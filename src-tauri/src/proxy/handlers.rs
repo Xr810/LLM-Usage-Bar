@@ -27,17 +27,20 @@ use super::{
     },
     response_processor::{
         create_logged_passthrough_stream, process_response, read_decoded_body,
-        strip_entity_headers_for_rebuilt_body, strip_hop_by_hop_response_headers,
-        usage_logging_enabled, SseUsageCollector,
+        report_ingestion_failure, stable_session_id, strip_entity_headers_for_rebuilt_body,
+        strip_hop_by_hop_response_headers, upstream_correlation_id_from_body,
+        upstream_correlation_id_from_events, usage_logging_enabled, SseUsageCollector,
     },
     server::ProxyState,
     sse::{strip_sse_field, take_sse_block},
     types::*,
-    usage::parser::TokenUsage,
+    usage::{
+        cost_parser::{extract_upstream_cost, extract_upstream_cost_from_events, UpstreamCost},
+        parser::TokenUsage,
+    },
     ProxyError,
 };
 use crate::app_config::AppType;
-use crate::database::PRICING_SOURCE_REQUEST;
 use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 use bytes::Bytes;
 use http_body_util::BodyExt;
@@ -335,6 +338,7 @@ async fn handle_claude_transform(
         let usage_collector = if usage_logging_enabled(state) {
             let state = state.clone();
             let provider_id = ctx.provider.id.clone();
+            let usage_provider_id = ctx.usage_provider_id.clone();
             let request_model = ctx.request_model.clone();
             // 上游/转换层未回显模型时，优先用映射后的出站模型兜底（路由接管真值），
             // 其次才是客户端请求别名。空字符串视为缺失（转换器对无回显上游会合成 ""）。
@@ -345,6 +349,7 @@ async fn handle_claude_transform(
             let status_code = status.as_u16();
             let start_time = ctx.start_time;
             let session_id = ctx.session_id.clone();
+            let session_client_provided = ctx.session_client_provided;
             // 用 ctx 的 app_type：Claude Desktop 网关也走此转换路径，硬编码
             // "claude" 会把 claude-desktop 的行错记到 claude 名下
             let app_type_str = ctx.app_type_str;
@@ -353,6 +358,16 @@ async fn handle_claude_transform(
                 start_time,
                 Some(claude_stream_usage_event_filter),
                 move |events, first_token_ms| {
+                    let upstream_correlation_id = upstream_correlation_id_from_events(&events);
+                    let upstream_cost =
+                        extract_upstream_cost_from_events(&events).unwrap_or_else(|error| {
+                            report_ingestion_failure(
+                                &usage_provider_id,
+                                upstream_correlation_id.as_deref().unwrap_or("unknown"),
+                                &error,
+                            );
+                            None
+                        });
                     if let Some(usage) = TokenUsage::from_claude_stream_events(&events) {
                         let model = usage
                             .model
@@ -362,6 +377,7 @@ async fn handle_claude_transform(
                         let latency_ms = start_time.elapsed().as_millis() as u64;
                         let state = state.clone();
                         let provider_id = provider_id.clone();
+                        let usage_provider_id = usage_provider_id.clone();
                         let session_id = session_id.clone();
                         let request_model = request_model.clone();
                         let outbound_model = fallback_model.clone();
@@ -369,6 +385,7 @@ async fn handle_claude_transform(
                         tokio::spawn(async move {
                             log_usage(
                                 &state,
+                                &usage_provider_id,
                                 &provider_id,
                                 app_type_str,
                                 &model,
@@ -379,7 +396,10 @@ async fn handle_claude_transform(
                                 first_token_ms,
                                 true,
                                 status_code,
+                                stable_session_id(&session_id, session_client_provided),
                                 Some(session_id),
+                                upstream_cost,
+                                upstream_correlation_id,
                             )
                             .await;
                         });
@@ -466,6 +486,15 @@ async fn handle_claude_transform(
             }
         }
     };
+    let upstream_correlation_id = upstream_correlation_id_from_body(&upstream_response);
+    let upstream_cost = extract_upstream_cost(&upstream_response).unwrap_or_else(|error| {
+        report_ingestion_failure(
+            &ctx.usage_provider_id,
+            upstream_correlation_id.as_deref().unwrap_or("unknown"),
+            &error,
+        );
+        None
+    });
 
     // 根据 api_format 选择非流式转换器
     let anthropic_response = if api_format == "openai_responses" {
@@ -512,10 +541,13 @@ async fn handle_claude_transform(
         tokio::spawn({
             let state = state.clone();
             let provider_id = ctx.provider.id.clone();
+            let usage_provider_id = ctx.usage_provider_id.clone();
             let session_id = ctx.session_id.clone();
+            let stable_session_id = stable_session_id(&session_id, ctx.session_client_provided);
             async move {
                 log_usage(
                     &state,
+                    &usage_provider_id,
                     &provider_id,
                     app_type_str,
                     &model,
@@ -526,7 +558,10 @@ async fn handle_claude_transform(
                     None,
                     false,
                     status.as_u16(),
+                    stable_session_id,
                     Some(session_id),
+                    upstream_cost,
+                    upstream_correlation_id,
                 )
                 .await;
             }
@@ -864,6 +899,7 @@ async fn handle_codex_chat_to_responses_transform(
         let usage_collector = if usage_logging_enabled(state) {
             let state = state.clone();
             let provider_id = ctx.provider.id.clone();
+            let usage_provider_id = ctx.usage_provider_id.clone();
             let request_model = ctx.request_model.clone();
             // 接管/模型覆写场景的归因兜底：出站真值优先于客户端请求别名
             let fallback_model = ctx
@@ -873,11 +909,22 @@ async fn handle_codex_chat_to_responses_transform(
             let app_type_str = ctx.app_type_str;
             let start_time = ctx.start_time;
             let session_id = ctx.session_id.clone();
+            let session_client_provided = ctx.session_client_provided;
 
             Some(SseUsageCollector::new(
                 start_time,
                 Some(codex_stream_usage_event_filter),
                 move |events, first_token_ms| {
+                    let upstream_correlation_id = upstream_correlation_id_from_events(&events);
+                    let upstream_cost =
+                        extract_upstream_cost_from_events(&events).unwrap_or_else(|error| {
+                            report_ingestion_failure(
+                                &usage_provider_id,
+                                upstream_correlation_id.as_deref().unwrap_or("unknown"),
+                                &error,
+                            );
+                            None
+                        });
                     let usage =
                         TokenUsage::from_codex_stream_events_auto(&events).unwrap_or_default();
                     // 上游遵守 OpenAI 语义省略 usage 时，Chat→Responses 转换器会合成一个
@@ -898,6 +945,7 @@ async fn handle_codex_chat_to_responses_transform(
 
                     let state = state.clone();
                     let provider_id = provider_id.clone();
+                    let usage_provider_id = usage_provider_id.clone();
                     let request_model = request_model.clone();
                     let outbound_model = fallback_model.clone();
                     let session_id = session_id.clone();
@@ -905,6 +953,7 @@ async fn handle_codex_chat_to_responses_transform(
                     tokio::spawn(async move {
                         log_usage(
                             &state,
+                            &usage_provider_id,
                             &provider_id,
                             app_type_str,
                             &model,
@@ -915,7 +964,10 @@ async fn handle_codex_chat_to_responses_transform(
                             first_token_ms,
                             true,
                             status.as_u16(),
+                            stable_session_id(&session_id, session_client_provided),
                             Some(session_id),
+                            upstream_cost,
+                            upstream_correlation_id,
                         )
                         .await;
                     });
@@ -979,6 +1031,15 @@ async fn handle_codex_chat_to_responses_transform(
             ));
         }
     };
+    let upstream_correlation_id = upstream_correlation_id_from_body(&chat_response);
+    let upstream_cost = extract_upstream_cost(&chat_response).unwrap_or_else(|error| {
+        report_ingestion_failure(
+            &ctx.usage_provider_id,
+            upstream_correlation_id.as_deref().unwrap_or("unknown"),
+            &error,
+        );
+        None
+    });
     let responses_response = transform_codex_chat::chat_completion_to_response_with_context(
         chat_response,
         &tool_context,
@@ -1015,11 +1076,14 @@ async fn handle_codex_chat_to_responses_transform(
         tokio::spawn({
             let state = state.clone();
             let provider_id = ctx.provider.id.clone();
+            let usage_provider_id = ctx.usage_provider_id.clone();
             let session_id = ctx.session_id.clone();
+            let stable_session_id = stable_session_id(&session_id, ctx.session_client_provided);
             let latency_ms = ctx.latency_ms();
             async move {
                 log_usage(
                     &state,
+                    &usage_provider_id,
                     &provider_id,
                     app_type_str,
                     &model,
@@ -1030,7 +1094,10 @@ async fn handle_codex_chat_to_responses_transform(
                     None,
                     false,
                     status.as_u16(),
+                    stable_session_id,
                     Some(session_id),
+                    upstream_cost,
+                    upstream_correlation_id,
                 )
                 .await;
             }
@@ -1994,7 +2061,8 @@ fn log_forward_error(
 #[allow(clippy::too_many_arguments)]
 async fn log_usage(
     state: &ProxyState,
-    provider_id: &str,
+    usage_provider_id: &str,
+    legacy_provider_id: &str,
     app_type: &str,
     model: &str,
     request_model: &str,
@@ -2004,44 +2072,33 @@ async fn log_usage(
     first_token_ms: Option<u64>,
     is_streaming: bool,
     status_code: u16,
-    session_id: Option<String>,
+    stable_session_id: Option<String>,
+    legacy_session_id: Option<String>,
+    upstream_cost: Option<UpstreamCost>,
+    upstream_correlation_id: Option<String>,
 ) {
-    use super::usage::logger::UsageLogger;
-
     if !usage_logging_enabled(state) {
         return;
     }
-
-    let logger = UsageLogger::new(&state.db);
-
-    let (multiplier, pricing_model_source) =
-        logger.resolve_pricing_config(provider_id, app_type).await;
-    let pricing_model = if pricing_model_source == PRICING_SOURCE_REQUEST {
-        outbound_model
-    } else {
-        model
-    };
-
-    let request_id = usage.dedup_request_id();
-
-    if let Err(e) = logger.log_with_calculation(
-        request_id,
-        provider_id.to_string(),
-        app_type.to_string(),
-        model.to_string(),
-        request_model.to_string(),
-        pricing_model.to_string(),
+    super::response_processor::ingest_usage_internal(
+        state,
+        usage_provider_id,
+        legacy_provider_id,
+        app_type,
+        model,
+        request_model,
+        outbound_model,
         usage,
-        multiplier,
         latency_ms,
         first_token_ms,
-        status_code,
-        session_id,
-        None, // provider_type
         is_streaming,
-    ) {
-        log::warn!("[USG-001] 记录使用量失败: {e}");
-    }
+        status_code,
+        stable_session_id,
+        legacy_session_id,
+        upstream_cost,
+        upstream_correlation_id,
+    )
+    .await;
 }
 
 #[cfg(test)]

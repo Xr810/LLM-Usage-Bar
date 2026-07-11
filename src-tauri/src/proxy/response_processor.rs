@@ -10,10 +10,16 @@ use super::{
     hyper_client::ProxyResponse,
     server::ProxyState,
     sse::{strip_sse_field, take_sse_block},
-    usage::parser::TokenUsage,
+    usage::{
+        cost_parser::{extract_upstream_cost, extract_upstream_cost_from_events, UpstreamCost},
+        logger::UsageLogger,
+        parser::TokenUsage,
+    },
     ProxyError,
 };
 use crate::database::PRICING_SOURCE_REQUEST;
+use crate::usage::domain::TokenSource;
+use crate::usage::ingestion::{LegacyLogInput, UsageIngestionInput};
 use axum::http::{header::HeaderMap, HeaderName};
 use axum::response::{IntoResponse, Response};
 use bytes::Bytes;
@@ -233,6 +239,15 @@ pub async fn handle_non_streaming(
     // 解析并记录使用量。关闭 usage logging 时直接跳过，避免非流式响应整包 JSON parse。
     if usage_logging_enabled(state) {
         if let Ok(json_value) = serde_json::from_slice::<Value>(&body_bytes) {
+            let upstream_correlation_id = upstream_correlation_id_from_body(&json_value);
+            let upstream_cost = extract_upstream_cost(&json_value).unwrap_or_else(|error| {
+                report_ingestion_failure(
+                    &ctx.usage_provider_id,
+                    upstream_correlation_id.as_deref().unwrap_or("unknown"),
+                    &error,
+                );
+                None
+            });
             // 解析使用量
             if let Some(usage) = (parser_config.response_parser)(&json_value) {
                 // 归因优先级：usage 解析出的模型 → 响应 model 字段 → 映射后的出站
@@ -259,6 +274,8 @@ pub async fn handle_non_streaming(
                     &ctx.request_model,
                     status.as_u16(),
                     false,
+                    upstream_cost,
+                    upstream_correlation_id,
                 );
             } else {
                 let model = json_value
@@ -276,6 +293,8 @@ pub async fn handle_non_streaming(
                     &ctx.request_model,
                     status.as_u16(),
                     false,
+                    upstream_cost,
+                    upstream_correlation_id,
                 );
                 log::debug!(
                     "[{}] 未能解析 usage 信息，跳过记录",
@@ -296,6 +315,8 @@ pub async fn handle_non_streaming(
                 &ctx.request_model,
                 status.as_u16(),
                 false,
+                None,
+                None,
             );
         }
     } else {
@@ -455,6 +476,30 @@ impl Drop for SseUsageFinishGuard {
 // 内部辅助函数
 // ============================================================================
 
+pub(crate) fn upstream_correlation_id_from_body(body: &Value) -> Option<String> {
+    body.get("id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+pub(crate) fn upstream_correlation_id_from_events(events: &[Value]) -> Option<String> {
+    events.iter().rev().find_map(|event| {
+        event
+            .get("response")
+            .and_then(|response| response.get("id"))
+            .or_else(|| event.get("message").and_then(|message| message.get("id")))
+            .or_else(|| event.get("id"))
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    })
+}
+
+pub(crate) fn stable_session_id(session_id: &str, client_provided: bool) -> Option<String> {
+    client_provided.then(|| session_id.to_string())
+}
+
 /// 创建使用量收集器
 fn create_usage_collector(
     ctx: &RequestContext,
@@ -473,6 +518,7 @@ fn create_usage_collector(
 
     let state = state.clone();
     let provider_id = ctx.provider.id.clone();
+    let usage_provider_id = ctx.usage_provider_id.clone();
     let request_model = ctx.request_model.clone();
     // 流式事件缺失模型名时的归因兜底：映射后的出站模型（路由接管真值）优先，
     // 其次才是客户端请求别名
@@ -489,24 +535,37 @@ fn create_usage_collector(
     let stream_parser = parser_config.stream_parser;
     let model_extractor = parser_config.model_extractor;
     let session_id = ctx.session_id.clone();
+    let session_client_provided = ctx.session_client_provided;
 
     Some(SseUsageCollector::new(
         start_time,
         parser_config.stream_event_filter,
         move |events, first_token_ms| {
+            let upstream_correlation_id = upstream_correlation_id_from_events(&events);
+            let upstream_cost =
+                extract_upstream_cost_from_events(&events).unwrap_or_else(|error| {
+                    report_ingestion_failure(
+                        &usage_provider_id,
+                        upstream_correlation_id.as_deref().unwrap_or("unknown"),
+                        &error,
+                    );
+                    None
+                });
             if let Some(usage) = stream_parser(&events) {
                 let model = model_extractor(&events, &fallback_model);
                 let latency_ms = start_time.elapsed().as_millis() as u64;
 
                 let state = state.clone();
                 let provider_id = provider_id.clone();
+                let usage_provider_id = usage_provider_id.clone();
                 let session_id = session_id.clone();
                 let request_model = request_model.clone();
                 let outbound_model = fallback_model.clone();
 
                 tokio::spawn(async move {
-                    log_usage_internal(
+                    ingest_usage_internal(
                         &state,
+                        &usage_provider_id,
                         &provider_id,
                         app_type_str,
                         &model,
@@ -517,7 +576,10 @@ fn create_usage_collector(
                         first_token_ms,
                         true, // is_streaming
                         status_code,
+                        stable_session_id(&session_id, session_client_provided),
                         Some(session_id),
+                        upstream_cost,
+                        upstream_correlation_id,
                     )
                     .await;
                 });
@@ -526,13 +588,15 @@ fn create_usage_collector(
                 let latency_ms = start_time.elapsed().as_millis() as u64;
                 let state = state.clone();
                 let provider_id = provider_id.clone();
+                let usage_provider_id = usage_provider_id.clone();
                 let session_id = session_id.clone();
                 let request_model = request_model.clone();
                 let outbound_model = fallback_model.clone();
 
                 tokio::spawn(async move {
-                    log_usage_internal(
+                    ingest_usage_internal(
                         &state,
+                        &usage_provider_id,
                         &provider_id,
                         app_type_str,
                         &model,
@@ -543,7 +607,10 @@ fn create_usage_collector(
                         first_token_ms,
                         true, // is_streaming
                         status_code,
+                        stable_session_id(&session_id, session_client_provided),
                         Some(session_id),
+                        upstream_cost,
+                        upstream_correlation_id,
                     )
                     .await;
                 });
@@ -562,6 +629,8 @@ fn spawn_log_usage(
     request_model: &str,
     status_code: u16,
     is_streaming: bool,
+    upstream_cost: Option<UpstreamCost>,
+    upstream_correlation_id: Option<String>,
 ) {
     // Check enable_logging before spawning the log task
     if let Ok(config) = state.config.try_read() {
@@ -572,6 +641,7 @@ fn spawn_log_usage(
 
     let state = state.clone();
     let provider_id = ctx.provider.id.clone();
+    let usage_provider_id = ctx.usage_provider_id.clone();
     let app_type_str = ctx.app_type_str.to_string();
     let model = model.to_string();
     let request_model = request_model.to_string();
@@ -582,10 +652,12 @@ fn spawn_log_usage(
         .unwrap_or_else(|| ctx.request_model.clone());
     let latency_ms = ctx.latency_ms();
     let session_id = ctx.session_id.clone();
+    let stable_session_id = stable_session_id(&session_id, ctx.session_client_provided);
 
     tokio::spawn(async move {
-        log_usage_internal(
+        ingest_usage_internal(
             &state,
+            &usage_provider_id,
             &provider_id,
             &app_type_str,
             &model,
@@ -596,7 +668,10 @@ fn spawn_log_usage(
             None,
             is_streaming,
             status_code,
+            stable_session_id,
             Some(session_id),
+            upstream_cost,
+            upstream_correlation_id,
         )
         .await;
     });
@@ -617,6 +692,79 @@ pub(crate) fn usage_logging_enabled(state: &ProxyState) -> bool {
 /// 「按代理发出的请求计价、不信任上游回显」，接管场景下发出的请求模型是
 /// 映射后的 Y 而非客户端别名 X，按 X 计价会用错定价表行。
 #[allow(clippy::too_many_arguments)]
+pub(crate) async fn ingest_usage_internal(
+    state: &ProxyState,
+    usage_provider_id: &str,
+    legacy_provider_id: &str,
+    app_type: &str,
+    model: &str,
+    request_model: &str,
+    outbound_model: &str,
+    usage: TokenUsage,
+    latency_ms: u64,
+    first_token_ms: Option<u64>,
+    is_streaming: bool,
+    status_code: u16,
+    stable_session_id: Option<String>,
+    legacy_session_id: Option<String>,
+    upstream_cost: Option<UpstreamCost>,
+    upstream_correlation_id: Option<String>,
+) {
+    let logger = UsageLogger::new(&state.db);
+    let (multiplier, pricing_model_source) = logger
+        .resolve_pricing_config(legacy_provider_id, app_type)
+        .await;
+    let pricing_model = if pricing_model_source == PRICING_SOURCE_REQUEST {
+        outbound_model
+    } else {
+        model
+    };
+    let event_id = usage.dedup_request_id();
+    let upstream_correlation_id = upstream_correlation_id.or_else(|| usage.message_id.clone());
+    let input = UsageIngestionInput {
+        event_id: event_id.clone(),
+        source: TokenSource::Proxy,
+        provider_id: usage_provider_id.to_string(),
+        occurred_at: chrono::Utc::now().timestamp(),
+        model: model.to_string(),
+        usage,
+        upstream_cost,
+        request_id: None,
+        session_id: stable_session_id,
+        upstream_correlation_id,
+        legacy: Some(LegacyLogInput {
+            request_id: event_id.clone(),
+            provider_id: legacy_provider_id.to_string(),
+            app_type: app_type.to_string(),
+            request_model: request_model.to_string(),
+            pricing_model: pricing_model.to_string(),
+            latency_ms,
+            first_token_ms,
+            status_code,
+            error_message: None,
+            session_id: legacy_session_id,
+            provider_type: None,
+            is_streaming,
+            cost_multiplier: multiplier,
+        }),
+    };
+
+    if let Err(error) = logger.ingest(&input) {
+        report_ingestion_failure(usage_provider_id, &event_id, &error);
+    }
+}
+
+pub(crate) fn report_ingestion_failure(
+    provider_id: &str,
+    request_id: &str,
+    error: &crate::error::AppError,
+) {
+    log::warn!("[USG-001] 记录使用量失败: provider={provider_id}, request={request_id}: {error}");
+    crate::usage_events::notify_ingestion_error(provider_id, request_id);
+}
+
+#[allow(clippy::too_many_arguments)]
+#[allow(dead_code)] // v12 compatibility tests; request paths use ingest_usage_internal.
 async fn log_usage_internal(
     state: &ProxyState,
     provider_id: &str,
@@ -631,8 +779,6 @@ async fn log_usage_internal(
     status_code: u16,
     session_id: Option<String>,
 ) {
-    use super::usage::logger::UsageLogger;
-
     let logger = UsageLogger::new(&state.db);
     let (multiplier, pricing_model_source) =
         logger.resolve_pricing_config(provider_id, app_type).await;
@@ -814,6 +960,7 @@ mod tests {
     use super::*;
     use crate::database::Database;
     use crate::error::AppError;
+    use crate::provider::Provider;
     use crate::provider::ProviderMeta;
     use crate::proxy::failover_switch::FailoverSwitchManager;
     use crate::proxy::provider_router::ProviderRouter;
@@ -821,11 +968,149 @@ mod tests {
         codex_chat_history::CodexChatHistoryStore, gemini_shadow::GeminiShadowStore,
     };
     use crate::proxy::types::{ProxyConfig, ProxyStatus};
+    use crate::usage::domain::{BillingKind, TokenSource, UsageProviderInput};
+    use axum::http::StatusCode;
     use rust_decimal::Decimal;
     use std::collections::HashMap;
     use std::str::FromStr;
     use std::sync::Arc;
     use tokio::sync::RwLock;
+
+    #[tokio::test]
+    async fn ingestion_failure_does_not_change_successful_upstream_response() -> Result<(), AppError>
+    {
+        use http_body_util::BodyExt;
+
+        let db = Arc::new(Database::memory()?);
+        let settings = serde_json::json!({
+            "env": {
+                "ANTHROPIC_BASE_URL": "https://upstream.example",
+                "ANTHROPIC_AUTH_TOKEN": "secret"
+            }
+        });
+        db.save_provider(
+            "claude",
+            &Provider::with_id(
+                "legacy-provider".to_string(),
+                "Legacy".to_string(),
+                settings.clone(),
+                None,
+            ),
+        )?;
+        db.save_usage_provider(&UsageProviderInput {
+            id: "global-provider".to_string(),
+            name: "Global".to_string(),
+            billing_kind: BillingKind::Metered,
+            product_group_id: "claude".to_string(),
+            token_sources: vec![TokenSource::Proxy],
+            quota_source: None,
+            quota_interval_seconds: None,
+            route_app_type: Some("claude".to_string()),
+            route_config: Some(settings),
+            quota_config: None,
+            enabled: true,
+        })?;
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE usage_providers
+                 SET legacy_app_type='claude', legacy_provider_id='legacy-provider'
+                 WHERE id='global-provider'",
+                [],
+            )?;
+        }
+        db.set_route_binding("claude", "global-provider")?;
+        let state = build_state(db.clone());
+        let ctx = RequestContext::new(
+            &state,
+            &serde_json::json!({"model": "claude-sonnet"}),
+            &HeaderMap::new(),
+            crate::app_config::AppType::Claude,
+            "Claude",
+            "claude",
+        )
+        .await
+        .map_err(|error| AppError::Message(error.to_string()))?;
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute_batch(
+                "CREATE TRIGGER fail_usage_ingestion
+                 BEFORE INSERT ON usage_events
+                 BEGIN
+                   SELECT RAISE(ABORT, 'forced ingestion failure');
+                 END;",
+            )?;
+        }
+
+        let original = serde_json::json!({
+            "id": "resp-success",
+            "model": "claude-sonnet",
+            "usage": {"input_tokens": 3, "output_tokens": 4, "cost": "0.01"},
+            "content": []
+        });
+        let original_bytes = Bytes::from(serde_json::to_vec(&original).unwrap());
+        let response = super::handle_non_streaming(
+            ProxyResponse::buffered(StatusCode::OK, HeaderMap::new(), original_bytes.clone()),
+            &ctx,
+            &state,
+            &crate::proxy::handler_config::CLAUDE_PARSER_CONFIG,
+            None,
+        )
+        .await
+        .map_err(|error| AppError::Message(error.to_string()))?;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let returned = response
+            .into_body()
+            .collect()
+            .await
+            .map_err(|error| AppError::Message(error.to_string()))?
+            .to_bytes();
+        assert_eq!(returned, original_bytes);
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        let conn = db.conn.lock().unwrap();
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM usage_events", [], |row| row
+                .get::<_, i64>(0))?,
+            0
+        );
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM proxy_request_logs", [], |row| row
+                .get::<_, i64>(0))?,
+            0
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn non_streaming_response_id_is_the_upstream_correlation_id() {
+        let body = serde_json::json!({"id": "resp-exact", "usage": {}});
+        assert_eq!(
+            upstream_correlation_id_from_body(&body).as_deref(),
+            Some("resp-exact")
+        );
+    }
+
+    #[test]
+    fn terminal_sse_response_id_is_the_upstream_correlation_id() {
+        let events = vec![
+            serde_json::json!({"type": "response.created", "response": {"id": "resp-old"}}),
+            serde_json::json!({"type": "response.completed", "response": {"id": "resp-final"}}),
+        ];
+        assert_eq!(
+            upstream_correlation_id_from_events(&events).as_deref(),
+            Some("resp-final")
+        );
+    }
+
+    #[test]
+    fn generated_session_id_is_not_stable_cross_source_evidence() {
+        assert_eq!(stable_session_id("generated-uuid", false), None);
+        assert_eq!(
+            stable_session_id("client-session", true).as_deref(),
+            Some("client-session")
+        );
+    }
 
     #[test]
     fn test_strip_sse_field_accepts_optional_space() {

@@ -21,6 +21,14 @@ pub struct ProviderRouter {
     circuit_breakers: Arc<RwLock<HashMap<String, Arc<CircuitBreaker>>>>,
 }
 
+#[derive(Debug, Clone)]
+pub struct BoundProvider {
+    /// Global v13 identity used by usage_events and quota/source ownership.
+    pub usage_provider_id: String,
+    /// Transitional Provider used by the existing protocol adapters.
+    pub provider: Provider,
+}
+
 impl ProviderRouter {
     /// 创建新的供应商路由器
     pub fn new(db: Arc<Database>) -> Self {
@@ -36,6 +44,12 @@ impl ProviderRouter {
     /// stale binding cannot continue routing after its target is disabled or
     /// changed to subscription billing.
     pub async fn select_bound_provider(&self, protocol: &str) -> Result<Provider, AppError> {
+        self.select_bound_route(protocol)
+            .await
+            .map(|bound| bound.provider)
+    }
+
+    pub async fn select_bound_route(&self, protocol: &str) -> Result<BoundProvider, AppError> {
         let binding = self
             .db
             .get_route_bindings()?
@@ -73,6 +87,12 @@ impl ProviderRouter {
             )));
         }
 
+        let route_config = stored
+            .route_config
+            .clone()
+            .filter(|config| config.as_object().is_some_and(|object| !object.is_empty()))
+            .ok_or_else(|| AppError::Message(format!("route config incomplete: {}", stored.id)))?;
+
         if let (Some(legacy_app_type), Some(legacy_provider_id)) = (
             stored.legacy_app_type.as_deref(),
             stored.legacy_provider_id.as_deref(),
@@ -81,21 +101,17 @@ impl ProviderRouter {
                 .db
                 .get_provider_by_id(legacy_provider_id, legacy_app_type)?
             {
-                return Ok(provider);
+                return Ok(BoundProvider {
+                    usage_provider_id: stored.id,
+                    provider,
+                });
             }
         }
 
-        let route_config = stored
-            .route_config
-            .filter(|config| config.as_object().is_some_and(|object| !object.is_empty()))
-            .ok_or_else(|| AppError::Message(format!("route config incomplete: {}", stored.id)))?;
-
-        Ok(Provider::with_id(
-            stored.id,
-            stored.name,
-            route_config,
-            None,
-        ))
+        Ok(BoundProvider {
+            usage_provider_id: stored.id.clone(),
+            provider: Provider::with_id(stored.id, stored.name, route_config, None),
+        })
     }
 
     /// 选择可用的供应商（支持故障转移）
@@ -545,6 +561,93 @@ mod tests {
                 .unwrap_err();
             assert_eq!(error.to_string(), format!("route config incomplete: {id}"));
         }
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn incomplete_legacy_route_config_is_rejected_before_forwarding() {
+        let _home = TempHome::new();
+        let db = Arc::new(Database::memory().unwrap());
+        let legacy = Provider::with_id(
+            "legacy-empty".to_string(),
+            "Legacy Empty".to_string(),
+            json!({}),
+            None,
+        );
+        db.save_provider("claude", &legacy).unwrap();
+        db.save_usage_provider(&usage_provider(
+            "claude:legacy-empty",
+            BillingKind::Metered,
+            Some(json!({})),
+        ))
+        .unwrap();
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE usage_providers
+                 SET legacy_app_type = 'claude', legacy_provider_id = 'legacy-empty'
+                 WHERE id = 'claude:legacy-empty'",
+                [],
+            )
+            .unwrap();
+        }
+        db.set_route_binding("claude", "claude:legacy-empty")
+            .unwrap();
+
+        let error = ProviderRouter::new(db)
+            .select_bound_provider("claude")
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "route config incomplete: claude:legacy-empty"
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn legacy_route_preserves_global_and_runtime_provider_identities() {
+        let _home = TempHome::new();
+        let db = Arc::new(Database::memory().unwrap());
+        let settings = json!({
+            "env": {
+                "ANTHROPIC_BASE_URL": "https://legacy.example",
+                "ANTHROPIC_AUTH_TOKEN": "secret"
+            }
+        });
+        let legacy = Provider::with_id(
+            "legacy-id".to_string(),
+            "Legacy".to_string(),
+            settings.clone(),
+            None,
+        );
+        db.save_provider("claude", &legacy).unwrap();
+        db.save_usage_provider(&usage_provider(
+            "claude:legacy-id",
+            BillingKind::Metered,
+            Some(settings),
+        ))
+        .unwrap();
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE usage_providers
+                 SET legacy_app_type='claude', legacy_provider_id='legacy-id'
+                 WHERE id='claude:legacy-id'",
+                [],
+            )
+            .unwrap();
+        }
+        db.set_route_binding("claude", "claude:legacy-id").unwrap();
+
+        let bound = ProviderRouter::new(db)
+            .select_bound_route("claude")
+            .await
+            .unwrap();
+
+        assert_eq!(bound.usage_provider_id, "claude:legacy-id");
+        assert_eq!(bound.provider.id, "legacy-id");
     }
 
     #[tokio::test]

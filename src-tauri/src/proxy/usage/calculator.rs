@@ -118,6 +118,7 @@ impl CostCalculator {
         pricing.map(|p| Self::calculate(usage, p, cost_multiplier))
     }
 
+    #[allow(dead_code)] // Retained for v12 compatibility logging.
     pub fn try_calculate_for_app(
         app_type: &str,
         usage: &TokenUsage,

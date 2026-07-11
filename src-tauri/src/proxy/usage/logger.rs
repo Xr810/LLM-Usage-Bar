@@ -5,6 +5,7 @@ use super::parser::TokenUsage;
 use crate::database::{Database, PRICING_SOURCE_REQUEST, PRICING_SOURCE_RESPONSE};
 use crate::error::AppError;
 use crate::services::usage_stats::{find_model_pricing_row, is_placeholder_pricing_model};
+use crate::usage::ingestion::{UsageIngestionInput, UsageIngestionOutcome, UsageIngestionService};
 use rust_decimal::Decimal;
 use std::str::FromStr;
 
@@ -46,6 +47,15 @@ impl<'a> UsageLogger<'a> {
         Self { db }
     }
 
+    /// Persist a v13 usage event and its compatibility v12 log atomically.
+    ///
+    /// New request paths should use this wrapper. The older `log_*` methods
+    /// remain available for compatibility-only callers that do not yet carry a
+    /// global usage Provider identity.
+    pub fn ingest(&self, input: &UsageIngestionInput) -> Result<UsageIngestionOutcome, AppError> {
+        UsageIngestionService::new(self.db).ingest(input)
+    }
+
     /// 记录成功的请求
     pub fn log_request(&self, log: &RequestLog) -> Result<(), AppError> {
         let conn = crate::database::lock_conn!(self.db.conn);
@@ -72,13 +82,14 @@ impl<'a> UsageLogger<'a> {
         let created_at = chrono::Utc::now().timestamp();
 
         conn.execute(
-            "INSERT OR REPLACE INTO proxy_request_logs (
+            "INSERT INTO proxy_request_logs (
                 request_id, provider_id, app_type, model, request_model, pricing_model,
                 input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
                 input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd, total_cost_usd,
                 latency_ms, first_token_ms, status_code, error_message, session_id,
                 provider_type, is_streaming, cost_multiplier, created_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)",
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)
+            ON CONFLICT(request_id) DO NOTHING",
             rusqlite::params![
                 log.request_id,
                 log.provider_id,
@@ -194,6 +205,7 @@ impl<'a> UsageLogger<'a> {
     }
 
     /// 获取模型定价
+    #[allow(dead_code)] // Retained for v12 compatibility logging.
     pub fn get_model_pricing(&self, model_id: &str) -> Result<Option<ModelPricing>, AppError> {
         let conn = crate::database::lock_conn!(self.db.conn);
         let row = find_model_pricing_row(&conn, model_id)?;
@@ -304,6 +316,7 @@ impl<'a> UsageLogger<'a> {
 
     /// 计算并记录请求
     #[allow(clippy::too_many_arguments)]
+    #[allow(dead_code)] // Retained for compatibility callers outside the v13 request path.
     pub fn log_with_calculation(
         &self,
         request_id: String,

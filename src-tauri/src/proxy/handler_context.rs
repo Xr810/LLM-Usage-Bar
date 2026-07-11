@@ -40,6 +40,8 @@ pub struct RequestContext {
     pub app_config: AppProxyConfig,
     /// 选中的 Provider（故障转移链的第一个）
     pub provider: Provider,
+    /// v13 全局 Provider ID；与兼容运行时 `provider.id` 明确分离。
+    pub usage_provider_id: String,
     /// 完整的 Provider 列表（用于故障转移）
     providers: Vec<Provider>,
     /// 请求中的模型名称
@@ -124,11 +126,13 @@ impl RequestContext {
 
         // Route bindings are the request-path SSOT. Resolve exactly one provider
         // for every request so binding/provider edits take effect immediately.
-        let provider = state
+        let bound = state
             .provider_router
-            .select_bound_provider(canonical_route_protocol(app_type_str))
+            .select_bound_route(canonical_route_protocol(app_type_str))
             .await
             .map_err(map_route_selection_error)?;
+        let usage_provider_id = bound.usage_provider_id;
+        let provider = bound.provider;
         let providers = vec![provider.clone()];
 
         log::debug!(
@@ -143,6 +147,7 @@ impl RequestContext {
             start_time,
             app_config,
             provider,
+            usage_provider_id,
             providers,
             request_model,
             outbound_model: None,

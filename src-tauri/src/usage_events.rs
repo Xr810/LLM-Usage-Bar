@@ -16,8 +16,19 @@ use std::time::Duration;
 
 use tauri::{AppHandle, Emitter};
 
+use serde::Serialize;
+
 /// 前端监听的事件名
 pub const EVENT_USAGE_LOG_RECORDED: &str = "usage-log-recorded";
+pub const EVENT_USAGE_INGESTION_ERROR: &str = "usage-ingestion-error";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UsageIngestionErrorPayload {
+    provider_id: String,
+    request_id: String,
+    message: &'static str,
+}
 
 /// 防抖窗口：合并 200ms 内的多次通知。
 const DEBOUNCE_WINDOW: Duration = Duration::from_millis(200);
@@ -65,4 +76,62 @@ pub fn notify_log_recorded() {
             log::warn!("emit {EVENT_USAGE_LOG_RECORDED} 失败: {e}");
         }
     });
+}
+
+/// Emit a diagnostic-only ingestion failure event without exposing credentials,
+/// upstream payloads, or raw database errors to the renderer.
+pub fn notify_ingestion_error(provider_id: &str, request_id: &str) {
+    let Some(handle) = APP_HANDLE.get() else {
+        return;
+    };
+    let payload = ingestion_error_payload(provider_id, request_id);
+    if let Err(error) = handle.emit(EVENT_USAGE_INGESTION_ERROR, payload) {
+        log::warn!("emit {EVENT_USAGE_INGESTION_ERROR} 失败: {error}");
+    }
+}
+
+fn ingestion_error_payload(provider_id: &str, request_id: &str) -> UsageIngestionErrorPayload {
+    UsageIngestionErrorPayload {
+        provider_id: redact_identifier(provider_id),
+        request_id: redact_identifier(request_id),
+        message: "usage ingestion failed",
+    }
+}
+
+fn redact_identifier(value: &str) -> String {
+    let clean: String = value
+        .chars()
+        .filter(|character| !character.is_control())
+        .collect();
+    let suffix: String = clean
+        .chars()
+        .rev()
+        .take(4)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    if suffix.is_empty() {
+        "***".to_string()
+    } else {
+        format!("***{suffix}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ingestion_error_payload;
+
+    #[test]
+    fn ingestion_error_payload_redacts_identifiers_and_raw_message() {
+        let payload =
+            ingestion_error_payload("global-provider-secret", "request-with-api-key-sk-secret");
+        assert_eq!(payload.provider_id, "***cret");
+        assert_eq!(payload.request_id, "***cret");
+        assert_eq!(payload.message, "usage ingestion failed");
+
+        let serialized = serde_json::to_string(&payload).unwrap();
+        assert!(!serialized.contains("global-provider-secret"));
+        assert!(!serialized.contains("api-key"));
+    }
 }
