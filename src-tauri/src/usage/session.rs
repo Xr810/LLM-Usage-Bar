@@ -39,47 +39,29 @@ impl SessionUsageService {
     }
 
     pub fn sync_provider(&self, provider_id: &str) -> Result<ProviderSessionSyncResult, AppError> {
-        let provider = self
-            .db
+        self.db
             .get_usage_provider(provider_id)?
             .ok_or_else(|| AppError::Message("usage provider not found".to_string()))?;
-        let preferred_source = provider
-            .legacy_app_type
-            .as_deref()
-            .or(provider.route_app_type.as_deref())
-            .unwrap_or(&provider.product_group_id)
-            .to_ascii_lowercase();
-
-        if matches!(preferred_source.as_str(), "claude" | "codex") {
-            if self
-                .db
-                .get_usage_source_binding(&preferred_source)?
-                .is_some_and(|binding| binding.provider_id == provider_id)
-            {
-                return self.sync_source(&preferred_source);
-            }
+        let sources = self.bound_sources_for_provider(provider_id)?;
+        if sources.is_empty() {
             return Ok(ProviderSessionSyncResult {
-                warnings: vec![format!("no usage source binding for {preferred_source}")],
+                warnings: vec![format!(
+                    "no usage source binding for provider {provider_id}"
+                )],
                 ..ProviderSessionSyncResult::default()
             });
         }
 
-        for source in ["claude", "codex"] {
-            if self
-                .db
-                .get_usage_source_binding(source)?
-                .is_some_and(|binding| binding.provider_id == provider_id)
-            {
-                return self.sync_source(source);
-            }
+        let mut combined = ProviderSessionSyncResult::default();
+        for source in sources {
+            let result = self.sync_source(source)?;
+            combined.imported = combined.imported.saturating_add(result.imported);
+            combined.skipped = combined.skipped.saturating_add(result.skipped);
+            combined.files_scanned = combined.files_scanned.saturating_add(result.files_scanned);
+            combined.errors.extend(result.errors);
+            combined.warnings.extend(result.warnings);
         }
-
-        Ok(ProviderSessionSyncResult {
-            warnings: vec![format!(
-                "no usage source binding for provider {provider_id}"
-            )],
-            ..ProviderSessionSyncResult::default()
-        })
+        Ok(combined)
     }
 
     pub fn sync_source(&self, source: &str) -> Result<ProviderSessionSyncResult, AppError> {
@@ -152,6 +134,20 @@ impl SessionUsageService {
             )));
         }
         self.db.get_usage_source_binding(source)
+    }
+
+    fn bound_sources_for_provider(&self, provider_id: &str) -> Result<Vec<&'static str>, AppError> {
+        let mut sources = Vec::new();
+        for source in ["claude", "codex"] {
+            if self
+                .db
+                .get_usage_source_binding(source)?
+                .is_some_and(|binding| binding.provider_id == provider_id)
+            {
+                sources.push(source);
+            }
+        }
+        Ok(sources)
     }
 }
 
@@ -286,11 +282,33 @@ mod tests {
 
         assert_eq!(result.imported, 0);
         assert_eq!(result.files_scanned, 0);
-        assert_eq!(result.warnings, vec!["no usage source binding for claude"]);
+        assert_eq!(
+            result.warnings,
+            vec!["no usage source binding for provider requested-a"]
+        );
         let conn = db.conn.lock().unwrap();
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM usage_events", [], |row| row.get(0))
             .unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn explicit_source_bindings_override_product_group_and_include_every_source() {
+        let db = Arc::new(Database::memory().unwrap());
+        db.save_usage_provider(&provider("sub")).unwrap();
+        let service = SessionUsageService::new(db.clone());
+
+        db.set_usage_source_binding("codex", "sub").unwrap();
+        assert_eq!(
+            service.bound_sources_for_provider("sub").unwrap(),
+            vec!["codex"]
+        );
+
+        db.set_usage_source_binding("claude", "sub").unwrap();
+        assert_eq!(
+            service.bound_sources_for_provider("sub").unwrap(),
+            vec!["claude", "codex"]
+        );
     }
 }

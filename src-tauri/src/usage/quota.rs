@@ -7,6 +7,7 @@ use crate::services::subscription::{
 use crate::usage::domain::{BillingKind, QuotaFetchState, QuotaSnapshot, UsageProviderStored};
 use futures::future::BoxFuture;
 use rust_decimal::Decimal;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -29,7 +30,8 @@ pub struct NormalizedQuota {
     pub raw_payload: Value,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct QuotaRefreshResult {
     pub snapshot: QuotaSnapshot,
     pub fetch_state: QuotaFetchState,
@@ -155,37 +157,16 @@ impl QuotaService {
             .get_usage_provider(provider_id)?
             .ok_or_else(|| AppError::Message("usage provider not found".to_string()))?;
         validate_refresh_provider(&provider)?;
-        let quota_source = provider
-            .quota_source
-            .as_deref()
-            .ok_or_else(|| AppError::Message("quota source is not configured".to_string()))?;
-        let collector = self.collectors.get(quota_source).ok_or_else(|| {
-            AppError::Message(format!("unsupported quota source: {quota_source}"))
-        })?;
 
-        let quota = match collector.collect(&provider).await {
-            Ok(quota) if quota.success => quota,
-            Ok(quota) => {
-                let error = quota
-                    .error
-                    .or(quota.credential_message)
-                    .unwrap_or_else(|| "quota collection failed".to_string());
-                self.db
-                    .record_quota_failure(provider_id, attempted_at, &error)?;
-                return Err(AppError::Message(error));
-            }
+        let normalized = match self.collect_normalized_quota(&provider).await {
+            Ok(normalized) => normalized,
             Err(error) => {
                 self.db
-                    .record_quota_failure(provider_id, attempted_at, &error)?;
-                return Err(AppError::Message(error));
+                    .record_quota_failure(provider_id, attempted_at, &error.to_string())?;
+                return Err(error);
             }
         };
 
-        let manual_resets_remaining = provider
-            .quota_config
-            .as_ref()
-            .and_then(manual_resets_from_config);
-        let normalized = normalize_subscription_quota(&quota, manual_resets_remaining)?;
         let snapshot = QuotaSnapshot {
             snapshot_id: Uuid::new_v4().to_string(),
             provider_id: provider.id,
@@ -203,6 +184,60 @@ impl QuotaService {
             snapshot,
             fetch_state,
         })
+    }
+
+    async fn collect_normalized_quota(
+        &self,
+        provider: &UsageProviderStored,
+    ) -> Result<NormalizedQuota, AppError> {
+        let quota_source = provider
+            .quota_source
+            .as_deref()
+            .ok_or_else(|| AppError::Message("quota source is not configured".to_string()))?;
+        self.validate_local_quota_source_ownership(provider, quota_source)?;
+        let collector = self.collectors.get(quota_source).ok_or_else(|| {
+            AppError::Message(format!("unsupported quota source: {quota_source}"))
+        })?;
+
+        let quota = match collector.collect(&provider).await {
+            Ok(quota) if quota.success => quota,
+            Ok(quota) => {
+                let error = quota
+                    .error
+                    .or(quota.credential_message)
+                    .unwrap_or_else(|| "quota collection failed".to_string());
+                return Err(AppError::Message(error));
+            }
+            Err(error) => return Err(AppError::Message(error)),
+        };
+
+        let manual_resets_remaining = provider
+            .quota_config
+            .as_ref()
+            .and_then(manual_resets_from_config);
+        normalize_subscription_quota(&quota, manual_resets_remaining)
+    }
+
+    fn validate_local_quota_source_ownership(
+        &self,
+        provider: &UsageProviderStored,
+        quota_source: &str,
+    ) -> Result<(), AppError> {
+        if !matches!(quota_source, "claude" | "codex") {
+            return Ok(());
+        }
+        let conflict = self.db.list_usage_providers()?.into_iter().any(|other| {
+            other.id != provider.id
+                && other.enabled
+                && other.billing_kind == BillingKind::Subscription
+                && other.quota_source.as_deref() == Some(quota_source)
+        });
+        if conflict {
+            return Err(AppError::Message(format!(
+                "local quota source {quota_source} must belong to exactly one enabled provider"
+            )));
+        }
+        Ok(())
     }
 
     /// Runs one deterministic scheduling pass. Failed collections have their
@@ -582,5 +617,51 @@ mod tests {
 
         assert_eq!(service.refresh_due_at(1_000).await.unwrap().attempted, 0);
         assert_eq!(collector.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn configuration_and_normalization_failures_wait_for_the_full_interval() {
+        let db = Arc::new(Database::memory().unwrap());
+        let mut input = provider("sub", BillingKind::Subscription, true);
+        input.quota_source = Some("unsupported".to_string());
+        db.save_usage_provider(&input).unwrap();
+        let service = QuotaService::with_collectors(db.clone(), vec![]);
+
+        let first = service.refresh_due_at(100).await.unwrap();
+        assert_eq!(first.attempted, 1);
+        assert_eq!(first.errors.len(), 1);
+        assert_eq!(
+            db.get_quota_fetch_state("sub")
+                .unwrap()
+                .unwrap()
+                .last_attempt_at,
+            Some(100)
+        );
+        assert_eq!(service.refresh_due_at(101).await.unwrap().attempted, 0);
+        assert_eq!(service.refresh_due_at(399).await.unwrap().attempted, 0);
+    }
+
+    #[tokio::test]
+    async fn machine_local_quota_source_cannot_be_attributed_to_two_providers() {
+        let db = Arc::new(Database::memory().unwrap());
+        for id in ["first", "second"] {
+            let mut input = provider(id, BillingKind::Subscription, true);
+            input.quota_source = Some("claude".to_string());
+            db.save_usage_provider(&input).unwrap();
+        }
+        let service = QuotaService::with_collectors(db.clone(), vec![]);
+
+        let cycle = service.refresh_due_at(500).await.unwrap();
+        assert_eq!(cycle.attempted, 2);
+        assert_eq!(cycle.errors.len(), 2);
+        for id in ["first", "second"] {
+            let state = db.get_quota_fetch_state(id).unwrap().unwrap();
+            assert_eq!(state.last_attempt_at, Some(500));
+            assert!(state
+                .last_error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("exactly one enabled provider"));
+        }
     }
 }
