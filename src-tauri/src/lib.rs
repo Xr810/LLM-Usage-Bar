@@ -34,6 +34,7 @@ mod settings;
 mod store;
 
 mod tray;
+pub mod usage;
 mod usage_events;
 mod usage_script;
 

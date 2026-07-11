@@ -478,6 +478,11 @@ impl Database {
                         Self::migrate_v11_to_v12(conn)?;
                         Self::set_user_version(conn, 12)?;
                     }
+                    12 => {
+                        log::info!("迁移数据库从 v12 到 v13（添加供应商感知的用量表）");
+                        crate::usage::migration::migrate_v12_to_v13(conn)?;
+                        Self::set_user_version(conn, 13)?;
+                    }
                     _ => {
                         return Err(AppError::Database(format!(
                             "未知的数据库版本 {version}，无法迁移到 {SCHEMA_VERSION}"
