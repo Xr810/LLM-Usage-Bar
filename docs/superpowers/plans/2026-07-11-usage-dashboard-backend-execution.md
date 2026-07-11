@@ -237,7 +237,7 @@ git commit -m "feat(usage): persist providers events and quotas"
 
 ### Task 3: Replace Current/Failover Selection with One Static Route
 
-**Status:** Core implementation and review fixes complete (`f323ea75`, `73ccb294`). Task 8 still owns the real local-503/zero-upstream-hit acceptance proof.
+**Status:** Complete and independently reviewed (`f323ea75`, `73ccb294`, `4fa50dea`, `0e27e91c`). The real proxy acceptance proves local 503/zero upstream hits even with reachable legacy fallback candidates.
 
 **Files:**
 - Modify: `src-tauri/src/proxy/provider_router.rs`
@@ -493,7 +493,7 @@ git commit -m "feat(usage): expose product dashboard API"
 
 ### Task 7: Add the Minimal React Dashboard and Configuration Surface
 
-**Status:** In progress.
+**Status:** Implementation and Important review fixes complete (`f9063ff8`, `66cff322`). Two Minor localization/proxy-status diagnostics are being closed with the Task 8 frontend shell.
 
 **Files:**
 - Create: `src/types/usageDashboard.ts`
@@ -553,7 +553,7 @@ git commit -m "feat(ui): add provider-aware usage dashboard"
 
 ### Task 8: Exit Legacy Features from the Main Path and Run End-to-End Acceptance
 
-**Status:** Not started.
+**Status:** In progress. Main-path UI (`ee93e413`), real proxy E2E (`15e44174`, `4fa50dea`), acceptance runbook (`9575ab78`) and request-path legacy selector removal (`0e27e91c`) are complete; frontend shell/event-refresh/test fixes and the full final gate remain.
 
 **Files:**
 - Modify: `src/App.tsx`

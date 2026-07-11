@@ -1,12 +1,12 @@
 # Current Task State
 
-Last checkpoint: 2026-07-12 00:16 Asia/Singapore
+Last checkpoint: 2026-07-12 00:42 Asia/Singapore
 
 Branch: `codex/usage-dashboard-backend`
 
 Worktree: `/Users/max/LLM Usage Bar/.worktrees/codex-usage-dashboard-backend`
 
-Current HEAD: `2194c36d` (`fix(usage): harden dashboard consistency`)
+Current HEAD: `0e27e91c` (`refactor(proxy): remove legacy selection from request path`)
 
 ## Goal
 
@@ -16,13 +16,13 @@ Complete `docs/superpowers/plans/2026-07-11-usage-dashboard-backend-implementati
 
 - Task 1 — v13 domain and v12 to v13 migration: complete, reviewed, committed.
 - Task 2 — Provider/event/quota persistence DAO: complete, reviewed, committed.
-- Task 3 — static one-Provider route: core implementation and review fixes complete. Real local-503/zero-upstream-hit acceptance remains in Task 8.
+- Task 3 — static one-Provider route: complete and independently approved, including real local-503/zero-upstream-hit acceptance with reachable legacy candidates.
 - Task 4 — transactional ingestion and trusted cost capture: complete, independently re-reviewed and approved.
 - Task 5 — quota scheduler and bound Claude/Codex Session import: complete and independently approved.
 - Coexistence safety — distinct app identity/data path from original CC Switch: complete and independently approved. Optional explicit snapshot import is not implemented.
 - Task 6 — aggregation and nine Tauri commands: complete, independently approved, full Rust gate passed.
-- Task 7 — React dashboard/configuration surface: TDD implementation in progress.
-- Task 8 — hide legacy main-path entry points, real mock-upstream proxy acceptance, full gate: not started.
+- Task 7 — React dashboard/configuration surface: implementation and all Important review fixes complete; two Minor findings are being closed with Task 8 frontend.
+- Task 8 — legacy entry points hidden; real proxy E2E, runbook and request-path selector removal complete and independently approved. Minimal desktop shell, live v13 event refresh, App/full-suite tests and final full gate remain in progress.
 
 ## Completed commits in this implementation
 
@@ -51,6 +51,13 @@ Complete `docs/superpowers/plans/2026-07-11-usage-dashboard-backend-implementati
 - `9d7ea3f8` docs: checkpoint task 6 backend API
 - `958a1cf6` fix(usage): pin session sync ownership
 - `2194c36d` fix(usage): harden dashboard consistency
+- `f9063ff8` feat(ui): add provider-aware usage dashboard
+- `ee93e413` feat(ui): make usage dashboard the main path
+- `15e44174` test(usage): add real proxy dashboard acceptance
+- `9575ab78` docs: add usage dashboard acceptance runbook
+- `66cff322` fix(ui): complete dashboard diagnostics and localization
+- `4fa50dea` test(usage): harden proxy dashboard acceptance
+- `0e27e91c` refactor(proxy): remove legacy selection from request path
 
 ## Key decisions
 
@@ -69,6 +76,9 @@ Complete `docs/superpowers/plans/2026-07-11-usage-dashboard-backend-implementati
 13. On Unix, original-data override protection compares filesystem object identity (`dev` + `ino`) in addition to lexical/canonical paths; this closes macOS case-alias and symlink bypasses.
 14. Quota fetch-state writes are monotonic by `attempted_at`; equal-time success may replace failure, but failure cannot replace equal-time success. Dashboard reads the latest snapshot/state under one database lock.
 15. Historical usage remains grouped by immutable `UsageEvent.product_group_id` even if the Provider is later reclassified. Provider and product cost sums use checked Decimal addition and return an error on overflow.
+16. The real proxy acceptance must seed reachable legacy current/failover candidates in its route-less fixture; an empty database cannot prove that fallback is unreachable.
+17. Integration tests use the existing `ProxyService` boundary. Production `ProxyServer`/`ProxyConfig` APIs are not widened solely for test access.
+18. Legacy feature removal does not include the desktop window shell: drag regions and optional native-like controls remain required while only switching/failover/MCP/Skills/OpenClaw/cloud business entry points leave the render tree.
 
 ## Failures and review findings already handled
 
@@ -91,6 +101,9 @@ Complete `docs/superpowers/plans/2026-07-11-usage-dashboard-backend-implementati
 - A later Provider integration assertion still expected takeover port 15721 and poisoned six sibling tests after its failure. Updating that one expected output to 15722 restored all 33 Provider integration tests.
 - Task 5 re-review found a binding-change TOCTOU window in `sync_provider(A)`. `958a1cf6` pins the requested Provider through the second binding check; A→B changes now warn without scanning or importing. Re-review approved.
 - Task 6 review found Decimal panic risk, current-Provider product regrouping of historical events, inconsistent quota pair reads, non-monotonic concurrent quota completion, and incomplete result redaction tests. `2194c36d` fixes all five areas; re-review approved.
+- Task 7 review found interval-zero corruption, ignored base-URL-only edits, invisible query/mutation failures, incomplete subscription summaries, incomplete localization and weak date-range assertions. `66cff322` fixes all Important items and exact range coverage; re-review left two Minor diagnostics now included in Task 8 frontend work.
+- Task 8 frontend review found that the initial main-path reduction also removed the desktop drag/window-control shell, did not invalidate v13 dashboard/event queries on `usage-log-recorded`, and used a self-proving mocked App test while the old integration suite stayed red. The repair keeps only the minimal shell and rewrites tests for the new product contract.
+- Task 8 backend review found test-only public API expansion and a route-less empty database that could not detect legacy fallback regression. `4fa50dea` uses existing `ProxyService`, seeds reachable legacy candidates, widens the async query window and asserts the full exact aggregate; independent re-review approved.
 
 ## Latest stage verification
 
@@ -111,6 +124,10 @@ Using repository-pinned Rust 1.95 temporary toolchain environment:
 - Task 6 nine-command integration tests: 2 passed.
 - Full Rust gate after review fixes: library 1850 passed / 2 ignored; all integration test binaries passed.
 - `git diff --check`: passed.
+- Task 7 targeted frontend tests after Important fixes: 15 passed; `tsc --noEmit` and `vite build` passed.
+- Real mock-upstream proxy acceptance after hardening: 1 passed; exact aggregate cost `0.42012` and route-less legacy-candidate 503/zero-hit behavior verified.
+- Provider router after removing unused legacy selection: 11 passed.
+- Required request-path search for `get_effective_current_provider|get_failover_queue|select_providers`: zero matches.
 - No desktop/Tauri application was launched; tests used isolated/in-memory databases.
 
 ## Real-data safety observation
@@ -124,8 +141,7 @@ Using repository-pinned Rust 1.95 temporary toolchain environment:
 
 ## Immediate next actions
 
-1. Finish and independently review Task 7 React dashboard and configuration surface.
-2. Implement Task 8 mock-upstream acceptance, hidden legacy entry points and final full gate.
-3. Keep explicit read-only snapshot import deferred unless it becomes necessary for the accepted product flow.
-4. Implement Task 7 frontend.
-5. Implement Task 8 mock-upstream E2E, hidden legacy UI, acceptance documentation, and full backend/frontend gate.
+1. Finish Task 8 frontend fixes: minimal desktop shell, v13 live event invalidation, real App contract tests, and the remaining two Task 7 Minor diagnostics.
+2. Independently review the frontend result and fix any Critical/Important findings.
+3. Run the complete Rust, TypeScript, unit, renderer-build, static-route and real-proxy gates from current HEAD.
+4. Perform a whole-branch independent review, checkpoint Tasks 7-8 as complete, and keep explicit read-only snapshot import deferred.

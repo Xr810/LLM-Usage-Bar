@@ -1,6 +1,6 @@
 # Usage Dashboard Backend Implementation Progress
 
-Last updated: 2026-07-11
+Last updated: 2026-07-12 00:42 Asia/Singapore
 
 Source plan: `2026-07-11-usage-dashboard-backend-implementation.md`
 
@@ -25,11 +25,12 @@ Execution plan: `2026-07-11-usage-dashboard-backend-execution.md`
   - Optional original-data import is not implemented; if added, it requires explicit user action and a read-only SQLite Backup snapshot.
   - Independent review gaps were fixed: Windows/tray labels and frontend fallback paths are isolated, and symlink plus macOS case-alias regression tests pass. Independent re-review approved the boundary.
 
-- [ ] Task 3: static one-Provider request routing.
+- [x] Task 3: static one-Provider request routing.
   - Main implementation commit: `f323ea75`
   - Full Rust suite passed before review.
   - Independent review found three follow-ups: validate legacy route config before forwarding, preserve both global Usage Provider ID and legacy runtime Provider ID, and prove local 503 produces zero upstream hits in the final mock-upstream acceptance test.
-  - Review fixes were implemented in `7fafece4` and `73ccb294` and independently approved. The request-level zero-hit proof is part of Task 8.
+  - Review fixes were implemented in `7fafece4` and `73ccb294` and independently approved.
+  - Task 8 acceptance (`4fa50dea`) proves that a route-less request stays local 503 with zero upstream hits even when reachable legacy current/failover candidates exist. `0e27e91c` removes the unused legacy selector from the three request-path files; the required static search has no matches.
 - [x] Task 4: transactional usage ingestion and trusted upstream-cost capture.
   - Implementation commit: `7fafece4`
   - Review fixes: `73ccb294`; targeted verification and independent re-review approved.
@@ -47,11 +48,16 @@ Execution plan: `2026-07-11-usage-dashboard-backend-execution.md`
   - Independent re-review approved.
 
 - [ ] Task 7: minimal React dashboard and Provider/route configuration UI.
-  - TDD implementation is in progress.
-
-## Not started
+  - Initial TDD implementation: `f9063ff8`; Important review fixes: `66cff322`.
+  - Target tests pass 15/15, TypeScript typecheck and renderer build pass.
+  - Independent re-review confirmed every Important finding and exact date-range coverage are fixed. Two Minor findings (localized unavailable event source and visible/disabled proxy-state failure handling) are being closed in the Task 8 frontend commit.
 
 - [ ] Task 8: hide legacy entry points, real mock-upstream proxy acceptance, full backend/frontend gate, and acceptance runbook.
+  - Main-path dashboard commit: `ee93e413`; compatibility source modules remain compiled but legacy entry points are no longer rendered.
+  - Real proxy acceptance: `15e44174`, hardened and independently approved in `4fa50dea`.
+  - Acceptance runbook: `9575ab78`.
+  - Request-path static selector removal: `0e27e91c`; Provider router tests 11/11 and required `rg` zero-match gate pass.
+  - Frontend review found the minimal desktop window shell, v13 event invalidation and non-self-proving App/full-suite tests still need repair. Those fixes are in progress; the full final gate has not run yet.
 
 ## Completion rule
 
