@@ -65,6 +65,12 @@ pub use settings::{update_settings, AppSettings};
 pub use store::AppState;
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+pub use usage::domain::{
+    BillingKind, CostSource, CostSourceCounts, ProductUsageView, ProviderUsageView,
+    QuotaFetchState, QuotaSnapshot, QuotaStatusView, RouteBinding, TokenSource, UsageDashboardView,
+    UsageEvent, UsageEventLink, UsageEventPage, UsageProviderInput, UsageProviderView,
+    UsageSourceBinding,
+};
 
 use std::sync::Arc;
 #[cfg(target_os = "macos")]
@@ -1190,6 +1196,15 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::list_usage_providers,
+            commands::save_usage_provider,
+            commands::set_usage_provider_enabled,
+            commands::get_route_bindings,
+            commands::set_route_binding,
+            commands::get_usage_dashboard,
+            commands::get_usage_events,
+            commands::refresh_provider_quota,
+            commands::sync_provider_session_usage,
             commands::get_providers,
             commands::get_current_provider,
             commands::add_provider,

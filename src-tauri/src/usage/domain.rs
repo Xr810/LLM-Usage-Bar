@@ -183,6 +183,41 @@ pub struct UsageEventPage {
     pub page_size: u32,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CostSourceCounts {
+    pub upstream: u64,
+    pub estimated: u64,
+    pub unavailable: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotaStatusView {
+    pub snapshot_id: String,
+    pub fetched_at: i64,
+    pub five_hour_utilization_percent: Option<String>,
+    pub five_hour_resets_at: Option<String>,
+    pub seven_day_utilization_percent: Option<String>,
+    pub seven_day_resets_at: Option<String>,
+    pub manual_resets_remaining: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderUsageView {
+    pub provider: UsageProviderView,
+    pub event_count: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_creation_tokens: u64,
+    pub total_cost_usd: Option<String>,
+    pub cost_source_counts: CostSourceCounts,
+    pub quota: Option<QuotaStatusView>,
+    pub quota_fetch_state: Option<QuotaFetchState>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProductUsageView {
@@ -192,8 +227,10 @@ pub struct ProductUsageView {
     pub cache_read_tokens: u64,
     pub cache_creation_tokens: u64,
     pub total_cost_usd: Option<String>,
-    pub subscription_providers: Vec<UsageProviderView>,
-    pub metered_providers: Vec<UsageProviderView>,
+    pub cost_source_counts: CostSourceCounts,
+    pub token_sources: Vec<TokenSource>,
+    pub subscription_providers: Vec<ProviderUsageView>,
+    pub metered_providers: Vec<ProviderUsageView>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

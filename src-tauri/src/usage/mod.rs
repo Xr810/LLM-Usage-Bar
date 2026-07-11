@@ -1,3 +1,4 @@
+pub mod dashboard;
 pub mod domain;
 pub mod ingestion;
 pub(crate) mod migration;
