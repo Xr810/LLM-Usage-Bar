@@ -29,11 +29,25 @@ pub enum ProxyError {
     #[error("无可用的Provider")]
     NoAvailableProvider,
 
+    #[allow(dead_code)] // v12 compatibility; removed after the stable-v13 gate.
     #[error("所有供应商已熔断，无可用渠道")]
     AllProvidersCircuitOpen,
 
+    #[allow(dead_code)] // v12 compatibility; static routes use RouteNotBound.
     #[error("未配置供应商")]
     NoProvidersConfigured,
+
+    #[error("路由未绑定: {0}")]
+    RouteNotBound(String),
+
+    #[error("路由供应商已禁用: {0}")]
+    RouteProviderDisabled(String),
+
+    #[error("路由供应商非按量计费: {0}")]
+    RouteProviderNotMetered(String),
+
+    #[error("路由配置不完整: {0}")]
+    RouteConfigIncomplete(String),
 
     #[allow(dead_code)]
     #[error("Provider不健康: {0}")]
@@ -132,6 +146,12 @@ impl IntoResponse for ProxyError {
                         (StatusCode::SERVICE_UNAVAILABLE, self.to_string())
                     }
                     ProxyError::NoProvidersConfigured => {
+                        (StatusCode::SERVICE_UNAVAILABLE, self.to_string())
+                    }
+                    ProxyError::RouteNotBound(_)
+                    | ProxyError::RouteProviderDisabled(_)
+                    | ProxyError::RouteProviderNotMetered(_)
+                    | ProxyError::RouteConfigIncomplete(_) => {
                         (StatusCode::SERVICE_UNAVAILABLE, self.to_string())
                     }
                     ProxyError::ProviderUnhealthy(_) => {

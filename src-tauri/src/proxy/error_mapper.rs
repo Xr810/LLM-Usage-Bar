@@ -31,8 +31,12 @@ pub fn map_proxy_error_to_status(error: &ProxyError) -> u16 {
         // 转发失败/连接失败：502 Bad Gateway
         ProxyError::ForwardFailed(_) => 502,
 
-        // 无可用 Provider：503 Service Unavailable
-        ProxyError::NoAvailableProvider => 503,
+        // 无可用/静态路由无效：503 Service Unavailable
+        ProxyError::NoAvailableProvider
+        | ProxyError::RouteNotBound(_)
+        | ProxyError::RouteProviderDisabled(_)
+        | ProxyError::RouteProviderNotMetered(_)
+        | ProxyError::RouteConfigIncomplete(_) => 503,
 
         // 所有供应商已熔断：503 Service Unavailable
         ProxyError::AllProvidersCircuitOpen => 503,
@@ -80,6 +84,12 @@ pub fn get_error_message(error: &ProxyError) -> String {
         ProxyError::NoProvidersConfigured => "未配置供应商".to_string(),
         ProxyError::MaxRetriesExceeded => "所有 Provider 都失败，重试耗尽".to_string(),
         ProxyError::ProviderUnhealthy(msg) => format!("Provider 不健康: {msg}"),
+        ProxyError::RouteNotBound(protocol) => format!("路由未绑定: {protocol}"),
+        ProxyError::RouteProviderDisabled(id) => format!("路由 Provider 已禁用: {id}"),
+        ProxyError::RouteProviderNotMetered(id) => {
+            format!("路由 Provider 不是按量计费: {id}")
+        }
+        ProxyError::RouteConfigIncomplete(id) => format!("路由配置不完整: {id}"),
         ProxyError::DatabaseError(msg) => format!("数据库错误: {msg}"),
         ProxyError::TransformError(msg) => format!("请求/响应转换错误: {msg}"),
         _ => error.to_string(),
@@ -115,6 +125,19 @@ mod tests {
     fn test_map_no_provider_error() {
         let error = ProxyError::NoAvailableProvider;
         assert_eq!(map_proxy_error_to_status(&error), 503);
+    }
+
+    #[test]
+    fn static_route_errors_map_to_service_unavailable() {
+        for error in [
+            ProxyError::RouteNotBound("claude".to_string()),
+            ProxyError::RouteProviderDisabled("p".to_string()),
+            ProxyError::RouteProviderNotMetered("p".to_string()),
+            ProxyError::RouteConfigIncomplete("p".to_string()),
+        ] {
+            assert_eq!(map_proxy_error_to_status(&error), 503);
+            assert!(!get_error_message(&error).is_empty());
+        }
     }
 
     #[test]

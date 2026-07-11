@@ -47,6 +47,7 @@ pub struct ProxyState {
     /// AppHandle，用于发射事件和更新托盘菜单
     pub app_handle: Option<tauri::AppHandle>,
     /// 故障转移切换管理器
+    #[allow(dead_code)] // Retained until milestone-3 physical removal.
     pub failover_manager: Arc<FailoverSwitchManager>,
 }
 

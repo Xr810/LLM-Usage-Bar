@@ -3,6 +3,7 @@
 //! 提供请求生命周期的上下文管理，封装通用初始化逻辑
 
 use crate::app_config::AppType;
+use crate::error::AppError;
 use crate::provider::Provider;
 use crate::proxy::{
     extract_session_id,
@@ -41,11 +42,6 @@ pub struct RequestContext {
     pub provider: Provider,
     /// 完整的 Provider 列表（用于故障转移）
     providers: Vec<Provider>,
-    /// 请求开始时的"当前供应商"（用于判断是否需要同步 UI/托盘）
-    ///
-    /// 这里使用本地 settings 的设备级 current provider。
-    /// 代理模式下如果实际使用的 provider 与此不一致，会触发切换以确保 UI 始终准确。
-    pub current_provider_id: String,
     /// 请求中的模型名称
     pub request_model: String,
     /// 实际发往上游的模型名（路由接管/模型映射后的真值，forward 成功后回填）。
@@ -107,9 +103,6 @@ impl RequestContext {
         let optimizer_config = state.db.get_optimizer_config().unwrap_or_default();
         let copilot_optimizer_config = state.db.get_copilot_optimizer_config().unwrap_or_default();
 
-        let current_provider_id =
-            crate::settings::get_current_provider(&app_type).unwrap_or_default();
-
         // 从请求体提取模型名称
         let request_model = body
             .get("model")
@@ -129,31 +122,20 @@ impl RequestContext {
             session_result.client_provided
         );
 
-        // 使用共享的 ProviderRouter 选择 Provider（熔断器状态跨请求保持）
-        // 注意：只在这里调用一次，结果传递给 forwarder，避免重复消耗 HalfOpen 名额
-        let providers = state
+        // Route bindings are the request-path SSOT. Resolve exactly one provider
+        // for every request so binding/provider edits take effect immediately.
+        let provider = state
             .provider_router
-            .select_providers(app_type_str)
+            .select_bound_provider(canonical_route_protocol(app_type_str))
             .await
-            .map_err(|e| match e {
-                crate::error::AppError::AllProvidersCircuitOpen => {
-                    ProxyError::AllProvidersCircuitOpen
-                }
-                crate::error::AppError::NoProvidersConfigured => ProxyError::NoProvidersConfigured,
-                _ => ProxyError::DatabaseError(e.to_string()),
-            })?;
-
-        let provider = providers
-            .first()
-            .cloned()
-            .ok_or(ProxyError::NoAvailableProvider)?;
+            .map_err(map_route_selection_error)?;
+        let providers = vec![provider.clone()];
 
         log::debug!(
-            "[{}] Provider: {}, model: {}, failover chain: {} providers, session: {}",
+            "[{}] Bound provider: {}, model: {}, session: {}",
             tag,
             provider.name,
             request_model,
-            providers.len(),
             session_id
         );
 
@@ -162,7 +144,6 @@ impl RequestContext {
             app_config,
             provider,
             providers,
-            current_provider_id,
             request_model,
             outbound_model: None,
             tag,
@@ -193,60 +174,29 @@ impl RequestContext {
 
     /// 创建 RequestForwarder
     ///
-    /// 使用共享的 ProviderRouter，确保熔断器状态跨请求保持
-    ///
-    /// 配置生效规则：
-    /// - 故障转移开启：超时配置正常生效（0 表示禁用超时）
-    /// - 故障转移关闭：超时配置不生效（全部传入 0）
+    /// Preserve the existing timeout and protocol-adapter configuration while
+    /// forcing the provider-attempt count to one.
     pub fn create_forwarder(&self, state: &ProxyState) -> RequestForwarder {
-        let (non_streaming_timeout, first_byte_timeout, idle_timeout) =
-            if self.app_config.auto_failover_enabled {
-                // 故障转移开启：使用配置的值（0 = 禁用超时）
-                (
-                    self.app_config.non_streaming_timeout as u64,
-                    self.app_config.streaming_first_byte_timeout as u64,
-                    self.app_config.streaming_idle_timeout as u64,
-                )
-            } else {
-                // 故障转移关闭：不启用超时配置
-                log::debug!(
-                    "[{}] Failover disabled, timeout configs are bypassed",
-                    self.tag
-                );
-                (0, 0, 0)
-            };
-
-        // 故障转移关闭时强制 max_retries=0（仅尝试 1 个 provider），与「不超时 + 不切换」语义一致。
-        let max_retries = if self.app_config.auto_failover_enabled {
-            self.app_config.max_retries
-        } else {
-            0
-        };
-
         RequestForwarder::new(
-            state.provider_router.clone(),
-            non_streaming_timeout,
+            self.app_config.non_streaming_timeout as u64,
             state.status.clone(),
             state.current_providers.clone(),
             state.gemini_shadow.clone(),
             state.codex_chat_history.clone(),
-            state.failover_manager.clone(),
             state.app_handle.clone(),
-            self.current_provider_id.clone(),
             self.session_id.clone(),
             self.session_client_provided,
-            first_byte_timeout,
-            idle_timeout,
+            self.app_config.streaming_first_byte_timeout as u64,
+            self.app_config.streaming_idle_timeout as u64,
             self.rectifier_config.clone(),
             self.optimizer_config.clone(),
             self.copilot_optimizer_config.clone(),
-            max_retries,
         )
     }
 
     /// 获取 Provider 列表（用于故障转移）
     ///
-    /// 返回在创建上下文时已选择的 providers，避免重复调用 select_providers()
+    /// Returns the single provider selected from the static binding.
     pub fn get_providers(&self) -> Vec<Provider> {
         self.providers.clone()
     }
@@ -298,9 +248,87 @@ pub(crate) fn extract_gemini_model_from_path(endpoint: &str) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+/// Claude Desktop shares the Claude inbound protocol binding. All persisted
+/// route-binding keys remain constrained to claude/codex/gemini.
+pub(crate) fn canonical_route_protocol(app_type: &str) -> &str {
+    if app_type == "claude-desktop" {
+        "claude"
+    } else {
+        app_type
+    }
+}
+
+/// Convert route-selection errors from `ProviderRouter::select_bound_provider` into typed
+/// `ProxyError` variants so callers can respond with consistent HTTP status codes.
+pub(crate) fn map_route_selection_error(error: AppError) -> ProxyError {
+    match error {
+        AppError::Message(message) => {
+            if let Some(value) = message.strip_prefix("route not bound: ") {
+                ProxyError::RouteNotBound(value.to_string())
+            } else if let Some(value) = message.strip_prefix("route provider disabled: ") {
+                ProxyError::RouteProviderDisabled(value.to_string())
+            } else if let Some(value) = message.strip_prefix("route provider is not metered: ") {
+                ProxyError::RouteProviderNotMetered(value.to_string())
+            } else if let Some(value) = message.strip_prefix("route config incomplete: ") {
+                ProxyError::RouteConfigIncomplete(value.to_string())
+            } else {
+                ProxyError::Internal(message)
+            }
+        }
+        _ => ProxyError::Internal(error.to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::extract_gemini_model_from_path;
+    use super::{
+        canonical_route_protocol, extract_gemini_model_from_path, map_route_selection_error,
+    };
+    use crate::error::AppError;
+    use crate::proxy::ProxyError;
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+
+    #[test]
+    fn route_selection_failures_are_local_service_unavailable_errors() {
+        let cases = [
+            (
+                "route not bound: claude",
+                ProxyError::RouteNotBound("claude".to_string()),
+            ),
+            (
+                "route provider disabled: disabled-id",
+                ProxyError::RouteProviderDisabled("disabled-id".to_string()),
+            ),
+            (
+                "route provider is not metered: subscription-id",
+                ProxyError::RouteProviderNotMetered("subscription-id".to_string()),
+            ),
+            (
+                "route config incomplete: incomplete-id",
+                ProxyError::RouteConfigIncomplete("incomplete-id".to_string()),
+            ),
+        ];
+
+        for (message, expected) in cases {
+            let error = map_route_selection_error(AppError::Message(message.to_string()));
+            assert_eq!(
+                std::mem::discriminant(&error),
+                std::mem::discriminant(&expected)
+            );
+            assert_eq!(
+                error.into_response().status(),
+                StatusCode::SERVICE_UNAVAILABLE
+            );
+        }
+    }
+
+    #[test]
+    fn claude_desktop_uses_the_claude_route_binding() {
+        assert_eq!(canonical_route_protocol("claude-desktop"), "claude");
+        assert_eq!(canonical_route_protocol("codex"), "codex");
+        assert_eq!(canonical_route_protocol("gemini"), "gemini");
+    }
 
     #[test]
     fn extract_model_with_action() {

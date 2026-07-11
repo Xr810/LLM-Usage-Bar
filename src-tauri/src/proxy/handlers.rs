@@ -136,13 +136,12 @@ pub async fn handle_claude_desktop_models(
     headers: axum::http::HeaderMap,
 ) -> Result<Json<Value>, ProxyError> {
     validate_claude_desktop_gateway_auth(&state, &headers)?;
-    let providers = state
+    let provider = state
         .provider_router
-        .select_providers("claude-desktop")
+        .select_bound_provider("claude")
         .await
-        .map_err(|e| ProxyError::DatabaseError(e.to_string()))?;
-    let provider = providers.first().ok_or(ProxyError::NoAvailableProvider)?;
-    let response = crate::claude_desktop_config::model_list_response(provider)
+        .map_err(crate::proxy::handler_context::map_route_selection_error)?;
+    let response = crate::claude_desktop_config::model_list_response(&provider)
         .map_err(|e| ProxyError::ConfigError(e.to_string()))?;
     Ok(Json(response))
 }
@@ -1292,6 +1291,10 @@ fn codex_proxy_error_code(error: &ProxyError) -> &'static str {
         ProxyError::NoProvidersConfigured => "cc_switch_no_providers_configured",
         ProxyError::MaxRetriesExceeded => "cc_switch_max_retries_exceeded",
         ProxyError::ProviderUnhealthy(_) => "cc_switch_provider_unhealthy",
+        ProxyError::RouteNotBound(_) => "cc_switch_route_not_bound",
+        ProxyError::RouteProviderDisabled(_) => "cc_switch_route_provider_disabled",
+        ProxyError::RouteProviderNotMetered(_) => "cc_switch_route_provider_not_metered",
+        ProxyError::RouteConfigIncomplete(_) => "cc_switch_route_config_incomplete",
         ProxyError::ConfigError(_) => "cc_switch_config_error",
         ProxyError::TransformError(_) => "cc_switch_transform_error",
         ProxyError::InvalidRequest(_) => "cc_switch_invalid_request",
