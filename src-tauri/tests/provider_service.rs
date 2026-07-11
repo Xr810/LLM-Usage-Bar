@@ -1647,8 +1647,8 @@ wire_api = "responses"
     let live_config =
         std::fs::read_to_string(cc_switch_lib::get_codex_config_path()).expect("read config.toml");
     assert!(
-        live_config.contains("http://127.0.0.1:15721/v1"),
-        "live config should remain pointed at the local proxy"
+        live_config.contains("http://127.0.0.1:15722/v1"),
+        "live config should use the isolated dashboard proxy"
     );
     assert!(
         live_config.contains("PROXY_MANAGED"),
