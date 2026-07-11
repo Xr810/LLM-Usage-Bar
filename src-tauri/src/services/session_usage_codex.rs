@@ -22,6 +22,9 @@ use crate::services::session_usage::{
     get_sync_state, metadata_modified_nanos, update_sync_state, SessionSyncResult,
 };
 use crate::services::usage_stats::{find_model_pricing, should_skip_session_insert, DedupKey};
+use crate::usage::domain::TokenSource;
+use crate::usage::ingestion::{LegacyLogInput, UsageIngestionInput, UsageIngestionService};
+use crate::usage::session::ProviderSessionSyncResult;
 use rust_decimal::Decimal;
 use std::fs;
 use std::io::{BufRead, BufReader};
@@ -144,6 +147,36 @@ fn parse_cumulative_tokens(total_usage: &serde_json::Value) -> Option<Cumulative
 
 /// 同步 Codex 使用数据（从 JSONL 会话日志）
 pub fn sync_codex_usage(db: &Database) -> Result<SessionSyncResult, AppError> {
+    sync_codex_usage_impl(db, None)
+}
+
+/// Provider-aware Codex import. The binding check happens before any file scan,
+/// and bound-path insertion errors abort the file before its offset is stored.
+pub fn sync_codex_usage_bound(
+    db: &Database,
+    provider_id: &str,
+) -> Result<ProviderSessionSyncResult, AppError> {
+    let binding = db.get_usage_source_binding("codex")?;
+    if !binding.is_some_and(|binding| binding.provider_id == provider_id) {
+        return Ok(ProviderSessionSyncResult {
+            warnings: vec!["no usage source binding for codex".to_string()],
+            ..ProviderSessionSyncResult::default()
+        });
+    }
+    let legacy = sync_codex_usage_impl(db, Some(provider_id))?;
+    Ok(ProviderSessionSyncResult {
+        imported: legacy.imported,
+        skipped: legacy.skipped,
+        files_scanned: legacy.files_scanned,
+        errors: legacy.errors,
+        warnings: vec![],
+    })
+}
+
+fn sync_codex_usage_impl(
+    db: &Database,
+    bound_provider_id: Option<&str>,
+) -> Result<SessionSyncResult, AppError> {
     let codex_dir = get_codex_config_dir();
 
     let files = collect_codex_session_files(&codex_dir);
@@ -160,7 +193,7 @@ pub fn sync_codex_usage(db: &Database) -> Result<SessionSyncResult, AppError> {
     }
 
     for file_path in &files {
-        match sync_single_codex_file(db, file_path) {
+        match sync_single_codex_file(db, file_path, bound_provider_id) {
             Ok((imported, skipped)) => {
                 result.imported += imported;
                 result.skipped += skipped;
@@ -229,7 +262,11 @@ fn collect_jsonl_recursive(dir: &Path, files: &mut Vec<PathBuf>, depth: u32, max
 }
 
 /// 同步单个 Codex JSONL 文件，返回 (imported, skipped)
-fn sync_single_codex_file(db: &Database, file_path: &Path) -> Result<(u32, u32), AppError> {
+fn sync_single_codex_file(
+    db: &Database,
+    file_path: &Path,
+    bound_provider_id: Option<&str>,
+) -> Result<(u32, u32), AppError> {
     let file_path_str = file_path.to_string_lossy().to_string();
 
     // 获取文件元数据
@@ -400,17 +437,33 @@ fn sync_single_codex_file(db: &Database, file_path: &Path) -> Result<(u32, u32),
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
 
-                match insert_codex_session_entry(
-                    db,
-                    &request_id,
-                    &delta,
-                    &state.current_model,
-                    state.session_id.as_deref(),
-                    timestamp.as_deref(),
-                ) {
+                let insert_result = if let Some(provider_id) = bound_provider_id {
+                    insert_bound_codex_session_entry(
+                        db,
+                        provider_id,
+                        &request_id,
+                        &delta,
+                        &state.current_model,
+                        state.session_id.as_deref(),
+                        timestamp.as_deref(),
+                    )
+                } else {
+                    insert_codex_session_entry(
+                        db,
+                        &request_id,
+                        &delta,
+                        &state.current_model,
+                        state.session_id.as_deref(),
+                        timestamp.as_deref(),
+                    )
+                };
+                match insert_result {
                     Ok(true) => imported += 1,
                     Ok(false) => skipped += 1,
                     Err(e) => {
+                        if bound_provider_id.is_some() {
+                            return Err(e);
+                        }
                         log::warn!("[CODEX-SYNC] 插入失败 ({}): {e}", request_id);
                         skipped += 1;
                     }
@@ -424,6 +477,66 @@ fn sync_single_codex_file(db: &Database, file_path: &Path) -> Result<(u32, u32),
     update_sync_state(db, &file_path_str, file_modified, line_offset)?;
 
     Ok((imported, skipped))
+}
+
+fn insert_bound_codex_session_entry(
+    db: &Database,
+    provider_id: &str,
+    request_id: &str,
+    delta: &DeltaTokens,
+    model: &str,
+    transcript_session_id: Option<&str>,
+    timestamp: Option<&str>,
+) -> Result<bool, AppError> {
+    let occurred_at = timestamp
+        .and_then(|timestamp| chrono::DateTime::parse_from_rfc3339(timestamp).ok())
+        .map(|timestamp| timestamp.timestamp())
+        .unwrap_or_else(current_timestamp);
+    let usage = TokenUsage {
+        input_tokens: delta.input,
+        output_tokens: delta.output,
+        cache_read_tokens: delta.cached_input,
+        cache_creation_tokens: 0,
+        model: Some(model.to_string()),
+        message_id: None,
+    };
+    let outcome = UsageIngestionService::new(db).ingest(&UsageIngestionInput {
+        event_id: format!("codex-session:{request_id}"),
+        source: TokenSource::SessionLog,
+        provider_id: provider_id.to_string(),
+        occurred_at,
+        model: model.to_string(),
+        usage,
+        upstream_cost: None,
+        request_id: Some(request_id.to_string()),
+        // A transcript session spans multiple API calls and is therefore not a
+        // request-level dedup identity.
+        session_id: None,
+        upstream_correlation_id: None,
+        legacy: Some(LegacyLogInput {
+            request_id: request_id.to_string(),
+            provider_id: "_codex_session".to_string(),
+            app_type: "codex".to_string(),
+            request_model: model.to_string(),
+            pricing_model: model.to_string(),
+            latency_ms: 0,
+            first_token_ms: None,
+            status_code: 200,
+            error_message: None,
+            session_id: transcript_session_id.map(str::to_string),
+            provider_type: Some("codex_session".to_string()),
+            is_streaming: true,
+            cost_multiplier: Decimal::ONE,
+        }),
+    })?;
+    Ok(outcome.inserted)
+}
+
+fn current_timestamp() -> i64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 /// 插入单条 Codex 会话记录到 proxy_request_logs

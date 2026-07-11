@@ -16,6 +16,9 @@ use crate::proxy::usage::parser::TokenUsage;
 use crate::services::usage_stats::{
     effective_usage_log_filter, find_model_pricing, should_skip_session_insert, DedupKey,
 };
+use crate::usage::domain::TokenSource;
+use crate::usage::ingestion::{LegacyLogInput, UsageIngestionInput, UsageIngestionService};
+use crate::usage::session::ProviderSessionSyncResult;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -59,6 +62,37 @@ struct ParsedAssistantUsage {
 
 /// 同步 Claude Code 会话日志到使用统计数据库
 pub fn sync_claude_session_logs(db: &Database) -> Result<SessionSyncResult, AppError> {
+    sync_claude_session_logs_impl(db, None)
+}
+
+/// Provider-aware entry point used by the v13 usage path. It refuses to scan
+/// before an explicit Claude source binding exists and only advances a file's
+/// offset after all parsed records have been ingested successfully.
+pub fn sync_claude_session_logs_bound(
+    db: &Database,
+    provider_id: &str,
+) -> Result<ProviderSessionSyncResult, AppError> {
+    let binding = db.get_usage_source_binding("claude")?;
+    if !binding.is_some_and(|binding| binding.provider_id == provider_id) {
+        return Ok(ProviderSessionSyncResult {
+            warnings: vec!["no usage source binding for claude".to_string()],
+            ..ProviderSessionSyncResult::default()
+        });
+    }
+    let legacy = sync_claude_session_logs_impl(db, Some(provider_id))?;
+    Ok(ProviderSessionSyncResult {
+        imported: legacy.imported,
+        skipped: legacy.skipped,
+        files_scanned: legacy.files_scanned,
+        errors: legacy.errors,
+        warnings: vec![],
+    })
+}
+
+fn sync_claude_session_logs_impl(
+    db: &Database,
+    bound_provider_id: Option<&str>,
+) -> Result<SessionSyncResult, AppError> {
     let projects_dir = get_claude_config_dir().join("projects");
     if !projects_dir.exists() {
         return Ok(SessionSyncResult {
@@ -82,7 +116,7 @@ pub fn sync_claude_session_logs(db: &Database) -> Result<SessionSyncResult, AppE
     for file_path in &jsonl_files {
         result.files_scanned += 1;
 
-        match sync_single_file(db, file_path) {
+        match sync_single_file(db, file_path, bound_provider_id) {
             Ok((imported, skipped)) => {
                 result.imported += imported;
                 result.skipped += skipped;
@@ -179,7 +213,11 @@ fn push_jsonl_children(dir: &Path, files: &mut Vec<PathBuf>) {
 }
 
 /// 同步单个 JSONL 文件，返回 (imported, skipped)
-fn sync_single_file(db: &Database, file_path: &Path) -> Result<(u32, u32), AppError> {
+fn sync_single_file(
+    db: &Database,
+    file_path: &Path,
+    bound_provider_id: Option<&str>,
+) -> Result<(u32, u32), AppError> {
     let file_path_str = file_path.to_string_lossy().to_string();
 
     // 获取文件元数据
@@ -340,10 +378,18 @@ fn sync_single_file(db: &Database, file_path: &Path) -> Result<(u32, u32), AppEr
             msg.message_id
         );
 
-        match insert_session_log_entry(db, &request_id, msg) {
+        let insert_result = if let Some(provider_id) = bound_provider_id {
+            insert_bound_session_entry(db, provider_id, &request_id, msg)
+        } else {
+            insert_session_log_entry(db, &request_id, msg)
+        };
+        match insert_result {
             Ok(true) => imported += 1,
             Ok(false) => skipped += 1,
             Err(e) => {
+                if bound_provider_id.is_some() {
+                    return Err(e);
+                }
                 log::warn!("[SESSION-SYNC] 插入失败 ({}): {e}", msg.message_id);
                 skipped += 1;
             }
@@ -354,6 +400,68 @@ fn sync_single_file(db: &Database, file_path: &Path) -> Result<(u32, u32), AppEr
     update_sync_state(db, &file_path_str, file_modified, line_offset)?;
 
     Ok((imported, skipped))
+}
+
+fn insert_bound_session_entry(
+    db: &Database,
+    provider_id: &str,
+    request_id: &str,
+    msg: &ParsedAssistantUsage,
+) -> Result<bool, AppError> {
+    let occurred_at = msg
+        .timestamp
+        .as_ref()
+        .and_then(|timestamp| chrono::DateTime::parse_from_rfc3339(timestamp).ok())
+        .map(|timestamp| timestamp.timestamp())
+        .unwrap_or_else(current_timestamp);
+    let usage = TokenUsage {
+        input_tokens: msg.input_tokens,
+        output_tokens: msg.output_tokens,
+        cache_read_tokens: msg.cache_read_tokens,
+        cache_creation_tokens: msg.cache_creation_tokens,
+        model: Some(msg.model.clone()),
+        message_id: Some(msg.message_id.clone()),
+    };
+    let outcome = UsageIngestionService::new(db).ingest(&UsageIngestionInput {
+        event_id: format!("claude-session:{}", msg.message_id),
+        source: TokenSource::SessionLog,
+        provider_id: provider_id.to_string(),
+        occurred_at,
+        model: msg.model.clone(),
+        usage,
+        upstream_cost: None,
+        request_id: Some(request_id.to_string()),
+        // Claude's transcript session ID identifies a conversation rather than
+        // one request, so it must not be used as a cross-source dedup key.
+        session_id: None,
+        // Proxy response parsing exposes the raw Anthropic message ID as the
+        // upstream correlation ID. Preserve that exact value so cross-source
+        // linking can use real evidence instead of the legacy `session:` key.
+        upstream_correlation_id: Some(msg.message_id.clone()),
+        legacy: Some(LegacyLogInput {
+            request_id: request_id.to_string(),
+            provider_id: "_session".to_string(),
+            app_type: "claude".to_string(),
+            request_model: msg.model.clone(),
+            pricing_model: msg.model.clone(),
+            latency_ms: 0,
+            first_token_ms: None,
+            status_code: 200,
+            error_message: None,
+            session_id: msg.session_id.clone(),
+            provider_type: Some("session_log".to_string()),
+            is_streaming: true,
+            cost_multiplier: Decimal::ONE,
+        }),
+    })?;
+    Ok(outcome.inserted)
+}
+
+fn current_timestamp() -> i64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 /// 获取 session_log_sync 表中某条目的同步进度。
@@ -771,7 +879,7 @@ mod tests {
         let empty = r#"{"type":"assistant","message":{"id":"msg_empty","model":"claude-opus-4-8","usage":{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}},"timestamp":"2026-06-07T13:01:24Z","sessionId":"session-wf"}"#;
         fs::write(&file, format!("{billable}\n{empty}\n")).unwrap();
 
-        let (imported, _skipped) = sync_single_file(&db, &file)?;
+        let (imported, _skipped) = sync_single_file(&db, &file, None)?;
         assert_eq!(
             imported, 1,
             "有 cache 成本但无 stop_reason 的 message 必须被导入"
@@ -790,6 +898,128 @@ mod tests {
             |row| row.get(0),
         )?;
         assert!(!empty_exists, "全 0 token 的 message 应被跳过");
+        drop(conn);
+
+        fs::remove_dir_all(&tmp).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn bound_sync_advances_offset_only_after_full_file_ingestion() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        db.save_usage_provider(&crate::usage::domain::UsageProviderInput {
+            id: "claude-sub".to_string(),
+            name: "Claude subscription".to_string(),
+            billing_kind: crate::usage::domain::BillingKind::Subscription,
+            product_group_id: "claude".to_string(),
+            token_sources: vec![crate::usage::domain::TokenSource::SessionLog],
+            quota_source: None,
+            quota_interval_seconds: Some(300),
+            route_app_type: None,
+            route_config: None,
+            quota_config: None,
+            enabled: true,
+        })?;
+        db.set_usage_source_binding("claude", "claude-sub")?;
+
+        let tmp = std::env::temp_dir().join(format!(
+            "cc-switch-bound-session-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&tmp).unwrap();
+        let file = tmp.join("session.jsonl");
+        let billable = r#"{"type":"assistant","message":{"id":"msg_bound","model":"claude-sonnet-4-5","usage":{"input_tokens":2,"output_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0},"stop_reason":"end_turn"},"timestamp":"2026-06-07T13:01:23Z","sessionId":"session-bound"}"#;
+        fs::write(&file, format!("{billable}\n")).unwrap();
+        let file_key = file.to_string_lossy().to_string();
+
+        {
+            let conn = lock_conn!(db.conn);
+            conn.execute_batch(
+                "CREATE TRIGGER fail_bound_session_event
+                 BEFORE INSERT ON usage_events
+                 BEGIN SELECT RAISE(FAIL, 'forced bound session failure'); END;",
+            )?;
+        }
+        assert!(sync_single_file(&db, &file, Some("claude-sub")).is_err());
+        assert_eq!(get_sync_state(&db, &file_key)?, (0, 0));
+
+        {
+            let conn = lock_conn!(db.conn);
+            conn.execute_batch("DROP TRIGGER fail_bound_session_event;")?;
+        }
+        let (imported, skipped) = sync_single_file(&db, &file, Some("claude-sub"))?;
+        assert_eq!((imported, skipped), (1, 0));
+        assert_eq!(get_sync_state(&db, &file_key)?.1, 1);
+
+        fs::remove_dir_all(&tmp).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn bound_claude_parser_links_exact_raw_message_id_from_proxy() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        db.save_usage_provider(&crate::usage::domain::UsageProviderInput {
+            id: "claude-sub".to_string(),
+            name: "Claude subscription".to_string(),
+            billing_kind: crate::usage::domain::BillingKind::Subscription,
+            product_group_id: "claude".to_string(),
+            token_sources: vec![
+                crate::usage::domain::TokenSource::Proxy,
+                crate::usage::domain::TokenSource::SessionLog,
+            ],
+            quota_source: None,
+            quota_interval_seconds: Some(300),
+            route_app_type: None,
+            route_config: None,
+            quota_config: None,
+            enabled: true,
+        })?;
+        db.set_usage_source_binding("claude", "claude-sub")?;
+
+        UsageIngestionService::new(&db).ingest(&UsageIngestionInput {
+            event_id: "proxy-event".to_string(),
+            source: TokenSource::Proxy,
+            provider_id: "claude-sub".to_string(),
+            occurred_at: 1_000,
+            model: "claude-sonnet-4-5".to_string(),
+            usage: TokenUsage {
+                input_tokens: 2,
+                output_tokens: 1,
+                cache_read_tokens: 0,
+                cache_creation_tokens: 0,
+                model: Some("claude-sonnet-4-5".to_string()),
+                message_id: Some("msg_exact".to_string()),
+            },
+            upstream_cost: None,
+            request_id: None,
+            session_id: None,
+            upstream_correlation_id: Some("msg_exact".to_string()),
+            legacy: None,
+        })?;
+
+        let tmp = std::env::temp_dir().join(format!(
+            "cc-switch-bound-link-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&tmp).unwrap();
+        let file = tmp.join("session.jsonl");
+        let billable = r#"{"type":"assistant","message":{"id":"msg_exact","model":"claude-sonnet-4-5","usage":{"input_tokens":2,"output_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0},"stop_reason":"end_turn"},"timestamp":"1970-01-01T00:16:40Z","sessionId":"conversation-wide"}"#;
+        fs::write(&file, format!("{billable}\n")).unwrap();
+
+        assert_eq!(sync_single_file(&db, &file, Some("claude-sub"))?, (1, 0));
+        let conn = lock_conn!(db.conn);
+        let link: (String, String) = conn.query_row(
+            "SELECT link_kind, link_value FROM usage_event_links",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert_eq!(
+            link,
+            (
+                "upstream_correlation_id".to_string(),
+                "msg_exact".to_string()
+            )
+        );
         drop(conn);
 
         fs::remove_dir_all(&tmp).ok();
