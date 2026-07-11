@@ -17,13 +17,13 @@ Execution plan: `2026-07-11-usage-dashboard-backend-execution.md`
 
 ## In progress
 
-- [x] Coexistence safety: isolate the Usage Dashboard from original CC Switch (`e931e7f9`).
+- [x] Coexistence safety: isolate the Usage Dashboard from original CC Switch (`e931e7f9`, `7fb6a6df`).
   - The original installation supports database schema v11 and currently uses `~/.cc-switch/cc-switch.db`.
   - This branch must not start against or upgrade that database to v13.
   - Implemented distinct product/bundle identity, `~/.llm-usage-bar`, no legacy deep-link registration/updater, unsafe-override rejection, and proxy port 15722.
-  - Tests proved the original v11 database hash, mtime, size, and version stay unchanged.
+  - Tests use fake/in-memory homes and do not start this app against the original v11 database. The running original app legitimately updates its own database, so long-window hash equality is not used as the final proof.
   - Optional original-data import is not implemented; if added, it requires explicit user action and a read-only SQLite Backup snapshot.
-  - Independent review found three remaining isolation gaps: Windows/tray labels, frontend fallback paths, and an actual symlink regression test. Fixes are pending.
+  - Independent review gaps were fixed: Windows/tray labels and frontend fallback paths are isolated, and an actual symlink regression test passes. Independent re-review is running.
 
 - [ ] Task 3: static one-Provider request routing.
   - Main implementation commit: `f323ea75`

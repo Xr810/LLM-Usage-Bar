@@ -1,12 +1,12 @@
 # Current Task State
 
-Last checkpoint: 2026-07-11 23:49 Asia/Singapore
+Last checkpoint: 2026-07-11 23:54 Asia/Singapore
 
 Branch: `codex/usage-dashboard-backend`
 
 Worktree: `/Users/max/LLM Usage Bar/.worktrees/codex-usage-dashboard-backend`
 
-Current HEAD: `49907148` (`fix(usage): enforce quota and session ownership`)
+Current HEAD: `7fb6a6df` (`fix(app): complete cc switch isolation`)
 
 ## Goal
 
@@ -19,7 +19,7 @@ Complete `docs/superpowers/plans/2026-07-11-usage-dashboard-backend-implementati
 - Task 3 — static one-Provider route: core implementation and review fixes complete. Real local-503/zero-upstream-hit acceptance remains in Task 8.
 - Task 4 — transactional ingestion and trusted cost capture: complete, independently re-reviewed and approved.
 - Task 5 — quota scheduler and bound Claude/Codex Session import: complete; independent review findings fixed and targeted tests pass.
-- Coexistence safety — distinct app identity/data path from original CC Switch: core isolation complete and committed. Review found three remaining surface/test gaps (Windows title/tray tooltip, frontend fallback paths, actual symlink regression). Optional explicit snapshot import is not implemented.
+- Coexistence safety — distinct app identity/data path from original CC Switch: review gaps fixed and committed; independent re-review is running. Optional explicit snapshot import is not implemented.
 - Task 6 — aggregation and nine Tauri commands: in progress; RED tests and initial implementation are present but not yet stage-verified or committed.
 - Task 7 — React dashboard/configuration surface: not started.
 - Task 8 — hide legacy main-path entry points, real mock-upstream proxy acceptance, full gate: not started.
@@ -40,6 +40,8 @@ Complete `docs/superpowers/plans/2026-07-11-usage-dashboard-backend-implementati
 - `e931e7f9` feat(app): isolate dashboard from cc switch
 - `b37f947c` docs: checkpoint coexistence and quota stages
 - `49907148` fix(usage): enforce quota and session ownership
+- `13b203a0` docs: checkpoint task 5 review fixes
+- `7fb6a6df` fix(app): complete cc switch isolation
 
 ## Key decisions
 
@@ -68,6 +70,8 @@ Complete `docs/superpowers/plans/2026-07-11-usage-dashboard-backend-implementati
 - The first coexistence draft registered `llmusagebar://`, but the legacy runtime handler only parsed `ccswitch://`. The final isolation commit registers no scheme and therefore cannot steal or break original CC Switch deep links.
 - Task 3 and Task 4 independent re-review approved the implemented route/ingestion fixes. Task 8 still owes the true proxy 503/zero-hit mock-upstream proof.
 - Coexistence review found residual `CC Switch` Windows/tray labels, frontend `~/.cc-switch` fallbacks, and no real symlink regression test. These are the next isolation fixes.
+- Those coexistence findings were fixed in `7fb6a6df`: Windows/tray branding and frontend fallbacks now use LLM Usage Bar, and an actual filesystem symlink to a fake legacy directory is rejected by the same validation boundary.
+- The first repeat check stopped at `cargo fmt --check` because the new tests needed formatting; formatting was applied and the complete targeted gate then passed.
 
 ## Latest stage verification
 
@@ -81,21 +85,22 @@ Using repository-pinned Rust 1.95 temporary toolchain environment:
 - `usage::session`: 4 passed after review fixes.
 - Final Task 5 gate: quota 8, Session service 4, underlying Session parser/service group 36 passed.
 - Coexistence identity integration test: 1 passed.
-- Config-path and Store legacy-override guards: 1 + 1 passed.
+- Config-path direct and actual-symlink override guards: 1 + 1 passed.
 - `git diff --check`: passed.
 - No desktop/Tauri application was launched; tests used isolated/in-memory databases.
 
 ## Real-data safety observation
 
 - `/Users/max/.cc-switch/cc-switch.db` currently reports `PRAGMA user_version = 11`.
-- Before and after coexistence tests its SHA-256 stayed `94f3b946ad912c224bb2f88085dc2d93c059b0e7d8f6ac6aa58fa0869b45379e`; mtime `1783783942` and size `8941568` also stayed unchanged.
+- The original `cc-switch` process (PID 31434 at this checkpoint) currently holds the database open and is actively updating it. Its current observed SHA-256 is `c105618cb3d52512443584a4cef1536cb522edd078b5e09cd8af03c5b457b49c`, mtime `1783785082`, size `8998912`; the version remains 11.
+- The hash changed since the earlier checkpoint because the original app is live, so long-window hash equality is not a valid coexistence proof. Isolation is instead verified through distinct identity/default paths, override rejection (including symlink), and tests that use fake/in-memory homes without launching this app.
 - The original installed app and this branch previously shared `com.ccswitch.desktop` and `~/.cc-switch`.
 - A prior v13 backup artifact exists, proving the collision is not theoretical.
-- Until coexistence isolation is committed and verified, never run `tauri dev` or the built dashboard with the real user home.
+- Never run `tauri dev` or a development build with the real user home during this plan; use isolated test homes and in-memory databases.
 
 ## Immediate next actions
 
-1. Fix and verify the three remaining coexistence review findings without touching the original v11 database.
+1. Receive the independent coexistence re-review and address any remaining findings.
 2. Finish and independently review Task 6 aggregation and nine Tauri commands.
 3. Keep explicit read-only snapshot import deferred unless it becomes necessary for the accepted product flow.
 4. Implement Task 7 frontend.
