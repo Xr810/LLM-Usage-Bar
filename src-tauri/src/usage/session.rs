@@ -52,9 +52,17 @@ impl SessionUsageService {
             });
         }
 
+        self.sync_bound_sources(provider_id, sources)
+    }
+
+    fn sync_bound_sources(
+        &self,
+        provider_id: &str,
+        sources: Vec<&str>,
+    ) -> Result<ProviderSessionSyncResult, AppError> {
         let mut combined = ProviderSessionSyncResult::default();
         for source in sources {
-            let result = self.sync_source(source)?;
+            let result = self.sync_bound_source(source, provider_id)?;
             combined.imported = combined.imported.saturating_add(result.imported);
             combined.skipped = combined.skipped.saturating_add(result.skipped);
             combined.files_scanned = combined.files_scanned.saturating_add(result.files_scanned);
@@ -72,15 +80,22 @@ impl SessionUsageService {
             });
         };
 
+        self.sync_bound_source(source, &binding.provider_id)
+    }
+
+    fn sync_bound_source(
+        &self,
+        source: &str,
+        provider_id: &str,
+    ) -> Result<ProviderSessionSyncResult, AppError> {
         match source {
             "claude" => crate::services::session_usage::sync_claude_session_logs_bound(
                 &self.db,
-                &binding.provider_id,
+                provider_id,
             ),
-            "codex" => crate::services::session_usage_codex::sync_codex_usage_bound(
-                &self.db,
-                &binding.provider_id,
-            ),
+            "codex" => {
+                crate::services::session_usage_codex::sync_codex_usage_bound(&self.db, provider_id)
+            }
             _ => Err(AppError::Message(format!(
                 "unsupported usage source: {source}"
             ))),
@@ -310,5 +325,25 @@ mod tests {
             service.bound_sources_for_provider("sub").unwrap(),
             vec!["claude", "codex"]
         );
+    }
+
+    #[test]
+    fn provider_sync_rechecks_requested_owner_after_binding_changes() {
+        let db = Arc::new(Database::memory().unwrap());
+        db.save_usage_provider(&provider("requested-a")).unwrap();
+        db.save_usage_provider(&provider("new-owner-b")).unwrap();
+        db.set_usage_source_binding("claude", "requested-a")
+            .unwrap();
+        let service = SessionUsageService::new(db.clone());
+
+        let sources = service.bound_sources_for_provider("requested-a").unwrap();
+        assert_eq!(sources, vec!["claude"]);
+        db.set_usage_source_binding("claude", "new-owner-b")
+            .unwrap();
+
+        let result = service.sync_bound_sources("requested-a", sources).unwrap();
+        assert_eq!(result.imported, 0);
+        assert_eq!(result.files_scanned, 0);
+        assert_eq!(result.warnings, vec!["no usage source binding for claude"]);
     }
 }

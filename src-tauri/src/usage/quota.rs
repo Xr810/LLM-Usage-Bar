@@ -620,7 +620,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn configuration_and_normalization_failures_wait_for_the_full_interval() {
+    async fn configuration_failures_wait_for_the_full_interval() {
         let db = Arc::new(Database::memory().unwrap());
         let mut input = provider("sub", BillingKind::Subscription, true);
         input.quota_source = Some("unsupported".to_string());
@@ -639,6 +639,30 @@ mod tests {
         );
         assert_eq!(service.refresh_due_at(101).await.unwrap().attempted, 0);
         assert_eq!(service.refresh_due_at(399).await.unwrap().attempted, 0);
+    }
+
+    #[tokio::test]
+    async fn normalization_failures_wait_for_the_full_interval() {
+        let db = Arc::new(Database::memory().unwrap());
+        db.save_usage_provider(&provider("sub", BillingKind::Subscription, true))
+            .unwrap();
+        let mut invalid = successful_quota("claude");
+        invalid.tiers[0].utilization = f64::NAN;
+        let collector = Arc::new(FakeCollector::new(vec![Ok(invalid)]));
+        let service = QuotaService::with_collectors(db.clone(), vec![collector.clone()]);
+
+        let first = service.refresh_due_at(100).await.unwrap();
+        assert_eq!(first.attempted, 1);
+        assert_eq!(first.errors.len(), 1);
+        let state = db.get_quota_fetch_state("sub").unwrap().unwrap();
+        assert_eq!(state.last_attempt_at, Some(100));
+        assert!(state
+            .last_error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("non-negative finite"));
+        assert_eq!(service.refresh_due_at(399).await.unwrap().attempted, 0);
+        assert_eq!(collector.calls.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
