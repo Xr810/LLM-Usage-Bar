@@ -1,12 +1,12 @@
 # Current Task State
 
-Last checkpoint: 2026-07-12 00:04 Asia/Singapore
+Last checkpoint: 2026-07-12 00:16 Asia/Singapore
 
 Branch: `codex/usage-dashboard-backend`
 
 Worktree: `/Users/max/LLM Usage Bar/.worktrees/codex-usage-dashboard-backend`
 
-Current HEAD: `fd8f7af6` (`feat(usage): expose product dashboard API`)
+Current HEAD: `2194c36d` (`fix(usage): harden dashboard consistency`)
 
 ## Goal
 
@@ -18,10 +18,10 @@ Complete `docs/superpowers/plans/2026-07-11-usage-dashboard-backend-implementati
 - Task 2 — Provider/event/quota persistence DAO: complete, reviewed, committed.
 - Task 3 — static one-Provider route: core implementation and review fixes complete. Real local-503/zero-upstream-hit acceptance remains in Task 8.
 - Task 4 — transactional ingestion and trusted cost capture: complete, independently re-reviewed and approved.
-- Task 5 — quota scheduler and bound Claude/Codex Session import: complete; independent review findings fixed and targeted tests pass.
+- Task 5 — quota scheduler and bound Claude/Codex Session import: complete and independently approved.
 - Coexistence safety — distinct app identity/data path from original CC Switch: complete and independently approved. Optional explicit snapshot import is not implemented.
-- Task 6 — aggregation and nine Tauri commands: implementation complete, full Rust gate passed, independently reviewing.
-- Task 7 — React dashboard/configuration surface: not started.
+- Task 6 — aggregation and nine Tauri commands: complete, independently approved, full Rust gate passed.
+- Task 7 — React dashboard/configuration surface: TDD implementation in progress.
 - Task 8 — hide legacy main-path entry points, real mock-upstream proxy acceptance, full gate: not started.
 
 ## Completed commits in this implementation
@@ -48,6 +48,9 @@ Complete `docs/superpowers/plans/2026-07-11-usage-dashboard-backend-implementati
 - `89f24a8e` test(app): isolate fixtures from cc switch data
 - `42884072` test(app): expect isolated takeover port
 - `fd8f7af6` feat(usage): expose product dashboard API
+- `9d7ea3f8` docs: checkpoint task 6 backend API
+- `958a1cf6` fix(usage): pin session sync ownership
+- `2194c36d` fix(usage): harden dashboard consistency
 
 ## Key decisions
 
@@ -64,6 +67,8 @@ Complete `docs/superpowers/plans/2026-07-11-usage-dashboard-backend-implementati
 11. Machine-global Claude/Codex quota credentials may belong to only one enabled subscription Provider per local quota source. Provider Session sync uses only explicit source bindings and aggregates every source bound to that Provider; it never guesses from product or legacy metadata.
 12. Subscription dashboard DTOs expose a redacted successful quota snapshot separately from `quota_fetch_state`, so a first-attempt failure remains visible even when no successful snapshot exists.
 13. On Unix, original-data override protection compares filesystem object identity (`dev` + `ino`) in addition to lexical/canonical paths; this closes macOS case-alias and symlink bypasses.
+14. Quota fetch-state writes are monotonic by `attempted_at`; equal-time success may replace failure, but failure cannot replace equal-time success. Dashboard reads the latest snapshot/state under one database lock.
+15. Historical usage remains grouped by immutable `UsageEvent.product_group_id` even if the Provider is later reclassified. Provider and product cost sums use checked Decimal addition and return an error on overflow.
 
 ## Failures and review findings already handled
 
@@ -84,6 +89,8 @@ Complete `docs/superpowers/plans/2026-07-11-usage-dashboard-backend-implementati
 - The first Task 6 full Rust run exposed six stale 15721 assertions after the deliberate proxy-port isolation to 15722. Targeted assertions were updated; all affected tests passed.
 - The second full run exposed integration fixtures still writing/cleaning current app data under `.cc-switch`; the first cleanup-only attempt was insufficient because test paths themselves were stale. All current-app fixtures now use `.llm-usage-bar` while coexistence tests retain `.cc-switch` only as the protected legacy path.
 - A later Provider integration assertion still expected takeover port 15721 and poisoned six sibling tests after its failure. Updating that one expected output to 15722 restored all 33 Provider integration tests.
+- Task 5 re-review found a binding-change TOCTOU window in `sync_provider(A)`. `958a1cf6` pins the requested Provider through the second binding check; A→B changes now warn without scanning or importing. Re-review approved.
+- Task 6 review found Decimal panic risk, current-Provider product regrouping of historical events, inconsistent quota pair reads, non-monotonic concurrent quota completion, and incomplete result redaction tests. `2194c36d` fixes all five areas; re-review approved.
 
 ## Latest stage verification
 
@@ -99,9 +106,10 @@ Using repository-pinned Rust 1.95 temporary toolchain environment:
 - Coexistence identity integration test: 1 passed.
 - Config-path direct and actual-symlink override guards: 1 + 1 passed.
 - macOS case-alias override guard: 1 passed; independent coexistence review approved.
-- Task 6 dashboard aggregation tests: 3 passed.
+- Task 6 dashboard aggregation tests: 6 passed.
+- Quota DAO monotonic/consistent status tests: 5 passed; quota service tests: 9 passed.
 - Task 6 nine-command integration tests: 2 passed.
-- Full Rust gate: library 1842 passed / 2 ignored; all integration test binaries passed.
+- Full Rust gate after review fixes: library 1850 passed / 2 ignored; all integration test binaries passed.
 - `git diff --check`: passed.
 - No desktop/Tauri application was launched; tests used isolated/in-memory databases.
 
@@ -116,8 +124,8 @@ Using repository-pinned Rust 1.95 temporary toolchain environment:
 
 ## Immediate next actions
 
-1. Receive the independent Task 5/Task 6 reviews and address any remaining findings.
-2. Begin Task 7 React dashboard and configuration surface after rereading this checkpoint.
+1. Finish and independently review Task 7 React dashboard and configuration surface.
+2. Implement Task 8 mock-upstream acceptance, hidden legacy entry points and final full gate.
 3. Keep explicit read-only snapshot import deferred unless it becomes necessary for the accepted product flow.
 4. Implement Task 7 frontend.
 5. Implement Task 8 mock-upstream E2E, hidden legacy UI, acceptance documentation, and full backend/frontend gate.

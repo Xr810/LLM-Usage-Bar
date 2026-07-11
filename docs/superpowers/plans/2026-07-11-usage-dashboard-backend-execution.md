@@ -40,7 +40,7 @@
 
 ### Task 0: Isolate LLM Usage Bar from Original CC Switch
 
-**Status:** Core isolation complete (`e931e7f9`). Optional explicit read-only snapshot import remains undecided; the dashboard never auto-opens or upgrades the original v11 database.
+**Status:** Complete and independently reviewed (`e931e7f9`, `7fb6a6df`, `ca38e0ef`). Optional explicit read-only snapshot import remains deferred; the dashboard never auto-opens or upgrades the original v11 database.
 
 - [x] Use a distinct product name, bundle identifier, updater policy, data/settings directory, and default proxy port; register no legacy deep-link scheme.
 - [x] Reject configuration-directory overrides that point back to the original `~/.cc-switch` data.
@@ -290,7 +290,7 @@ git commit -m "feat(proxy): enforce static provider routes"
 
 ### Task 4: Build Transactional Usage Ingestion and Capture Upstream Cost
 
-**Status:** Implementation and review fixes complete (`7fafece4`, `73ccb294`); independent re-review pending.
+**Status:** Complete and independently reviewed (`7fafece4`, `73ccb294`).
 
 **Files:**
 - Create: `src-tauri/src/usage/ingestion.rs`
@@ -374,7 +374,7 @@ git commit -m "feat(usage): ingest trusted request costs"
 
 ### Task 5: Add Provider-Aware Quota Collection and Session Import
 
-**Status:** Implementation complete (`fc57e960`); targeted quota/session/parser gates pass and independent review is in progress.
+**Status:** Complete and independently reviewed (`fc57e960`, `49907148`, `958a1cf6`).
 
 **Files:**
 - Create: `src-tauri/src/usage/quota.rs`
@@ -429,7 +429,7 @@ git commit -m "feat(usage): collect quotas and bound sessions"
 
 ### Task 6: Implement Aggregation and the Nine Tauri Commands
 
-**Status:** Implementation complete in `fd8f7af6`; independent review in progress.
+**Status:** Complete and independently reviewed (`fd8f7af6`, `2194c36d`).
 
 **Files:**
 - Create: `src-tauri/src/usage/dashboard.rs`
@@ -493,7 +493,7 @@ git commit -m "feat(usage): expose product dashboard API"
 
 ### Task 7: Add the Minimal React Dashboard and Configuration Surface
 
-**Status:** Not started.
+**Status:** In progress.
 
 **Files:**
 - Create: `src/types/usageDashboard.ts`

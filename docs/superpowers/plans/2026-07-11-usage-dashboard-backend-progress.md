@@ -35,19 +35,22 @@ Execution plan: `2026-07-11-usage-dashboard-backend-execution.md`
   - Review fixes: `73ccb294`; targeted verification and independent re-review approved.
   - New events must use the global Usage Provider ID; compatibility logs may retain the legacy Provider ID.
 
-- [x] Task 5: Provider-aware quota collection and bound Session import (`fc57e960`, `49907148`).
+- [x] Task 5: Provider-aware quota collection and bound Session import (`fc57e960`, `49907148`, `958a1cf6`).
   - Review fixes persist every failed attempt, enforce one Provider per machine-local quota source, and use explicit source bindings as the only Session sync source of truth.
   - Targeted quota (8), Session service (4), and underlying Session parser/service (36) tests pass.
-  - Independent review findings addressed; final re-review will be included in the Task 6 checkpoint review pass.
+  - Binding-change TOCTOU review finding fixed; normalization and ownership tests pass. Independent re-review approved.
 
-- [x] Task 6: product aggregation and nine Tauri commands (`fd8f7af6`).
+- [x] Task 6: product aggregation and nine Tauri commands (`fd8f7af6`, `2194c36d`).
   - Product/Provider aggregation, duplicate exclusion, Decimal cost sums, half-open filters, pagination, redacted quota/fetch state, and exactly nine registered commands are implemented.
-  - Targeted tests pass (dashboard 3, command adapters 2); the complete Rust suite passes (1842 passed, 2 ignored plus all integration binaries).
-  - Independent review is in progress.
+  - Review fixes add checked Decimal sums, immutable historical product grouping, consistent/monotonic quota state, and a redacted refresh result.
+  - Targeted tests pass (quota DAO 5, quota service 9, dashboard 6, command adapters 2); the complete Rust suite passes (1850 passed, 2 ignored plus all integration binaries).
+  - Independent re-review approved.
+
+- [ ] Task 7: minimal React dashboard and Provider/route configuration UI.
+  - TDD implementation is in progress.
 
 ## Not started
 
-- [ ] Task 7: minimal React dashboard and Provider/route configuration UI.
 - [ ] Task 8: hide legacy entry points, real mock-upstream proxy acceptance, full backend/frontend gate, and acceptance runbook.
 
 ## Completion rule
