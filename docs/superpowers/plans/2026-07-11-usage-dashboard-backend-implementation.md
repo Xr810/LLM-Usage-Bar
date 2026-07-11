@@ -2,7 +2,7 @@
 
 ## Implementation Status
 
-**Complete as of 2026-07-12.** Tasks 0–8 are implemented, independently reviewed, committed and verified with the repository-pinned Rust 1.95 toolchain plus the complete frontend gate. PR #6's initial backend CI run exposed two `-D warnings` Clippy findings omitted from the local final gate; commit `67654d44` fixes both without lint suppression and passes the exact CI Clippy command plus the full Rust gate locally. The optional explicit read-only import from original CC Switch remains intentionally deferred and is not required for coexistence.
+**Complete as of 2026-07-12.** Tasks 0–8 are implemented, independently reviewed, committed and verified with the repository-pinned Rust 1.95 toolchain plus the complete frontend gate. PR #6's initial backend CI run exposed two `-D warnings` Clippy findings omitted from the local final gate; commit `67654d44` fixes both without lint suppression. The remediation run completed with Backend Checks, Frontend Checks and PR labelling all green. The optional explicit read-only import from original CC Switch remains intentionally deferred and is not required for coexistence.
 
 ## 开发上下文
 
