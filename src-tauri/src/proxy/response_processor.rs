@@ -1106,6 +1106,7 @@ mod tests {
             billing_kind: BillingKind::Metered,
             product_group_id: "claude".to_string(),
             token_sources: vec![TokenSource::Proxy],
+            session_source_bindings: None,
             quota_source: None,
             quota_interval_seconds: None,
             route_app_type: Some("claude".to_string()),

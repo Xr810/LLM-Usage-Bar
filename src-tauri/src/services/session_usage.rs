@@ -72,14 +72,15 @@ pub fn sync_claude_session_logs_bound(
     db: &Database,
     provider_id: &str,
 ) -> Result<ProviderSessionSyncResult, AppError> {
-    let binding = db.get_usage_source_binding("claude")?;
-    if !binding.is_some_and(|binding| binding.provider_id == provider_id) {
+    let legacy = db.with_bound_usage_source("claude", provider_id, || {
+        sync_claude_session_logs_impl(db, Some(provider_id))
+    })?;
+    let Some(legacy) = legacy else {
         return Ok(ProviderSessionSyncResult {
             warnings: vec!["no usage source binding for claude".to_string()],
             ..ProviderSessionSyncResult::default()
         });
-    }
-    let legacy = sync_claude_session_logs_impl(db, Some(provider_id))?;
+    };
     Ok(ProviderSessionSyncResult {
         imported: legacy.imported,
         skipped: legacy.skipped,
@@ -913,6 +914,7 @@ mod tests {
             billing_kind: crate::usage::domain::BillingKind::Subscription,
             product_group_id: "claude".to_string(),
             token_sources: vec![crate::usage::domain::TokenSource::SessionLog],
+            session_source_bindings: None,
             quota_source: None,
             quota_interval_seconds: Some(300),
             route_app_type: None,
@@ -967,6 +969,7 @@ mod tests {
                 crate::usage::domain::TokenSource::Proxy,
                 crate::usage::domain::TokenSource::SessionLog,
             ],
+            session_source_bindings: None,
             quota_source: None,
             quota_interval_seconds: Some(300),
             route_app_type: None,

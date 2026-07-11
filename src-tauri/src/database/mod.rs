@@ -76,6 +76,7 @@ pub(crate) use lock_conn;
 /// rusqlite::Connection 本身不是 Sync 的，因此需要这层包装。
 pub struct Database {
     pub(crate) conn: Mutex<Connection>,
+    pub(crate) usage_source_binding_operation: Mutex<()>,
 }
 
 fn register_db_change_hook(conn: &Connection) {
@@ -118,6 +119,7 @@ impl Database {
 
         let db = Self {
             conn: Mutex::new(conn),
+            usage_source_binding_operation: Mutex::new(()),
         };
         db.create_tables()?;
 
@@ -189,6 +191,7 @@ impl Database {
 
         let db = Self {
             conn: Mutex::new(conn),
+            usage_source_binding_operation: Mutex::new(()),
         };
         db.create_tables()?;
         db.apply_schema_migrations()?;

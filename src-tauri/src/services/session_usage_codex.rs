@@ -156,14 +156,15 @@ pub fn sync_codex_usage_bound(
     db: &Database,
     provider_id: &str,
 ) -> Result<ProviderSessionSyncResult, AppError> {
-    let binding = db.get_usage_source_binding("codex")?;
-    if !binding.is_some_and(|binding| binding.provider_id == provider_id) {
+    let legacy = db.with_bound_usage_source("codex", provider_id, || {
+        sync_codex_usage_impl(db, Some(provider_id))
+    })?;
+    let Some(legacy) = legacy else {
         return Ok(ProviderSessionSyncResult {
             warnings: vec!["no usage source binding for codex".to_string()],
             ..ProviderSessionSyncResult::default()
         });
-    }
-    let legacy = sync_codex_usage_impl(db, Some(provider_id))?;
+    };
     Ok(ProviderSessionSyncResult {
         imported: legacy.imported,
         skipped: legacy.skipped,

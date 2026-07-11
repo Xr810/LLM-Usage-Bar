@@ -10,6 +10,8 @@ use serde_json::Value;
 use std::time::{SystemTime, UNIX_EPOCH};
 use url::Url;
 
+const SUPPORTED_SESSION_SOURCES: [&str; 2] = ["claude", "codex"];
+
 fn now_timestamp() -> Result<i64, AppError> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -89,7 +91,10 @@ fn public_route_base_url(raw: String) -> Option<String> {
     })
 }
 
-fn provider_view(provider: &UsageProviderStored) -> UsageProviderView {
+fn provider_view(
+    provider: &UsageProviderStored,
+    session_source_bindings: Vec<String>,
+) -> UsageProviderView {
     let route_base_url = provider.route_config.as_ref().and_then(|config| {
         let direct_or_env = config
             .get("base_url")
@@ -159,6 +164,7 @@ fn provider_view(provider: &UsageProviderStored) -> UsageProviderView {
         billing_kind: provider.billing_kind,
         product_group_id: provider.product_group_id.clone(),
         token_sources: provider.token_sources.clone(),
+        session_source_bindings,
         quota_source: provider.quota_source.clone(),
         quota_interval_seconds: provider.quota_interval_seconds,
         route_app_type: provider.route_app_type.clone(),
@@ -171,6 +177,48 @@ fn provider_view(provider: &UsageProviderStored) -> UsageProviderView {
     }
 }
 
+fn validate_session_source_bindings(
+    input: &UsageProviderInput,
+) -> Result<Option<Vec<String>>, AppError> {
+    let Some(requested) = input.session_source_bindings.as_ref() else {
+        return Ok(None);
+    };
+    for source in requested {
+        if !SUPPORTED_SESSION_SOURCES.contains(&source.as_str()) {
+            return Err(AppError::Message(format!(
+                "unsupported usage source: {source}"
+            )));
+        }
+    }
+    if !requested.is_empty() && !input.token_sources.contains(&TokenSource::SessionLog) {
+        return Err(AppError::Message(
+            "session source bindings require session_log token support".to_string(),
+        ));
+    }
+    Ok(Some(
+        SUPPORTED_SESSION_SOURCES
+            .iter()
+            .filter(|source| requested.iter().any(|requested| requested == **source))
+            .map(|source| (*source).to_string())
+            .collect(),
+    ))
+}
+
+fn source_bindings_for_provider(
+    conn: &rusqlite::Connection,
+    provider_id: &str,
+) -> Result<Vec<String>, AppError> {
+    let mut statement = conn.prepare(
+        "SELECT source FROM usage_source_bindings
+         WHERE provider_id = ?1 ORDER BY source",
+    )?;
+    let bindings = statement
+        .query_map([provider_id], |row| row.get(0))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(AppError::from)?;
+    Ok(bindings)
+}
+
 impl Database {
     pub fn list_usage_providers(&self) -> Result<Vec<UsageProviderView>, AppError> {
         let conn = lock_conn!(self.conn);
@@ -180,7 +228,15 @@ impl Database {
         let providers = statement
             .query_map([], provider_from_row)?
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(providers.iter().map(provider_view).collect())
+        providers
+            .iter()
+            .map(|provider| {
+                Ok(provider_view(
+                    provider,
+                    source_bindings_for_provider(&conn, &provider.id)?,
+                ))
+            })
+            .collect()
     }
 
     pub fn get_usage_provider(&self, id: &str) -> Result<Option<UsageProviderStored>, AppError> {
@@ -199,6 +255,7 @@ impl Database {
         input: &UsageProviderInput,
     ) -> Result<UsageProviderView, AppError> {
         input.validate().map_err(AppError::Message)?;
+        let requested_session_sources = validate_session_source_bindings(input)?;
         let now = now_timestamp()?;
         let token_sources = to_json_string(&input.token_sources)?;
         let route_config = input
@@ -217,8 +274,10 @@ impl Database {
             .transpose()
             .map_err(|_| AppError::Message("quota interval is too large".to_string()))?;
 
-        let conn = lock_conn!(self.conn);
-        conn.execute(
+        let _operation_guard = lock_conn!(self.usage_source_binding_operation);
+        let mut conn = lock_conn!(self.conn);
+        let transaction = conn.transaction()?;
+        transaction.execute(
             "INSERT INTO usage_providers (
                 id, name, billing_kind, product_group_id, token_sources, quota_source,
                 quota_interval_seconds, route_app_type, route_config, quota_config,
@@ -252,12 +311,35 @@ impl Database {
             ],
         )?;
 
-        let stored = conn.query_row(
+        if let Some(requested) = requested_session_sources.as_ref() {
+            for source in SUPPORTED_SESSION_SOURCES {
+                if requested.iter().any(|requested| requested == source) {
+                    transaction.execute(
+                        "INSERT INTO usage_source_bindings (source, provider_id, updated_at)
+                         VALUES (?1, ?2, ?3)
+                         ON CONFLICT(source) DO UPDATE SET
+                            provider_id = excluded.provider_id,
+                            updated_at = excluded.updated_at",
+                        params![source, input.id, now],
+                    )?;
+                } else {
+                    transaction.execute(
+                        "DELETE FROM usage_source_bindings
+                         WHERE source = ?1 AND provider_id = ?2",
+                        params![source, input.id],
+                    )?;
+                }
+            }
+        }
+
+        let stored = transaction.query_row(
             &format!("SELECT {PROVIDER_COLUMNS} FROM usage_providers WHERE id = ?1"),
             [&input.id],
             provider_from_row,
         )?;
-        Ok(provider_view(&stored))
+        let bindings = source_bindings_for_provider(&transaction, &input.id)?;
+        transaction.commit()?;
+        Ok(provider_view(&stored, bindings))
     }
 
     pub fn set_usage_provider_enabled(&self, id: &str, enabled: bool) -> Result<(), AppError> {
@@ -359,6 +441,12 @@ impl Database {
         source_key: &str,
         provider_id: &str,
     ) -> Result<UsageSourceBinding, AppError> {
+        if !SUPPORTED_SESSION_SOURCES.contains(&source_key) {
+            return Err(AppError::Message(format!(
+                "unsupported usage source: {source_key}"
+            )));
+        }
+        let _operation_guard = lock_conn!(self.usage_source_binding_operation);
         let conn = lock_conn!(self.conn);
         let token_sources = conn
             .query_row(
@@ -395,6 +483,34 @@ impl Database {
             updated_at,
         })
     }
+
+    pub(crate) fn with_bound_usage_source<T>(
+        &self,
+        source_key: &str,
+        provider_id: &str,
+        operation: impl FnOnce() -> Result<T, AppError>,
+    ) -> Result<Option<T>, AppError> {
+        if !SUPPORTED_SESSION_SOURCES.contains(&source_key) {
+            return Err(AppError::Message(format!(
+                "unsupported usage source: {source_key}"
+            )));
+        }
+        let _operation_guard = lock_conn!(self.usage_source_binding_operation);
+        let binding_matches = {
+            let conn = lock_conn!(self.conn);
+            conn.query_row(
+                "SELECT provider_id FROM usage_source_bindings WHERE source = ?1",
+                [source_key],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .is_some_and(|bound_provider_id| bound_provider_id == provider_id)
+        };
+        if !binding_matches {
+            return Ok(None);
+        }
+        operation().map(Some)
+    }
 }
 
 #[cfg(test)]
@@ -402,6 +518,8 @@ mod tests {
     use crate::database::Database;
     use crate::usage::domain::{BillingKind, TokenSource, UsageProviderInput};
     use serde_json::json;
+    use std::sync::{mpsc, Arc};
+    use std::time::Duration;
 
     fn provider(
         id: &str,
@@ -414,6 +532,7 @@ mod tests {
             billing_kind,
             product_group_id: "claude".to_string(),
             token_sources,
+            session_source_bindings: None,
             quota_source: Some("official".to_string()),
             quota_interval_seconds: Some(300),
             route_app_type: Some("claude".to_string()),
@@ -658,6 +777,159 @@ mod tests {
         assert_eq!(
             db.get_usage_source_binding("claude").unwrap(),
             Some(binding)
+        );
+    }
+
+    #[test]
+    fn provider_save_atomically_binds_unbinds_and_takes_over_session_sources() {
+        let db = Database::memory().unwrap();
+        let mut first = provider(
+            "first",
+            BillingKind::Subscription,
+            vec![TokenSource::SessionLog],
+        );
+        first.session_source_bindings = Some(vec!["claude".to_string(), "codex".to_string()]);
+
+        let saved = db.save_usage_provider(&first).unwrap();
+        assert_eq!(saved.session_source_bindings, vec!["claude", "codex"]);
+
+        let mut second = provider(
+            "second",
+            BillingKind::Subscription,
+            vec![TokenSource::SessionLog],
+        );
+        second.session_source_bindings = Some(vec!["claude".to_string()]);
+        let saved = db.save_usage_provider(&second).unwrap();
+        assert_eq!(saved.session_source_bindings, vec!["claude"]);
+        assert_eq!(
+            db.get_usage_source_binding("claude")
+                .unwrap()
+                .unwrap()
+                .provider_id,
+            "second"
+        );
+
+        first.session_source_bindings = Some(vec![]);
+        let saved = db.save_usage_provider(&first).unwrap();
+        assert!(saved.session_source_bindings.is_empty());
+        assert_eq!(
+            db.get_usage_source_binding("claude")
+                .unwrap()
+                .unwrap()
+                .provider_id,
+            "second",
+            "deselecting another provider's binding must not remove it"
+        );
+        assert!(db.get_usage_source_binding("codex").unwrap().is_none());
+
+        let listed = db.list_usage_providers().unwrap();
+        assert_eq!(listed[0].session_source_bindings, Vec::<String>::new());
+        assert_eq!(listed[1].session_source_bindings, vec!["claude"]);
+    }
+
+    #[test]
+    fn provider_save_rejects_unknown_or_incapable_session_bindings() {
+        let db = Database::memory().unwrap();
+        let mut incapable = provider("incapable", BillingKind::Metered, vec![TokenSource::Proxy]);
+        incapable.session_source_bindings = Some(vec!["claude".to_string()]);
+        assert_eq!(
+            db.save_usage_provider(&incapable).unwrap_err().to_string(),
+            "session source bindings require session_log token support"
+        );
+
+        let mut unknown = provider(
+            "unknown",
+            BillingKind::Subscription,
+            vec![TokenSource::SessionLog],
+        );
+        unknown.session_source_bindings = Some(vec!["other".to_string()]);
+        assert_eq!(
+            db.save_usage_provider(&unknown).unwrap_err().to_string(),
+            "unsupported usage source: other"
+        );
+    }
+
+    #[test]
+    fn provider_and_session_bindings_roll_back_as_one_transaction() {
+        let db = Database::memory().unwrap();
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute_batch(
+                "CREATE TRIGGER fail_session_binding
+                 BEFORE INSERT ON usage_source_bindings
+                 BEGIN SELECT RAISE(FAIL, 'forced binding failure'); END;",
+            )
+            .unwrap();
+        }
+        let mut input = provider(
+            "atomic",
+            BillingKind::Subscription,
+            vec![TokenSource::SessionLog],
+        );
+        input.session_source_bindings = Some(vec!["claude".to_string()]);
+
+        assert!(db.save_usage_provider(&input).is_err());
+        assert!(db.get_usage_provider("atomic").unwrap().is_none());
+        assert!(db.get_usage_source_binding("claude").unwrap().is_none());
+    }
+
+    #[test]
+    fn binding_mutation_waits_for_in_flight_bound_operation() {
+        let db = Arc::new(Database::memory().unwrap());
+        let mut original = provider(
+            "original",
+            BillingKind::Subscription,
+            vec![TokenSource::SessionLog],
+        );
+        original.session_source_bindings = Some(vec!["claude".to_string()]);
+        db.save_usage_provider(&original).unwrap();
+        let replacement = provider(
+            "replacement",
+            BillingKind::Subscription,
+            vec![TokenSource::SessionLog],
+        );
+        db.save_usage_provider(&replacement).unwrap();
+
+        let (operation_started_tx, operation_started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let operation_db = db.clone();
+        let operation = std::thread::spawn(move || {
+            operation_db
+                .with_bound_usage_source("claude", "original", || {
+                    operation_started_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                    Ok(())
+                })
+                .unwrap()
+        });
+        operation_started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+
+        let (mutation_done_tx, mutation_done_rx) = mpsc::channel();
+        let mutation_db = db.clone();
+        let mutation = std::thread::spawn(move || {
+            mutation_db
+                .set_usage_source_binding("claude", "replacement")
+                .unwrap();
+            mutation_done_tx.send(()).unwrap();
+        });
+        assert!(mutation_done_rx
+            .recv_timeout(Duration::from_millis(50))
+            .is_err());
+
+        release_tx.send(()).unwrap();
+        assert_eq!(operation.join().unwrap(), Some(()));
+        mutation.join().unwrap();
+        mutation_done_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+        assert_eq!(
+            db.get_usage_source_binding("claude")
+                .unwrap()
+                .unwrap()
+                .provider_id,
+            "replacement"
         );
     }
 }

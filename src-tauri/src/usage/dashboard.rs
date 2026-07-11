@@ -317,6 +317,7 @@ mod tests {
             billing_kind,
             product_group_id: product_group_id.to_string(),
             token_sources: vec![TokenSource::Proxy, TokenSource::SessionLog],
+            session_source_bindings: None,
             quota_source: (billing_kind == BillingKind::Subscription).then(|| "claude".to_string()),
             quota_interval_seconds: Some(300),
             route_app_type: None,

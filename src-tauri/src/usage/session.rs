@@ -173,7 +173,9 @@ mod tests {
     use crate::proxy::usage::parser::TokenUsage;
     use crate::usage::domain::{BillingKind, TokenSource, UsageProviderInput};
     use crate::usage::ingestion::{UsageIngestionInput, UsageIngestionService};
+    use std::sync::mpsc;
     use std::sync::Arc;
+    use std::time::Duration;
 
     fn provider(id: &str) -> UsageProviderInput {
         UsageProviderInput {
@@ -182,6 +184,7 @@ mod tests {
             billing_kind: BillingKind::Subscription,
             product_group_id: "claude".to_string(),
             token_sources: vec![TokenSource::Proxy, TokenSource::SessionLog],
+            session_source_bindings: None,
             quota_source: None,
             quota_interval_seconds: Some(300),
             route_app_type: None,
@@ -345,5 +348,53 @@ mod tests {
         assert_eq!(result.imported, 0);
         assert_eq!(result.files_scanned, 0);
         assert_eq!(result.warnings, vec!["no usage source binding for claude"]);
+    }
+
+    #[test]
+    fn claude_and_codex_bound_entrypoints_wait_for_the_binding_operation_guard() {
+        let db = Arc::new(Database::memory().unwrap());
+        let guard = db.usage_source_binding_operation.lock().unwrap();
+        let (done_tx, done_rx) = mpsc::channel();
+
+        let claude_db = db.clone();
+        let claude_done = done_tx.clone();
+        let claude = std::thread::spawn(move || {
+            let result = crate::services::session_usage::sync_claude_session_logs_bound(
+                &claude_db,
+                "unbound-claude",
+            )
+            .unwrap();
+            claude_done.send(("claude", result)).unwrap();
+        });
+        let codex_db = db.clone();
+        let codex = std::thread::spawn(move || {
+            let result = crate::services::session_usage_codex::sync_codex_usage_bound(
+                &codex_db,
+                "unbound-codex",
+            )
+            .unwrap();
+            done_tx.send(("codex", result)).unwrap();
+        });
+
+        assert!(done_rx.recv_timeout(Duration::from_millis(50)).is_err());
+        drop(guard);
+
+        let mut completed = vec![
+            done_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            done_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+        ];
+        completed.sort_by_key(|(source, _)| *source);
+        assert_eq!(completed[0].0, "claude");
+        assert_eq!(
+            completed[0].1.warnings,
+            vec!["no usage source binding for claude"]
+        );
+        assert_eq!(completed[1].0, "codex");
+        assert_eq!(
+            completed[1].1.warnings,
+            vec!["no usage source binding for codex"]
+        );
+        claude.join().unwrap();
+        codex.join().unwrap();
     }
 }

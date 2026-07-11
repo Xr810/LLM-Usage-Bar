@@ -175,6 +175,7 @@ mod tests {
             billing_kind: BillingKind::Subscription,
             product_group_id: "claude".to_string(),
             token_sources: vec![TokenSource::SessionLog],
+            session_source_bindings: None,
             quota_source: Some("official".to_string()),
             quota_interval_seconds: Some(300),
             route_app_type: None,

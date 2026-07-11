@@ -1,5 +1,6 @@
 export type BillingKind = "subscription" | "metered";
 export type TokenSource = "proxy" | "session_log";
+export type SessionSource = "claude" | "codex";
 export type CostSource = "upstream" | "estimated" | "unavailable";
 
 export interface UsageProviderInput {
@@ -8,6 +9,7 @@ export interface UsageProviderInput {
   billingKind: BillingKind;
   productGroupId: string;
   tokenSources: TokenSource[];
+  sessionSourceBindings?: SessionSource[] | null;
   quotaSource?: string | null;
   quotaIntervalSeconds?: number | null;
   routeAppType?: string | null;
@@ -22,6 +24,7 @@ export interface UsageProviderView {
   billingKind: BillingKind;
   productGroupId: string;
   tokenSources: TokenSource[];
+  sessionSourceBindings: SessionSource[];
   quotaSource: string | null;
   quotaIntervalSeconds: number | null;
   routeAppType: string | null;

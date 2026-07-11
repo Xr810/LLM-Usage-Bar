@@ -18,6 +18,7 @@ fn metered() -> UsageProviderInput {
         billing_kind: BillingKind::Metered,
         product_group_id: "product".to_string(),
         token_sources: vec![TokenSource::Proxy],
+        session_source_bindings: None,
         quota_source: None,
         quota_interval_seconds: None,
         route_app_type: Some("claude".to_string()),
@@ -37,6 +38,7 @@ fn subscription() -> UsageProviderInput {
         billing_kind: BillingKind::Subscription,
         product_group_id: "product".to_string(),
         token_sources: vec![TokenSource::SessionLog],
+        session_source_bindings: Some(vec!["claude".to_string()]),
         quota_source: Some("unsupported-test-source".to_string()),
         quota_interval_seconds: Some(300),
         route_app_type: None,
@@ -138,7 +140,11 @@ async fn nine_command_adapters_validate_and_never_serialize_provider_secrets() {
     assert!(refresh_provider_quota_test_hook(&state, "missing")
         .await
         .is_err());
-    save_usage_provider_test_hook(&state, subscription()).unwrap();
+    let subscription_saved = save_usage_provider_test_hook(&state, subscription()).unwrap();
+    assert_eq!(subscription_saved.session_source_bindings, vec!["claude"]);
+    assert!(!serde_json::to_string(&subscription_saved)
+        .unwrap()
+        .contains("quota-secret"));
     assert!(refresh_provider_quota_test_hook(&state, "subscription")
         .await
         .is_err());

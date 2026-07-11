@@ -23,6 +23,7 @@ const input: UsageProviderInput = {
   billingKind: "metered",
   productGroupId: "claude",
   tokenSources: ["proxy"],
+  sessionSourceBindings: [],
   quotaSource: null,
   quotaIntervalSeconds: null,
   routeAppType: "claude",

@@ -13,6 +13,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import type {
   BillingKind,
+  SessionSource,
   TokenSource,
   UsageProviderInput,
   UsageProviderView,
@@ -40,6 +41,9 @@ export function UsageProviderDialog({
   const [productGroupId, setProductGroupId] = useState("");
   const [billingKind, setBillingKind] = useState<BillingKind>("metered");
   const [tokenSources, setTokenSources] = useState<TokenSource[]>(["proxy"]);
+  const [sessionSourceBindings, setSessionSourceBindings] = useState<
+    SessionSource[]
+  >([]);
   const [quotaSource, setQuotaSource] = useState("");
   const [quotaIntervalSeconds, setQuotaIntervalSeconds] = useState("300");
   const [routeAppType, setRouteAppType] = useState("claude");
@@ -56,6 +60,7 @@ export function UsageProviderDialog({
     setProductGroupId(provider?.productGroupId ?? "");
     setBillingKind(provider?.billingKind ?? "metered");
     setTokenSources(provider?.tokenSources ?? ["proxy"]);
+    setSessionSourceBindings(provider?.sessionSourceBindings ?? []);
     setQuotaSource(provider?.quotaSource ?? "");
     setQuotaIntervalSeconds(String(provider?.quotaIntervalSeconds ?? 300));
     setRouteAppType(provider?.routeAppType ?? "claude");
@@ -112,6 +117,9 @@ export function UsageProviderDialog({
         productGroupId: productGroupId.trim(),
         billingKind,
         tokenSources,
+        sessionSourceBindings: tokenSources.includes("session_log")
+          ? sessionSourceBindings
+          : [],
         quotaSource:
           billingKind === "subscription" ? quotaSource.trim() || null : null,
         quotaIntervalSeconds:
@@ -214,6 +222,46 @@ export function UsageProviderDialog({
                       })}
                 </label>
               ))}
+            </div>
+          </fieldset>
+          <fieldset
+            className="space-y-1"
+            disabled={!tokenSources.includes("session_log")}
+          >
+            <legend className="text-sm font-medium">
+              {t("usageDashboard.sessionSourceBindings", {
+                defaultValue: "Session log ownership",
+              })}
+            </legend>
+            <div className="flex gap-4 text-sm">
+              {(["claude", "codex"] as SessionSource[]).map((source) => (
+                <label key={source} className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={sessionSourceBindings.includes(source)}
+                    onChange={(event) =>
+                      setSessionSourceBindings((current) =>
+                        event.target.checked
+                          ? [...new Set([...current, source])]
+                          : current.filter((item) => item !== source),
+                      )
+                    }
+                  />
+                  {source === "claude"
+                    ? t("usageDashboard.claudeSessionSource", {
+                        defaultValue: "Claude session logs",
+                      })
+                    : t("usageDashboard.codexSessionSource", {
+                        defaultValue: "Codex session logs",
+                      })}
+                </label>
+              ))}
+            </div>
+            <div className="text-xs text-muted-foreground">
+              {t("usageDashboard.sessionSourceBindingsHint", {
+                defaultValue:
+                  "Selecting a source transfers its future session imports to this provider.",
+              })}
             </div>
           </fieldset>
           {billingKind === "metered" ? (

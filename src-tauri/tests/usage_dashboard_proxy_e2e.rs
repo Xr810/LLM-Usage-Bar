@@ -91,6 +91,7 @@ fn metered_provider(upstream: std::net::SocketAddr) -> UsageProviderInput {
         billing_kind: BillingKind::Metered,
         product_group_id: "claude-e2e".to_string(),
         token_sources: vec![TokenSource::Proxy],
+        session_source_bindings: None,
         quota_source: None,
         quota_interval_seconds: None,
         route_app_type: Some("claude".to_string()),
