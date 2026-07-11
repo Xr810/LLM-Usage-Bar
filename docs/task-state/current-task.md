@@ -1,12 +1,12 @@
 # Current Task State
 
-Last checkpoint: 2026-07-11 23:54 Asia/Singapore
+Last checkpoint: 2026-07-12 00:04 Asia/Singapore
 
 Branch: `codex/usage-dashboard-backend`
 
 Worktree: `/Users/max/LLM Usage Bar/.worktrees/codex-usage-dashboard-backend`
 
-Current HEAD: `7fb6a6df` (`fix(app): complete cc switch isolation`)
+Current HEAD: `fd8f7af6` (`feat(usage): expose product dashboard API`)
 
 ## Goal
 
@@ -19,8 +19,8 @@ Complete `docs/superpowers/plans/2026-07-11-usage-dashboard-backend-implementati
 - Task 3 — static one-Provider route: core implementation and review fixes complete. Real local-503/zero-upstream-hit acceptance remains in Task 8.
 - Task 4 — transactional ingestion and trusted cost capture: complete, independently re-reviewed and approved.
 - Task 5 — quota scheduler and bound Claude/Codex Session import: complete; independent review findings fixed and targeted tests pass.
-- Coexistence safety — distinct app identity/data path from original CC Switch: review gaps fixed and committed; independent re-review is running. Optional explicit snapshot import is not implemented.
-- Task 6 — aggregation and nine Tauri commands: in progress; RED tests and initial implementation are present but not yet stage-verified or committed.
+- Coexistence safety — distinct app identity/data path from original CC Switch: complete and independently approved. Optional explicit snapshot import is not implemented.
+- Task 6 — aggregation and nine Tauri commands: implementation complete, full Rust gate passed, independently reviewing.
 - Task 7 — React dashboard/configuration surface: not started.
 - Task 8 — hide legacy main-path entry points, real mock-upstream proxy acceptance, full gate: not started.
 
@@ -42,6 +42,12 @@ Complete `docs/superpowers/plans/2026-07-11-usage-dashboard-backend-implementati
 - `49907148` fix(usage): enforce quota and session ownership
 - `13b203a0` docs: checkpoint task 5 review fixes
 - `7fb6a6df` fix(app): complete cc switch isolation
+- `2481fc10` docs: checkpoint coexistence review fixes
+- `ca38e0ef` fix(app): reject legacy data aliases
+- `f50659c9` test(app): expect isolated proxy port
+- `89f24a8e` test(app): isolate fixtures from cc switch data
+- `42884072` test(app): expect isolated takeover port
+- `fd8f7af6` feat(usage): expose product dashboard API
 
 ## Key decisions
 
@@ -56,6 +62,8 @@ Complete `docs/superpowers/plans/2026-07-11-usage-dashboard-backend-implementati
 9. Any future import from original CC Switch must be an explicit user action using a read-only SQLite Backup snapshot, never `fs::copy` of a live/WAL database. The two apps must not simultaneously take over the same CLI live configuration.
 10. LLM Usage Bar registers no custom deep-link scheme in this milestone. A temporary `llmusagebar://` registration was rejected because the retained runtime parser still accepted only `ccswitch://`; claiming a nonfunctional scheme was worse than registering none.
 11. Machine-global Claude/Codex quota credentials may belong to only one enabled subscription Provider per local quota source. Provider Session sync uses only explicit source bindings and aggregates every source bound to that Provider; it never guesses from product or legacy metadata.
+12. Subscription dashboard DTOs expose a redacted successful quota snapshot separately from `quota_fetch_state`, so a first-attempt failure remains visible even when no successful snapshot exists.
+13. On Unix, original-data override protection compares filesystem object identity (`dev` + `ino`) in addition to lexical/canonical paths; this closes macOS case-alias and symlink bypasses.
 
 ## Failures and review findings already handled
 
@@ -72,6 +80,10 @@ Complete `docs/superpowers/plans/2026-07-11-usage-dashboard-backend-implementati
 - Coexistence review found residual `CC Switch` Windows/tray labels, frontend `~/.cc-switch` fallbacks, and no real symlink regression test. These are the next isolation fixes.
 - Those coexistence findings were fixed in `7fb6a6df`: Windows/tray branding and frontend fallbacks now use LLM Usage Bar, and an actual filesystem symlink to a fake legacy directory is rejected by the same validation boundary.
 - The first repeat check stopped at `cargo fmt --check` because the new tests needed formatting; formatting was applied and the complete targeted gate then passed.
+- Coexistence re-review found that a macOS case alias such as `~/.CC-SWITCH` can resolve to the original directory while retaining different canonical spelling. `ca38e0ef` now compares filesystem object identity; the reviewer approved the fix.
+- The first Task 6 full Rust run exposed six stale 15721 assertions after the deliberate proxy-port isolation to 15722. Targeted assertions were updated; all affected tests passed.
+- The second full run exposed integration fixtures still writing/cleaning current app data under `.cc-switch`; the first cleanup-only attempt was insufficient because test paths themselves were stale. All current-app fixtures now use `.llm-usage-bar` while coexistence tests retain `.cc-switch` only as the protected legacy path.
+- A later Provider integration assertion still expected takeover port 15721 and poisoned six sibling tests after its failure. Updating that one expected output to 15722 restored all 33 Provider integration tests.
 
 ## Latest stage verification
 
@@ -86,6 +98,10 @@ Using repository-pinned Rust 1.95 temporary toolchain environment:
 - Final Task 5 gate: quota 8, Session service 4, underlying Session parser/service group 36 passed.
 - Coexistence identity integration test: 1 passed.
 - Config-path direct and actual-symlink override guards: 1 + 1 passed.
+- macOS case-alias override guard: 1 passed; independent coexistence review approved.
+- Task 6 dashboard aggregation tests: 3 passed.
+- Task 6 nine-command integration tests: 2 passed.
+- Full Rust gate: library 1842 passed / 2 ignored; all integration test binaries passed.
 - `git diff --check`: passed.
 - No desktop/Tauri application was launched; tests used isolated/in-memory databases.
 
@@ -100,8 +116,8 @@ Using repository-pinned Rust 1.95 temporary toolchain environment:
 
 ## Immediate next actions
 
-1. Receive the independent coexistence re-review and address any remaining findings.
-2. Finish and independently review Task 6 aggregation and nine Tauri commands.
+1. Receive the independent Task 5/Task 6 reviews and address any remaining findings.
+2. Begin Task 7 React dashboard and configuration surface after rereading this checkpoint.
 3. Keep explicit read-only snapshot import deferred unless it becomes necessary for the accepted product flow.
 4. Implement Task 7 frontend.
 5. Implement Task 8 mock-upstream E2E, hidden legacy UI, acceptance documentation, and full backend/frontend gate.

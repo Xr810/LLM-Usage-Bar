@@ -429,7 +429,7 @@ git commit -m "feat(usage): collect quotas and bound sessions"
 
 ### Task 6: Implement Aggregation and the Nine Tauri Commands
 
-**Status:** Not started.
+**Status:** Implementation complete in `fd8f7af6`; independent review in progress.
 
 **Files:**
 - Create: `src-tauri/src/usage/dashboard.rs`
@@ -444,7 +444,7 @@ git commit -m "feat(usage): collect quotas and bound sessions"
 - Consumes: all v13 services/DAO.
 - Produces: correct product DTOs, event pagination and the exact nine public commands from the source plan.
 
-- [ ] **Step 1: Write failing aggregation tests**
+- [x] **Step 1: Write failing aggregation tests**
 
 Seed one product containing subscription and metered Providers, linked and unlinked cross-source events, upstream/estimated/unavailable costs, and quota snapshots. Assert:
 
@@ -455,15 +455,15 @@ Seed one product containing subscription and metered Providers, linked and unlin
 - cost-source counts are preserved;
 - half-open time range, Provider/product filters and page boundaries are exact.
 
-- [ ] **Step 2: Implement aggregation**
+- [x] **Step 2: Implement aggregation**
 
 Exclude `usage_event_links.duplicate_event_id` only from aggregate SQL. Sum costs with `Decimal`, not SQLite REAL. Group first by Provider, then product. Read latest quota/fetch state after event aggregation and attach only to subscription cards.
 
-- [ ] **Step 3: Write failing command tests**
+- [x] **Step 3: Write failing command tests**
 
 Through isolated AppState/test hooks cover provider save/list/enable, binding, empty and populated dashboard, page validation, manual quota refresh and Session sync warning. Serialize every command result and assert stored secrets are absent.
 
-- [ ] **Step 4: Implement and register commands**
+- [x] **Step 4: Implement and register commands**
 
 Create and register exactly:
 
@@ -481,7 +481,7 @@ sync_provider_session_usage(providerId)
 
 Commands are thin service adapters. Validate `startAt < endAt`, page size 1-200 and Provider existence before dispatch.
 
-- [ ] **Step 5: Run backend gate and commit**
+- [x] **Step 5: Run backend gate and commit**
 
 ```bash
 cargo test --manifest-path src-tauri/Cargo.toml usage::dashboard -- --nocapture

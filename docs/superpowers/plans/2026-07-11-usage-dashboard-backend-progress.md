@@ -23,7 +23,7 @@ Execution plan: `2026-07-11-usage-dashboard-backend-execution.md`
   - Implemented distinct product/bundle identity, `~/.llm-usage-bar`, no legacy deep-link registration/updater, unsafe-override rejection, and proxy port 15722.
   - Tests use fake/in-memory homes and do not start this app against the original v11 database. The running original app legitimately updates its own database, so long-window hash equality is not used as the final proof.
   - Optional original-data import is not implemented; if added, it requires explicit user action and a read-only SQLite Backup snapshot.
-  - Independent review gaps were fixed: Windows/tray labels and frontend fallback paths are isolated, and an actual symlink regression test passes. Independent re-review is running.
+  - Independent review gaps were fixed: Windows/tray labels and frontend fallback paths are isolated, and symlink plus macOS case-alias regression tests pass. Independent re-review approved the boundary.
 
 - [ ] Task 3: static one-Provider request routing.
   - Main implementation commit: `f323ea75`
@@ -40,8 +40,10 @@ Execution plan: `2026-07-11-usage-dashboard-backend-execution.md`
   - Targeted quota (8), Session service (4), and underlying Session parser/service (36) tests pass.
   - Independent review findings addressed; final re-review will be included in the Task 6 checkpoint review pass.
 
-- [ ] Task 6: product aggregation and nine Tauri commands.
-  - RED tests and initial implementation are present; stage verification and independent review are pending.
+- [x] Task 6: product aggregation and nine Tauri commands (`fd8f7af6`).
+  - Product/Provider aggregation, duplicate exclusion, Decimal cost sums, half-open filters, pagination, redacted quota/fetch state, and exactly nine registered commands are implemented.
+  - Targeted tests pass (dashboard 3, command adapters 2); the complete Rust suite passes (1842 passed, 2 ignored plus all integration binaries).
+  - Independent review is in progress.
 
 ## Not started
 
