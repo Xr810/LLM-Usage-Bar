@@ -9,10 +9,13 @@ pub mod prompts;
 pub mod providers;
 pub mod providers_seed;
 pub mod proxy;
+pub mod quota;
 pub mod settings;
 pub mod skills;
 pub mod stream_check;
 pub mod universal_providers;
+pub mod usage_events;
+pub mod usage_providers;
 pub mod usage_rollup;
 
 // 所有 DAO 方法都通过 Database impl 提供，无需单独导出
