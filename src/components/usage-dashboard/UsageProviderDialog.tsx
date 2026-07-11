@@ -24,6 +24,7 @@ interface Props {
   onOpenChange: (open: boolean) => void;
   provider?: UsageProviderView | null;
   onSave: (input: UsageProviderInput) => Promise<unknown>;
+  isPending?: boolean;
 }
 
 export function UsageProviderDialog({
@@ -31,6 +32,7 @@ export function UsageProviderDialog({
   onOpenChange,
   provider,
   onSave,
+  isPending = false,
 }: Props) {
   const { t } = useTranslation();
   const [id, setId] = useState("");
@@ -66,6 +68,22 @@ export function UsageProviderDialog({
 
   const submit = async () => {
     setError(null);
+    const parsedInterval = Number(quotaIntervalSeconds);
+    if (
+      billingKind === "subscription" &&
+      (quotaIntervalSeconds.trim() === "" ||
+        !Number.isFinite(parsedInterval) ||
+        !Number.isInteger(parsedInterval) ||
+        parsedInterval < 0 ||
+        (parsedInterval > 0 && parsedInterval < 60))
+    ) {
+      setError(
+        t("usageDashboard.invalidQuotaInterval", {
+          defaultValue: "Refresh interval must be 0 or at least 60 seconds.",
+        }),
+      );
+      return;
+    }
     let parsedQuotaConfig: Record<string, unknown> | undefined;
     if (quotaConfig.trim()) {
       try {
@@ -82,27 +100,31 @@ export function UsageProviderDialog({
     const routeConfig =
       billingKind === "metered" && secret.trim()
         ? { baseUrl: baseUrl.trim(), apiKey: secret.trim() }
-        : !provider && billingKind === "metered" && baseUrl.trim()
+        : billingKind === "metered" &&
+            baseUrl.trim() &&
+            (!provider || !provider.hasRouteCredentials)
           ? { baseUrl: baseUrl.trim() }
           : undefined;
-    await onSave({
-      id: id.trim(),
-      name: name.trim(),
-      productGroupId: productGroupId.trim(),
-      billingKind,
-      tokenSources,
-      quotaSource:
-        billingKind === "subscription" ? quotaSource.trim() || null : null,
-      quotaIntervalSeconds:
-        billingKind === "subscription"
-          ? Number(quotaIntervalSeconds) || 300
-          : null,
-      routeAppType: billingKind === "metered" ? routeAppType : null,
-      routeConfig,
-      quotaConfig: parsedQuotaConfig,
-      enabled,
-    });
-    onOpenChange(false);
+    try {
+      await onSave({
+        id: id.trim(),
+        name: name.trim(),
+        productGroupId: productGroupId.trim(),
+        billingKind,
+        tokenSources,
+        quotaSource:
+          billingKind === "subscription" ? quotaSource.trim() || null : null,
+        quotaIntervalSeconds:
+          billingKind === "subscription" ? parsedInterval : null,
+        routeAppType: billingKind === "metered" ? routeAppType : null,
+        routeConfig,
+        quotaConfig: parsedQuotaConfig,
+        enabled,
+      });
+      onOpenChange(false);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
   };
 
   return (
@@ -153,8 +175,14 @@ export function UsageProviderDialog({
                 setBillingKind(event.target.value as BillingKind)
               }
             >
-              <option value="metered">Metered</option>
-              <option value="subscription">Subscription</option>
+              <option value="metered">
+                {t("usageDashboard.metered", { defaultValue: "Metered" })}
+              </option>
+              <option value="subscription">
+                {t("usageDashboard.subscription", {
+                  defaultValue: "Subscription",
+                })}
+              </option>
             </select>
           </Label>
           <fieldset className="space-y-1">
@@ -177,7 +205,13 @@ export function UsageProviderDialog({
                       )
                     }
                   />
-                  {source === "proxy" ? "Proxy" : "Session log"}
+                  {source === "proxy"
+                    ? t("usageDashboard.sourceProxy", {
+                        defaultValue: "Proxy",
+                      })
+                    : t("usageDashboard.sourceSession", {
+                        defaultValue: "Session log",
+                      })}
                 </label>
               ))}
             </div>
@@ -243,12 +277,21 @@ export function UsageProviderDialog({
                 })}
                 <Input
                   type="number"
-                  min={60}
+                  min={0}
+                  aria-label={t("usageDashboard.quotaInterval", {
+                    defaultValue: "Refresh interval (seconds)",
+                  })}
                   value={quotaIntervalSeconds}
                   onChange={(event) =>
                     setQuotaIntervalSeconds(event.target.value)
                   }
                 />
+                <span className="mt-1 block text-xs text-muted-foreground">
+                  {t("usageDashboard.quotaIntervalHint", {
+                    defaultValue:
+                      "0 disables refresh; otherwise use at least 60 seconds.",
+                  })}
+                </span>
               </Label>
               <Label>
                 {t("usageDashboard.quotaConfig", {
@@ -278,7 +321,7 @@ export function UsageProviderDialog({
           ) : null}
         </div>
         <DialogFooter>
-          <Button onClick={() => void submit()}>
+          <Button disabled={isPending} onClick={() => void submit()}>
             {t("common.save", { defaultValue: "Save" })}
           </Button>
         </DialogFooter>

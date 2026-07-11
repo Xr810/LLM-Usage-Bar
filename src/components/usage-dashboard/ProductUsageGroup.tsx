@@ -11,6 +11,8 @@ interface Props {
   onSyncSessions: (providerId: string) => Promise<void>;
   startAt: number;
   endAt: number;
+  isRefreshingQuota?: boolean;
+  isSyncingSessions?: boolean;
 }
 
 export function ProductUsageGroup({
@@ -19,6 +21,8 @@ export function ProductUsageGroup({
   onSyncSessions,
   startAt,
   endAt,
+  isRefreshingQuota = false,
+  isSyncingSessions = false,
 }: Props) {
   const { t } = useTranslation();
   const totalTokens =
@@ -27,7 +31,11 @@ export function ProductUsageGroup({
     product.cacheReadTokens +
     product.cacheCreationTokens;
   const sourceText = product.tokenSources
-    .map((source) => (source === "proxy" ? "Proxy" : "Session log"))
+    .map((source) =>
+      source === "proxy"
+        ? t("usageDashboard.sourceProxy", { defaultValue: "Proxy" })
+        : t("usageDashboard.sourceSession", { defaultValue: "Session log" }),
+    )
     .join(" + ");
   return (
     <Card className="border-border/60">
@@ -45,7 +53,8 @@ export function ProductUsageGroup({
               {totalTokens.toLocaleString()}
             </div>
             <div className="text-xs text-muted-foreground">
-              Tokens · USD {product.totalCostUsd ?? "—"}
+              {t("usageDashboard.tokens", { defaultValue: "Tokens" })} · USD{" "}
+              {product.totalCostUsd ?? "—"}
             </div>
           </div>
         </div>
@@ -79,6 +88,8 @@ export function ProductUsageGroup({
             usage={usage}
             onRefreshQuota={onRefreshQuota}
             onSyncSessions={onSyncSessions}
+            isRefreshingQuota={isRefreshingQuota}
+            isSyncingSessions={isSyncingSessions}
           />
         ))}
         {product.meteredProviders.map((usage) => (

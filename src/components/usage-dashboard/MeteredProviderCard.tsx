@@ -1,4 +1,5 @@
 import { Badge } from "@/components/ui/badge";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { ProviderUsageView } from "@/types/usageDashboard";
 import { useUsageEvents } from "@/lib/query/usageDashboard";
@@ -20,6 +21,13 @@ export function MeteredProviderCard({
     usage.outputTokens +
     usage.cacheReadTokens +
     usage.cacheCreationTokens;
+  const sourceText = usage.provider.tokenSources
+    .map((source) =>
+      source === "proxy"
+        ? t("usageDashboard.sourceProxy", { defaultValue: "Proxy" })
+        : t("usageDashboard.sourceSession", { defaultValue: "Session log" }),
+    )
+    .join(" + ");
   return (
     <Card data-testid={`metered-provider-${usage.provider.id}`}>
       <CardHeader className="pb-3">
@@ -29,18 +37,20 @@ export function MeteredProviderCard({
             {t("usageDashboard.metered", { defaultValue: "Metered" })}
           </Badge>
         </div>
-        <div className="text-xs text-muted-foreground">
-          {t("usageDashboard.sourceProxy", { defaultValue: "Proxy" })}
-        </div>
+        <div className="text-xs text-muted-foreground">{sourceText}</div>
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
         <div className="grid grid-cols-3 gap-3">
           <div>
-            <div className="text-muted-foreground">Tokens</div>
+            <div className="text-muted-foreground">
+              {t("usageDashboard.tokens", { defaultValue: "Tokens" })}
+            </div>
             <div className="font-semibold">{totalTokens.toLocaleString()}</div>
           </div>
           <div>
-            <div className="text-muted-foreground">Requests</div>
+            <div className="text-muted-foreground">
+              {t("usageDashboard.requests", { defaultValue: "Requests" })}
+            </div>
             <div className="font-semibold">{usage.eventCount}</div>
           </div>
           <div>
@@ -48,10 +58,28 @@ export function MeteredProviderCard({
             <div className="font-semibold">{usage.totalCostUsd ?? "—"}</div>
           </div>
         </div>
+        {events.error ? (
+          <Alert
+            variant="destructive"
+            aria-label={
+              events.error instanceof Error
+                ? events.error.message
+                : String(events.error)
+            }
+          >
+            <AlertDescription>
+              {events.error instanceof Error
+                ? events.error.message
+                : String(events.error)}
+            </AlertDescription>
+          </Alert>
+        ) : null}
         {events.data?.items.length ? (
           <div className="border-t pt-2">
             <div className="mb-1 text-xs font-medium text-muted-foreground">
-              Recent requests
+              {t("usageDashboard.recentRequests", {
+                defaultValue: "Recent requests",
+              })}
             </div>
             {events.data.items.map((event) => (
               <div

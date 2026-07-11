@@ -23,12 +23,55 @@ const mocks = vi.hoisted(() => ({
   stopProxy: vi.fn(),
 }));
 
+const ui = vi.hoisted(() => ({
+  language: "en",
+  pending: {
+    saveProvider: false,
+    setEnabled: false,
+    setBinding: false,
+    refreshQuota: false,
+    syncSession: false,
+    startProxy: false,
+    stopProxy: false,
+  },
+}));
+
+const zh: Record<string, string> = {
+  "usageDashboard.today": "今天",
+  "usageDashboard.sevenDays": "7 天",
+  "usageDashboard.thirtyDays": "30 天",
+  "usageDashboard.customRange": "自定义范围",
+  "usageDashboard.sourceSession": "会话日志",
+  "usageDashboard.sourceProxy": "本地代理",
+  "usageDashboard.tokens": "令牌",
+  "usageDashboard.requests": "请求",
+  "usageDashboard.recentRequests": "近期请求",
+};
+
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: (key: string, options?: { defaultValue?: string }) =>
-      options?.defaultValue ?? key,
-    i18n: { resolvedLanguage: "en", language: "en" },
+      (ui.language === "zh" ? zh[key] : undefined) ??
+      options?.defaultValue ??
+      key,
+    i18n: { resolvedLanguage: ui.language, language: ui.language },
   }),
+}));
+
+vi.mock("@/lib/usageRange", () => ({
+  resolveUsageRange: (selection: {
+    preset: string;
+    customStartDate?: number;
+    customEndDate?: number;
+  }) => {
+    if (selection.preset === "today") return { startDate: 10, endDate: 20 };
+    if (selection.preset === "7d") return { startDate: 30, endDate: 40 };
+    if (selection.preset === "30d") return { startDate: 50, endDate: 60 };
+    return {
+      startDate: selection.customStartDate ?? 70,
+      endDate: selection.customEndDate ?? 80,
+    };
+  },
 }));
 
 vi.mock("@/lib/query/usageDashboard", () => ({
@@ -38,23 +81,23 @@ vi.mock("@/lib/query/usageDashboard", () => ({
   useRouteBindings: () => mocks.bindings(),
   useSaveUsageProvider: () => ({
     mutateAsync: mocks.saveProvider,
-    isPending: false,
+    isPending: ui.pending.saveProvider,
   }),
   useSetUsageProviderEnabled: () => ({
     mutateAsync: mocks.setEnabled,
-    isPending: false,
+    isPending: ui.pending.setEnabled,
   }),
   useSetRouteBinding: () => ({
     mutateAsync: mocks.setBinding,
-    isPending: false,
+    isPending: ui.pending.setBinding,
   }),
   useRefreshProviderQuota: () => ({
     mutateAsync: mocks.refreshQuota,
-    isPending: false,
+    isPending: ui.pending.refreshQuota,
   }),
   useSyncProviderSessionUsage: () => ({
     mutateAsync: mocks.syncSession,
-    isPending: false,
+    isPending: ui.pending.syncSession,
   }),
 }));
 
@@ -62,19 +105,21 @@ vi.mock("@/lib/query/proxy", () => ({
   useIsProxyRunning: () => mocks.isRunning(),
   useStartProxyServer: () => ({
     mutateAsync: mocks.startProxy,
-    isPending: false,
+    isPending: ui.pending.startProxy,
   }),
   useStopProxyServer: () => ({
     mutateAsync: mocks.stopProxy,
-    isPending: false,
+    isPending: ui.pending.stopProxy,
   }),
 }));
 
 vi.mock("@/components/usage/UsageDateRangePicker", () => ({
   UsageDateRangePicker: ({
     onApply,
+    triggerLabel,
   }: {
     onApply: (value: unknown) => void;
+    triggerLabel?: string;
   }) => (
     <button
       type="button"
@@ -82,7 +127,7 @@ vi.mock("@/components/usage/UsageDateRangePicker", () => ({
         onApply({ preset: "custom", customStartDate: 100, customEndDate: 200 })
       }
     >
-      Custom range
+      {triggerLabel ?? "Custom range"}
     </button>
   ),
 }));
@@ -118,6 +163,10 @@ const meteredProvider = {
 describe("UsageDashboardPage", () => {
   beforeEach(() => {
     Object.values(mocks).forEach((mock) => mock.mockReset());
+    ui.language = "en";
+    Object.keys(ui.pending).forEach((key) => {
+      ui.pending[key as keyof typeof ui.pending] = false;
+    });
     mocks.providers.mockReturnValue({
       data: [subscriptionProvider, meteredProvider],
       isLoading: false,
@@ -223,13 +272,96 @@ describe("UsageDashboardPage", () => {
 
   it("supports today, 7d, 30d and custom ranges", () => {
     render(<UsageDashboardPage />);
+    expect(mocks.dashboard).toHaveBeenLastCalledWith(10, 20, undefined);
     for (const label of ["Today", "7 days", "30 days", "Custom range"]) {
       expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
     }
     fireEvent.click(screen.getByRole("button", { name: "7 days" }));
+    expect(mocks.dashboard).toHaveBeenLastCalledWith(30, 40, undefined);
     fireEvent.click(screen.getByRole("button", { name: "30 days" }));
+    expect(mocks.dashboard).toHaveBeenLastCalledWith(50, 60, undefined);
     fireEvent.click(screen.getByRole("button", { name: "Custom range" }));
-    expect(mocks.dashboard).toHaveBeenCalled();
+    expect(mocks.dashboard).toHaveBeenLastCalledWith(100, 200, undefined);
+  });
+
+  it("preserves zero quota refresh and rejects invalid intervals", async () => {
+    render(<UsageDashboardPage />);
+    fireEvent.click(
+      within(screen.getByTestId("provider-config-sub")).getByRole("button", {
+        name: "Edit",
+      }),
+    );
+    const interval = screen.getByLabelText("Refresh interval (seconds)");
+    expect(interval).toHaveAttribute("min", "0");
+    expect(
+      screen.getByText(
+        "0 disables refresh; otherwise use at least 60 seconds.",
+      ),
+    ).toBeInTheDocument();
+
+    fireEvent.change(interval, { target: { value: "0" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(mocks.saveProvider).toHaveBeenCalledWith(
+        expect.objectContaining({ quotaIntervalSeconds: 0 }),
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+    );
+
+    mocks.saveProvider.mockClear();
+    fireEvent.click(
+      within(screen.getByTestId("provider-config-sub")).getByRole("button", {
+        name: "Edit",
+      }),
+    );
+    fireEvent.change(screen.getByLabelText("Refresh interval (seconds)"), {
+      target: { value: "59" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Refresh interval must be 0 or at least 60 seconds.",
+    );
+    expect(mocks.saveProvider).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText("Refresh interval (seconds)"), {
+      target: { value: "" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Refresh interval must be 0 or at least 60 seconds.",
+    );
+    expect(mocks.saveProvider).not.toHaveBeenCalled();
+  });
+
+  it("sends a Base URL edit for an existing provider without credentials", async () => {
+    const provider = {
+      ...meteredProvider,
+      id: "auth-free",
+      routeBaseUrl: "https://old.example.com",
+      hasRouteCredentials: false,
+    };
+    mocks.providers.mockReturnValue({ data: [provider], isLoading: false });
+    render(<UsageDashboardPage />);
+    fireEvent.click(
+      within(screen.getByTestId("provider-config-auth-free")).getByRole(
+        "button",
+        { name: "Edit" },
+      ),
+    );
+    const baseUrl = screen.getByLabelText("Base URL");
+    expect(baseUrl).not.toBeDisabled();
+    fireEvent.change(baseUrl, { target: { value: "https://new.example.com" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(mocks.saveProvider).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: "auth-free",
+          routeConfig: { baseUrl: "https://new.example.com" },
+        }),
+      ),
+    );
   });
 
   it("keeps stored route credentials omitted and requires re-entry for a Base URL edit", async () => {
@@ -309,5 +441,294 @@ describe("UsageDashboardPage", () => {
     rerender(<UsageDashboardPage />);
     fireEvent.click(screen.getAllByRole("button", { name: "Stop proxy" })[0]);
     expect(mocks.stopProxy).toHaveBeenCalled();
+  });
+
+  it("renders card sources from provider tokenSources and usage metrics for both billing kinds", () => {
+    const subscriptionWithProxy = {
+      ...subscriptionProvider,
+      tokenSources: ["proxy" as const],
+    };
+    const meteredWithSessions = {
+      ...meteredProvider,
+      tokenSources: ["session_log" as const],
+    };
+    const data = mocks.dashboard.mock.results[0]?.value?.data;
+    mocks.dashboard.mockReturnValue({
+      data: {
+        ...(data ?? {
+          startAt: 10,
+          endAt: 20,
+          warnings: [],
+          productGroups: [],
+        }),
+        productGroups: [
+          {
+            productGroupId: "mixed",
+            inputTokens: 11,
+            outputTokens: 7,
+            cacheReadTokens: 3,
+            cacheCreationTokens: 2,
+            totalCostUsd: "3.50",
+            costSourceCounts: { upstream: 1, estimated: 0, unavailable: 0 },
+            tokenSources: ["proxy", "session_log"],
+            subscriptionProviders: [
+              {
+                provider: subscriptionWithProxy,
+                eventCount: 4,
+                inputTokens: 10,
+                outputTokens: 5,
+                cacheReadTokens: 2,
+                cacheCreationTokens: 1,
+                totalCostUsd: "2.25",
+                costSourceCounts: { upstream: 1, estimated: 0, unavailable: 0 },
+                quota: null,
+                quotaFetchState: null,
+              },
+            ],
+            meteredProviders: [
+              {
+                provider: meteredWithSessions,
+                eventCount: 2,
+                inputTokens: 1,
+                outputTokens: 2,
+                cacheReadTokens: 1,
+                cacheCreationTokens: 1,
+                totalCostUsd: "1.25",
+                costSourceCounts: { upstream: 1, estimated: 0, unavailable: 0 },
+                quota: null,
+                quotaFetchState: null,
+              },
+            ],
+          },
+        ],
+      },
+      isLoading: false,
+    });
+
+    render(<UsageDashboardPage />);
+    const subscription = within(
+      screen.getByTestId("subscription-provider-sub"),
+    );
+    expect(subscription.getByText("Proxy")).toBeInTheDocument();
+    expect(subscription.getByText("18")).toBeInTheDocument();
+    expect(subscription.getByText("4")).toBeInTheDocument();
+    expect(subscription.getByText("2.25")).toBeInTheDocument();
+    const metered = within(screen.getByTestId("metered-provider-api"));
+    expect(metered.getByText("Session log")).toBeInTheDocument();
+  });
+
+  it("surfaces query, mutation, session warning and session error messages", async () => {
+    mocks.dashboard.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: new Error("dashboard failed"),
+    });
+    mocks.providers.mockReturnValue({
+      data: [subscriptionProvider, meteredProvider],
+      isLoading: false,
+      error: new Error("providers failed"),
+    });
+    mocks.bindings.mockReturnValue({
+      data: [],
+      error: new Error("bindings failed"),
+    });
+    mocks.events.mockReturnValue({
+      data: undefined,
+      error: new Error("events failed"),
+    });
+    const queries = render(<UsageDashboardPage />);
+    for (const message of [
+      "dashboard failed",
+      "providers failed",
+      "bindings failed",
+    ]) {
+      expect(screen.getByRole("alert", { name: message })).toBeInTheDocument();
+    }
+    queries.unmount();
+
+    mocks.dashboard.mockReturnValue({
+      data: {
+        startAt: 10,
+        endAt: 20,
+        warnings: [],
+        productGroups: [
+          {
+            productGroupId: "claude",
+            inputTokens: 1,
+            outputTokens: 1,
+            cacheReadTokens: 0,
+            cacheCreationTokens: 0,
+            totalCostUsd: null,
+            costSourceCounts: { upstream: 0, estimated: 0, unavailable: 1 },
+            tokenSources: ["proxy"],
+            subscriptionProviders: [],
+            meteredProviders: [
+              {
+                provider: meteredProvider,
+                eventCount: 1,
+                inputTokens: 1,
+                outputTokens: 1,
+                cacheReadTokens: 0,
+                cacheCreationTokens: 0,
+                totalCostUsd: null,
+                costSourceCounts: { upstream: 0, estimated: 0, unavailable: 1 },
+                quota: null,
+                quotaFetchState: null,
+              },
+            ],
+          },
+        ],
+      },
+      isLoading: false,
+    });
+    const { unmount } = render(<UsageDashboardPage />);
+    expect(
+      screen.getByRole("alert", { name: "events failed" }),
+    ).toBeInTheDocument();
+    unmount();
+
+    mocks.dashboard.mockReturnValue({
+      data: {
+        startAt: 10,
+        endAt: 20,
+        warnings: [],
+        productGroups: [],
+      },
+      isLoading: false,
+    });
+    mocks.providers.mockReturnValue({
+      data: [subscriptionProvider],
+      isLoading: false,
+    });
+    mocks.bindings.mockReturnValue({ data: [], error: undefined });
+    mocks.saveProvider.mockRejectedValueOnce(new Error("save failed"));
+    const page = render(<UsageDashboardPage />);
+    fireEvent.click(
+      within(screen.getByTestId("provider-config-sub")).getByRole("button", {
+        name: "Edit",
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText("save failed")).toHaveAttribute(
+      "role",
+      "alert",
+    );
+    page.unmount();
+
+    mocks.setEnabled.mockRejectedValueOnce(new Error("enable failed"));
+    mocks.startProxy.mockRejectedValueOnce(new Error("proxy failed"));
+    const actions = render(<UsageDashboardPage />);
+    fireEvent.click(screen.getByRole("button", { name: "Disable" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start proxy" }));
+    expect(
+      (await screen.findByText("enable failed")).closest("[role=alert]"),
+    ).not.toBeNull();
+    expect(
+      (await screen.findByText("proxy failed")).closest("[role=alert]"),
+    ).not.toBeNull();
+    actions.unmount();
+
+    mocks.syncSession.mockResolvedValueOnce({
+      warnings: ["session warning"],
+      errors: ["session error"],
+    });
+    mocks.dashboard.mockReturnValue({
+      data: {
+        startAt: 10,
+        endAt: 20,
+        warnings: [],
+        productGroups: [
+          {
+            productGroupId: "claude",
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheReadTokens: 0,
+            cacheCreationTokens: 0,
+            totalCostUsd: null,
+            costSourceCounts: { upstream: 0, estimated: 0, unavailable: 0 },
+            tokenSources: ["session_log"],
+            subscriptionProviders: [
+              {
+                provider: subscriptionProvider,
+                eventCount: 0,
+                inputTokens: 0,
+                outputTokens: 0,
+                cacheReadTokens: 0,
+                cacheCreationTokens: 0,
+                totalCostUsd: null,
+                costSourceCounts: { upstream: 0, estimated: 0, unavailable: 0 },
+                quota: null,
+                quotaFetchState: null,
+              },
+            ],
+            meteredProviders: [],
+          },
+        ],
+      },
+      isLoading: false,
+    });
+    render(<UsageDashboardPage />);
+    fireEvent.click(screen.getByRole("button", { name: "Sync sessions" }));
+    expect(await screen.findByText("session warning")).toBeInTheDocument();
+    expect(
+      (await screen.findByText("session error")).closest("[role=alert]"),
+    ).not.toBeNull();
+  });
+
+  it("disables relevant actions while mutations are pending", () => {
+    Object.keys(ui.pending).forEach((key) => {
+      ui.pending[key as keyof typeof ui.pending] = true;
+    });
+    render(<UsageDashboardPage />);
+    for (const label of [
+      "Start proxy",
+      "Save routes",
+      "Disable",
+      "Refresh quota",
+      "Sync sessions",
+    ]) {
+      for (const button of screen.getAllByRole("button", { name: label })) {
+        expect(button).toBeDisabled();
+      }
+    }
+    fireEvent.click(
+      within(screen.getByTestId("provider-config-sub")).getByRole("button", {
+        name: "Edit",
+      }),
+    );
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+  });
+
+  it("renders core dashboard labels in Chinese", () => {
+    ui.language = "zh";
+    mocks.events.mockReturnValue({
+      data: {
+        items: [
+          {
+            eventId: "one",
+            model: "model",
+            totalCostUsd: "1",
+            costSource: "upstream",
+          },
+        ],
+        total: 1,
+        page: 1,
+        pageSize: 5,
+      },
+    });
+    render(<UsageDashboardPage />);
+    for (const text of [
+      "今天",
+      "7 天",
+      "30 天",
+      "自定义范围",
+      "会话日志",
+      "本地代理",
+      "令牌",
+      "请求",
+      "近期请求",
+    ]) {
+      expect(screen.getAllByText(text).length).toBeGreaterThan(0);
+    }
   });
 });

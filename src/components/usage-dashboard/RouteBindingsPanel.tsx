@@ -10,14 +10,21 @@ interface Props {
   providers: UsageProviderView[];
   bindings: RouteBinding[];
   onSave: (protocol: string, providerId: string) => Promise<unknown>;
+  isPending?: boolean;
 }
 
-export function RouteBindingsPanel({ providers, bindings, onSave }: Props) {
+export function RouteBindingsPanel({
+  providers,
+  bindings,
+  onSave,
+  isPending = false,
+}: Props) {
   const { t } = useTranslation();
   const eligible = providers.filter(
     (provider) => provider.enabled && provider.billingKind === "metered",
   );
   const [values, setValues] = useState<Record<string, string>>({});
+  const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     setValues(
       Object.fromEntries(
@@ -27,11 +34,16 @@ export function RouteBindingsPanel({ providers, bindings, onSave }: Props) {
   }, [bindings]);
 
   const save = async () => {
-    await Promise.all(
-      protocols.flatMap((protocol) =>
-        values[protocol] ? [onSave(protocol, values[protocol])] : [],
-      ),
-    );
+    setError(null);
+    try {
+      await Promise.all(
+        protocols.flatMap((protocol) =>
+          values[protocol] ? [onSave(protocol, values[protocol])] : [],
+        ),
+      );
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
   };
 
   return (
@@ -45,9 +57,18 @@ export function RouteBindingsPanel({ providers, bindings, onSave }: Props) {
         <div className="grid gap-3 md:grid-cols-3">
           {protocols.map((protocol) => (
             <label key={protocol} className="space-y-1 text-sm">
-              <span className="capitalize">{protocol} route</span>
+              <span className="capitalize">
+                {t("usageDashboard.routeLabel", {
+                  protocol,
+                  defaultValue: `${protocol} route`,
+                })}
+              </span>
               <select
-                aria-label={`${protocol[0].toUpperCase()}${protocol.slice(1)} route`}
+                aria-label={t("usageDashboard.routeLabel", {
+                  protocol: `${protocol[0].toUpperCase()}${protocol.slice(1)}`,
+                  defaultValue: `${protocol[0].toUpperCase()}${protocol.slice(1)} route`,
+                })}
+                disabled={isPending}
                 className="h-9 w-full rounded-md border border-input bg-background px-3"
                 value={values[protocol] ?? ""}
                 onChange={(event) =>
@@ -73,7 +94,12 @@ export function RouteBindingsPanel({ providers, bindings, onSave }: Props) {
             </label>
           ))}
         </div>
-        <Button size="sm" onClick={() => void save()}>
+        {error ? (
+          <div role="alert" className="text-sm text-destructive">
+            {error}
+          </div>
+        ) : null}
+        <Button size="sm" disabled={isPending} onClick={() => void save()}>
           {t("usageDashboard.saveRoutes", { defaultValue: "Save routes" })}
         </Button>
       </CardContent>
