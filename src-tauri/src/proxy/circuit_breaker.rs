@@ -97,11 +97,13 @@ pub struct CircuitBreaker {
 /// `used_half_open_permit` 表示本次放行是否占用了 HalfOpen 探测名额。
 /// 调用方应在请求结束后把该值传回 `record_success` / `record_failure` 用于正确释放名额。
 #[derive(Debug, Clone, Copy)]
+#[allow(dead_code)] // Retained for v12 compatibility until milestone-3 removal.
 pub struct AllowResult {
     pub allowed: bool,
     pub used_half_open_permit: bool,
 }
 
+#[allow(dead_code)] // Static routing no longer calls the circuit breaker on request paths.
 impl CircuitBreaker {
     /// 创建新的熔断器
     pub fn new(config: CircuitBreakerConfig) -> Self {

@@ -27,7 +27,10 @@ export function resolveUsageRange(
   selection: UsageRangeSelection,
   nowMs: number = Date.now(),
 ): ResolvedUsageRange {
-  const endDate = Math.floor(nowMs / 1000);
+  // Backend ranges are half-open (`startAt <= event < endAt`). Advance the
+  // live end to the next second so an event timestamped in the current second
+  // is visible immediately.
+  const endDate = Math.floor(nowMs / 1000) + 1;
 
   switch (selection.preset) {
     case "today":

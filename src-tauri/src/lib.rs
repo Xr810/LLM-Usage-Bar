@@ -34,6 +34,7 @@ mod settings;
 mod store;
 
 mod tray;
+pub mod usage;
 mod usage_events;
 mod usage_script;
 
@@ -64,6 +65,12 @@ pub use settings::{update_settings, AppSettings};
 pub use store::AppState;
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+pub use usage::domain::{
+    BillingKind, CostSource, CostSourceCounts, ProductUsageView, ProviderUsageView,
+    QuotaFetchState, QuotaSnapshot, QuotaStatusView, RouteBinding, TokenSource, UsageDashboardView,
+    UsageEvent, UsageEventLink, UsageEventPage, UsageProviderInput, UsageProviderView,
+    UsageSourceBinding,
+};
 
 use std::sync::Arc;
 #[cfg(target_os = "macos")]
@@ -222,7 +229,7 @@ fn macos_tray_icon() -> Option<Image<'static>> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // 设置 panic hook，在应用崩溃时记录日志到 <app_config_dir>/crash.log（默认 ~/.cc-switch/crash.log）
+    // 设置 panic hook，在应用崩溃时记录日志到 <app_config_dir>/crash.log（默认 ~/.llm-usage-bar/crash.log）
     panic_hook::setup_panic_hook();
 
     let mut builder = tauri::Builder::default();
@@ -488,6 +495,7 @@ pub fn run() {
             }
 
             let app_state = AppState::new(db);
+            app_state.start_quota_scheduler();
 
             // 设置 AppHandle 用于代理故障转移时的 UI 更新
             app_state.proxy_service.set_app_handle(app.handle().clone());
@@ -900,7 +908,7 @@ pub fn run() {
 
             // 构建托盘
             let mut tray_builder = TrayIconBuilder::with_id(tray::TRAY_ID)
-                .tooltip("CC Switch") // 鼠标悬停提示
+                .tooltip("LLM Usage Bar") // 鼠标悬停提示
                 .on_tray_icon_event(|tray, event| match event {
                     // 鼠标悬停/点击到托盘图标时，后台异步刷新用量缓存，
                     // 让用户下一次（或快速打开菜单的那一刻）看到较新的数字。
@@ -1078,6 +1086,7 @@ pub fn run() {
 
                 // Session log usage sync: 启动时同步一次，之后每 60 秒检查
                 let db_for_session_sync = state.db.clone();
+                let provider_session_sync = state.session_usage_service.clone();
                 tauri::async_runtime::spawn(async move {
                     const SESSION_SYNC_INTERVAL_SECS: u64 = 60;
 
@@ -1096,11 +1105,11 @@ pub fn run() {
                     );
                     run_step(
                         "Session usage initial sync",
-                        crate::services::session_usage::sync_claude_session_logs(db),
+                        provider_session_sync.sync_source("claude"),
                     );
                     run_step(
                         "Codex usage initial sync",
-                        crate::services::session_usage_codex::sync_codex_usage(db),
+                        provider_session_sync.sync_source("codex"),
                     );
                     run_step(
                         "Gemini usage initial sync",
@@ -1120,11 +1129,11 @@ pub fn run() {
                         interval.tick().await;
                         run_step(
                             "Session usage periodic sync",
-                            crate::services::session_usage::sync_claude_session_logs(db),
+                            provider_session_sync.sync_source("claude"),
                         );
                         run_step(
                             "Codex usage periodic sync",
-                            crate::services::session_usage_codex::sync_codex_usage(db),
+                            provider_session_sync.sync_source("codex"),
                         );
                         run_step(
                             "Gemini usage periodic sync",
@@ -1187,6 +1196,15 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::list_usage_providers,
+            commands::save_usage_provider,
+            commands::set_usage_provider_enabled,
+            commands::get_route_bindings,
+            commands::set_route_binding,
+            commands::get_usage_dashboard,
+            commands::get_usage_events,
+            commands::refresh_provider_quota,
+            commands::sync_provider_session_usage,
             commands::get_providers,
             commands::get_current_provider,
             commands::add_provider,
@@ -1675,6 +1693,7 @@ pub fn run() {
 /// 使用 stop_with_restore_keep_state 保留 settings 表中的代理状态，下次启动时自动恢复。
 pub async fn cleanup_before_exit(app_handle: &tauri::AppHandle) {
     if let Some(state) = app_handle.try_state::<store::AppState>() {
+        state.stop_quota_scheduler().await;
         let proxy_service = &state.proxy_service;
 
         // 退出时也需要兜底：代理可能已崩溃/未运行，但 Live 接管残留仍在（占位符/备份）。

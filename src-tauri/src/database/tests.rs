@@ -887,3 +887,438 @@ fn ensure_incremental_auto_vacuum_rebuilds_existing_file_db() {
         "file db should persist INCREMENTAL auto_vacuum after VACUUM rebuild"
     );
 }
+
+const V12_USAGE_MIGRATION_FIXTURE_SQL: &str = r#"
+    CREATE TABLE providers (
+        id TEXT NOT NULL,
+        app_type TEXT NOT NULL,
+        name TEXT NOT NULL,
+        settings_config TEXT NOT NULL,
+        website_url TEXT,
+        category TEXT,
+        created_at INTEGER,
+        sort_index INTEGER,
+        notes TEXT,
+        icon TEXT,
+        icon_color TEXT,
+        meta TEXT NOT NULL DEFAULT '{}',
+        is_current BOOLEAN NOT NULL DEFAULT 0,
+        in_failover_queue BOOLEAN NOT NULL DEFAULT 0,
+        PRIMARY KEY (id, app_type)
+    );
+    CREATE TABLE proxy_request_logs (
+        request_id TEXT PRIMARY KEY,
+        provider_id TEXT NOT NULL,
+        app_type TEXT NOT NULL,
+        model TEXT NOT NULL,
+        request_model TEXT,
+        pricing_model TEXT,
+        input_tokens INTEGER NOT NULL DEFAULT 0,
+        output_tokens INTEGER NOT NULL DEFAULT 0,
+        cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+        cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+        input_cost_usd TEXT NOT NULL DEFAULT '0',
+        output_cost_usd TEXT NOT NULL DEFAULT '0',
+        cache_read_cost_usd TEXT NOT NULL DEFAULT '0',
+        cache_creation_cost_usd TEXT NOT NULL DEFAULT '0',
+        total_cost_usd TEXT NOT NULL DEFAULT '0',
+        latency_ms INTEGER NOT NULL,
+        first_token_ms INTEGER,
+        duration_ms INTEGER,
+        status_code INTEGER NOT NULL,
+        error_message TEXT,
+        session_id TEXT,
+        provider_type TEXT,
+        is_streaming INTEGER NOT NULL DEFAULT 0,
+        cost_multiplier TEXT NOT NULL DEFAULT '1.0',
+        created_at INTEGER NOT NULL,
+        data_source TEXT NOT NULL DEFAULT 'proxy'
+    );
+"#;
+
+fn count(conn: &Connection, table: &str) -> i64 {
+    conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+        row.get(0)
+    })
+    .expect("count table rows")
+}
+
+fn scalar_i64(conn: &Connection, sql: &str) -> i64 {
+    conn.query_row(sql, [], |row| row.get(0))
+        .expect("query integer scalar")
+}
+
+fn scalar_text(conn: &Connection, sql: &str) -> String {
+    conn.query_row(sql, [], |row| row.get(0))
+        .expect("query text scalar")
+}
+
+fn insert_v12_provider(
+    conn: &Connection,
+    id: &str,
+    app_type: &str,
+    name: &str,
+    category: Option<&str>,
+    settings_config: serde_json::Value,
+    meta: serde_json::Value,
+) {
+    conn.execute(
+        "INSERT INTO providers
+         (id, app_type, name, settings_config, category, meta, is_current)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1)",
+        params![
+            id,
+            app_type,
+            name,
+            settings_config.to_string(),
+            category,
+            meta.to_string()
+        ],
+    )
+    .expect("insert v12 provider");
+}
+
+fn insert_v12_log(
+    conn: &Connection,
+    request_id: &str,
+    provider_id: &str,
+    app_type: &str,
+    data_source: &str,
+) {
+    conn.execute(
+        "INSERT INTO proxy_request_logs (
+            request_id, provider_id, app_type, model, request_model, pricing_model,
+            input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
+            input_cost_usd, output_cost_usd, cache_read_cost_usd,
+            cache_creation_cost_usd, total_cost_usd, latency_ms, status_code,
+            session_id, created_at, data_source
+         ) VALUES (
+            ?1, ?2, ?3, 'claude-sonnet-4-6', 'requested-model', 'priced-model',
+            11, 7, 3, 2, '0.11', '0.21', '0.03', '0.02', '0.37', 42, 200,
+            'session-stable-id', 1720000000, ?4
+         )",
+        params![request_id, provider_id, app_type, data_source],
+    )
+    .expect("insert v12 proxy log");
+}
+
+fn true_v12_usage_fixture() -> Connection {
+    let conn = Connection::open_in_memory().expect("open v12 fixture");
+    conn.execute_batch(V12_USAGE_MIGRATION_FIXTURE_SQL)
+        .expect("create v12 fixture schema");
+
+    insert_v12_provider(
+        &conn,
+        "codex-oauth",
+        "claude",
+        "Codex OAuth",
+        Some("official"),
+        json!({"env": {"ANTHROPIC_BASE_URL": "https://chatgpt.com/backend-api/codex"}}),
+        json!({"providerType": "codex_oauth"}),
+    );
+    insert_v12_provider(
+        &conn,
+        "copilot",
+        "claude",
+        "GitHub Copilot",
+        Some("official"),
+        json!({"env": {"ANTHROPIC_BASE_URL": "https://api.githubcopilot.com"}}),
+        json!({"providerType": "github_copilot"}),
+    );
+    insert_v12_provider(
+        &conn,
+        "token-plan",
+        "codex",
+        "Token Plan",
+        Some("custom"),
+        json!({"base_url": "https://plan.example.com"}),
+        json!({"usage_script": {"enabled": true, "templateType": "token_plan"}}),
+    );
+    insert_v12_provider(
+        &conn,
+        "official-subscription",
+        "claude",
+        "Official Subscription",
+        Some("official"),
+        json!({"base_url": "https://subscription.example.com"}),
+        json!({"usage_script": {"enabled": true, "templateType": "official_subscription"}}),
+    );
+    insert_v12_provider(
+        &conn,
+        "metered",
+        "claude",
+        "Metered",
+        Some("custom"),
+        json!({"env": {"ANTHROPIC_BASE_URL": "https://metered.example.com", "ANTHROPIC_AUTH_TOKEN": "secret"}}),
+        json!({}),
+    );
+    insert_v12_provider(
+        &conn,
+        "ambiguous",
+        "gemini",
+        "Ambiguous Official",
+        Some("official"),
+        json!({"base_url": "https://ambiguous.example.com"}),
+        json!({}),
+    );
+    insert_v12_provider(
+        &conn,
+        "_session",
+        "claude",
+        "Session Placeholder",
+        Some("custom"),
+        json!({}),
+        json!({}),
+    );
+
+    insert_v12_log(&conn, "request-proxy", "metered", "claude", "proxy");
+    insert_v12_log(&conn, "request-placeholder", "_session", "claude", "proxy");
+    insert_v12_log(
+        &conn,
+        "request-session",
+        "codex-oauth",
+        "claude",
+        "session_log",
+    );
+    Database::set_user_version(&conn, 12).expect("set v12 user_version");
+    conn
+}
+
+#[test]
+fn migration_v12_to_v13_preserves_legacy_rows_and_imports_only_proxy_events() {
+    let conn = true_v12_usage_fixture();
+    let legacy_provider_count = count(&conn, "providers");
+    let legacy_log_count = count(&conn, "proxy_request_logs");
+
+    Database::apply_schema_migrations_on_conn(&conn).expect("migrate v12 to v13");
+
+    assert_eq!(Database::get_user_version(&conn).unwrap(), 13);
+    assert_eq!(count(&conn, "providers"), legacy_provider_count);
+    assert_eq!(count(&conn, "proxy_request_logs"), legacy_log_count);
+    assert_eq!(count(&conn, "usage_providers"), legacy_provider_count);
+    assert_eq!(count(&conn, "usage_events"), 1);
+    assert_eq!(
+        scalar_text(&conn, "SELECT cost_source FROM usage_events LIMIT 1"),
+        "estimated"
+    );
+    assert_eq!(
+        scalar_i64(
+            &conn,
+            "SELECT COUNT(*) FROM usage_events
+             WHERE legacy_request_id='request-placeholder'"
+        ),
+        0
+    );
+    assert_eq!(
+        scalar_i64(
+            &conn,
+            "SELECT COUNT(*) FROM usage_events WHERE provider_id='claude:_session'"
+        ),
+        0
+    );
+    assert_eq!(
+        scalar_text(&conn, "SELECT event_id FROM usage_events LIMIT 1"),
+        "legacy:request-proxy"
+    );
+    assert_eq!(
+        scalar_text(&conn, "SELECT provider_id FROM usage_events LIMIT 1"),
+        "claude:metered"
+    );
+    assert_eq!(
+        scalar_text(&conn, "SELECT request_id FROM usage_events LIMIT 1"),
+        "request-proxy"
+    );
+    assert_eq!(
+        scalar_text(&conn, "SELECT total_cost_usd FROM usage_events LIMIT 1"),
+        "0.37"
+    );
+
+    let provider_rows: Vec<(String, String, String, i64)> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, billing_kind, token_sources, needs_review
+                 FROM usage_providers ORDER BY id",
+            )
+            .expect("prepare provider classifications");
+        stmt.query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })
+        .expect("query provider classifications")
+        .collect::<Result<_, _>>()
+        .expect("collect provider classifications")
+    };
+
+    for id in [
+        "claude:codex-oauth",
+        "claude:copilot",
+        "codex:token-plan",
+        "claude:official-subscription",
+    ] {
+        assert!(provider_rows.iter().any(|row| {
+            row.0 == id && row.1 == "subscription" && row.2 == "[\"session_log\"]" && row.3 == 0
+        }));
+    }
+    assert!(provider_rows.iter().any(|row| {
+        row.0 == "claude:metered" && row.1 == "metered" && row.2 == "[\"proxy\"]" && row.3 == 0
+    }));
+    assert!(provider_rows.iter().any(|row| {
+        row.0 == "gemini:ambiguous" && row.1 == "metered" && row.2 == "[\"proxy\"]" && row.3 == 1
+    }));
+
+    let route_config: serde_json::Value = serde_json::from_str(&scalar_text(
+        &conn,
+        "SELECT route_config FROM usage_providers WHERE id='claude:metered'",
+    ))
+    .expect("route_config should remain JSON");
+    assert_eq!(
+        route_config,
+        json!({
+            "env": {
+                "ANTHROPIC_BASE_URL": "https://metered.example.com",
+                "ANTHROPIC_AUTH_TOKEN": "secret"
+            }
+        })
+    );
+
+    Database::apply_schema_migrations_on_conn(&conn).expect("second migration is idempotent");
+    assert_eq!(count(&conn, "usage_providers"), legacy_provider_count);
+    assert_eq!(count(&conn, "usage_events"), 1);
+
+    assert!(conn
+        .execute(
+            "UPDATE usage_events SET model='changed' WHERE event_id='legacy:request-proxy'",
+            [],
+        )
+        .is_err());
+    assert!(conn
+        .execute(
+            "DELETE FROM usage_events WHERE event_id='legacy:request-proxy'",
+            [],
+        )
+        .is_err());
+}
+
+#[test]
+fn migration_v12_to_v13_rejects_quota_snapshot_updates_and_preserves_the_row() {
+    let conn = true_v12_usage_fixture();
+    Database::apply_schema_migrations_on_conn(&conn).expect("migrate v12 to v13");
+    conn.execute(
+        "INSERT INTO quota_snapshots (
+            snapshot_id, provider_id, fetched_at, five_hour_utilization_percent,
+            raw_payload, created_at
+         ) VALUES ('quota-1', 'claude:metered', 1720000000, '25.5', '{}', 1720000000)",
+        [],
+    )
+    .expect("insert quota snapshot");
+
+    let update = conn.execute(
+        "UPDATE quota_snapshots
+         SET five_hour_utilization_percent='99.9'
+         WHERE snapshot_id='quota-1'",
+        [],
+    );
+
+    assert!(update.is_err(), "quota snapshot UPDATE must abort");
+    assert_eq!(
+        scalar_text(
+            &conn,
+            "SELECT five_hour_utilization_percent
+             FROM quota_snapshots WHERE snapshot_id='quota-1'"
+        ),
+        "25.5"
+    );
+}
+
+#[test]
+fn migration_v12_to_v13_rejects_quota_snapshot_deletes_and_preserves_the_row() {
+    let conn = true_v12_usage_fixture();
+    Database::apply_schema_migrations_on_conn(&conn).expect("migrate v12 to v13");
+    conn.execute(
+        "INSERT INTO quota_snapshots (
+            snapshot_id, provider_id, fetched_at, five_hour_utilization_percent,
+            raw_payload, created_at
+         ) VALUES ('quota-1', 'claude:metered', 1720000000, '25.5', '{}', 1720000000)",
+        [],
+    )
+    .expect("insert quota snapshot");
+
+    let delete = conn.execute(
+        "DELETE FROM quota_snapshots WHERE snapshot_id='quota-1'",
+        [],
+    );
+
+    assert!(delete.is_err(), "quota snapshot DELETE must abort");
+    assert_eq!(count(&conn, "quota_snapshots"), 1);
+    assert_eq!(
+        scalar_text(
+            &conn,
+            "SELECT five_hour_utilization_percent
+             FROM quota_snapshots WHERE snapshot_id='quota-1'"
+        ),
+        "25.5"
+    );
+}
+
+#[test]
+fn migration_v12_to_v13_rolls_back_tables_rows_and_version_on_trigger_failure() {
+    let conn = true_v12_usage_fixture();
+    conn.execute_batch(
+        "CREATE TABLE usage_events (
+            event_id TEXT PRIMARY KEY,
+            source TEXT NOT NULL,
+            provider_id TEXT NOT NULL,
+            product_group_id TEXT NOT NULL,
+            occurred_at INTEGER NOT NULL,
+            model TEXT NOT NULL,
+            input_tokens INTEGER NOT NULL DEFAULT 0,
+            output_tokens INTEGER NOT NULL DEFAULT 0,
+            cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+            cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+            request_id TEXT,
+            session_id TEXT,
+            upstream_correlation_id TEXT,
+            input_cost_usd TEXT,
+            output_cost_usd TEXT,
+            cache_read_cost_usd TEXT,
+            cache_creation_cost_usd TEXT,
+            total_cost_usd TEXT,
+            cost_source TEXT NOT NULL,
+            legacy_request_id TEXT UNIQUE,
+            created_at INTEGER NOT NULL
+        );
+        CREATE TRIGGER force_usage_event_import_failure
+        BEFORE INSERT ON usage_events
+        BEGIN
+            SELECT RAISE(ABORT, 'forced v13 import failure');
+        END;",
+    )
+    .expect("install forced failure trigger");
+
+    let error = Database::apply_schema_migrations_on_conn(&conn)
+        .expect_err("forced trigger should fail migration");
+    assert!(error.to_string().contains("forced v13 import failure"));
+    assert_eq!(Database::get_user_version(&conn).unwrap(), 12);
+    assert_eq!(count(&conn, "providers"), 7);
+    assert_eq!(count(&conn, "proxy_request_logs"), 3);
+    assert_eq!(count(&conn, "usage_events"), 0);
+
+    for table in [
+        "usage_providers",
+        "route_bindings",
+        "usage_source_bindings",
+        "usage_event_links",
+        "quota_snapshots",
+        "quota_fetch_state",
+    ] {
+        assert_eq!(
+            scalar_i64(
+                &conn,
+                &format!(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='{table}'"
+                )
+            ),
+            0,
+            "{table} should roll back"
+        );
+    }
+}

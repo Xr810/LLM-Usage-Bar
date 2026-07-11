@@ -333,7 +333,7 @@ pub struct CodexOfficialHistoryUnifyMigration {
 
 /// 应用设置结构
 ///
-/// 存储设备级别设置，保存在本地 `~/.cc-switch/settings.json`，不随数据库同步。
+/// 存储设备级别设置，保存在本地应用数据目录的 `settings.json`，不随数据库同步。
 /// 这确保了云同步场景下多设备可以独立运作。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -543,11 +543,7 @@ impl Default for AppSettings {
 impl AppSettings {
     fn settings_path() -> Option<PathBuf> {
         // settings.json 保留用于旧版本迁移和无数据库场景
-        Some(
-            crate::config::get_home_dir()
-                .join(".cc-switch")
-                .join("settings.json"),
-        )
+        Some(crate::config::get_app_config_dir().join("settings.json"))
     }
 
     fn normalize_paths(&mut self) {
@@ -1115,6 +1111,18 @@ pub fn update_s3_sync_status(status: WebDavSyncStatus) -> Result<(), AppError> {
 mod tests {
     use super::*;
     use crate::app_config::AppType;
+
+    #[test]
+    fn device_settings_follow_the_isolated_app_data_directory() {
+        assert_eq!(
+            AppSettings::settings_path(),
+            Some(crate::config::get_app_config_dir().join("settings.json"))
+        );
+        assert!(!AppSettings::settings_path()
+            .expect("settings path")
+            .to_string_lossy()
+            .contains("/.cc-switch/"));
+    }
 
     #[test]
     fn visible_apps_old_settings_default_claude_desktop_visible() {

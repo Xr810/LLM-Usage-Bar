@@ -44,6 +44,11 @@ fn read_override_from_store(app: &tauri::AppHandle) -> Option<PathBuf> {
 
             let path = resolve_path(path_str);
 
+            if let Err(error) = crate::config::validate_app_config_dir_override(&path) {
+                log::error!("Rejected unsafe app_config_dir from Store: {error}");
+                return None;
+            }
+
             if !path.exists() {
                 log::warn!(
                     "Store 中配置的 app_config_dir 不存在: {path:?}\n\
@@ -84,6 +89,8 @@ pub fn set_app_config_dir_to_store(
         Some(p) => {
             let trimmed = p.trim();
             if !trimmed.is_empty() {
+                let resolved = resolve_path(trimmed);
+                crate::config::validate_app_config_dir_override(&resolved)?;
                 store.set(STORE_KEY_APP_CONFIG_DIR, Value::String(trimmed.to_string()));
                 log::info!("已将 app_config_dir 写入 Store: {trimmed}");
             } else {
@@ -108,20 +115,35 @@ pub fn set_app_config_dir_to_store(
 /// 解析路径，支持 ~ 开头的相对路径
 fn resolve_path(raw: &str) -> PathBuf {
     if raw == "~" {
-        if let Some(home) = dirs::home_dir() {
-            return home;
-        }
+        return crate::config::get_home_dir();
     } else if let Some(stripped) = raw.strip_prefix("~/") {
-        if let Some(home) = dirs::home_dir() {
-            return home.join(stripped);
-        }
+        return crate::config::get_home_dir().join(stripped);
     } else if let Some(stripped) = raw.strip_prefix("~\\") {
-        if let Some(home) = dirs::home_dir() {
-            return home.join(stripped);
-        }
+        return crate::config::get_home_dir().join(stripped);
     }
 
     PathBuf::from(raw)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolves_tilde_with_the_application_home_boundary() {
+        assert_eq!(
+            resolve_path("~/.cc-switch"),
+            crate::config::get_home_dir().join(".cc-switch")
+        );
+    }
+
+    #[test]
+    fn legacy_cc_switch_override_is_rejected_before_store_write() {
+        let legacy = resolve_path("~/.cc-switch");
+        let error = crate::config::validate_app_config_dir_override(&legacy)
+            .expect_err("legacy data directory must be rejected");
+        assert!(error.to_string().contains("original ~/.cc-switch"));
+    }
 }
 
 /// 从旧的 settings.json 迁移 app_config_dir 到 Store
