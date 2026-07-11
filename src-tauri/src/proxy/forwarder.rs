@@ -291,7 +291,7 @@ impl RequestForwarder {
     /// * `endpoint` - API 端点
     /// * `body` - 请求体
     /// * `headers` - 请求头
-    /// * `providers` - 已选择的 Provider 列表（由 RequestContext 提供，避免重复调用 select_providers）
+    /// * `providers` - RequestContext 中已静态绑定的单个 Provider 列表
     #[allow(clippy::too_many_arguments)]
     async fn forward_with_retry_inner(
         &self,
