@@ -17,6 +17,12 @@ Execution plan: `2026-07-11-usage-dashboard-backend-execution.md`
 
 ## In progress
 
+- [ ] Coexistence safety: isolate the Usage Dashboard from original CC Switch.
+  - The original installation supports database schema v11 and currently uses `~/.cc-switch/cc-switch.db`.
+  - This branch must not start against or upgrade that database to v13.
+  - Required changes: distinct product/bundle identity, default data/settings directory (planned `~/.llm-usage-bar`), safe read-only SQLite snapshot import, and a non-conflicting proxy port.
+  - Until this is implemented and tested, do not run the desktop application or `tauri dev` against the real user home.
+
 - [ ] Task 3: static one-Provider request routing.
   - Main implementation commit: `f323ea75`
   - Full Rust suite passed before review.

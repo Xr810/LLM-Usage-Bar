@@ -38,7 +38,19 @@
 
 ---
 
+### Task 0: Isolate LLM Usage Bar from Original CC Switch
+
+**Status:** In progress. This is a launch blocker.
+
+- [ ] Use a distinct product name, bundle identifier, deep-link scheme, updater policy, data/settings directory, and default proxy port.
+- [ ] Reject configuration-directory overrides that point back to the original `~/.cc-switch` data.
+- [ ] Verify the original v11 database is unchanged by all dashboard tests and startup preparation.
+- [ ] If original data import is added, require explicit user action and use a read-only SQLite Backup snapshot into the isolated target; never copy or migrate the live source database in place.
+- [ ] Document that both apps may run concurrently but may not both control the same Claude/Codex/Gemini live configuration.
+
 ### Task 1: Define the Domain and Migrate SQLite from v12 to v13
+
+**Status:** Complete and independently reviewed (`55814021`, `1fcaf35d`).
 
 **Files:**
 - Create: `src-tauri/src/usage/domain.rs`
@@ -149,6 +161,8 @@ git commit -m "feat(db): add provider-aware usage schema"
 
 ### Task 2: Implement v13 Persistence for Providers, Bindings, Events, and Quotas
 
+**Status:** Complete and independently reviewed (`ac70ec35`, `18e146fe`).
+
 **Files:**
 - Create: `src-tauri/src/database/dao/usage_providers.rs`
 - Create: `src-tauri/src/database/dao/usage_events.rs`
@@ -223,6 +237,8 @@ git commit -m "feat(usage): persist providers events and quotas"
 
 ### Task 3: Replace Current/Failover Selection with One Static Route
 
+**Status:** Core implementation and review fixes complete (`f323ea75`, `73ccb294`). Task 8 still owns the real local-503/zero-upstream-hit acceptance proof.
+
 **Files:**
 - Modify: `src-tauri/src/proxy/provider_router.rs`
 - Modify: `src-tauri/src/proxy/handler_context.rs`
@@ -273,6 +289,8 @@ git commit -m "feat(proxy): enforce static provider routes"
 ```
 
 ### Task 4: Build Transactional Usage Ingestion and Capture Upstream Cost
+
+**Status:** Implementation and review fixes complete (`7fafece4`, `73ccb294`); independent re-review pending.
 
 **Files:**
 - Create: `src-tauri/src/usage/ingestion.rs`
@@ -356,6 +374,8 @@ git commit -m "feat(usage): ingest trusted request costs"
 
 ### Task 5: Add Provider-Aware Quota Collection and Session Import
 
+**Status:** In progress; targeted quota/session tests pass, final binding/correlation regression gate and commit pending.
+
 **Files:**
 - Create: `src-tauri/src/usage/quota.rs`
 - Create: `src-tauri/src/usage/session.rs`
@@ -408,6 +428,8 @@ git commit -m "feat(usage): collect quotas and bound sessions"
 ```
 
 ### Task 6: Implement Aggregation and the Nine Tauri Commands
+
+**Status:** Not started.
 
 **Files:**
 - Create: `src-tauri/src/usage/dashboard.rs`
@@ -471,6 +493,8 @@ git commit -m "feat(usage): expose product dashboard API"
 
 ### Task 7: Add the Minimal React Dashboard and Configuration Surface
 
+**Status:** Not started.
+
 **Files:**
 - Create: `src/types/usageDashboard.ts`
 - Create: `src/lib/api/usageDashboard.ts`
@@ -528,6 +552,8 @@ git commit -m "feat(ui): add provider-aware usage dashboard"
 ```
 
 ### Task 8: Exit Legacy Features from the Main Path and Run End-to-End Acceptance
+
+**Status:** Not started.
 
 **Files:**
 - Modify: `src/App.tsx`
