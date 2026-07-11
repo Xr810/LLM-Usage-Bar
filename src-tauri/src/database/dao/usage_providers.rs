@@ -277,6 +277,20 @@ impl Database {
         let _operation_guard = lock_conn!(self.usage_source_binding_operation);
         let mut conn = lock_conn!(self.conn);
         let transaction = conn.transaction()?;
+        if requested_session_sources.is_none()
+            && !input.token_sources.contains(&TokenSource::SessionLog)
+            && transaction.query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM usage_source_bindings WHERE provider_id = ?1
+                 )",
+                [&input.id],
+                |row| row.get::<_, bool>(0),
+            )?
+        {
+            return Err(AppError::Message(
+                "existing session source bindings require session_log token support".to_string(),
+            ));
+        }
         transaction.execute(
             "INSERT INTO usage_providers (
                 id, name, billing_kind, product_group_id, token_sources, quota_source,
@@ -846,6 +860,34 @@ mod tests {
         assert_eq!(
             db.save_usage_provider(&unknown).unwrap_err().to_string(),
             "unsupported usage source: other"
+        );
+    }
+
+    #[test]
+    fn omitted_bindings_cannot_leave_an_incapable_bound_provider() {
+        let db = Database::memory().unwrap();
+        let mut input = provider(
+            "bound",
+            BillingKind::Subscription,
+            vec![TokenSource::SessionLog],
+        );
+        input.session_source_bindings = Some(vec!["claude".to_string()]);
+        db.save_usage_provider(&input).unwrap();
+
+        input.token_sources = vec![TokenSource::Proxy];
+        input.session_source_bindings = None;
+        assert_eq!(
+            db.save_usage_provider(&input).unwrap_err().to_string(),
+            "existing session source bindings require session_log token support"
+        );
+        let stored = db.get_usage_provider("bound").unwrap().unwrap();
+        assert_eq!(stored.token_sources, vec![TokenSource::SessionLog]);
+        assert_eq!(
+            db.get_usage_source_binding("claude")
+                .unwrap()
+                .unwrap()
+                .provider_id,
+            "bound"
         );
     }
 
