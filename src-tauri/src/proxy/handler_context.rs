@@ -197,6 +197,7 @@ impl RequestContext {
             self.optimizer_config.clone(),
             self.copilot_optimizer_config.clone(),
         )
+        .without_reactive_retries()
     }
 
     /// 获取 Provider 列表（用于故障转移）

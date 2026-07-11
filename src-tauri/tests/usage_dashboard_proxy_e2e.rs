@@ -1,4 +1,10 @@
-use axum::{extract::State, routing::post, Json, Router};
+use axum::{
+    extract::State,
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    routing::post,
+    Json, Router,
+};
 use cc_switch_lib::{
     usage::dashboard::UsageDashboardService, BillingKind, CostSource, Database, Provider,
     ProxyService, TokenSource, UsageEventPage, UsageProviderInput,
@@ -11,8 +17,23 @@ use std::sync::{
 use std::time::Duration;
 use tokio::sync::oneshot;
 
-async fn mock_messages(State(hits): State<Arc<AtomicUsize>>) -> Json<Value> {
+async fn mock_messages(
+    State(hits): State<Arc<AtomicUsize>>,
+    Json(request): Json<Value>,
+) -> Response {
     let request_index = hits.fetch_add(1, Ordering::SeqCst);
+    if request["model"] == "rectifier-retry-probe" {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": "Invalid signature in thinking block"
+                }
+            })),
+        )
+            .into_response();
+    }
     let mut usage = json!({
         "input_tokens": if request_index == 0 { 10 } else { 20 },
         "output_tokens": if request_index == 0 { 2 } else { 4 },
@@ -38,6 +59,7 @@ async fn mock_messages(State(hits): State<Arc<AtomicUsize>>) -> Json<Value> {
         "stop_reason": "end_turn",
         "usage": usage
     }))
+    .into_response()
 }
 
 async fn start_mock_upstream(
@@ -123,6 +145,30 @@ async fn send_message(client: &reqwest::Client, port: u16) -> reqwest::Response 
         .expect("send request through proxy")
 }
 
+async fn send_rectifier_retry_probe(client: &reqwest::Client, port: u16) -> reqwest::Response {
+    client
+        .post(format!("http://127.0.0.1:{port}/v1/messages"))
+        .json(&json!({
+            "model": "rectifier-retry-probe",
+            "max_tokens": 16,
+            "stream": false,
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [{
+                        "type": "thinking",
+                        "thinking": "private",
+                        "signature": "invalid"
+                    }]
+                },
+                {"role": "user", "content": "continue"}
+            ]
+        }))
+        .send()
+        .await
+        .expect("send rectifier retry probe through proxy")
+}
+
 async fn wait_for_events(
     db: &Database,
     start_at: i64,
@@ -171,6 +217,15 @@ async fn real_proxy_requests_feed_dashboard_and_route_errors_stay_local() {
     let estimated_body: Value = estimated.json().await.expect("estimated upstream response");
     assert_eq!(estimated_body["id"], "msg-e2e-1");
 
+    let hits_before_probe = hits.load(Ordering::SeqCst);
+    let retry_probe = send_rectifier_retry_probe(&client, proxy_port).await;
+    assert_eq!(retry_probe.status(), reqwest::StatusCode::BAD_REQUEST);
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        hits_before_probe + 1,
+        "the static v13 route must make exactly one upstream attempt"
+    );
+
     // The ingestion worker may use the full five-second polling allowance; keep
     // the half-open query range wider than that allowance so late completion
     // cannot fall outside `occurred_at < end_at`.
@@ -178,7 +233,7 @@ async fn real_proxy_requests_feed_dashboard_and_route_errors_stay_local() {
     let events = wait_for_events(&db, start_at, end_at, 2).await;
     assert_eq!(events.total, 2);
     assert_eq!(events.items.len(), 2);
-    assert_eq!(hits.load(Ordering::SeqCst), 2);
+    assert_eq!(hits.load(Ordering::SeqCst), 3);
 
     let upstream_event = events
         .items

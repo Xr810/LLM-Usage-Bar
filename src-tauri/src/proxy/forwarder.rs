@@ -106,6 +106,10 @@ pub struct RequestForwarder {
     session_client_provided: bool,
     /// 整流器配置
     rectifier_config: RectifierConfig,
+    /// Compatibility callers may still opt into reactive repair. The v13
+    /// static route disables it so one client request produces one upstream
+    /// attempt and cannot consume quota twice.
+    reactive_retries_enabled: bool,
     /// 优化器配置
     optimizer_config: OptimizerConfig,
     /// Copilot 优化器配置
@@ -187,6 +191,7 @@ impl RequestForwarder {
             session_id,
             session_client_provided,
             rectifier_config,
+            reactive_retries_enabled: true,
             optimizer_config,
             copilot_optimizer_config,
             non_streaming_timeout: std::time::Duration::from_secs(non_streaming_timeout),
@@ -194,6 +199,11 @@ impl RequestForwarder {
                 streaming_first_byte_timeout,
             ),
         }
+    }
+
+    pub(crate) fn without_reactive_retries(mut self) -> Self {
+        self.reactive_retries_enabled = false;
+        self
     }
 
     /// 整流（thinking signature 或 budget）重试失败后的统一收尾。
@@ -406,12 +416,14 @@ impl RequestForwarder {
                     );
                     let mut signature_rectifier_non_retryable_client_error = false;
 
-                    if self.media_retry_should_trigger(
-                        adapter.name(),
-                        media_rectifier_retried,
-                        &provider_body,
-                        &e,
-                    ) {
+                    if self.reactive_retries_enabled
+                        && self.media_retry_should_trigger(
+                            adapter.name(),
+                            media_rectifier_retried,
+                            &provider_body,
+                            &e,
+                        )
+                    {
                         let mut media_body = provider_body.clone();
                         let replaced_images =
                             super::media_sanitizer::replace_image_blocks_with_marker(
@@ -501,10 +513,12 @@ impl RequestForwarder {
 
                     if is_anthropic_provider {
                         let error_message = extract_error_message(&e);
-                        if should_rectify_thinking_signature(
-                            error_message.as_deref(),
-                            &self.rectifier_config,
-                        ) {
+                        if self.reactive_retries_enabled
+                            && should_rectify_thinking_signature(
+                                error_message.as_deref(),
+                                &self.rectifier_config,
+                            )
+                        {
                             // 已经重试过：直接返回错误（不可重试客户端错误）
                             if rectifier_retried {
                                 log::warn!("[{app_type_str}] [RECT-005] 整流器已触发过，不再重试");
@@ -617,10 +631,12 @@ impl RequestForwarder {
                     // 检测是否需要触发 budget 整流器（仅 Claude/ClaudeAuth 供应商）
                     if is_anthropic_provider {
                         let error_message = extract_error_message(&e);
-                        if should_rectify_thinking_budget(
-                            error_message.as_deref(),
-                            &self.rectifier_config,
-                        ) {
+                        if self.reactive_retries_enabled
+                            && should_rectify_thinking_budget(
+                                error_message.as_deref(),
+                                &self.rectifier_config,
+                            )
+                        {
                             // 已经重试过：直接返回错误（不可重试客户端错误）
                             if budget_rectifier_retried {
                                 log::warn!(
@@ -2580,6 +2596,7 @@ mod tests {
             session_id: String::new(),
             session_client_provided: false,
             rectifier_config: RectifierConfig::default(),
+            reactive_retries_enabled: true,
             optimizer_config: OptimizerConfig::default(),
             copilot_optimizer_config: CopilotOptimizerConfig::default(),
             non_streaming_timeout,
