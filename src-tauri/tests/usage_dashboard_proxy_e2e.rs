@@ -1,7 +1,7 @@
 use axum::{extract::State, routing::post, Json, Router};
 use cc_switch_lib::{
-    usage::dashboard::UsageDashboardService, BillingKind, CostSource, Database, ProxyConfig,
-    ProxyServer, TokenSource, UsageEventPage, UsageProviderInput,
+    usage::dashboard::UsageDashboardService, BillingKind, CostSource, Database, Provider,
+    ProxyService, TokenSource, UsageEventPage, UsageProviderInput,
 };
 use serde_json::{json, Value};
 use std::sync::{
@@ -62,15 +62,6 @@ async fn start_mock_upstream(
     (address, shutdown_tx)
 }
 
-fn proxy_config() -> ProxyConfig {
-    ProxyConfig {
-        listen_address: "127.0.0.1".to_string(),
-        listen_port: 0,
-        enable_logging: true,
-        ..ProxyConfig::default()
-    }
-}
-
 fn metered_provider(upstream: std::net::SocketAddr) -> UsageProviderInput {
     UsageProviderInput {
         id: "metered-e2e".to_string(),
@@ -88,6 +79,34 @@ fn metered_provider(upstream: std::net::SocketAddr) -> UsageProviderInput {
         quota_config: None,
         enabled: true,
     }
+}
+
+fn legacy_provider(id: &str, upstream: std::net::SocketAddr) -> Provider {
+    Provider::with_id(
+        id.to_string(),
+        format!("Legacy {id}"),
+        json!({
+            "env": {
+                "ANTHROPIC_BASE_URL": format!("http://{upstream}"),
+                "ANTHROPIC_AUTH_TOKEN": "legacy-fixture-key"
+            }
+        }),
+        None,
+    )
+}
+
+async fn start_proxy(db: Arc<Database>) -> (ProxyService, u16) {
+    let proxy = ProxyService::new(db);
+    let mut config = proxy.get_config().await.expect("read proxy config");
+    config.listen_address = "127.0.0.1".to_string();
+    config.listen_port = 0;
+    config.enable_logging = true;
+    proxy
+        .update_config(&config)
+        .await
+        .expect("configure proxy on port zero");
+    let info = proxy.start().await.expect("start proxy on port zero");
+    (proxy, info.port)
 }
 
 async fn send_message(client: &reqwest::Client, port: u16) -> reqwest::Response {
@@ -135,26 +154,30 @@ async fn real_proxy_requests_feed_dashboard_and_route_errors_stay_local() {
     db.set_route_binding("claude", "metered-e2e")
         .expect("bind Claude route");
 
-    let proxy = ProxyServer::new(proxy_config(), db.clone(), None);
-    let proxy_info = proxy.start().await.expect("start proxy on port zero");
+    let (proxy, proxy_port) = start_proxy(db.clone()).await;
     let client = reqwest::Client::builder()
         .no_proxy()
         .build()
         .expect("build local client");
     let start_at = chrono::Utc::now().timestamp() - 2;
 
-    let explicit = send_message(&client, proxy_info.port).await;
+    let explicit = send_message(&client, proxy_port).await;
     assert_eq!(explicit.status(), reqwest::StatusCode::OK);
     let explicit_body: Value = explicit.json().await.expect("explicit upstream response");
     assert_eq!(explicit_body["id"], "msg-e2e-0");
 
-    let estimated = send_message(&client, proxy_info.port).await;
+    let estimated = send_message(&client, proxy_port).await;
     assert_eq!(estimated.status(), reqwest::StatusCode::OK);
     let estimated_body: Value = estimated.json().await.expect("estimated upstream response");
     assert_eq!(estimated_body["id"], "msg-e2e-1");
 
-    let end_at = chrono::Utc::now().timestamp() + 2;
+    // The ingestion worker may use the full five-second polling allowance; keep
+    // the half-open query range wider than that allowance so late completion
+    // cannot fall outside `occurred_at < end_at`.
+    let end_at = chrono::Utc::now().timestamp() + 10;
     let events = wait_for_events(&db, start_at, end_at, 2).await;
+    assert_eq!(events.total, 2);
+    assert_eq!(events.items.len(), 2);
     assert_eq!(hits.load(Ordering::SeqCst), 2);
 
     let upstream_event = events
@@ -195,19 +218,69 @@ async fn real_proxy_requests_feed_dashboard_and_route_errors_stay_local() {
     let product = &dashboard.product_groups[0];
     assert_eq!(product.input_tokens, 30);
     assert_eq!(product.output_tokens, 6);
+    assert_eq!(product.cache_read_tokens, 3);
+    assert_eq!(product.cache_creation_tokens, 4);
+    assert_eq!(product.total_cost_usd.as_deref(), Some("0.42012"));
     assert_eq!(product.cost_source_counts.upstream, 1);
     assert_eq!(product.cost_source_counts.estimated, 1);
+    assert_eq!(product.cost_source_counts.unavailable, 0);
+    assert_eq!(product.token_sources, vec![TokenSource::Proxy]);
+    assert!(product.subscription_providers.is_empty());
     assert_eq!(product.metered_providers.len(), 1);
-    assert_eq!(product.metered_providers[0].provider.id, "metered-e2e");
+    let provider_summary = &product.metered_providers[0];
+    assert_eq!(provider_summary.provider.id, "metered-e2e");
+    assert_eq!(provider_summary.provider.name, "Metered E2E");
+    assert_eq!(provider_summary.provider.billing_kind, BillingKind::Metered);
+    assert_eq!(provider_summary.provider.product_group_id, "claude-e2e");
+    assert_eq!(
+        provider_summary.provider.token_sources,
+        vec![TokenSource::Proxy]
+    );
+    assert!(provider_summary.provider.quota_source.is_none());
+    assert!(provider_summary.provider.quota_interval_seconds.is_none());
+    assert_eq!(
+        provider_summary.provider.route_app_type.as_deref(),
+        Some("claude")
+    );
+    assert!(provider_summary.provider.enabled);
+    assert!(!provider_summary.provider.needs_review);
+    assert_eq!(
+        provider_summary.provider.route_base_url.as_deref(),
+        Some(format!("http://{upstream}").as_str())
+    );
+    assert!(provider_summary.provider.has_route_credentials);
+    assert!(provider_summary.provider.created_at > 0);
+    assert!(provider_summary.provider.updated_at >= provider_summary.provider.created_at);
+    assert_eq!(provider_summary.event_count, 2);
+    assert_eq!(provider_summary.input_tokens, 30);
+    assert_eq!(provider_summary.output_tokens, 6);
+    assert_eq!(provider_summary.cache_read_tokens, 3);
+    assert_eq!(provider_summary.cache_creation_tokens, 4);
+    assert_eq!(provider_summary.total_cost_usd.as_deref(), Some("0.42012"));
+    assert_eq!(provider_summary.cost_source_counts.upstream, 1);
+    assert_eq!(provider_summary.cost_source_counts.estimated, 1);
+    assert_eq!(provider_summary.cost_source_counts.unavailable, 0);
+    assert!(provider_summary.quota.is_none());
+    assert!(provider_summary.quota_fetch_state.is_none());
 
     let unbound_db = Arc::new(Database::memory().expect("unbound in-memory database"));
-    let unbound_proxy = ProxyServer::new(proxy_config(), unbound_db, None);
-    let unbound_info = unbound_proxy
-        .start()
-        .await
-        .expect("start unbound proxy on port zero");
+    let legacy_current = legacy_provider("legacy-current", upstream);
+    let legacy_failover = legacy_provider("legacy-failover", upstream);
+    unbound_db
+        .save_provider("claude", &legacy_current)
+        .expect("save legacy current provider");
+    unbound_db
+        .save_provider("claude", &legacy_failover)
+        .expect("save legacy failover provider");
+    unbound_db
+        .set_current_provider("claude", &legacy_current.id)
+        .expect("select legacy current provider");
+    unbound_db
+        .add_to_failover_queue("claude", &legacy_failover.id)
+        .expect("queue legacy failover provider");
+    let (unbound_proxy, unbound_port) = start_proxy(unbound_db).await;
     let hits_before_503 = hits.load(Ordering::SeqCst);
-    let route_less = send_message(&client, unbound_info.port).await;
+    let route_less = send_message(&client, unbound_port).await;
     assert_eq!(
         route_less.status(),
         reqwest::StatusCode::SERVICE_UNAVAILABLE

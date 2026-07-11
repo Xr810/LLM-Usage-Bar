@@ -48,8 +48,6 @@ pub use provider_router::ProviderRouter;
 #[allow(unused_imports)]
 pub use response_handler::{NonStreamHandler, ResponseType, StreamHandler};
 #[allow(unused_imports)]
-pub use server::ProxyServer;
-#[allow(unused_imports)]
 pub use session::{
     extract_session_id, ClientFormat, ProxySession, SessionIdResult, SessionIdSource,
 };
