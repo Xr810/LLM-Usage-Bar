@@ -59,7 +59,7 @@ Execution plan: `2026-07-11-usage-dashboard-backend-execution.md`
   - Request-path static selector removal: `0e27e91c`; Provider router tests 11/11 and required `rg` zero-match gate pass.
   - `44ae009a` repaired the shell/event bridge/tests and was independently approved.
   - Whole-branch review found six Important integration issues. `bcc63b52`, `d0fd6f33`, `22f85516`, `1a04f5b7` and `ec389d86` close all six; final re-review found no Critical, Important or Minor findings.
-  - Final gate: Rust 1.95 library 1856 passed / 2 ignored plus every integration binary; frontend 72 files / 433 tests; TypeScript, renderer build, real proxy E2E, static request-path zero-match search and diff check all pass.
+  - Final gate: Rust 1.95 library 1857 passed / 2 ignored plus every integration binary; frontend 72 files / 433 tests; TypeScript, renderer build, real proxy E2E, static request-path zero-match search and diff check all pass.
 
 ## Completion rule
 

@@ -141,7 +141,7 @@ Using repository-pinned Rust 1.95 temporary toolchain environment:
 - Task 6 dashboard aggregation tests: 6 passed.
 - Quota DAO monotonic/consistent status tests: 5 passed; quota service tests: 9 passed.
 - Task 6 nine-command integration tests: 2 passed.
-- Final full Rust 1.95 gate: library 1856 passed / 2 ignored; all integration test binaries passed, including nine-command and real proxy E2E tests.
+- Final full Rust 1.95 gate: library 1857 passed / 2 ignored; all integration test binaries passed, including nine-command and real proxy E2E tests.
 - `git diff --check`: passed.
 - Task 7 targeted frontend tests after Important fixes: 15 passed; `tsc --noEmit` and `vite build` passed.
 - Real mock-upstream proxy acceptance after hardening: 1 passed; exact aggregate cost `0.42012` and route-less legacy-candidate 503/zero-hit behavior verified.
