@@ -94,14 +94,22 @@ impl ProviderRouter {
             .filter(|config| config.as_object().is_some_and(|object| !object.is_empty()))
             .ok_or_else(|| AppError::Message(format!("route config incomplete: {}", stored.id)))?;
 
+        let route_config = normalize_direct_route_config(route_config);
+
         if let (Some(legacy_app_type), Some(legacy_provider_id)) = (
             stored.legacy_app_type.as_deref(),
             stored.legacy_provider_id.as_deref(),
         ) {
-            if let Some(provider) = self
+            if let Some(mut provider) = self
                 .db
                 .get_provider_by_id(legacy_provider_id, legacy_app_type)?
             {
+                // v13 is the routing SSOT. Keep the legacy envelope only for
+                // adapter metadata and compatibility-log identity; otherwise
+                // edits made in the dashboard would continue using stale v12
+                // endpoint/credential data.
+                provider.name = stored.name;
+                provider.settings_config = route_config;
                 validate_runtime_route(protocol, &stored.id, &provider)?;
                 return Ok(BoundProvider {
                     usage_provider_id: stored.id,
@@ -110,7 +118,6 @@ impl ProviderRouter {
             }
         }
 
-        let route_config = normalize_direct_route_config(route_config);
         let provider = Provider::with_id(stored.id.clone(), stored.name, route_config, None);
         validate_runtime_route(protocol, &stored.id, &provider)?;
         Ok(BoundProvider {
@@ -534,36 +541,38 @@ mod tests {
 
     #[tokio::test]
     #[serial]
-    async fn incomplete_legacy_route_config_is_rejected_before_forwarding() {
+    async fn incomplete_v13_route_config_is_rejected_even_when_legacy_is_complete() {
         let _home = TempHome::new();
         let db = Arc::new(Database::memory().unwrap());
         let legacy = Provider::with_id(
-            "legacy-empty".to_string(),
-            "Legacy Empty".to_string(),
-            json!({}),
+            "legacy-complete".to_string(),
+            "Legacy Complete".to_string(),
+            json!({
+                "env": {
+                    "ANTHROPIC_BASE_URL": "https://legacy.example",
+                    "ANTHROPIC_AUTH_TOKEN": "legacy-secret"
+                }
+            }),
             None,
         );
         db.save_provider("claude", &legacy).unwrap();
         db.save_usage_provider(&usage_provider(
-            "claude:legacy-empty",
+            "claude:legacy-complete",
             BillingKind::Metered,
-            Some(json!({
-                "baseUrl": "https://stored.example",
-                "apiKey": "stored-secret"
-            })),
+            Some(json!({"baseUrl": "https://stored.example"})),
         ))
         .unwrap();
         {
             let conn = db.conn.lock().unwrap();
             conn.execute(
                 "UPDATE usage_providers
-                 SET legacy_app_type = 'claude', legacy_provider_id = 'legacy-empty'
-                 WHERE id = 'claude:legacy-empty'",
+                 SET legacy_app_type = 'claude', legacy_provider_id = 'legacy-complete'
+                 WHERE id = 'claude:legacy-complete'",
                 [],
             )
             .unwrap();
         }
-        db.set_route_binding("claude", "claude:legacy-empty")
+        db.set_route_binding("claude", "claude:legacy-complete")
             .unwrap();
 
         let error = ProviderRouter::new(db)
@@ -573,7 +582,7 @@ mod tests {
 
         assert_eq!(
             error.to_string(),
-            "route config incomplete: claude:legacy-empty"
+            "route config incomplete: claude:legacy-complete"
         );
     }
 
@@ -607,26 +616,29 @@ mod tests {
 
     #[tokio::test]
     #[serial]
-    async fn legacy_route_preserves_global_and_runtime_provider_identities() {
+    async fn legacy_route_uses_v13_config_and_preserves_runtime_identity() {
         let _home = TempHome::new();
         let db = Arc::new(Database::memory().unwrap());
-        let settings = json!({
+        let legacy_settings = json!({
             "env": {
                 "ANTHROPIC_BASE_URL": "https://legacy.example",
-                "ANTHROPIC_AUTH_TOKEN": "secret"
+                "ANTHROPIC_AUTH_TOKEN": "legacy-secret"
             }
         });
         let legacy = Provider::with_id(
             "legacy-id".to_string(),
             "Legacy".to_string(),
-            settings.clone(),
+            legacy_settings,
             None,
         );
         db.save_provider("claude", &legacy).unwrap();
         db.save_usage_provider(&usage_provider(
             "claude:legacy-id",
             BillingKind::Metered,
-            Some(settings),
+            Some(json!({
+                "baseUrl": "https://edited.example/v1",
+                "apiKey": "edited-secret"
+            })),
         ))
         .unwrap();
         {
@@ -648,6 +660,15 @@ mod tests {
 
         assert_eq!(bound.usage_provider_id, "claude:legacy-id");
         assert_eq!(bound.provider.id, "legacy-id");
+        assert_eq!(
+            bound.provider.settings_config["base_url"].as_str(),
+            Some("https://edited.example/v1")
+        );
+        assert_eq!(
+            bound.provider.settings_config["apiKey"].as_str(),
+            Some("edited-secret")
+        );
+        assert!(bound.provider.settings_config.get("env").is_none());
     }
 
     #[tokio::test]

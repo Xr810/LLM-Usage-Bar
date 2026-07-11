@@ -8,6 +8,7 @@ use rusqlite::{params, types::Type, OptionalExtension, Row};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::time::{SystemTime, UNIX_EPOCH};
+use url::Url;
 
 fn now_timestamp() -> Result<i64, AppError> {
     SystemTime::now()
@@ -73,16 +74,50 @@ fn has_non_empty_value(value: &Value) -> bool {
     }
 }
 
+fn public_route_base_url(raw: String) -> Option<String> {
+    let mut url = Url::parse(&raw).ok()?;
+    url.set_username("").ok()?;
+    url.set_password(None).ok()?;
+    url.set_query(None);
+    url.set_fragment(None);
+    let root_path = url.path() == "/";
+    let sanitized = url.to_string();
+    Some(if root_path {
+        sanitized.trim_end_matches('/').to_string()
+    } else {
+        sanitized
+    })
+}
+
 fn provider_view(provider: &UsageProviderStored) -> UsageProviderView {
     let route_base_url = provider.route_config.as_ref().and_then(|config| {
-        config
+        let direct_or_env = config
             .get("base_url")
             .or_else(|| config.get("baseUrl"))
+            .or_else(|| config.get("baseURL"))
             .and_then(Value::as_str)
+            .or_else(|| {
+                config
+                    .pointer("/env/ANTHROPIC_BASE_URL")
+                    .and_then(Value::as_str)
+            })
+            .or_else(|| {
+                config
+                    .pointer("/env/GOOGLE_GEMINI_BASE_URL")
+                    .and_then(Value::as_str)
+            });
+        direct_or_env
             .map(str::to_string)
+            .or_else(|| {
+                config
+                    .get("config")
+                    .and_then(Value::as_str)
+                    .and_then(crate::codex_config::extract_codex_base_url)
+            })
+            .and_then(public_route_base_url)
     });
     let has_route_credentials = provider.route_config.as_ref().is_some_and(|config| {
-        [
+        let has_direct = [
             "api_key",
             "apiKey",
             "token",
@@ -92,7 +127,30 @@ fn provider_view(provider: &UsageProviderStored) -> UsageProviderView {
             "authToken",
         ]
         .iter()
-        .any(|key| config.get(key).is_some_and(has_non_empty_value))
+        .any(|key| config.get(key).is_some_and(has_non_empty_value));
+        let has_env = [
+            "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_API_KEY",
+            "OPENROUTER_API_KEY",
+            "OPENAI_API_KEY",
+            "GEMINI_API_KEY",
+        ]
+        .iter()
+        .any(|key| {
+            config
+                .get("env")
+                .and_then(|env| env.get(key))
+                .is_some_and(has_non_empty_value)
+        });
+        let config_text = config.get("config").and_then(Value::as_str);
+        let has_codex = crate::codex_config::extract_codex_api_key(config.get("auth"), config_text)
+            .is_some()
+            || config.get("config").is_some_and(|nested| {
+                ["api_key", "apiKey", "token"]
+                    .iter()
+                    .any(|key| nested.get(key).is_some_and(has_non_empty_value))
+            });
+        has_direct || has_env || has_codex
     });
 
     UsageProviderView {
@@ -470,6 +528,79 @@ mod tests {
             Some("https://camel.example")
         );
         assert!(!view.has_route_credentials);
+    }
+
+    #[test]
+    fn redaction_recognizes_migrated_nested_route_shapes() {
+        for (index, route_config, expected_base_url) in [
+            (
+                0,
+                json!({
+                    "env": {
+                        "ANTHROPIC_BASE_URL": "https://claude.example",
+                        "ANTHROPIC_AUTH_TOKEN": "claude-secret"
+                    }
+                }),
+                "https://claude.example",
+            ),
+            (
+                1,
+                json!({
+                    "env": {
+                        "GOOGLE_GEMINI_BASE_URL": "https://gemini.example",
+                        "GEMINI_API_KEY": "gemini-secret"
+                    }
+                }),
+                "https://gemini.example",
+            ),
+            (
+                2,
+                json!({
+                    "auth": {"OPENAI_API_KEY": "codex-secret"},
+                    "config": "model_provider = \"custom\"\n[model_providers.custom]\nbase_url = \"https://codex.example\""
+                }),
+                "https://codex.example",
+            ),
+        ] {
+            let db = Database::memory().unwrap();
+            let mut input = provider(
+                &format!("nested-{index}"),
+                BillingKind::Metered,
+                vec![TokenSource::Proxy],
+            );
+            input.route_config = Some(route_config);
+            let view = db.save_usage_provider(&input).unwrap();
+            assert_eq!(view.route_base_url.as_deref(), Some(expected_base_url));
+            assert!(view.has_route_credentials);
+            let serialized = serde_json::to_string(&view).unwrap();
+            assert!(!serialized.contains("secret"));
+        }
+    }
+
+    #[test]
+    fn public_route_base_url_strips_userinfo_query_and_fragment() {
+        let db = Database::memory().unwrap();
+        let mut input = provider("url-secret", BillingKind::Metered, vec![TokenSource::Proxy]);
+        input.route_config = Some(json!({
+            "baseUrl": "https://user:password@example.com/v1?api_key=query-secret#fragment-secret",
+            "apiKey": "header-secret"
+        }));
+
+        let view = db.save_usage_provider(&input).unwrap();
+        assert_eq!(
+            view.route_base_url.as_deref(),
+            Some("https://example.com/v1")
+        );
+        let serialized = serde_json::to_string(&view).unwrap();
+        for secret in [
+            "user",
+            "password",
+            "query-secret",
+            "fragment-secret",
+            "header-secret",
+        ] {
+            assert!(!serialized.contains(secret));
+        }
     }
 
     #[test]
