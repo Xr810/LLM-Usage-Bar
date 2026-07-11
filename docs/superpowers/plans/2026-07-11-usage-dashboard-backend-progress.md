@@ -1,6 +1,6 @@
 # Usage Dashboard Backend Implementation Progress
 
-Last updated: 2026-07-12 00:42 Asia/Singapore
+Last updated: 2026-07-12 01:06 Asia/Singapore
 
 Source plan: `2026-07-11-usage-dashboard-backend-implementation.md`
 
@@ -50,7 +50,8 @@ Execution plan: `2026-07-11-usage-dashboard-backend-execution.md`
 - [ ] Task 7: minimal React dashboard and Provider/route configuration UI.
   - Initial TDD implementation: `f9063ff8`; Important review fixes: `66cff322`.
   - Target tests pass 15/15, TypeScript typecheck and renderer build pass.
-  - Independent re-review confirmed every Important finding and exact date-range coverage are fixed. Two Minor findings (localized unavailable event source and visible/disabled proxy-state failure handling) are being closed in the Task 8 frontend commit.
+  - Task-level re-review approved `44ae009a`, including the two previous Minor diagnostics and a full 423-test frontend pass.
+  - Whole-branch review found the live preset end time is frozen after mount and source ownership cannot be configured. Explicit source-binding UI/API and a moving half-open range are in progress.
 
 - [ ] Task 8: hide legacy entry points, real mock-upstream proxy acceptance, full backend/frontend gate, and acceptance runbook.
   - Main-path dashboard commit: `ee93e413`; compatibility source modules remain compiled but legacy entry points are no longer rendered.
@@ -58,6 +59,8 @@ Execution plan: `2026-07-11-usage-dashboard-backend-execution.md`
   - Acceptance runbook: `9575ab78`.
   - Request-path static selector removal: `0e27e91c`; Provider router tests 11/11 and required `rg` zero-match gate pass.
   - Frontend review found the minimal desktop window shell, v13 event invalidation and non-self-proving App/full-suite tests still need repair. Those fixes are in progress; the full final gate has not run yet.
+  - `44ae009a` repaired the shell/event bridge/tests and was independently approved.
+  - Whole-branch review then found six Important integration issues. `bcc63b52` closes migrated-route authority plus nested credential/URL redaction; `d0fd6f33` closes reactive same-Provider retries and adds a real hit-count RED/GREEN E2E. Explicit Session bindings, binding-change serialization and live-range progression remain in progress.
 
 ## Completion rule
 

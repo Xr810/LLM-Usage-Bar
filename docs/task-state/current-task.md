@@ -1,12 +1,12 @@
 # Current Task State
 
-Last checkpoint: 2026-07-12 00:42 Asia/Singapore
+Last checkpoint: 2026-07-12 01:06 Asia/Singapore
 
 Branch: `codex/usage-dashboard-backend`
 
 Worktree: `/Users/max/LLM Usage Bar/.worktrees/codex-usage-dashboard-backend`
 
-Current HEAD: `0e27e91c` (`refactor(proxy): remove legacy selection from request path`)
+Current HEAD: `d0fd6f33` (`fix(proxy): enforce one upstream attempt`)
 
 ## Goal
 
@@ -21,8 +21,8 @@ Complete `docs/superpowers/plans/2026-07-11-usage-dashboard-backend-implementati
 - Task 5 — quota scheduler and bound Claude/Codex Session import: complete and independently approved.
 - Coexistence safety — distinct app identity/data path from original CC Switch: complete and independently approved. Optional explicit snapshot import is not implemented.
 - Task 6 — aggregation and nine Tauri commands: complete, independently approved, full Rust gate passed.
-- Task 7 — React dashboard/configuration surface: implementation and all Important review fixes complete; two Minor findings are being closed with Task 8 frontend.
-- Task 8 — legacy entry points hidden; real proxy E2E, runbook and request-path selector removal complete and independently approved. Minimal desktop shell, live v13 event refresh, App/full-suite tests and final full gate remain in progress.
+- Task 7 — React dashboard/configuration surface: task-level implementation/review complete, but whole-branch review reopened explicit Session-source configuration and moving live-range semantics; fixes are in progress.
+- Task 8 — legacy entry points hidden; real proxy E2E, runbook, minimal shell/event refresh/tests and request-path selector removal are complete and task-level approved. Whole-branch integration fixes and repeat final gate are in progress.
 
 ## Completed commits in this implementation
 
@@ -58,6 +58,10 @@ Complete `docs/superpowers/plans/2026-07-11-usage-dashboard-backend-implementati
 - `66cff322` fix(ui): complete dashboard diagnostics and localization
 - `4fa50dea` test(usage): harden proxy dashboard acceptance
 - `0e27e91c` refactor(proxy): remove legacy selection from request path
+- `44ae009a` fix(ui): restore dashboard shell and live cache updates
+- `759ca832` docs: checkpoint dashboard acceptance stages
+- `bcc63b52` fix(usage): honor edited migrated routes
+- `d0fd6f33` fix(proxy): enforce one upstream attempt
 
 ## Key decisions
 
@@ -79,6 +83,8 @@ Complete `docs/superpowers/plans/2026-07-11-usage-dashboard-backend-implementati
 16. The real proxy acceptance must seed reachable legacy current/failover candidates in its route-less fixture; an empty database cannot prove that fallback is unreachable.
 17. Integration tests use the existing `ProxyService` boundary. Production `ProxyServer`/`ProxyConfig` APIs are not widened solely for test access.
 18. Legacy feature removal does not include the desktop window shell: drag regions and optional native-like controls remain required while only switching/failover/MCP/Skills/OpenClaw/cloud business entry points leave the render tree.
+19. A migrated Provider keeps its legacy runtime ID and metadata only as a compatibility envelope; v13 `route_config` is always the routing SSOT.
+20. The v13 request path disables reactive media/thinking/budget resends. Preventive transformations remain, but one client request makes exactly one upstream attempt.
 
 ## Failures and review findings already handled
 
@@ -104,6 +110,9 @@ Complete `docs/superpowers/plans/2026-07-11-usage-dashboard-backend-implementati
 - Task 7 review found interval-zero corruption, ignored base-URL-only edits, invisible query/mutation failures, incomplete subscription summaries, incomplete localization and weak date-range assertions. `66cff322` fixes all Important items and exact range coverage; re-review left two Minor diagnostics now included in Task 8 frontend work.
 - Task 8 frontend review found that the initial main-path reduction also removed the desktop drag/window-control shell, did not invalidate v13 dashboard/event queries on `usage-log-recorded`, and used a self-proving mocked App test while the old integration suite stayed red. The repair keeps only the minimal shell and rewrites tests for the new product contract.
 - Task 8 backend review found test-only public API expansion and a route-less empty database that could not detect legacy fallback regression. `4fa50dea` uses existing `ProxyService`, seeds reachable legacy candidates, widens the async query window and asserts the full exact aggregate; independent re-review approved.
+- Whole-branch review found six Important integration gaps: no public Session-source binding path, stale legacy route config authority, frozen live range, scan/rebind ownership race, URL-embedded secret exposure and reactive second upstream attempts.
+- `bcc63b52` fixes the stale route authority and strips URL userinfo/query/fragment from public DTOs while recognizing nested migrated credentials. The migrated-route regression was RED on the old path and GREEN after the fix.
+- `d0fd6f33` disables reactive resends on the v13 main path. The real proxy probe first observed two upstream hits for one request, then passed with exactly one hit.
 
 ## Latest stage verification
 
@@ -141,7 +150,7 @@ Using repository-pinned Rust 1.95 temporary toolchain environment:
 
 ## Immediate next actions
 
-1. Finish Task 8 frontend fixes: minimal desktop shell, v13 live event invalidation, real App contract tests, and the remaining two Task 7 Minor diagnostics.
-2. Independently review the frontend result and fix any Critical/Important findings.
-3. Run the complete Rust, TypeScript, unit, renderer-build, static-route and real-proxy gates from current HEAD.
-4. Perform a whole-branch independent review, checkpoint Tasks 7-8 as complete, and keep explicit read-only snapshot import deferred.
+1. Finish explicit Session-source binding configuration and serialize in-flight Session sync against binding changes.
+2. Finish moving live-range/end-exclusive semantics and prove post-mount events change the dashboard query window.
+3. Independently re-review all six whole-branch Important fixes.
+4. Repeat the complete Rust, TypeScript, unit, renderer-build, static-route and real-proxy gates, then checkpoint Tasks 7-8 as complete.

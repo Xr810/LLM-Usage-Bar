@@ -493,7 +493,7 @@ git commit -m "feat(usage): expose product dashboard API"
 
 ### Task 7: Add the Minimal React Dashboard and Configuration Surface
 
-**Status:** Implementation and Important review fixes complete (`f9063ff8`, `66cff322`). Two Minor localization/proxy-status diagnostics are being closed with the Task 8 frontend shell.
+**Status:** Initial implementation and task-level review fixes complete (`f9063ff8`, `66cff322`, `44ae009a`). Whole-branch review reopened live time-range progression and explicit Session-source configuration; fixes are in progress.
 
 **Files:**
 - Create: `src/types/usageDashboard.ts`
@@ -553,7 +553,7 @@ git commit -m "feat(ui): add provider-aware usage dashboard"
 
 ### Task 8: Exit Legacy Features from the Main Path and Run End-to-End Acceptance
 
-**Status:** In progress. Main-path UI (`ee93e413`), real proxy E2E (`15e44174`, `4fa50dea`), acceptance runbook (`9575ab78`) and request-path legacy selector removal (`0e27e91c`) are complete; frontend shell/event-refresh/test fixes and the full final gate remain.
+**Status:** In progress. Main-path UI and shell (`ee93e413`, `44ae009a`), real proxy E2E (`15e44174`, `4fa50dea`), acceptance runbook (`9575ab78`) and request-path legacy selector removal (`0e27e91c`) are complete. Whole-branch review fixes migrated-route authority/URL redaction (`bcc63b52`) and the one-upstream-attempt contract (`d0fd6f33`); Session ownership and live range fixes plus the repeat full gate remain.
 
 **Files:**
 - Modify: `src/App.tsx`
