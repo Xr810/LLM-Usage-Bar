@@ -66,7 +66,7 @@
 - Consumes: old `providers`, `proxy_request_logs`, current migration runner.
 - Produces: public domain types; `SCHEMA_VERSION = 13`; seven v13 tables; `classify_legacy_provider(...) -> LegacyProviderClassification`.
 
-- [ ] **Step 1: Write failing domain and migration tests**
+- [x] **Step 1: Write failing domain and migration tests**
 
 Add tests that:
 
@@ -90,7 +90,7 @@ assert_eq!(scalar_text(&conn, "SELECT cost_source FROM usage_events LIMIT 1"), "
 assert_eq!(scalar_i64(&conn, "SELECT COUNT(*) FROM usage_events WHERE provider_id='_session'"), 0);
 ```
 
-- [ ] **Step 2: Run tests and verify the expected failure**
+- [x] **Step 2: Run tests and verify the expected failure**
 
 Run:
 
@@ -101,7 +101,7 @@ cargo test --manifest-path src-tauri/Cargo.toml migration_v12_to_v13 -- --nocapt
 
 Expected: compilation/test failure because the module, types and v13 migration do not exist.
 
-- [ ] **Step 3: Implement the domain contract**
+- [x] **Step 3: Implement the domain contract**
 
 Define snake_case enums and camelCase structs:
 
@@ -127,7 +127,7 @@ pub struct UsageProviderInput {
 
 Add stored/public Provider variants so `UsageProviderView` exposes only `route_base_url` and `has_route_credentials`. Define `RouteBinding`, `UsageSourceBinding`, immutable `UsageEvent`, `UsageEventLink`, `QuotaSnapshot`, `QuotaFetchState`, `UsageEventPage`, `ProductUsageView`, and `UsageDashboardView`. Cost fields and stable IDs are `Option<String>`.
 
-- [ ] **Step 4: Implement the atomic v13 migration**
+- [x] **Step 4: Implement the atomic v13 migration**
 
 Create these tables and indexes in `migrate_v12_to_v13` under the existing SAVEPOINT:
 
@@ -143,7 +143,7 @@ Add indexes `(provider_id, occurred_at DESC)`, `(product_group_id, occurred_at D
 
 Classification is deterministic: `meta.provider_type` equal to `codex_oauth` or `github_copilot`, or enabled usage script template `official_subscription`/`token_plan`, becomes subscription; all other proxy Providers default metered; `category='official'` without proof also sets `needs_review=1`. Legacy IDs become `{app_type}:{provider_id}`.
 
-- [ ] **Step 5: Run the database gate and commit**
+- [x] **Step 5: Run the database gate and commit**
 
 Run:
 
@@ -174,7 +174,7 @@ git commit -m "feat(db): add provider-aware usage schema"
 - Consumes: Task 1 types/tables.
 - Produces: Provider/binding CRUD; immutable event insert/link/query; append-only quota success and failure-state methods.
 
-- [ ] **Step 1: Write failing DAO tests**
+- [x] **Step 1: Write failing DAO tests**
 
 Cover:
 
@@ -196,13 +196,13 @@ assert!(!db.insert_usage_event(&changed_duplicate).unwrap());
 assert_eq!(db.latest_quota_snapshot("sub").unwrap().unwrap().captured_at, first_success_at);
 ```
 
-- [ ] **Step 2: Run tests and verify failure**
+- [x] **Step 2: Run tests and verify failure**
 
 Run: `cargo test --manifest-path src-tauri/Cargo.toml database::dao -- --nocapture`
 
 Expected: v13 DAO methods are undefined.
 
-- [ ] **Step 3: Implement Provider and binding DAO**
+- [x] **Step 3: Implement Provider and binding DAO**
 
 Add methods on `Database`:
 
@@ -219,13 +219,13 @@ set_usage_source_binding(source_key: &str, provider_id: &str) -> Result<UsageSou
 
 Use explicit `INSERT ... ON CONFLICT DO UPDATE`, never `OR REPLACE`. Validate target type/enabled/source in the same locked connection as the binding UPSERT. Centralize redaction in one conversion function.
 
-- [ ] **Step 4: Implement immutable event and quota DAO**
+- [x] **Step 4: Implement immutable event and quota DAO**
 
 Event insert uses `ON CONFLICT(event_id) DO NOTHING`. Exact matching SQL always includes `provider_id=?` and one non-empty equality over request/session/upstream ID. A link keeps both events intact and is created only across different sources. Event list uses half-open time range and `ORDER BY occurred_at DESC, event_id DESC`.
 
 Successful quota refresh appends one snapshot and UPSERTs success state. Failure never modifies `quota_snapshots`; it only updates attempt/error/stale while preserving `last_success_at`.
 
-- [ ] **Step 5: Run tests and commit**
+- [x] **Step 5: Run tests and commit**
 
 ```bash
 cargo test --manifest-path src-tauri/Cargo.toml usage_providers::tests -- --nocapture
@@ -252,23 +252,23 @@ git commit -m "feat(usage): persist providers events and quotas"
 - Consumes: `Database::get_route_binding`, transitional `legacy_app_type/legacy_provider_id` bridge.
 - Produces: `ProviderRouter::select_bound_provider(protocol) -> Result<Provider, AppError>`; one-attempt request path.
 
-- [ ] **Step 1: Replace routing tests with failing static-binding cases**
+- [x] **Step 1: Replace routing tests with failing static-binding cases**
 
 Seed old current A and failover C, but bind usage Provider B. Assert only B is selected. Add missing binding, disabled target, subscription target and incomplete route config cases; assert each becomes a local 503 and the mock upstream receives zero requests.
 
-- [ ] **Step 2: Run tests and verify the old behavior fails the new contract**
+- [x] **Step 2: Run tests and verify the old behavior fails the new contract**
 
 Run: `cargo test --manifest-path src-tauri/Cargo.toml provider_router::tests -- --nocapture`
 
 Expected: selector still reads current/failover state or the new method is absent.
 
-- [ ] **Step 3: Implement static selection**
+- [x] **Step 3: Implement static selection**
 
 Add `ProxyError::{RouteNotBound, RouteProviderDisabled, RouteProviderNotMetered, RouteConfigIncomplete}` and map all to 503. On every request, load binding and Provider fresh, validate it, then resolve the transitional old `Provider` needed by existing protocol adapters. Do not call effective/current Provider, failover queue, circuit breaker, or switch manager.
 
 Change `RequestContext::new` to hold `vec![bound_provider]`. Change forwarder to make exactly one upstream attempt with `max_retries=0`; retain existing protocol conversion, auth injection, model mapping, headers, streaming and timeout behavior.
 
-- [ ] **Step 4: Prove no fallback occurs**
+- [x] **Step 4: Prove no fallback occurs**
 
 Run:
 
@@ -281,7 +281,7 @@ rg -n "get_effective_current_provider|get_failover_queue|allow_provider_request"
 
 Expected: tests pass; final `rg` returns no request-path match.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src-tauri/src/proxy/provider_router.rs src-tauri/src/proxy/handler_context.rs src-tauri/src/proxy/forwarder.rs src-tauri/src/proxy/error.rs src-tauri/src/proxy/error_mapper.rs
@@ -307,7 +307,7 @@ git commit -m "feat(proxy): enforce static provider routes"
 - Consumes: Task 2 DAO, existing Token parsers and model pricing.
 - Produces: `UsageIngestionService::ingest`; `extract_upstream_cost`; proxy response integration and diagnostic event.
 
-- [ ] **Step 1: Write failing trust and transaction tests**
+- [x] **Step 1: Write failing trust and transaction tests**
 
 Cover:
 
@@ -321,7 +321,7 @@ Cover:
 - same tokens/model/time without ID remain separate and unlinked;
 - ingestion failure does not change the already successful upstream response.
 
-- [ ] **Step 2: Run tests and verify failure**
+- [x] **Step 2: Run tests and verify failure**
 
 ```bash
 cargo test --manifest-path src-tauri/Cargo.toml usage::ingestion -- --nocapture
@@ -331,7 +331,7 @@ cargo test --manifest-path src-tauri/Cargo.toml response_processor -- --nocaptur
 
 Expected: service/parser are absent and old logger writes only `proxy_request_logs`.
 
-- [ ] **Step 3: Implement cost extraction and decision**
+- [x] **Step 3: Implement cost extraction and decision**
 
 Parse only explicit upstream JSON fields such as `usage.cost`, `usage.total_cost` and documented cost-detail fields; accept JSON number/string through `Decimal`, reject negative/non-numeric values, and preserve missing parts as `None`.
 
@@ -355,13 +355,13 @@ pub struct UsageIngestionInput {
 
 Decision order is upstream, estimated pricing, unavailable. `usage.dedup_request_id()` may generate the local event ID, but a random fallback must never become stable cross-source evidence.
 
-- [ ] **Step 4: Implement the single transaction and response wiring**
+- [x] **Step 4: Implement the single transaction and response wiring**
 
 Within one `rusqlite::Transaction`: validate Provider/source, insert event immutably, find/link exact stable duplicate, insert compatibility `proxy_request_logs` using `ON CONFLICT DO NOTHING`, commit, then notify UI. Refactor `UsageLogger` into a compatibility wrapper over ingestion.
 
 For non-streaming responses pass response `id` as upstream correlation ID; for SSE inspect collected usage/terminal events. On failure keep the upstream response unchanged, log `[USG-001]`, and emit `usage-ingestion-error` with redacted Provider/request/message fields.
 
-- [ ] **Step 5: Run proxy gate and commit**
+- [x] **Step 5: Run proxy gate and commit**
 
 ```bash
 cargo test --manifest-path src-tauri/Cargo.toml usage::ingestion -- --nocapture
@@ -392,7 +392,7 @@ git commit -m "feat(usage): ingest trusted request costs"
 - Consumes: existing Claude/Codex/Coding Plan collectors, source bindings, JSONL parsers, ingestion service.
 - Produces: `QuotaService::refresh_provider`; five-minute scheduler; `SessionUsageService::sync_provider` with visible warnings.
 
-- [ ] **Step 1: Write failing quota adapter/scheduler tests**
+- [x] **Step 1: Write failing quota adapter/scheduler tests**
 
 Use a fake collector and paused Tokio time. Assert:
 
@@ -403,19 +403,19 @@ Use a fake collector and paused Tokio time. Assert:
 - manual refresh invokes one collection immediately;
 - metered/disabled Provider refresh is rejected.
 
-- [ ] **Step 2: Write failing Session binding tests**
+- [x] **Step 2: Write failing Session binding tests**
 
 Assert unbound Claude/Codex sources import zero and return `warnings=["no usage source binding for <source>"]`. After binding, every event uses that Provider. Exact stable IDs link; token/time similarity without ID does not link. Quota snapshots remain absent from events.
 
-- [ ] **Step 3: Implement quota adapters and scheduler**
+- [x] **Step 3: Implement quota adapters and scheduler**
 
 Add an object-safe `QuotaCollector` adapter boundary. Reuse current service parsers instead of duplicating HTTP logic. A success appends snapshot and clears stale/error; a failure updates fetch state only. Add `quota_service` plus cancellable scheduler handle to `AppState`, start after DB initialization, stop during shutdown.
 
-- [ ] **Step 4: Refactor Session parsers to emit records**
+- [x] **Step 4: Refactor Session parsers to emit records**
 
 Keep existing file traversal/format parsing, but replace direct `proxy_request_logs` writes with parsed records consumed by `SessionUsageService`. Resolve `usage_source_bindings` before scanning. Update `session_log_sync` offset only after every yielded record for that file is ingested. Remove fingerprint (`DedupKey`/model+tokens+time) from the new path. First version exposes only Claude and Codex binding keys.
 
-- [ ] **Step 5: Run suites and commit**
+- [x] **Step 5: Run suites and commit**
 
 ```bash
 cargo test --manifest-path src-tauri/Cargo.toml usage::quota -- --nocapture
@@ -493,7 +493,7 @@ git commit -m "feat(usage): expose product dashboard API"
 
 ### Task 7: Add the Minimal React Dashboard and Configuration Surface
 
-**Status:** Initial implementation and task-level review fixes complete (`f9063ff8`, `66cff322`, `44ae009a`). Whole-branch review reopened live time-range progression and explicit Session-source configuration; fixes are in progress.
+**Status:** Complete and independently reviewed (`f9063ff8`, `66cff322`, `44ae009a`, `22f85516`, `1a04f5b7`, `ec389d86`).
 
 **Files:**
 - Create: `src/types/usageDashboard.ts`
@@ -516,11 +516,11 @@ git commit -m "feat(usage): expose product dashboard API"
 - Consumes: Task 6 wire contract and existing date range/proxy controls.
 - Produces: types/API/hooks plus product group UI, separate cards, Provider/routes, proxy toggle, quota refresh and Session sync.
 
-- [ ] **Step 1: Write failing wire/hook tests**
+- [x] **Step 1: Write failing wire/hook tests**
 
 Mock Tauri invoke. Verify exact camelCase payloads for all nine commands and deterministic query keys containing all range/filter/page values. Provider/route mutations invalidate providers, bindings and dashboard; quota refresh invalidates that Provider/dashboard.
 
-- [ ] **Step 2: Implement TypeScript contract and data client**
+- [x] **Step 2: Implement TypeScript contract and data client**
 
 Mirror Rust types exactly:
 
@@ -532,15 +532,15 @@ export type CostSource = "upstream" | "estimated" | "unavailable";
 
 Add `usageDashboardApi`, query keys, list/dashboard/events queries and save/enable/bind/refresh/sync mutations. Do not expose a credential read API.
 
-- [ ] **Step 3: Write failing page tests**
+- [x] **Step 3: Write failing page tests**
 
 Mock hooks with a product containing both kinds. Verify separate subscription/metered cards, source labels, upstream/estimated/unavailable labels, stale quota while last success remains visible, today/7d/30d/custom ranges, route save, proxy start/stop, quota refresh and Session sync warning.
 
-- [ ] **Step 4: Implement the minimal page**
+- [x] **Step 4: Implement the minimal page**
 
 Reuse existing `UsageDateRangePicker`, UI primitives and proxy hooks. Do not add complex charts. Product header shows time-scoped Token summary plus sources. Provider dialog edits v13 fields; secret inputs are blank on edit and omission preserves stored secret. Route selector lists only enabled metered Providers. Replace the old Settings `usage` tab body with the new page.
 
-- [ ] **Step 5: Run frontend gate and commit**
+- [x] **Step 5: Run frontend gate and commit**
 
 ```bash
 pnpm test:unit -- src/lib/query/usageDashboard.test.tsx
@@ -553,7 +553,7 @@ git commit -m "feat(ui): add provider-aware usage dashboard"
 
 ### Task 8: Exit Legacy Features from the Main Path and Run End-to-End Acceptance
 
-**Status:** In progress. Main-path UI and shell (`ee93e413`, `44ae009a`), real proxy E2E (`15e44174`, `4fa50dea`), acceptance runbook (`9575ab78`) and request-path legacy selector removal (`0e27e91c`) are complete. Whole-branch review fixes migrated-route authority/URL redaction (`bcc63b52`) and the one-upstream-attempt contract (`d0fd6f33`); Session ownership and live range fixes plus the repeat full gate remain.
+**Status:** Complete and independently reviewed. Main-path UI/shell (`ee93e413`, `44ae009a`), real proxy E2E (`15e44174`, `4fa50dea`, `d0fd6f33`), runbook (`9575ab78`), request-path cleanup (`0e27e91c`), migrated-route authority/redaction (`bcc63b52`), live range (`22f85516`) and explicit serialized Session ownership (`1a04f5b7`, `ec389d86`) all pass the final gate.
 
 **Files:**
 - Modify: `src/App.tsx`
@@ -569,19 +569,19 @@ git commit -m "feat(ui): add provider-aware usage dashboard"
 - Consumes: complete v13 backend/frontend.
 - Produces: hidden legacy entry points, no legacy request-path fallback, mock-upstream acceptance evidence and runbook. Old source modules/tables remain for the compatibility window.
 
-- [ ] **Step 1: Write failing navigation visibility tests**
+- [x] **Step 1: Write failing navigation visibility tests**
 
 Render App and assert dashboard, Provider/routes and proxy controls are visible while quick switching, failover, preset marketplace, MCP, Skills, OpenClaw, WebDAV and S3 entry points are absent. Old settings tab names must fall back to the usage page, not a blank panel.
 
-- [ ] **Step 2: Hide legacy UI and keep compatibility code compiled**
+- [x] **Step 2: Hide legacy UI and keep compatibility code compiled**
 
 Remove the legacy buttons/actions from the rendered tree. Do not delete old Tauri modules, source files, database tables, migrations or settings keys. Keep old log dual-write and backup/export compatibility.
 
-- [ ] **Step 3: Write and pass a real mock-upstream test**
+- [x] **Step 3: Write and pass a real mock-upstream test**
 
 Start an Axum upstream on port 0. Seed metered Provider plus static binding, start `ProxyServer` on port 0, send one real request containing explicit Token/cost response, wait for ingestion, and query dashboard/events. Assert exact Provider/time/tokens/cost and `costSource=upstream`. Add response without cost (`estimated`) and route-less request (local 503, zero upstream hits).
 
-- [ ] **Step 4: Document manual acceptance and run the full gate**
+- [x] **Step 4: Document manual acceptance and run the full gate**
 
 `docs/usage-dashboard-acceptance.md` must contain safe fixture config, expected 503 bodies, expected event fields, SQLite read-only queries and explicit checks that quota never enters events/trends and no-ID similar events remain separate.
 
@@ -599,7 +599,7 @@ git diff --check
 
 Expected: all tests/builds pass; request-path `rg` has no match; legacy compatibility files still exist but are unreachable from the new path/UI. Cargo 输出必须来自仓库固定的 Rust 1.95 toolchain，不能用此前其他提交的成功结果代替。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/App.tsx src/components/settings/SettingsPage.tsx src/components/providers/ProviderActions.tsx src/components/providers/ProviderCard.tsx src/components/proxy/ProxyPanel.tsx src/App.usage-dashboard.test.tsx src-tauri/tests/usage_dashboard_proxy_e2e.rs docs/usage-dashboard-acceptance.md

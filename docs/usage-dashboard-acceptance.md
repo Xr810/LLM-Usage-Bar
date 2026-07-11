@@ -47,7 +47,7 @@ The test creates this isolated fixture in memory:
 
 Expected assertions:
 
-1. A real request through `ProxyServer` reaches the Axum upstream exactly once and records the upstream response ID.
+1. A real request through the proxy reaches the Axum upstream exactly once and records the upstream response ID. A signature-error probe also confirms reactive rectification does not send a second upstream request.
 2. Explicit upstream Token and cost fields create an event with `costSource="upstream"` and exact decimal component/total costs.
 3. A response without explicit cost uses seeded model pricing and creates `costSource="estimated"`.
 4. Dashboard totals are queryable by the immutable Provider, product group and half-open time range.

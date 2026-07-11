@@ -1,12 +1,12 @@
 # Current Task State
 
-Last checkpoint: 2026-07-12 01:06 Asia/Singapore
+Last checkpoint: 2026-07-12 01:23 Asia/Singapore
 
 Branch: `codex/usage-dashboard-backend`
 
 Worktree: `/Users/max/LLM Usage Bar/.worktrees/codex-usage-dashboard-backend`
 
-Current HEAD: `d0fd6f33` (`fix(proxy): enforce one upstream attempt`)
+Current HEAD: `ec389d86` (`fix(usage): preserve session binding invariants`)
 
 ## Goal
 
@@ -21,8 +21,9 @@ Complete `docs/superpowers/plans/2026-07-11-usage-dashboard-backend-implementati
 - Task 5 — quota scheduler and bound Claude/Codex Session import: complete and independently approved.
 - Coexistence safety — distinct app identity/data path from original CC Switch: complete and independently approved. Optional explicit snapshot import is not implemented.
 - Task 6 — aggregation and nine Tauri commands: complete, independently approved, full Rust gate passed.
-- Task 7 — React dashboard/configuration surface: task-level implementation/review complete, but whole-branch review reopened explicit Session-source configuration and moving live-range semantics; fixes are in progress.
-- Task 8 — legacy entry points hidden; real proxy E2E, runbook, minimal shell/event refresh/tests and request-path selector removal are complete and task-level approved. Whole-branch integration fixes and repeat final gate are in progress.
+- Task 7 — React dashboard/configuration surface: complete and independently reviewed, including explicit Session-source ownership and moving live ranges.
+- Task 8 — legacy main-path exit, real proxy E2E/runbook, desktop shell/live refresh/tests and all whole-branch review fixes: complete and independently reviewed.
+- Final gate — Rust 1.95, all frontend tests, TypeScript, renderer build, static request-path scan, real proxy E2E and diff check: complete.
 
 ## Completed commits in this implementation
 
@@ -62,6 +63,10 @@ Complete `docs/superpowers/plans/2026-07-11-usage-dashboard-backend-implementati
 - `759ca832` docs: checkpoint dashboard acceptance stages
 - `bcc63b52` fix(usage): honor edited migrated routes
 - `d0fd6f33` fix(proxy): enforce one upstream attempt
+- `5f23ada6` docs: checkpoint whole-branch review fixes
+- `22f85516` fix(usage): advance live dashboard ranges
+- `1a04f5b7` fix(usage): expose and serialize session ownership
+- `ec389d86` fix(usage): preserve session binding invariants
 
 ## Key decisions
 
@@ -85,6 +90,9 @@ Complete `docs/superpowers/plans/2026-07-11-usage-dashboard-backend-implementati
 18. Legacy feature removal does not include the desktop window shell: drag regions and optional native-like controls remain required while only switching/failover/MCP/Skills/OpenClaw/cloud business entry points leave the render tree.
 19. A migrated Provider keeps its legacy runtime ID and metadata only as a compatibility envelope; v13 `route_config` is always the routing SSOT.
 20. The v13 request path disables reactive media/thinking/budget resends. Preventive transformations remain, but one client request makes exactly one upstream attempt.
+21. Claude/Codex Session ownership is explicit in the existing Provider save DTO/view/UI. Provider and ownership changes commit in one SQLite transaction; no tenth Tauri command is added.
+22. In-flight bound Session sync and binding mutations are serialized with a dedicated operation mutex. The mutex spans file IO but never holds the SQLite connection across IO, so offset and ownership have one linear order.
+23. Dashboard live ranges use an exclusive `current second + 1` end and advance on `usage-log-recorded` plus a 30-second tick; fixed custom ranges do not move.
 
 ## Failures and review findings already handled
 
@@ -97,7 +105,7 @@ Complete `docs/superpowers/plans/2026-07-11-usage-dashboard-backend-implementati
 - Task 5 review found that `sync_provider(A)` could follow source binding B and that Claude session IDs used a different stable-ID column than proxy events. Provider equality is now enforced and raw Claude message IDs populate `upstream_correlation_id`.
 - Task 5 re-review found unsupported/normalization failures did not persist `last_attempt_at`, machine-global quota sources could be attributed to several Providers, and `sync_provider` guessed a single source. Commit `49907148` persists every attempt, enforces local quota ownership, and treats explicit bindings as the sole source of truth.
 - The first coexistence draft registered `llmusagebar://`, but the legacy runtime handler only parsed `ccswitch://`. The final isolation commit registers no scheme and therefore cannot steal or break original CC Switch deep links.
-- Task 3 and Task 4 independent re-review approved the implemented route/ingestion fixes. Task 8 still owes the true proxy 503/zero-hit mock-upstream proof.
+- Task 3 and Task 4 independent re-review approved the implemented route/ingestion fixes. Task 8 later supplied and independently approved the true proxy 503/zero-hit proof.
 - Coexistence review found residual `CC Switch` Windows/tray labels, frontend `~/.cc-switch` fallbacks, and no real symlink regression test. These are the next isolation fixes.
 - Those coexistence findings were fixed in `7fb6a6df`: Windows/tray branding and frontend fallbacks now use LLM Usage Bar, and an actual filesystem symlink to a fake legacy directory is rejected by the same validation boundary.
 - The first repeat check stopped at `cargo fmt --check` because the new tests needed formatting; formatting was applied and the complete targeted gate then passed.
@@ -113,6 +121,8 @@ Complete `docs/superpowers/plans/2026-07-11-usage-dashboard-backend-implementati
 - Whole-branch review found six Important integration gaps: no public Session-source binding path, stale legacy route config authority, frozen live range, scan/rebind ownership race, URL-embedded secret exposure and reactive second upstream attempts.
 - `bcc63b52` fixes the stale route authority and strips URL userinfo/query/fragment from public DTOs while recognizing nested migrated credentials. The migrated-route regression was RED on the old path and GREEN after the fix.
 - `d0fd6f33` disables reactive resends on the v13 main path. The real proxy probe first observed two upstream hits for one request, then passed with exactly one hit.
+- Whole-branch review also found no public Session binding path and a scan/rebind ownership race. `1a04f5b7` adds atomic Provider/binding save, four-language UI and a dedicated sync/binding operation guard; transaction rollback and both Claude/Codex bound-entry tests pass.
+- Re-review found one Minor omission invariant: an internal caller could omit bindings while removing `session_log`. `ec389d86` first reproduced the invalid retained binding, then rejects the update before UPSERT and preserves the original Provider/binding. Final re-review found no remaining findings.
 
 ## Latest stage verification
 
@@ -131,12 +141,14 @@ Using repository-pinned Rust 1.95 temporary toolchain environment:
 - Task 6 dashboard aggregation tests: 6 passed.
 - Quota DAO monotonic/consistent status tests: 5 passed; quota service tests: 9 passed.
 - Task 6 nine-command integration tests: 2 passed.
-- Full Rust gate after review fixes: library 1850 passed / 2 ignored; all integration test binaries passed.
+- Final full Rust 1.95 gate: library 1856 passed / 2 ignored; all integration test binaries passed, including nine-command and real proxy E2E tests.
 - `git diff --check`: passed.
 - Task 7 targeted frontend tests after Important fixes: 15 passed; `tsc --noEmit` and `vite build` passed.
 - Real mock-upstream proxy acceptance after hardening: 1 passed; exact aggregate cost `0.42012` and route-less legacy-candidate 503/zero-hit behavior verified.
 - Provider router after removing unused legacy selection: 11 passed.
 - Required request-path search for `get_effective_current_provider|get_failover_queue|select_providers`: zero matches.
+- Final frontend gate: 72 test files / 433 tests passed; `tsc --noEmit` and `vite build` passed.
+- Whole-branch review and all six Important follow-up reviews: approved; final review has no Critical, Important or Minor findings.
 - No desktop/Tauri application was launched; tests used isolated/in-memory databases.
 
 ## Real-data safety observation
@@ -150,7 +162,5 @@ Using repository-pinned Rust 1.95 temporary toolchain environment:
 
 ## Immediate next actions
 
-1. Finish explicit Session-source binding configuration and serialize in-flight Session sync against binding changes.
-2. Finish moving live-range/end-exclusive semantics and prove post-mount events change the dashboard query window.
-3. Independently re-review all six whole-branch Important fixes.
-4. Repeat the complete Rust, TypeScript, unit, renderer-build, static-route and real-proxy gates, then checkpoint Tasks 7-8 as complete.
+1. Choose branch integration: local merge, push/PR, or keep the branch/worktree as-is.
+2. Keep optional original-data import deferred unless a future explicit read-only snapshot workflow is requested.

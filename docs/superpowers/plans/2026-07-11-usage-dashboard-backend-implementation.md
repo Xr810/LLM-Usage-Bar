@@ -1,5 +1,9 @@
 # 用量仪表盘后端优先改造计划
 
+## Implementation Status
+
+**Complete as of 2026-07-12.** Tasks 0–8 are implemented, independently reviewed, committed and verified with the repository-pinned Rust 1.95 toolchain plus the complete frontend gate. The optional explicit read-only import from original CC Switch remains intentionally deferred and is not required for coexistence.
+
 ## 开发上下文
 
 - 当前唯一开发仓库：`/Users/max/LLM Usage Bar`（远程：`Xr810/LLM-Usage-Bar`）。

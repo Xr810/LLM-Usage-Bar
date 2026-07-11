@@ -1,6 +1,6 @@
 # Usage Dashboard Backend Implementation Progress
 
-Last updated: 2026-07-12 01:06 Asia/Singapore
+Last updated: 2026-07-12 01:23 Asia/Singapore
 
 Source plan: `2026-07-11-usage-dashboard-backend-implementation.md`
 
@@ -14,8 +14,6 @@ Execution plan: `2026-07-11-usage-dashboard-backend-execution.md`
 - [x] Task 2: Provider, route/source binding, immutable event/link, and quota persistence DAO.
   - Commits: `ac70ec35`, `18e146fe`
   - Independent review: approved.
-
-## In progress
 
 - [x] Coexistence safety: isolate the Usage Dashboard from original CC Switch (`e931e7f9`, `7fb6a6df`).
   - The original installation supports database schema v11 and currently uses `~/.cc-switch/cc-switch.db`.
@@ -47,21 +45,22 @@ Execution plan: `2026-07-11-usage-dashboard-backend-execution.md`
   - Targeted tests pass (quota DAO 5, quota service 9, dashboard 6, command adapters 2); the complete Rust suite passes (1850 passed, 2 ignored plus all integration binaries).
   - Independent re-review approved.
 
-- [ ] Task 7: minimal React dashboard and Provider/route configuration UI.
+- [x] Task 7: minimal React dashboard and Provider/route configuration UI.
   - Initial TDD implementation: `f9063ff8`; Important review fixes: `66cff322`.
   - Target tests pass 15/15, TypeScript typecheck and renderer build pass.
   - Task-level re-review approved `44ae009a`, including the two previous Minor diagnostics and a full 423-test frontend pass.
-  - Whole-branch review found the live preset end time is frozen after mount and source ownership cannot be configured. Explicit source-binding UI/API and a moving half-open range are in progress.
+  - `22f85516` advances live half-open ranges on events and a 30-second clock while fixed custom ranges remain stable.
+  - `1a04f5b7` exposes explicit Claude/Codex Session ownership through the existing Provider save contract/UI without adding a tenth command; `ec389d86` preserves ownership capability invariants. Independent re-review approved all fixes.
 
-- [ ] Task 8: hide legacy entry points, real mock-upstream proxy acceptance, full backend/frontend gate, and acceptance runbook.
+- [x] Task 8: hide legacy entry points, real mock-upstream proxy acceptance, full backend/frontend gate, and acceptance runbook.
   - Main-path dashboard commit: `ee93e413`; compatibility source modules remain compiled but legacy entry points are no longer rendered.
   - Real proxy acceptance: `15e44174`, hardened and independently approved in `4fa50dea`.
   - Acceptance runbook: `9575ab78`.
   - Request-path static selector removal: `0e27e91c`; Provider router tests 11/11 and required `rg` zero-match gate pass.
-  - Frontend review found the minimal desktop window shell, v13 event invalidation and non-self-proving App/full-suite tests still need repair. Those fixes are in progress; the full final gate has not run yet.
   - `44ae009a` repaired the shell/event bridge/tests and was independently approved.
-  - Whole-branch review then found six Important integration issues. `bcc63b52` closes migrated-route authority plus nested credential/URL redaction; `d0fd6f33` closes reactive same-Provider retries and adds a real hit-count RED/GREEN E2E. Explicit Session bindings, binding-change serialization and live-range progression remain in progress.
+  - Whole-branch review found six Important integration issues. `bcc63b52`, `d0fd6f33`, `22f85516`, `1a04f5b7` and `ec389d86` close all six; final re-review found no Critical, Important or Minor findings.
+  - Final gate: Rust 1.95 library 1856 passed / 2 ignored plus every integration binary; frontend 72 files / 433 tests; TypeScript, renderer build, real proxy E2E, static request-path zero-match search and diff check all pass.
 
 ## Completion rule
 
-The plan is not complete until Tasks 1 through 8 are implemented, reviewed, and the final Rust, TypeScript, unit-test, renderer-build, static-route, and mock-upstream acceptance gates all pass.
+Tasks 0 through 8 are complete, reviewed and verified. Optional original-data import remains deferred behind explicit user action and a read-only SQLite Backup snapshot.
