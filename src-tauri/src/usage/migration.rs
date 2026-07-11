@@ -194,6 +194,18 @@ fn create_v13_schema(conn: &Connection) -> Result<(), AppError> {
         BEFORE DELETE ON usage_events
         BEGIN
             SELECT RAISE(ABORT, 'usage_events are immutable');
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS quota_snapshots_append_only_update
+        BEFORE UPDATE ON quota_snapshots
+        BEGIN
+            SELECT RAISE(ABORT, 'quota_snapshots are append-only');
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS quota_snapshots_append_only_delete
+        BEFORE DELETE ON quota_snapshots
+        BEGIN
+            SELECT RAISE(ABORT, 'quota_snapshots are append-only');
         END;",
     )
     .map_err(|e| AppError::Database(format!("v12 -> v13 创建用量 schema 失败: {e}")))?;
@@ -258,11 +270,12 @@ fn import_legacy_providers(conn: &Connection) -> Result<(), AppError> {
         })?;
 
         conn.execute(
-            "INSERT OR IGNORE INTO usage_providers (
+            "INSERT INTO usage_providers (
                 id, name, billing_kind, product_group_id, token_sources,
                 route_app_type, route_config, quota_config, enabled, needs_review,
                 legacy_app_type, legacy_provider_id, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1, ?9, ?10, ?11, ?12, ?13)",
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1, ?9, ?10, ?11, ?12, ?13)
+             ON CONFLICT(legacy_app_type, legacy_provider_id) DO NOTHING",
             params![
                 global_id,
                 provider.name,
@@ -313,7 +326,7 @@ fn import_legacy_proxy_logs(conn: &Connection) -> Result<(), AppError> {
 
     let now = unix_timestamp()?;
     conn.execute(
-        "INSERT OR IGNORE INTO usage_events (
+        "INSERT INTO usage_events (
             event_id, source, provider_id, product_group_id, occurred_at, model,
             input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
             request_id, session_id, upstream_correlation_id,
@@ -348,7 +361,8 @@ fn import_legacy_proxy_logs(conn: &Connection) -> Result<(), AppError> {
            ON usage_providers.legacy_app_type = logs.app_type
           AND usage_providers.legacy_provider_id = logs.provider_id
          WHERE (logs.data_source IS NULL OR logs.data_source = 'proxy')
-           AND substr(logs.provider_id, 1, 1) <> '_'",
+           AND substr(logs.provider_id, 1, 1) <> '_'
+         ON CONFLICT(legacy_request_id) DO NOTHING",
         params![now],
     )
     .map_err(|e| AppError::Database(format!("v12 -> v13 导入旧代理日志失败: {e}")))?;

@@ -1061,6 +1061,15 @@ fn true_v12_usage_fixture() -> Connection {
         json!({"base_url": "https://ambiguous.example.com"}),
         json!({}),
     );
+    insert_v12_provider(
+        &conn,
+        "_session",
+        "claude",
+        "Session Placeholder",
+        Some("custom"),
+        json!({}),
+        json!({}),
+    );
 
     insert_v12_log(&conn, "request-proxy", "metered", "claude", "proxy");
     insert_v12_log(&conn, "request-placeholder", "_session", "claude", "proxy");
@@ -1095,7 +1104,15 @@ fn migration_v12_to_v13_preserves_legacy_rows_and_imports_only_proxy_events() {
     assert_eq!(
         scalar_i64(
             &conn,
-            "SELECT COUNT(*) FROM usage_events WHERE provider_id='_session'"
+            "SELECT COUNT(*) FROM usage_events
+             WHERE legacy_request_id='request-placeholder'"
+        ),
+        0
+    );
+    assert_eq!(
+        scalar_i64(
+            &conn,
+            "SELECT COUNT(*) FROM usage_events WHERE provider_id='claude:_session'"
         ),
         0
     );
@@ -1182,6 +1199,67 @@ fn migration_v12_to_v13_preserves_legacy_rows_and_imports_only_proxy_events() {
 }
 
 #[test]
+fn migration_v12_to_v13_rejects_quota_snapshot_updates_and_preserves_the_row() {
+    let conn = true_v12_usage_fixture();
+    Database::apply_schema_migrations_on_conn(&conn).expect("migrate v12 to v13");
+    conn.execute(
+        "INSERT INTO quota_snapshots (
+            snapshot_id, provider_id, fetched_at, five_hour_utilization_percent,
+            raw_payload, created_at
+         ) VALUES ('quota-1', 'claude:metered', 1720000000, '25.5', '{}', 1720000000)",
+        [],
+    )
+    .expect("insert quota snapshot");
+
+    let update = conn.execute(
+        "UPDATE quota_snapshots
+         SET five_hour_utilization_percent='99.9'
+         WHERE snapshot_id='quota-1'",
+        [],
+    );
+
+    assert!(update.is_err(), "quota snapshot UPDATE must abort");
+    assert_eq!(
+        scalar_text(
+            &conn,
+            "SELECT five_hour_utilization_percent
+             FROM quota_snapshots WHERE snapshot_id='quota-1'"
+        ),
+        "25.5"
+    );
+}
+
+#[test]
+fn migration_v12_to_v13_rejects_quota_snapshot_deletes_and_preserves_the_row() {
+    let conn = true_v12_usage_fixture();
+    Database::apply_schema_migrations_on_conn(&conn).expect("migrate v12 to v13");
+    conn.execute(
+        "INSERT INTO quota_snapshots (
+            snapshot_id, provider_id, fetched_at, five_hour_utilization_percent,
+            raw_payload, created_at
+         ) VALUES ('quota-1', 'claude:metered', 1720000000, '25.5', '{}', 1720000000)",
+        [],
+    )
+    .expect("insert quota snapshot");
+
+    let delete = conn.execute(
+        "DELETE FROM quota_snapshots WHERE snapshot_id='quota-1'",
+        [],
+    );
+
+    assert!(delete.is_err(), "quota snapshot DELETE must abort");
+    assert_eq!(count(&conn, "quota_snapshots"), 1);
+    assert_eq!(
+        scalar_text(
+            &conn,
+            "SELECT five_hour_utilization_percent
+             FROM quota_snapshots WHERE snapshot_id='quota-1'"
+        ),
+        "25.5"
+    );
+}
+
+#[test]
 fn migration_v12_to_v13_rolls_back_tables_rows_and_version_on_trigger_failure() {
     let conn = true_v12_usage_fixture();
     conn.execute_batch(
@@ -1220,7 +1298,7 @@ fn migration_v12_to_v13_rolls_back_tables_rows_and_version_on_trigger_failure() 
         .expect_err("forced trigger should fail migration");
     assert!(error.to_string().contains("forced v13 import failure"));
     assert_eq!(Database::get_user_version(&conn).unwrap(), 12);
-    assert_eq!(count(&conn, "providers"), 6);
+    assert_eq!(count(&conn, "providers"), 7);
     assert_eq!(count(&conn, "proxy_request_logs"), 3);
     assert_eq!(count(&conn, "usage_events"), 0);
 
