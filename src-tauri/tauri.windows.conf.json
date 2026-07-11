@@ -4,7 +4,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "CC Switch",
+        "title": "LLM Usage Bar",
         "titleBarStyle": "Visible",
         "visible": false,
         "minWidth": 900,

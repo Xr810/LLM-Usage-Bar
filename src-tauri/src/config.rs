@@ -180,11 +180,10 @@ pub fn get_claude_settings_path() -> PathBuf {
 }
 
 /// Return whether a proposed data directory is the original CC Switch data directory.
-///
 /// This guard deliberately checks both the lexical path and its canonical target (when
 /// available), so a symlink cannot accidentally point this app at the v11 database.
-pub fn is_legacy_cc_switch_config_dir(path: &Path) -> bool {
-    let legacy_dir = get_home_dir().join(".cc-switch");
+fn is_legacy_cc_switch_config_dir_for_home(path: &Path, home: &Path) -> bool {
+    let legacy_dir = home.join(".cc-switch");
     if path_eq_lexical(path, &legacy_dir) {
         return true;
     }
@@ -197,7 +196,11 @@ pub fn is_legacy_cc_switch_config_dir(path: &Path) -> bool {
 
 /// Validate an app data-directory override against the coexistence boundary.
 pub fn validate_app_config_dir_override(path: &Path) -> Result<(), AppError> {
-    if is_legacy_cc_switch_config_dir(path) {
+    validate_app_config_dir_override_for_home(path, &get_home_dir())
+}
+
+fn validate_app_config_dir_override_for_home(path: &Path, home: &Path) -> Result<(), AppError> {
+    if is_legacy_cc_switch_config_dir_for_home(path, home) {
         return Err(AppError::Message(
             "LLM Usage Bar cannot use the original ~/.cc-switch data directory".to_string(),
         ));
@@ -366,10 +369,25 @@ mod tests {
         let legacy = home.join(".cc-switch");
         let isolated = home.join(".llm-usage-bar");
 
-        assert!(is_legacy_cc_switch_config_dir(&legacy));
+        assert!(is_legacy_cc_switch_config_dir_for_home(&legacy, &home));
         assert!(validate_app_config_dir_override(&legacy).is_err());
-        assert!(!is_legacy_cc_switch_config_dir(&isolated));
+        assert!(!is_legacy_cc_switch_config_dir_for_home(&isolated, &home));
         assert!(validate_app_config_dir_override(&isolated).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_to_original_data_directory_is_rejected() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let legacy = temp.path().join(".cc-switch");
+        let alias = temp.path().join("dashboard-data");
+        fs::create_dir(&legacy).unwrap();
+        symlink(&legacy, &alias).unwrap();
+
+        assert!(is_legacy_cc_switch_config_dir_for_home(&alias, temp.path()));
+        assert!(validate_app_config_dir_override_for_home(&alias, temp.path()).is_err());
     }
 
     #[test]
