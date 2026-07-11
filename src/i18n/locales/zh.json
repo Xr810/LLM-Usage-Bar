@@ -2486,7 +2486,7 @@
         },
         "listenPort": {
           "label": "监听端口",
-          "placeholder": "15721",
+          "placeholder": "15722",
           "description": "路由服务器监听的端口号（1024 ~ 65535）"
         },
         "maxRetries": {

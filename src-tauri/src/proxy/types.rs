@@ -43,7 +43,7 @@ impl Default for ProxyConfig {
     fn default() -> Self {
         Self {
             listen_address: "127.0.0.1".to_string(),
-            listen_port: 15721, // 使用较少占用的高位端口
+            listen_port: 15722, // 与原版 CC Switch 的 15721 隔离
             max_retries: 3,
             request_timeout: 600,
             enable_logging: true,
@@ -387,6 +387,11 @@ impl LogConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_proxy_port_does_not_collide_with_original_cc_switch() {
+        assert_eq!(ProxyConfig::default().listen_port, 15722);
+    }
 
     #[test]
     fn test_rectifier_config_default_enabled() {

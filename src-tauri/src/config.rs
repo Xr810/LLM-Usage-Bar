@@ -13,7 +13,7 @@ use crate::error::AppError;
 /// - `dirs::home_dir()` 在 Windows 上使用 `SHGetKnownFolderPath(FOLDERID_Profile)`，
 ///   返回的是真实用户目录（类似 `C:\\Users\\Alice`），与 v3.10.2 行为一致。
 /// - 不要直接使用 `HOME` 环境变量：它可能由 Git/Cygwin/MSYS 等第三方工具注入，
-///   且不一定等于用户目录，可能导致 `.cc-switch/cc-switch.db` 路径变化，从而“看起来像数据丢失”。
+///   且不一定等于用户目录，可能导致应用数据路径变化，从而“看起来像数据丢失”。
 ///
 /// ## 测试隔离
 ///
@@ -179,40 +179,45 @@ pub fn get_claude_settings_path() -> PathBuf {
     settings
 }
 
-/// 获取应用配置目录路径 (~/.cc-switch)
+/// Return whether a proposed data directory is the original CC Switch data directory.
+///
+/// This guard deliberately checks both the lexical path and its canonical target (when
+/// available), so a symlink cannot accidentally point this app at the v11 database.
+pub fn is_legacy_cc_switch_config_dir(path: &Path) -> bool {
+    let legacy_dir = get_home_dir().join(".cc-switch");
+    if path_eq_lexical(path, &legacy_dir) {
+        return true;
+    }
+
+    match (fs::canonicalize(path), fs::canonicalize(&legacy_dir)) {
+        (Ok(candidate), Ok(legacy)) => path_eq_lexical(&candidate, &legacy),
+        _ => false,
+    }
+}
+
+/// Validate an app data-directory override against the coexistence boundary.
+pub fn validate_app_config_dir_override(path: &Path) -> Result<(), AppError> {
+    if is_legacy_cc_switch_config_dir(path) {
+        return Err(AppError::Message(
+            "LLM Usage Bar cannot use the original ~/.cc-switch data directory".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// 获取应用配置目录路径 (~/.llm-usage-bar)
 pub fn get_app_config_dir() -> PathBuf {
     if let Some(custom) = crate::app_store::get_app_config_dir_override() {
-        return custom;
-    }
-
-    let default_dir = get_home_dir().join(".cc-switch");
-
-    // 兼容 v3.10.3：当用户环境存在 `HOME` 且与真实用户目录不同，
-    // v3.10.3 可能在 `HOME/.cc-switch/` 下创建/使用了数据库。
-    // 这里仅在“默认位置没有数据库”时回退到旧位置，避免再次出现“供应商消失”问题，
-    // 同时也避免新安装因为 `HOME` 被设置而写入非预期路径。
-    #[cfg(windows)]
-    {
-        let default_db = default_dir.join("cc-switch.db");
-        if !default_db.exists() {
-            if let Ok(home_env) = std::env::var("HOME") {
-                let trimmed = home_env.trim();
-                if !trimmed.is_empty() {
-                    let legacy_dir = PathBuf::from(trimmed).join(".cc-switch");
-                    if legacy_dir.join("cc-switch.db").exists() {
-                        log::info!(
-                            "Detected v3.10.3 legacy database at {}, using it instead of {}",
-                            legacy_dir.display(),
-                            default_dir.display()
-                        );
-                        return legacy_dir;
-                    }
-                }
-            }
+        if validate_app_config_dir_override(&custom).is_ok() {
+            return custom;
         }
+        log::error!(
+            "Rejected unsafe app_config_dir override pointing at the original CC Switch data: {}",
+            custom.display()
+        );
     }
 
-    default_dir
+    get_home_dir().join(".llm-usage-bar")
 }
 
 /// 获取应用配置文件路径
@@ -354,6 +359,18 @@ pub fn atomic_write(path: &Path, data: &[u8]) -> Result<(), AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn app_data_directory_is_distinct_from_original_cc_switch() {
+        let home = get_home_dir();
+        let legacy = home.join(".cc-switch");
+        let isolated = home.join(".llm-usage-bar");
+
+        assert!(is_legacy_cc_switch_config_dir(&legacy));
+        assert!(validate_app_config_dir_override(&legacy).is_err());
+        assert!(!is_legacy_cc_switch_config_dir(&isolated));
+        assert!(validate_app_config_dir_override(&isolated).is_ok());
+    }
 
     #[test]
     fn derive_mcp_path_from_override_uses_config_dir_for_custom_path() {
