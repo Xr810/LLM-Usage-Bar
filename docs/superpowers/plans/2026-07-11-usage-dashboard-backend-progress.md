@@ -23,24 +23,28 @@ Execution plan: `2026-07-11-usage-dashboard-backend-execution.md`
   - Implemented distinct product/bundle identity, `~/.llm-usage-bar`, no legacy deep-link registration/updater, unsafe-override rejection, and proxy port 15722.
   - Tests proved the original v11 database hash, mtime, size, and version stay unchanged.
   - Optional original-data import is not implemented; if added, it requires explicit user action and a read-only SQLite Backup snapshot.
+  - Independent review found three remaining isolation gaps: Windows/tray labels, frontend fallback paths, and an actual symlink regression test. Fixes are pending.
 
 - [ ] Task 3: static one-Provider request routing.
   - Main implementation commit: `f323ea75`
   - Full Rust suite passed before review.
   - Independent review found three follow-ups: validate legacy route config before forwarding, preserve both global Usage Provider ID and legacy runtime Provider ID, and prove local 503 produces zero upstream hits in the final mock-upstream acceptance test.
-  - Review fixes were implemented in `7fafece4` and `73ccb294` and are being independently reverified. The request-level zero-hit proof is part of Task 8.
-- [ ] Task 4: transactional usage ingestion and trusted upstream-cost capture.
+  - Review fixes were implemented in `7fafece4` and `73ccb294` and independently approved. The request-level zero-hit proof is part of Task 8.
+- [x] Task 4: transactional usage ingestion and trusted upstream-cost capture.
   - Implementation commit: `7fafece4`
-  - Targeted verification and independent review are in progress.
+  - Review fixes: `73ccb294`; targeted verification and independent re-review approved.
   - New events must use the global Usage Provider ID; compatibility logs may retain the legacy Provider ID.
 
-- [x] Task 5: Provider-aware quota collection and bound Session import (`fc57e960`).
-  - Targeted quota, Session service, and Claude/Codex parser tests pass.
-  - Independent review is in progress.
+- [x] Task 5: Provider-aware quota collection and bound Session import (`fc57e960`, `49907148`).
+  - Review fixes persist every failed attempt, enforce one Provider per machine-local quota source, and use explicit source bindings as the only Session sync source of truth.
+  - Targeted quota (8), Session service (4), and underlying Session parser/service (36) tests pass.
+  - Independent review findings addressed; final re-review will be included in the Task 6 checkpoint review pass.
+
+- [ ] Task 6: product aggregation and nine Tauri commands.
+  - RED tests and initial implementation are present; stage verification and independent review are pending.
 
 ## Not started
 
-- [ ] Task 6: product aggregation and nine Tauri commands.
 - [ ] Task 7: minimal React dashboard and Provider/route configuration UI.
 - [ ] Task 8: hide legacy entry points, real mock-upstream proxy acceptance, full backend/frontend gate, and acceptance runbook.
 
