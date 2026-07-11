@@ -28,7 +28,7 @@ use serde_json::Value;
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc,
+        Arc, Mutex as StdMutex,
     },
     time::Duration,
 };
@@ -240,16 +240,17 @@ pub async fn handle_non_streaming(
     if usage_logging_enabled(state) {
         if let Ok(json_value) = serde_json::from_slice::<Value>(&body_bytes) {
             let upstream_correlation_id = upstream_correlation_id_from_body(&json_value);
-            let upstream_cost = extract_upstream_cost(&json_value).unwrap_or_else(|error| {
-                report_ingestion_failure(
-                    &ctx.usage_provider_id,
-                    upstream_correlation_id.as_deref().unwrap_or("unknown"),
-                    &error,
-                );
-                None
-            });
-            // 解析使用量
-            if let Some(usage) = (parser_config.response_parser)(&json_value) {
+            let upstream_cost = validated_upstream_cost(
+                extract_upstream_cost(&json_value),
+                &ctx.usage_provider_id,
+                upstream_correlation_id.as_deref().unwrap_or("unknown"),
+            );
+            // Invalid explicit cost is a diagnostic ingestion failure. Keep the
+            // upstream response intact but do not downgrade the event to estimated.
+            if let (Some(upstream_cost), Some(usage)) = (
+                upstream_cost.clone(),
+                (parser_config.response_parser)(&json_value),
+            ) {
                 // 归因优先级：usage 解析出的模型 → 响应 model 字段 → 映射后的出站
                 // 模型（路由接管真值）→ 客户端请求模型。空字符串视为缺失。
                 let model = usage
@@ -277,7 +278,7 @@ pub async fn handle_non_streaming(
                     upstream_cost,
                     upstream_correlation_id,
                 );
-            } else {
+            } else if let Some(upstream_cost) = upstream_cost {
                 let model = json_value
                     .get("model")
                     .and_then(|m| m.as_str())
@@ -496,6 +497,110 @@ pub(crate) fn upstream_correlation_id_from_events(events: &[Value]) -> Option<St
     })
 }
 
+/// Preserve the distinction between a response with no explicit upstream cost
+/// and a response whose explicit cost is invalid. The former may be estimated;
+/// the latter is a diagnostic ingestion failure and must not silently become an
+/// estimated event.
+pub(crate) fn validated_upstream_cost(
+    result: Result<Option<UpstreamCost>, crate::error::AppError>,
+    provider_id: &str,
+    request_id: &str,
+) -> Option<Option<UpstreamCost>> {
+    match result {
+        Ok(cost) => Some(cost),
+        Err(error) => {
+            report_ingestion_failure(provider_id, request_id, &error);
+            None
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct RawSseUsageMetadata {
+    pub upstream_cost: Option<UpstreamCost>,
+    pub upstream_correlation_id: Option<String>,
+    pub invalid_explicit_cost: bool,
+}
+
+pub(crate) type SharedRawSseUsageMetadata = Arc<StdMutex<RawSseUsageMetadata>>;
+
+/// Tee an upstream SSE byte stream without changing it while capturing the
+/// original cost fields and response ID before any protocol transformer can
+/// drop or rewrite them.
+pub(crate) fn capture_raw_sse_usage_metadata<E>(
+    stream: impl Stream<Item = Result<Bytes, E>> + Send + 'static,
+    metadata: SharedRawSseUsageMetadata,
+    usage_provider_id: String,
+) -> impl Stream<Item = Result<Bytes, E>> + Send
+where
+    E: std::error::Error + Send + 'static,
+{
+    async_stream::stream! {
+        let mut buffer = String::new();
+        let mut utf8_remainder: Vec<u8> = Vec::new();
+        tokio::pin!(stream);
+
+        while let Some(chunk) = stream.next().await {
+            if let Ok(bytes) = &chunk {
+                crate::proxy::sse::append_utf8_safe(
+                    &mut buffer,
+                    &mut utf8_remainder,
+                    bytes,
+                );
+                while let Some(block) = take_sse_block(&mut buffer) {
+                    for line in block.lines() {
+                        let Some(data) = strip_sse_field(line, "data") else {
+                            continue;
+                        };
+                        if data.trim() == "[DONE]" {
+                            continue;
+                        }
+                        let Ok(event) = serde_json::from_str::<Value>(data) else {
+                            continue;
+                        };
+                        let correlation_id =
+                            upstream_correlation_id_from_events(std::slice::from_ref(&event));
+                        let cost = extract_upstream_cost_from_events(std::slice::from_ref(&event));
+                        let mut guard = metadata.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                        if let Some(correlation_id) = correlation_id {
+                            guard.upstream_correlation_id = Some(correlation_id);
+                        }
+                        match cost {
+                            Ok(Some(cost)) => guard.upstream_cost = Some(cost),
+                            Ok(None) => {}
+                            Err(error) => {
+                                if !guard.invalid_explicit_cost {
+                                    report_ingestion_failure(
+                                        &usage_provider_id,
+                                        guard.upstream_correlation_id.as_deref().unwrap_or("unknown"),
+                                        &error,
+                                    );
+                                }
+                                guard.invalid_explicit_cost = true;
+                            }
+                        }
+                    }
+                }
+            }
+            yield chunk;
+        }
+    }
+}
+
+pub(crate) fn validated_raw_sse_usage_metadata(
+    metadata: &SharedRawSseUsageMetadata,
+) -> Option<(Option<UpstreamCost>, Option<String>)> {
+    let guard = metadata
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    (!guard.invalid_explicit_cost).then(|| {
+        (
+            guard.upstream_cost.clone(),
+            guard.upstream_correlation_id.clone(),
+        )
+    })
+}
+
 pub(crate) fn stable_session_id(session_id: &str, client_provided: bool) -> Option<String> {
     client_provided.then(|| session_id.to_string())
 }
@@ -542,15 +647,13 @@ fn create_usage_collector(
         parser_config.stream_event_filter,
         move |events, first_token_ms| {
             let upstream_correlation_id = upstream_correlation_id_from_events(&events);
-            let upstream_cost =
-                extract_upstream_cost_from_events(&events).unwrap_or_else(|error| {
-                    report_ingestion_failure(
-                        &usage_provider_id,
-                        upstream_correlation_id.as_deref().unwrap_or("unknown"),
-                        &error,
-                    );
-                    None
-                });
+            let Some(upstream_cost) = validated_upstream_cost(
+                extract_upstream_cost_from_events(&events),
+                &usage_provider_id,
+                upstream_correlation_id.as_deref().unwrap_or("unknown"),
+            ) else {
+                return;
+            };
             if let Some(usage) = stream_parser(&events) {
                 let model = model_extractor(&events, &fallback_model);
                 let latency_ms = start_time.elapsed().as_millis() as u64;
@@ -1110,6 +1213,57 @@ mod tests {
             stable_session_id("client-session", true).as_deref(),
             Some("client-session")
         );
+    }
+
+    #[test]
+    fn invalid_explicit_cost_is_not_eligible_for_estimated_ingestion() {
+        let invalid = extract_upstream_cost(&serde_json::json!({
+            "usage": {"cost": "-0.01"}
+        }));
+        assert!(validated_upstream_cost(invalid, "provider", "request").is_none());
+
+        let absent = extract_upstream_cost(&serde_json::json!({
+            "usage": {"input_tokens": 1, "output_tokens": 2}
+        }));
+        assert!(matches!(
+            validated_upstream_cost(absent, "provider", "request"),
+            Some(None)
+        ));
+    }
+
+    #[tokio::test]
+    async fn raw_sse_tee_preserves_bytes_cost_and_exact_upstream_id() -> Result<(), std::io::Error>
+    {
+        let first = Bytes::from_static(b"data: {\"id\":\"chatcmpl-raw\",\"choices\":[]}\n\n");
+        let second = Bytes::from_static(
+            b"data: {\"id\":\"chatcmpl-raw\",\"usage\":{\"total_cost\":\"0.42\"}}\n\n",
+        );
+        let expected = [first.clone(), second.clone()].concat();
+        let metadata = Arc::new(StdMutex::new(RawSseUsageMetadata::default()));
+        let stream = futures::stream::iter(vec![
+            Ok::<_, std::io::Error>(first),
+            Ok::<_, std::io::Error>(second),
+        ]);
+
+        let captured =
+            capture_raw_sse_usage_metadata(stream, metadata.clone(), "global-provider".to_string())
+                .collect::<Vec<_>>()
+                .await
+                .into_iter()
+                .collect::<Result<Vec<_>, _>>()?
+                .concat();
+
+        assert_eq!(captured, expected);
+        let (cost, correlation_id) =
+            validated_raw_sse_usage_metadata(&metadata).expect("valid raw metadata");
+        assert_eq!(correlation_id.as_deref(), Some("chatcmpl-raw"));
+        assert_eq!(
+            cost.and_then(|cost| cost.total_cost)
+                .map(|value| value.to_string())
+                .as_deref(),
+            Some("0.42")
+        );
+        Ok(())
     }
 
     #[test]

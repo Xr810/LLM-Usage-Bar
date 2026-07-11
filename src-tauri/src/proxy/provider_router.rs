@@ -7,6 +7,7 @@ use crate::database::Database;
 use crate::error::AppError;
 use crate::provider::Provider;
 use crate::proxy::circuit_breaker::{AllowResult, CircuitBreaker, CircuitBreakerConfig};
+use crate::proxy::providers::get_adapter;
 use crate::usage::domain::BillingKind;
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -101,6 +102,7 @@ impl ProviderRouter {
                 .db
                 .get_provider_by_id(legacy_provider_id, legacy_app_type)?
             {
+                validate_runtime_route(protocol, &stored.id, &provider)?;
                 return Ok(BoundProvider {
                     usage_provider_id: stored.id,
                     provider,
@@ -108,9 +110,12 @@ impl ProviderRouter {
             }
         }
 
+        let route_config = normalize_direct_route_config(route_config);
+        let provider = Provider::with_id(stored.id.clone(), stored.name, route_config, None);
+        validate_runtime_route(protocol, &stored.id, &provider)?;
         Ok(BoundProvider {
-            usage_provider_id: stored.id.clone(),
-            provider: Provider::with_id(stored.id, stored.name, route_config, None),
+            usage_provider_id: stored.id,
+            provider,
         })
     }
 
@@ -358,6 +363,43 @@ impl ProviderRouter {
     }
 }
 
+fn normalize_direct_route_config(mut config: serde_json::Value) -> serde_json::Value {
+    if let Some(object) = config.as_object_mut() {
+        if !object.contains_key("base_url") && !object.contains_key("baseURL") {
+            if let Some(base_url) = object.get("baseUrl").cloned() {
+                object.insert("base_url".to_string(), base_url);
+            }
+        }
+    }
+    config
+}
+
+fn validate_runtime_route(
+    protocol: &str,
+    usage_provider_id: &str,
+    provider: &Provider,
+) -> Result<(), AppError> {
+    let app_type = AppType::from_str(protocol)
+        .map_err(|_| AppError::Message(format!("route config incomplete: {usage_provider_id}")))?;
+    let adapter = get_adapter(&app_type);
+    let base_url = adapter
+        .extract_base_url(provider)
+        .map_err(|_| AppError::Message(format!("route config incomplete: {usage_provider_id}")))?;
+    let parsed = reqwest::Url::parse(base_url.trim())
+        .map_err(|_| AppError::Message(format!("route config incomplete: {usage_provider_id}")))?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        return Err(AppError::Message(format!(
+            "route config incomplete: {usage_provider_id}"
+        )));
+    }
+    if adapter.extract_auth(provider).is_none() {
+        return Err(AppError::Message(format!(
+            "route config incomplete: {usage_provider_id}"
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -503,7 +545,7 @@ mod tests {
         let input = usage_provider(
             "bound",
             BillingKind::Metered,
-            Some(json!({"baseUrl": "https://bound.example"})),
+            Some(json!({"baseUrl": "https://bound.example", "apiKey": "secret"})),
         );
         db.save_usage_provider(&input).unwrap();
         db.set_route_binding("claude", "bound").unwrap();
@@ -527,7 +569,7 @@ mod tests {
         let mut input = usage_provider(
             "bound",
             BillingKind::Metered,
-            Some(json!({"baseUrl": "https://bound.example"})),
+            Some(json!({"baseUrl": "https://bound.example", "apiKey": "secret"})),
         );
         db.save_usage_provider(&input).unwrap();
         db.set_route_binding("claude", "bound").unwrap();
@@ -544,9 +586,16 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn incomplete_direct_route_configs_are_rejected() {
-        for (index, route_config) in [None, Some(json!("not-an-object")), Some(json!({}))]
-            .into_iter()
-            .enumerate()
+        for (index, route_config) in [
+            None,
+            Some(json!("not-an-object")),
+            Some(json!({})),
+            Some(json!({"baseUrl": "https://bound.example"})),
+            Some(json!({"apiKey": "secret"})),
+            Some(json!({"baseUrl": "not a url", "apiKey": "secret"})),
+        ]
+        .into_iter()
+        .enumerate()
         {
             let _home = TempHome::new();
             let db = Arc::new(Database::memory().unwrap());
@@ -578,7 +627,10 @@ mod tests {
         db.save_usage_provider(&usage_provider(
             "claude:legacy-empty",
             BillingKind::Metered,
-            Some(json!({})),
+            Some(json!({
+                "baseUrl": "https://stored.example",
+                "apiKey": "stored-secret"
+            })),
         ))
         .unwrap();
         {
@@ -602,6 +654,34 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "route config incomplete: claude:legacy-empty"
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn direct_route_normalizes_public_base_url_alias_for_the_adapter() {
+        let _home = TempHome::new();
+        let db = Arc::new(Database::memory().unwrap());
+        db.save_usage_provider(&usage_provider(
+            "direct",
+            BillingKind::Metered,
+            Some(json!({
+                "baseUrl": "https://direct.example/v1",
+                "apiKey": "secret"
+            })),
+        ))
+        .unwrap();
+        db.set_route_binding("claude", "direct").unwrap();
+
+        let bound = ProviderRouter::new(db)
+            .select_bound_route("claude")
+            .await
+            .unwrap();
+
+        assert_eq!(bound.usage_provider_id, "direct");
+        assert_eq!(
+            bound.provider.settings_config["base_url"].as_str(),
+            Some("https://direct.example/v1")
         );
     }
 
@@ -658,7 +738,7 @@ mod tests {
         let mut input = usage_provider(
             "wrong-protocol",
             BillingKind::Metered,
-            Some(json!({"baseUrl": "https://bound.example"})),
+            Some(json!({"baseUrl": "https://bound.example", "apiKey": "secret"})),
         );
         input.route_app_type = Some("codex".to_string());
         db.save_usage_provider(&input).unwrap();

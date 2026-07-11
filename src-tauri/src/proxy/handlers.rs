@@ -26,16 +26,17 @@ use super::{
         transform_codex_chat, transform_gemini, transform_responses,
     },
     response_processor::{
-        create_logged_passthrough_stream, process_response, read_decoded_body,
-        report_ingestion_failure, stable_session_id, strip_entity_headers_for_rebuilt_body,
+        capture_raw_sse_usage_metadata, create_logged_passthrough_stream, process_response,
+        read_decoded_body, stable_session_id, strip_entity_headers_for_rebuilt_body,
         strip_hop_by_hop_response_headers, upstream_correlation_id_from_body,
-        upstream_correlation_id_from_events, usage_logging_enabled, SseUsageCollector,
+        usage_logging_enabled, validated_raw_sse_usage_metadata, validated_upstream_cost,
+        RawSseUsageMetadata, SseUsageCollector,
     },
     server::ProxyState,
     sse::{strip_sse_field, take_sse_block},
     types::*,
     usage::{
-        cost_parser::{extract_upstream_cost, extract_upstream_cost_from_events, UpstreamCost},
+        cost_parser::{extract_upstream_cost, UpstreamCost},
         parser::TokenUsage,
     },
     ProxyError,
@@ -316,8 +317,25 @@ async fn handle_claude_transform(
     let tool_schema_hints = (!tool_schema_hints.is_empty()).then_some(tool_schema_hints);
 
     if use_streaming {
+        // Capture cost and correlation metadata from the raw upstream SSE
+        // before a protocol transformer can drop or rewrite those fields.
+        let collect_usage = usage_logging_enabled(state);
+        let raw_metadata =
+            std::sync::Arc::new(std::sync::Mutex::new(RawSseUsageMetadata::default()));
+        let upstream_stream = response.bytes_stream();
+        let stream: std::pin::Pin<
+            Box<dyn futures::Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static>,
+        > = if collect_usage {
+            Box::pin(capture_raw_sse_usage_metadata(
+                upstream_stream,
+                raw_metadata.clone(),
+                ctx.usage_provider_id.clone(),
+            ))
+        } else {
+            Box::pin(upstream_stream)
+        };
+
         // 根据 api_format 选择流式转换器
-        let stream = response.bytes_stream();
         let sse_stream: Box<
             dyn futures::Stream<Item = Result<Bytes, std::io::Error>> + Send + Unpin,
         > = if api_format == "openai_responses" {
@@ -335,7 +353,7 @@ async fn handle_claude_transform(
         };
 
         // 创建使用量收集器；关闭 usage logging 时不要再解析转换后的 SSE。
-        let usage_collector = if usage_logging_enabled(state) {
+        let usage_collector = if collect_usage {
             let state = state.clone();
             let provider_id = ctx.provider.id.clone();
             let usage_provider_id = ctx.usage_provider_id.clone();
@@ -350,6 +368,7 @@ async fn handle_claude_transform(
             let start_time = ctx.start_time;
             let session_id = ctx.session_id.clone();
             let session_client_provided = ctx.session_client_provided;
+            let raw_metadata = raw_metadata.clone();
             // 用 ctx 的 app_type：Claude Desktop 网关也走此转换路径，硬编码
             // "claude" 会把 claude-desktop 的行错记到 claude 名下
             let app_type_str = ctx.app_type_str;
@@ -358,16 +377,11 @@ async fn handle_claude_transform(
                 start_time,
                 Some(claude_stream_usage_event_filter),
                 move |events, first_token_ms| {
-                    let upstream_correlation_id = upstream_correlation_id_from_events(&events);
-                    let upstream_cost =
-                        extract_upstream_cost_from_events(&events).unwrap_or_else(|error| {
-                            report_ingestion_failure(
-                                &usage_provider_id,
-                                upstream_correlation_id.as_deref().unwrap_or("unknown"),
-                                &error,
-                            );
-                            None
-                        });
+                    let Some((upstream_cost, upstream_correlation_id)) =
+                        validated_raw_sse_usage_metadata(&raw_metadata)
+                    else {
+                        return;
+                    };
                     if let Some(usage) = TokenUsage::from_claude_stream_events(&events) {
                         let model = usage
                             .model
@@ -487,14 +501,11 @@ async fn handle_claude_transform(
         }
     };
     let upstream_correlation_id = upstream_correlation_id_from_body(&upstream_response);
-    let upstream_cost = extract_upstream_cost(&upstream_response).unwrap_or_else(|error| {
-        report_ingestion_failure(
-            &ctx.usage_provider_id,
-            upstream_correlation_id.as_deref().unwrap_or("unknown"),
-            &error,
-        );
-        None
-    });
+    let upstream_cost = validated_upstream_cost(
+        extract_upstream_cost(&upstream_response),
+        &ctx.usage_provider_id,
+        upstream_correlation_id.as_deref().unwrap_or("unknown"),
+    );
 
     // 根据 api_format 选择非流式转换器
     let anthropic_response = if api_format == "openai_responses" {
@@ -518,9 +529,10 @@ async fn handle_claude_transform(
     // 记录使用量
     // 全 0 usage 不落账（对齐 Codex 流式收集器的 skip）：SSE 聚合兜底救回的流
     // 在上游缺 stream_options.include_usage 时没有 usage，写入只会产生无意义空行
-    if let Some(usage) =
-        TokenUsage::from_claude_response(&anthropic_response).filter(|u| u.has_billable_tokens())
-    {
+    if let (Some(upstream_cost), Some(usage)) = (
+        upstream_cost,
+        TokenUsage::from_claude_response(&anthropic_response).filter(|u| u.has_billable_tokens()),
+    ) {
         // 转换后的响应缺失/合成空 model 时，回退到映射后的出站模型（接管真值），
         // 再回退到客户端请求别名
         let model = anthropic_response
@@ -892,11 +904,25 @@ async fn handle_codex_chat_to_responses_transform(
     }
 
     if is_stream || response.is_sse() {
-        let stream = response.bytes_stream();
+        let collect_usage = usage_logging_enabled(state);
+        let raw_metadata =
+            std::sync::Arc::new(std::sync::Mutex::new(RawSseUsageMetadata::default()));
+        let upstream_stream = response.bytes_stream();
+        let stream: std::pin::Pin<
+            Box<dyn futures::Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static>,
+        > = if collect_usage {
+            Box::pin(capture_raw_sse_usage_metadata(
+                upstream_stream,
+                raw_metadata.clone(),
+                ctx.usage_provider_id.clone(),
+            ))
+        } else {
+            Box::pin(upstream_stream)
+        };
         let sse_stream = create_responses_sse_stream_from_chat_with_context(stream, tool_context);
         let sse_stream = record_responses_sse_stream(sse_stream, state.codex_chat_history.clone());
 
-        let usage_collector = if usage_logging_enabled(state) {
+        let usage_collector = if collect_usage {
             let state = state.clone();
             let provider_id = ctx.provider.id.clone();
             let usage_provider_id = ctx.usage_provider_id.clone();
@@ -910,21 +936,17 @@ async fn handle_codex_chat_to_responses_transform(
             let start_time = ctx.start_time;
             let session_id = ctx.session_id.clone();
             let session_client_provided = ctx.session_client_provided;
+            let raw_metadata = raw_metadata.clone();
 
             Some(SseUsageCollector::new(
                 start_time,
                 Some(codex_stream_usage_event_filter),
                 move |events, first_token_ms| {
-                    let upstream_correlation_id = upstream_correlation_id_from_events(&events);
-                    let upstream_cost =
-                        extract_upstream_cost_from_events(&events).unwrap_or_else(|error| {
-                            report_ingestion_failure(
-                                &usage_provider_id,
-                                upstream_correlation_id.as_deref().unwrap_or("unknown"),
-                                &error,
-                            );
-                            None
-                        });
+                    let Some((upstream_cost, upstream_correlation_id)) =
+                        validated_raw_sse_usage_metadata(&raw_metadata)
+                    else {
+                        return;
+                    };
                     let usage =
                         TokenUsage::from_codex_stream_events_auto(&events).unwrap_or_default();
                     // 上游遵守 OpenAI 语义省略 usage 时，Chat→Responses 转换器会合成一个
@@ -1032,14 +1054,11 @@ async fn handle_codex_chat_to_responses_transform(
         }
     };
     let upstream_correlation_id = upstream_correlation_id_from_body(&chat_response);
-    let upstream_cost = extract_upstream_cost(&chat_response).unwrap_or_else(|error| {
-        report_ingestion_failure(
-            &ctx.usage_provider_id,
-            upstream_correlation_id.as_deref().unwrap_or("unknown"),
-            &error,
-        );
-        None
-    });
+    let upstream_cost = validated_upstream_cost(
+        extract_upstream_cost(&chat_response),
+        &ctx.usage_provider_id,
+        upstream_correlation_id.as_deref().unwrap_or("unknown"),
+    );
     let responses_response = transform_codex_chat::chat_completion_to_response_with_context(
         chat_response,
         &tool_context,
@@ -1057,9 +1076,11 @@ async fn handle_codex_chat_to_responses_transform(
     // (transform_codex_chat.rs:1581)，from_codex_response 对 input/output 字段存在(哪怕=0)
     // 即返回 Some。用 has_billable_tokens 闸门跳过全 0，避免空行虚增请求数——与流式分支
     // 及 Claude transform handler 的 skip 行为对齐。
-    if let Some(usage) = TokenUsage::from_codex_response_auto(&responses_response)
-        .filter(TokenUsage::has_billable_tokens)
-    {
+    if let (Some(upstream_cost), Some(usage)) = (
+        upstream_cost,
+        TokenUsage::from_codex_response_auto(&responses_response)
+            .filter(TokenUsage::has_billable_tokens),
+    ) {
         let model = responses_response
             .get("model")
             .and_then(|m| m.as_str())

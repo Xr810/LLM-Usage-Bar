@@ -355,7 +355,7 @@ fn insert_event(transaction: &Transaction<'_>, event: &UsageEvent) -> Result<boo
          ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
             ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21
-         ) ON CONFLICT DO NOTHING",
+         ) ON CONFLICT(event_id) DO NOTHING",
         params![
             event.event_id,
             token_source_value(event.source),
@@ -669,6 +669,27 @@ mod tests {
             .unwrap();
         assert_eq!(stored.model, "priced-model");
         assert_eq!(stored.input_tokens, 1_000_000);
+    }
+
+    #[test]
+    fn non_event_id_conflicts_are_not_silently_ignored() {
+        let db = Database::memory().unwrap();
+        save_provider(&db, "global-provider", Some("legacy-provider"));
+        let service = UsageIngestionService::new(&db);
+
+        let mut first = input("first-event", TokenSource::Proxy);
+        first.legacy = Some(legacy("same-legacy-request"));
+        assert!(service.ingest(&first).unwrap().inserted);
+
+        let mut conflicting = input("different-event", TokenSource::Proxy);
+        conflicting.legacy = Some(legacy("same-legacy-request"));
+        assert!(service.ingest(&conflicting).is_err());
+
+        let conn = db.conn.lock().unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM usage_events", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
     }
 
     #[test]
