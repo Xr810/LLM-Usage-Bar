@@ -1,12 +1,14 @@
 # Current Task State
 
-Last checkpoint: 2026-07-12 01:23 Asia/Singapore
+Last checkpoint: 2026-07-12 02:15 Asia/Singapore
 
 Branch: `codex/usage-dashboard-backend`
 
 Worktree: `/Users/max/LLM Usage Bar/.worktrees/codex-usage-dashboard-backend`
 
-Current HEAD: `ec389d86` (`fix(usage): preserve session binding invariants`)
+Implementation HEAD: `67654d44` (`fix(ci): satisfy backend clippy gate`)
+
+Latest pushed checkpoint before this status update: `360d4ddc` (`docs: checkpoint PR CI remediation`)
 
 ## Goal
 
@@ -24,6 +26,7 @@ Complete `docs/superpowers/plans/2026-07-11-usage-dashboard-backend-implementati
 - Task 7 — React dashboard/configuration surface: complete and independently reviewed, including explicit Session-source ownership and moving live ranges.
 - Task 8 — legacy main-path exit, real proxy E2E/runbook, desktop shell/live refresh/tests and all whole-branch review fixes: complete and independently reviewed.
 - Final gate — Rust 1.95, all frontend tests, TypeScript, renderer build, static request-path scan, real proxy E2E and diff check: complete.
+- PR #6 CI follow-up — complete. Initial backend Clippy failures were fixed without lint suppression, independently reviewed, pushed, and verified by a fully green remediation run.
 
 ## Completed commits in this implementation
 
@@ -67,6 +70,8 @@ Complete `docs/superpowers/plans/2026-07-11-usage-dashboard-backend-implementati
 - `22f85516` fix(usage): advance live dashboard ranges
 - `1a04f5b7` fix(usage): expose and serialize session ownership
 - `ec389d86` fix(usage): preserve session binding invariants
+- `67654d44` fix(ci): satisfy backend clippy gate
+- `360d4ddc` docs: checkpoint PR CI remediation
 
 ## Key decisions
 
@@ -93,6 +98,7 @@ Complete `docs/superpowers/plans/2026-07-11-usage-dashboard-backend-implementati
 21. Claude/Codex Session ownership is explicit in the existing Provider save DTO/view/UI. Provider and ownership changes commit in one SQLite transaction; no tenth Tauri command is added.
 22. In-flight bound Session sync and binding mutations are serialized with a dedicated operation mutex. The mutex spans file IO but never holds the SQLite connection across IO, so offset and ownership have one linear order.
 23. Dashboard live ranges use an exclusive `current second + 1` end and advance on `usage-log-recorded` plus a 30-second tick; fixed custom ranges do not move.
+24. CI warnings are treated as required release gates. The response logging arguments form an owned `UsageLogParams` payload rather than suppressing `clippy::too_many_arguments`; quota collectors receive the existing Provider reference directly rather than an immediately dereferenced double reference.
 
 ## Failures and review findings already handled
 
@@ -123,6 +129,8 @@ Complete `docs/superpowers/plans/2026-07-11-usage-dashboard-backend-implementati
 - `d0fd6f33` disables reactive resends on the v13 main path. The real proxy probe first observed two upstream hits for one request, then passed with exactly one hit.
 - Whole-branch review also found no public Session binding path and a scan/rebind ownership race. `1a04f5b7` adds atomic Provider/binding save, four-language UI and a dedicated sync/binding operation guard; transaction rollback and both Claude/Codex bound-entry tests pass.
 - Re-review found one Minor omission invariant: an internal caller could omit bindings while removing `session_log`. `ec389d86` first reproduced the invalid retained binding, then rejects the update before UPSERT and preserves the original Provider/binding. Final re-review found no remaining findings.
+- The first PR #6 backend CI run failed before tests because the local final gate had not included the workflow's `cargo clippy ... -D warnings` command. It exposed `spawn_log_usage` with 9 parameters and a needless `&provider` borrow. The failures were reproduced locally, fixed in `67654d44` without lint suppression, and independently reviewed as ownership- and behavior-safe.
+- GitHub Actions remediation run `29162690278` then passed Backend Checks, Frontend Checks and PR labelling. Backend Clippy completed before the full Rust test step, closing the original CI failure rather than bypassing it.
 
 ## Latest stage verification
 
@@ -150,6 +158,8 @@ Using repository-pinned Rust 1.95 temporary toolchain environment:
 - Final frontend gate: 72 test files / 433 tests passed; `tsc --noEmit` and `vite build` passed.
 - Whole-branch review and all six Important follow-up reviews: approved; final review has no Critical, Important or Minor findings.
 - No desktop/Tauri application was launched; tests used isolated/in-memory databases.
+- PR #6 Clippy remediation: exact workflow command `cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings` passed; response processor 13/13 and quota 9/9 targeted tests passed; the complete Rust gate again passed with 1857/2 plus all integration binaries.
+- PR #6 remote remediation gate: Backend Checks passed in 13m34s, Frontend Checks passed in 2m43s, and PR labelling passed in 8s on GitHub Actions run `29162690278`.
 
 ## Real-data safety observation
 
@@ -162,5 +172,5 @@ Using repository-pinned Rust 1.95 temporary toolchain environment:
 
 ## Immediate next actions
 
-1. Choose branch integration: local merge, push/PR, or keep the branch/worktree as-is.
+1. No required implementation or CI remediation work remains for this plan.
 2. Keep optional original-data import deferred unless a future explicit read-only snapshot workflow is requested.

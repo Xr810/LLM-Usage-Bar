@@ -270,13 +270,14 @@ pub async fn handle_non_streaming(
                 spawn_log_usage(
                     state,
                     ctx,
-                    usage,
-                    &model,
-                    &ctx.request_model,
-                    status.as_u16(),
-                    false,
-                    upstream_cost,
-                    upstream_correlation_id,
+                    UsageLogParams {
+                        usage,
+                        model,
+                        status_code: status.as_u16(),
+                        is_streaming: false,
+                        upstream_cost,
+                        upstream_correlation_id,
+                    },
                 );
             } else if let Some(upstream_cost) = upstream_cost {
                 let model = json_value
@@ -289,13 +290,14 @@ pub async fn handle_non_streaming(
                 spawn_log_usage(
                     state,
                     ctx,
-                    TokenUsage::default(),
-                    &model,
-                    &ctx.request_model,
-                    status.as_u16(),
-                    false,
-                    upstream_cost,
-                    upstream_correlation_id,
+                    UsageLogParams {
+                        usage: TokenUsage::default(),
+                        model,
+                        status_code: status.as_u16(),
+                        is_streaming: false,
+                        upstream_cost,
+                        upstream_correlation_id,
+                    },
                 );
                 log::debug!(
                     "[{}] 未能解析 usage 信息，跳过记录",
@@ -311,13 +313,17 @@ pub async fn handle_non_streaming(
             spawn_log_usage(
                 state,
                 ctx,
-                TokenUsage::default(),
-                ctx.outbound_model.as_deref().unwrap_or(&ctx.request_model),
-                &ctx.request_model,
-                status.as_u16(),
-                false,
-                None,
-                None,
+                UsageLogParams {
+                    usage: TokenUsage::default(),
+                    model: ctx
+                        .outbound_model
+                        .clone()
+                        .unwrap_or_else(|| ctx.request_model.clone()),
+                    status_code: status.as_u16(),
+                    is_streaming: false,
+                    upstream_cost: None,
+                    upstream_correlation_id: None,
+                },
             );
         }
     } else {
@@ -724,17 +730,25 @@ fn create_usage_collector(
 }
 
 /// 异步记录使用量
-fn spawn_log_usage(
-    state: &ProxyState,
-    ctx: &RequestContext,
+struct UsageLogParams {
     usage: TokenUsage,
-    model: &str,
-    request_model: &str,
+    model: String,
     status_code: u16,
     is_streaming: bool,
     upstream_cost: Option<UpstreamCost>,
     upstream_correlation_id: Option<String>,
-) {
+}
+
+fn spawn_log_usage(state: &ProxyState, ctx: &RequestContext, params: UsageLogParams) {
+    let UsageLogParams {
+        usage,
+        model,
+        status_code,
+        is_streaming,
+        upstream_cost,
+        upstream_correlation_id,
+    } = params;
+
     // Check enable_logging before spawning the log task
     if let Ok(config) = state.config.try_read() {
         if !config.enable_logging {
@@ -746,8 +760,7 @@ fn spawn_log_usage(
     let provider_id = ctx.provider.id.clone();
     let usage_provider_id = ctx.usage_provider_id.clone();
     let app_type_str = ctx.app_type_str.to_string();
-    let model = model.to_string();
-    let request_model = request_model.to_string();
+    let request_model = ctx.request_model.clone();
     // 「按请求计价」模式的锚点：映射后的出站模型，无映射时等于 request_model
     let outbound_model = ctx
         .outbound_model

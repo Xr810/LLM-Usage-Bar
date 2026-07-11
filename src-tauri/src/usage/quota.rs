@@ -201,7 +201,7 @@ impl QuotaService {
             AppError::Message(format!("unsupported quota source: {quota_source}"))
         })?;
 
-        let quota = match collector.collect(&provider).await {
+        let quota = match collector.collect(provider).await {
             Ok(quota) if quota.success => quota,
             Ok(quota) => {
                 let error = quota
