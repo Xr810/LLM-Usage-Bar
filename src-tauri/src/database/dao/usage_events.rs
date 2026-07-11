@@ -116,6 +116,11 @@ impl Database {
         provider_id: &str,
         event: &UsageEvent,
     ) -> Result<Option<UsageEvent>, AppError> {
+        if provider_id != event.provider_id {
+            return Err(AppError::Message(
+                "provider_id must match event.provider_id".to_string(),
+            ));
+        }
         let conn = lock_conn!(self.conn);
         for (column, value) in [
             ("request_id", event.request_id.as_deref()),
@@ -145,24 +150,32 @@ impl Database {
 
     pub fn insert_usage_event_link(&self, link: &UsageEventLink) -> Result<bool, AppError> {
         let conn = lock_conn!(self.conn);
-        let canonical_source = conn
+        let canonical = conn
             .query_row(
-                "SELECT source FROM usage_events WHERE event_id = ?1",
+                "SELECT source, provider_id FROM usage_events WHERE event_id = ?1",
                 [&link.canonical_event_id],
-                |row| row.get::<_, String>(0),
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
             )
             .optional()?;
-        let duplicate_source = conn
+        let duplicate = conn
             .query_row(
-                "SELECT source FROM usage_events WHERE event_id = ?1",
+                "SELECT source, provider_id FROM usage_events WHERE event_id = ?1",
                 [&link.duplicate_event_id],
-                |row| row.get::<_, String>(0),
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
             )
             .optional()?;
-        let (Some(canonical_source), Some(duplicate_source)) = (canonical_source, duplicate_source)
+        let (
+            Some((canonical_source, canonical_provider)),
+            Some((duplicate_source, duplicate_provider)),
+        ) = (canonical, duplicate)
         else {
             return Err(AppError::Message("usage event not found".to_string()));
         };
+        if canonical_provider != duplicate_provider {
+            return Err(AppError::Message(
+                "usage event links require same provider".to_string(),
+            ));
+        }
         if canonical_source == duplicate_source {
             return Err(AppError::Message(
                 "usage event links require different sources".to_string(),
@@ -327,9 +340,11 @@ mod tests {
             .find_matching_usage_event("one", &exact)
             .unwrap()
             .is_none());
-        exact.request_id = Some("request-exact".to_string());
+        let mut other_provider = exact.clone();
+        other_provider.provider_id = "two".to_string();
+        other_provider.request_id = Some("request-exact".to_string());
         assert!(db
-            .find_matching_usage_event("two", &exact)
+            .find_matching_usage_event("two", &other_provider)
             .unwrap()
             .is_none());
 
@@ -340,6 +355,25 @@ mod tests {
             .find_matching_usage_event("one", &exact)
             .unwrap()
             .is_none());
+    }
+
+    #[test]
+    fn matching_rejects_provider_parameter_mismatch() {
+        let db = Database::memory().unwrap();
+        save_provider(&db, "one");
+        save_provider(&db, "two");
+        let mut stored = event("stored", "one", TokenSource::Proxy, 100);
+        stored.request_id = Some("request-exact".to_string());
+        db.insert_usage_event(&stored).unwrap();
+
+        let mut probe = event("probe", "two", TokenSource::SessionLog, 101);
+        probe.request_id = Some("request-exact".to_string());
+        assert_eq!(
+            db.find_matching_usage_event("one", &probe)
+                .unwrap_err()
+                .to_string(),
+            "provider_id must match event.provider_id"
+        );
     }
 
     #[test]
@@ -372,6 +406,29 @@ mod tests {
                 .unwrap_err()
                 .to_string(),
             "usage event links require different sources"
+        );
+    }
+
+    #[test]
+    fn event_links_reject_events_from_different_providers() {
+        let db = Database::memory().unwrap();
+        save_provider(&db, "one");
+        save_provider(&db, "two");
+        db.insert_usage_event(&event("proxy", "one", TokenSource::Proxy, 100))
+            .unwrap();
+        db.insert_usage_event(&event("session", "two", TokenSource::SessionLog, 101))
+            .unwrap();
+
+        let link = UsageEventLink {
+            canonical_event_id: "proxy".to_string(),
+            duplicate_event_id: "session".to_string(),
+            link_kind: "request_id".to_string(),
+            link_value: "shared".to_string(),
+            created_at: 102,
+        };
+        assert_eq!(
+            db.insert_usage_event_link(&link).unwrap_err().to_string(),
+            "usage event links require same provider"
         );
     }
 
