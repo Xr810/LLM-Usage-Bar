@@ -40,13 +40,13 @@
 
 ### Task 0: Isolate LLM Usage Bar from Original CC Switch
 
-**Status:** In progress. This is a launch blocker.
+**Status:** Core isolation complete (`e931e7f9`). Optional explicit read-only snapshot import remains undecided; the dashboard never auto-opens or upgrades the original v11 database.
 
-- [ ] Use a distinct product name, bundle identifier, deep-link scheme, updater policy, data/settings directory, and default proxy port.
-- [ ] Reject configuration-directory overrides that point back to the original `~/.cc-switch` data.
-- [ ] Verify the original v11 database is unchanged by all dashboard tests and startup preparation.
+- [x] Use a distinct product name, bundle identifier, updater policy, data/settings directory, and default proxy port; register no legacy deep-link scheme.
+- [x] Reject configuration-directory overrides that point back to the original `~/.cc-switch` data.
+- [x] Verify the original v11 database is unchanged by all dashboard tests and startup preparation.
 - [ ] If original data import is added, require explicit user action and use a read-only SQLite Backup snapshot into the isolated target; never copy or migrate the live source database in place.
-- [ ] Document that both apps may run concurrently but may not both control the same Claude/Codex/Gemini live configuration.
+- [x] Document that both apps may run concurrently but may not both control the same Claude/Codex/Gemini live configuration.
 
 ### Task 1: Define the Domain and Migrate SQLite from v12 to v13
 
@@ -374,7 +374,7 @@ git commit -m "feat(usage): ingest trusted request costs"
 
 ### Task 5: Add Provider-Aware Quota Collection and Session Import
 
-**Status:** In progress; targeted quota/session tests pass, final binding/correlation regression gate and commit pending.
+**Status:** Implementation complete (`fc57e960`); targeted quota/session/parser gates pass and independent review is in progress.
 
 **Files:**
 - Create: `src-tauri/src/usage/quota.rs`
