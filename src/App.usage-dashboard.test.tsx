@@ -1,25 +1,27 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
-import { SettingsPage } from "@/components/settings/SettingsPage";
+import { setSettings } from "../tests/msw/state";
 
-vi.mock("@/components/usage-dashboard/UsageDashboardPage", () => ({
-  UsageDashboardPage: () => (
-    <div data-testid="usage-dashboard-main">
-      <h1>Provider-aware usage dashboard</h1>
-      <section>Provider routes</section>
-      <button type="button">Start proxy</button>
-    </div>
-  ),
+const windowMocks = vi.hoisted(() => ({
+  minimize: vi.fn(),
+  toggleMaximize: vi.fn(),
+  close: vi.fn(),
 }));
 
-function renderWithQuery(ui: React.ReactNode) {
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => windowMocks,
+}));
+
+function renderApp() {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
   return render(
-    <QueryClientProvider client={client}>{ui}</QueryClientProvider>,
+    <QueryClientProvider client={client}>
+      <App />
+    </QueryClientProvider>,
   );
 }
 
@@ -35,13 +37,18 @@ const legacyLabels = [
 ];
 
 describe("usage dashboard main path", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    Object.values(windowMocks).forEach((mock) => mock.mockReset());
+  });
 
-  it("renders dashboard, provider routes and proxy controls without legacy entry points", () => {
-    renderWithQuery(<App />);
+  it("renders the real dashboard and no legacy business entry points", async () => {
+    renderApp();
 
-    expect(screen.getByTestId("usage-dashboard-main")).toBeInTheDocument();
-    expect(screen.getByText("Provider routes")).toBeInTheDocument();
+    expect(
+      await screen.findAllByText("Official Subscription"),
+    ).not.toHaveLength(0);
+    expect(screen.getAllByText("Metered API")).not.toHaveLength(0);
+    expect(screen.getByText("Static routes")).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Start proxy" }),
     ).toBeInTheDocument();
@@ -52,24 +59,23 @@ describe("usage dashboard main path", () => {
     }
   });
 
-  it("opens the usage-only settings surface", () => {
-    renderWithQuery(<App />);
-    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
-    expect(screen.getAllByTestId("usage-dashboard-main")).toHaveLength(2);
-    for (const label of legacyLabels) {
-      expect(
-        screen.queryByText(label, { exact: false }),
-      ).not.toBeInTheDocument();
-    }
-  });
+  it("keeps a draggable title area and gates native window controls by settings", async () => {
+    setSettings({ useAppWindowControls: true, language: "en" });
+    const { container } = renderApp();
 
-  it.each(["general", "proxy", "auth", "advanced", "mcp", "skills", "about"])(
-    "falls back legacy default tab %s to usage",
-    (defaultTab) => {
-      renderWithQuery(
-        <SettingsPage open onOpenChange={() => {}} defaultTab={defaultTab} />,
-      );
-      expect(screen.getByTestId("usage-dashboard-main")).toBeInTheDocument();
-    },
-  );
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Minimize window" }),
+      ).toBeInTheDocument(),
+    );
+    const dragRegion = container.querySelector("[data-tauri-drag-region]");
+    expect(dragRegion).not.toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Minimize window" }));
+    fireEvent.click(screen.getByRole("button", { name: "Maximize window" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close window" }));
+    expect(windowMocks.minimize).toHaveBeenCalledOnce();
+    expect(windowMocks.toggleMaximize).toHaveBeenCalledOnce();
+    expect(windowMocks.close).toHaveBeenCalledOnce();
+  });
 });

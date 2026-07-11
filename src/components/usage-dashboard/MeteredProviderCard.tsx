@@ -28,6 +28,17 @@ export function MeteredProviderCard({
         : t("usageDashboard.sourceSession", { defaultValue: "Session log" }),
     )
     .join(" + ");
+  const costSourceLabel = (source: string) => {
+    if (source === "upstream") {
+      return t("usageDashboard.costUpstream", { defaultValue: "Upstream" });
+    }
+    if (source === "estimated") {
+      return t("usageDashboard.costEstimated", { defaultValue: "Estimated" });
+    }
+    return t("usageDashboard.costUnavailable", {
+      defaultValue: "Unavailable",
+    });
+  };
   return (
     <Card data-testid={`metered-provider-${usage.provider.id}`}>
       <CardHeader className="pb-3">
@@ -89,7 +100,7 @@ export function MeteredProviderCard({
                 <span className="truncate">{event.model}</span>
                 <span>
                   {event.totalCostUsd == null
-                    ? event.costSource
+                    ? costSourceLabel(event.costSource)
                     : `$${event.totalCostUsd}`}
                 </span>
               </div>

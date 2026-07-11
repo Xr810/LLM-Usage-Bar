@@ -46,6 +46,7 @@ const zh: Record<string, string> = {
   "usageDashboard.tokens": "令牌",
   "usageDashboard.requests": "请求",
   "usageDashboard.recentRequests": "近期请求",
+  "usageDashboard.costUnavailable": "费用不可用",
 };
 
 vi.mock("react-i18next", () => ({
@@ -72,6 +73,10 @@ vi.mock("@/lib/usageRange", () => ({
       endDate: selection.customEndDate ?? 80,
     };
   },
+}));
+
+vi.mock("@/hooks/useUsageEventBridge", () => ({
+  useUsageEventBridge: () => undefined,
 }));
 
 vi.mock("@/lib/query/usageDashboard", () => ({
@@ -697,6 +702,54 @@ describe("UsageDashboardPage", () => {
       }),
     );
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+  });
+
+  it("surfaces proxy status errors and disables proxy control until status is known", () => {
+    mocks.isRunning.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: new Error("proxy status failed"),
+    });
+    const failed = render(<UsageDashboardPage />);
+    expect(
+      screen.getByRole("alert", { name: "proxy status failed" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start proxy" })).toBeDisabled();
+    failed.unmount();
+
+    mocks.isRunning.mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      error: undefined,
+    });
+    render(<UsageDashboardPage />);
+    expect(screen.getByRole("button", { name: "Start proxy" })).toBeDisabled();
+  });
+
+  it("localizes an unavailable recent-event cost source", () => {
+    ui.language = "zh";
+    mocks.events.mockReturnValue({
+      data: {
+        items: [
+          {
+            eventId: "no-cost",
+            model: "model",
+            totalCostUsd: null,
+            costSource: "unavailable",
+          },
+        ],
+        total: 1,
+        page: 1,
+        pageSize: 5,
+      },
+    });
+    render(<UsageDashboardPage />);
+    expect(
+      within(screen.getByTestId("metered-provider-api")).getByText(
+        "费用不可用",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("unavailable")).not.toBeInTheDocument();
   });
 
   it("renders core dashboard labels in Chinese", () => {

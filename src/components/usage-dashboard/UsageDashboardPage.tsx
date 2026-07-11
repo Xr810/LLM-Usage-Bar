@@ -25,9 +25,11 @@ import { ProductUsageGroup } from "./ProductUsageGroup";
 import { RouteBindingsPanel } from "./RouteBindingsPanel";
 import { UsageProviderDialog } from "./UsageProviderDialog";
 import { useTranslation } from "react-i18next";
+import { useUsageEventBridge } from "@/hooks/useUsageEventBridge";
 
 export function UsageDashboardPage() {
   const { t } = useTranslation();
+  useUsageEventBridge();
   const [selection, setSelection] = useState<UsageRangeSelection>({
     preset: "today",
   });
@@ -71,7 +73,12 @@ export function UsageDashboardPage() {
     }
   };
 
-  const queryErrors = [dashboard.error, providers.error, bindings.error]
+  const queryErrors = [
+    dashboard.error,
+    providers.error,
+    bindings.error,
+    proxyRunning.error,
+  ]
     .filter((error) => error != null)
     .map(errorText);
 
@@ -128,7 +135,12 @@ export function UsageDashboardPage() {
           </Button>
           <Button
             size="sm"
-            disabled={startProxy.isPending || stopProxy.isPending}
+            disabled={
+              proxyRunning.isLoading ||
+              Boolean(proxyRunning.error) ||
+              startProxy.isPending ||
+              stopProxy.isPending
+            }
             onClick={() =>
               void run(() =>
                 proxyRunning.data

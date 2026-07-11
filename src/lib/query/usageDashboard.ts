@@ -18,6 +18,7 @@ export const usageDashboardKeys = {
     ] as const,
   eventsRoot: (providerId: string) =>
     [...usageDashboardKeys.all, "events", providerId] as const,
+  eventsAll: () => [...usageDashboardKeys.all, "events"] as const,
   events: (
     providerId: string,
     startAt: number,
