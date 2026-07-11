@@ -1,4 +1,5 @@
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -25,6 +26,7 @@ const mocks = vi.hoisted(() => ({
 
 const ui = vi.hoisted(() => ({
   language: "en",
+  onUsageRecorded: undefined as undefined | (() => void),
   pending: {
     saveProvider: false,
     setEnabled: false,
@@ -59,24 +61,10 @@ vi.mock("react-i18next", () => ({
   }),
 }));
 
-vi.mock("@/lib/usageRange", () => ({
-  resolveUsageRange: (selection: {
-    preset: string;
-    customStartDate?: number;
-    customEndDate?: number;
-  }) => {
-    if (selection.preset === "today") return { startDate: 10, endDate: 20 };
-    if (selection.preset === "7d") return { startDate: 30, endDate: 40 };
-    if (selection.preset === "30d") return { startDate: 50, endDate: 60 };
-    return {
-      startDate: selection.customStartDate ?? 70,
-      endDate: selection.customEndDate ?? 80,
-    };
-  },
-}));
-
 vi.mock("@/hooks/useUsageEventBridge", () => ({
-  useUsageEventBridge: () => undefined,
+  useUsageEventBridge: (onUsageRecorded?: () => void) => {
+    ui.onUsageRecorded = onUsageRecorded;
+  },
 }));
 
 vi.mock("@/lib/query/usageDashboard", () => ({
@@ -169,6 +157,7 @@ describe("UsageDashboardPage", () => {
   beforeEach(() => {
     Object.values(mocks).forEach((mock) => mock.mockReset());
     ui.language = "en";
+    ui.onUsageRecorded = undefined;
     Object.keys(ui.pending).forEach((key) => {
       ui.pending[key as keyof typeof ui.pending] = false;
     });
@@ -275,18 +264,102 @@ describe("UsageDashboardPage", () => {
     expect(screen.getByText("25% used")).toBeInTheDocument();
   });
 
-  it("supports today, 7d, 30d and custom ranges", () => {
+  it("supports exact today, 7d, 30d and fixed custom ranges", () => {
+    vi.useFakeTimers();
+    const nowMs = new Date("2026-07-12T12:34:56.789Z").getTime();
+    vi.setSystemTime(nowMs);
     render(<UsageDashboardPage />);
-    expect(mocks.dashboard).toHaveBeenLastCalledWith(10, 20, undefined);
+    const endDate = Math.floor(nowMs / 1000) + 1;
+    const localNow = new Date(nowMs);
+    const todayStart = Math.floor(
+      new Date(
+        localNow.getFullYear(),
+        localNow.getMonth(),
+        localNow.getDate(),
+      ).getTime() / 1000,
+    );
+    expect(mocks.dashboard).toHaveBeenLastCalledWith(
+      todayStart,
+      endDate,
+      undefined,
+    );
     for (const label of ["Today", "7 days", "30 days", "Custom range"]) {
       expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
     }
     fireEvent.click(screen.getByRole("button", { name: "7 days" }));
-    expect(mocks.dashboard).toHaveBeenLastCalledWith(30, 40, undefined);
+    const sevenDayStart = Math.floor(
+      new Date(
+        localNow.getFullYear(),
+        localNow.getMonth(),
+        localNow.getDate() - 6,
+      ).getTime() / 1000,
+    );
+    expect(mocks.dashboard).toHaveBeenLastCalledWith(
+      sevenDayStart,
+      endDate,
+      undefined,
+    );
     fireEvent.click(screen.getByRole("button", { name: "30 days" }));
-    expect(mocks.dashboard).toHaveBeenLastCalledWith(50, 60, undefined);
+    const thirtyDayStart = Math.floor(
+      new Date(
+        localNow.getFullYear(),
+        localNow.getMonth(),
+        localNow.getDate() - 29,
+      ).getTime() / 1000,
+    );
+    expect(mocks.dashboard).toHaveBeenLastCalledWith(
+      thirtyDayStart,
+      endDate,
+      undefined,
+    );
     fireEvent.click(screen.getByRole("button", { name: "Custom range" }));
     expect(mocks.dashboard).toHaveBeenLastCalledWith(100, 200, undefined);
+    vi.useRealTimers();
+  });
+
+  it("advances the live query range on usage events and periodic ticks", () => {
+    vi.useFakeTimers();
+    const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");
+    const initialMs = new Date("2026-07-12T12:34:56.100Z").getTime();
+    vi.setSystemTime(initialMs);
+    const { unmount } = render(<UsageDashboardPage />);
+
+    expect(mocks.dashboard).toHaveBeenLastCalledWith(
+      expect.any(Number),
+      Math.floor(initialMs / 1000) + 1,
+      undefined,
+    );
+
+    const eventMs = initialMs + 5_000;
+    vi.setSystemTime(eventMs);
+    act(() => ui.onUsageRecorded?.());
+    expect(mocks.dashboard).toHaveBeenLastCalledWith(
+      expect.any(Number),
+      Math.floor(eventMs / 1000) + 1,
+      undefined,
+    );
+
+    const tickMs = eventMs + 30_000;
+    act(() => {
+      vi.advanceTimersByTime(30_000);
+    });
+    expect(mocks.dashboard).toHaveBeenLastCalledWith(
+      expect.any(Number),
+      Math.floor(tickMs / 1000) + 1,
+      undefined,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Custom range" }));
+    expect(mocks.dashboard).toHaveBeenLastCalledWith(100, 200, undefined);
+    act(() => {
+      vi.advanceTimersByTime(30_000);
+    });
+    expect(mocks.dashboard).toHaveBeenLastCalledWith(100, 200, undefined);
+
+    unmount();
+    expect(clearIntervalSpy).toHaveBeenCalled();
+    clearIntervalSpy.mockRestore();
+    vi.useRealTimers();
   });
 
   it("preserves zero quota refresh and rejects invalid intervals", async () => {

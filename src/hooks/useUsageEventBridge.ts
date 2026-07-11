@@ -13,7 +13,7 @@ import { usageDashboardKeys } from "@/lib/query/usageDashboard";
  *
  * 该 hook 挂在当前 Provider-aware 用量页面上，避免在页面未渲染时无意义触发。
  */
-export function useUsageEventBridge() {
+export function useUsageEventBridge(onUsageRecorded?: () => void) {
   const queryClient = useQueryClient();
 
   useEffect(() => {
@@ -22,6 +22,7 @@ export function useUsageEventBridge() {
 
     (async () => {
       const off = await listen("usage-log-recorded", () => {
+        onUsageRecorded?.();
         // v13 Provider-aware dashboard and recent-event cards.
         queryClient.invalidateQueries({
           queryKey: usageDashboardKeys.dashboards(),
@@ -44,5 +45,5 @@ export function useUsageEventBridge() {
       disposed = true;
       unlisten?.();
     };
-  }, [queryClient]);
+  }, [onUsageRecorded, queryClient]);
 }

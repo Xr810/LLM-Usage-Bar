@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -29,7 +29,15 @@ import { useUsageEventBridge } from "@/hooks/useUsageEventBridge";
 
 export function UsageDashboardPage() {
   const { t } = useTranslation();
-  useUsageEventBridge();
+  const [rangeClockMs, setRangeClockMs] = useState(() => Date.now());
+  const advanceRangeClock = useCallback(() => {
+    setRangeClockMs(Date.now());
+  }, []);
+  useUsageEventBridge(advanceRangeClock);
+  useEffect(() => {
+    const interval = globalThis.setInterval(advanceRangeClock, 30_000);
+    return () => globalThis.clearInterval(interval);
+  }, [advanceRangeClock]);
   const [selection, setSelection] = useState<UsageRangeSelection>({
     preset: "today",
   });
@@ -37,7 +45,10 @@ export function UsageDashboardPage() {
   const [editing, setEditing] = useState<UsageProviderView | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [errors, setErrors] = useState<string[]>([]);
-  const range = useMemo(() => resolveUsageRange(selection), [selection]);
+  const range = useMemo(
+    () => resolveUsageRange(selection, rangeClockMs),
+    [rangeClockMs, selection],
+  );
   const dashboard = useUsageDashboard(
     range.startDate,
     range.endDate,
