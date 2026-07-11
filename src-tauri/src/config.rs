@@ -90,6 +90,21 @@ fn path_eq_lexical(left: &Path, right: &Path) -> bool {
     comparable_path_key(left) == comparable_path_key(right)
 }
 
+#[cfg(unix)]
+fn path_eq_filesystem_object(left: &Path, right: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    match (fs::metadata(left), fs::metadata(right)) {
+        (Ok(left), Ok(right)) => left.dev() == right.dev() && left.ino() == right.ino(),
+        _ => false,
+    }
+}
+
+#[cfg(not(unix))]
+fn path_eq_filesystem_object(_left: &Path, _right: &Path) -> bool {
+    false
+}
+
 #[cfg(windows)]
 fn derive_wsl_default_mcp_path(dir: &Path) -> Option<PathBuf> {
     use std::path::Prefix;
@@ -185,6 +200,9 @@ pub fn get_claude_settings_path() -> PathBuf {
 fn is_legacy_cc_switch_config_dir_for_home(path: &Path, home: &Path) -> bool {
     let legacy_dir = home.join(".cc-switch");
     if path_eq_lexical(path, &legacy_dir) {
+        return true;
+    }
+    if path_eq_filesystem_object(path, &legacy_dir) {
         return true;
     }
 
@@ -388,6 +406,25 @@ mod tests {
 
         assert!(is_legacy_cc_switch_config_dir_for_home(&alias, temp.path()));
         assert!(validate_app_config_dir_override_for_home(&alias, temp.path()).is_err());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn case_alias_to_original_data_directory_is_rejected_on_case_insensitive_volume() {
+        let temp = tempfile::tempdir().unwrap();
+        let legacy = temp.path().join(".cc-switch");
+        let case_alias = temp.path().join(".CC-SWITCH");
+        fs::create_dir(&legacy).unwrap();
+
+        // APFS can be case-sensitive or case-insensitive. The collision exists only
+        // when both spellings resolve to the same filesystem object.
+        if path_eq_filesystem_object(&legacy, &case_alias) {
+            assert!(is_legacy_cc_switch_config_dir_for_home(
+                &case_alias,
+                temp.path()
+            ));
+            assert!(validate_app_config_dir_override_for_home(&case_alias, temp.path()).is_err());
+        }
     }
 
     #[test]
