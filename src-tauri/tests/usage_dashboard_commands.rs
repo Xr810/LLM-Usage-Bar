@@ -92,8 +92,15 @@ async fn nine_command_adapters_validate_and_never_serialize_provider_secrets() {
     set_usage_provider_enabled_test_hook(&state, "metered", false).unwrap();
     assert!(set_route_binding_test_hook(&state, "claude", "metered").is_err());
     set_usage_provider_enabled_test_hook(&state, "metered", true).unwrap();
-    set_route_binding_test_hook(&state, "claude", "metered").unwrap();
-    assert_eq!(get_route_bindings_test_hook(&state).unwrap().len(), 1);
+    let binding = set_route_binding_test_hook(&state, "claude", "metered").unwrap();
+    assert!(!serde_json::to_string(&binding)
+        .unwrap()
+        .contains("route-secret"));
+    let bindings = get_route_bindings_test_hook(&state).unwrap();
+    assert_eq!(bindings.len(), 1);
+    assert!(!serde_json::to_string(&bindings)
+        .unwrap()
+        .contains("route-secret"));
 
     let empty_dashboard = get_usage_dashboard_test_hook(&state, 0, 100, None).unwrap();
     assert_eq!(empty_dashboard.product_groups[0].input_tokens, 0);
@@ -117,6 +124,9 @@ async fn nine_command_adapters_validate_and_never_serialize_provider_secrets() {
     let events = get_usage_events_test_hook(&state, "metered", 0, 100, 1, 10).unwrap();
     assert_eq!(events.total, 1);
     assert_eq!(events.items[0].event_id, "event");
+    assert!(!serde_json::to_string(&events)
+        .unwrap()
+        .contains("route-secret"));
     assert_eq!(
         get_usage_events_test_hook(&state, "metered", 51, 100, 1, 10)
             .unwrap()

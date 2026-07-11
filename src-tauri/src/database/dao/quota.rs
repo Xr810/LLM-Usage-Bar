@@ -45,6 +45,24 @@ fn fetch_state_on_conn(
     .map_err(AppError::from)
 }
 
+fn latest_snapshot_on_conn(
+    conn: &Connection,
+    provider_id: &str,
+) -> Result<Option<QuotaSnapshot>, AppError> {
+    conn.query_row(
+        "SELECT snapshot_id, provider_id, fetched_at,
+                five_hour_utilization_percent, five_hour_resets_at,
+                seven_day_utilization_percent, seven_day_resets_at,
+                manual_resets_remaining, raw_payload, created_at
+         FROM quota_snapshots WHERE provider_id = ?1
+         ORDER BY fetched_at DESC, snapshot_id DESC LIMIT 1",
+        [provider_id],
+        quota_snapshot_from_row,
+    )
+    .optional()
+    .map_err(AppError::from)
+}
+
 impl Database {
     pub fn append_quota_success(
         &self,
@@ -80,7 +98,10 @@ impl Database {
                 last_attempt_at = excluded.last_attempt_at,
                 last_success_at = excluded.last_success_at,
                 last_error = NULL,
-                stale = 0",
+                stale = 0
+             WHERE excluded.last_attempt_at >= COALESCE(
+                quota_fetch_state.last_attempt_at, -9223372036854775808
+             )",
             params![snapshot.provider_id, snapshot.fetched_at],
         )?;
         let state = fetch_state_on_conn(&transaction, &snapshot.provider_id)?
@@ -103,7 +124,10 @@ impl Database {
              ON CONFLICT(provider_id) DO UPDATE SET
                 last_attempt_at = excluded.last_attempt_at,
                 last_error = excluded.last_error,
-                stale = 1",
+                stale = 1
+             WHERE excluded.last_attempt_at > COALESCE(
+                quota_fetch_state.last_attempt_at, -9223372036854775808
+             )",
             params![provider_id, attempted_at, error],
         )?;
         fetch_state_on_conn(&conn, provider_id)?
@@ -115,18 +139,7 @@ impl Database {
         provider_id: &str,
     ) -> Result<Option<QuotaSnapshot>, AppError> {
         let conn = lock_conn!(self.conn);
-        conn.query_row(
-            "SELECT snapshot_id, provider_id, fetched_at,
-                    five_hour_utilization_percent, five_hour_resets_at,
-                    seven_day_utilization_percent, seven_day_resets_at,
-                    manual_resets_remaining, raw_payload, created_at
-             FROM quota_snapshots WHERE provider_id = ?1
-             ORDER BY fetched_at DESC, snapshot_id DESC LIMIT 1",
-            [provider_id],
-            quota_snapshot_from_row,
-        )
-        .optional()
-        .map_err(AppError::from)
+        latest_snapshot_on_conn(&conn, provider_id)
     }
 
     pub fn get_quota_fetch_state(
@@ -135,6 +148,17 @@ impl Database {
     ) -> Result<Option<QuotaFetchState>, AppError> {
         let conn = lock_conn!(self.conn);
         fetch_state_on_conn(&conn, provider_id)
+    }
+
+    pub fn latest_quota_status(
+        &self,
+        provider_id: &str,
+    ) -> Result<(Option<QuotaSnapshot>, Option<QuotaFetchState>), AppError> {
+        let conn = lock_conn!(self.conn);
+        Ok((
+            latest_snapshot_on_conn(&conn, provider_id)?,
+            fetch_state_on_conn(&conn, provider_id)?,
+        ))
     }
 }
 
@@ -210,5 +234,44 @@ mod tests {
             first_success_at
         );
         assert_eq!(db.get_quota_fetch_state("sub").unwrap(), Some(state));
+    }
+
+    #[test]
+    fn older_failure_cannot_overwrite_a_newer_success() {
+        let db = Database::memory().unwrap();
+        save_provider(&db, "sub");
+        db.append_quota_success(&snapshot("new", 200)).unwrap();
+
+        let state = db.record_quota_failure("sub", 100, "late timeout").unwrap();
+        assert_eq!(state.last_attempt_at, Some(200));
+        assert_eq!(state.last_success_at, Some(200));
+        assert_eq!(state.last_error, None);
+        assert!(!state.stale);
+    }
+
+    #[test]
+    fn older_success_cannot_roll_back_newer_fetch_state_or_snapshot() {
+        let db = Database::memory().unwrap();
+        save_provider(&db, "sub");
+        let newer = snapshot("new", 200);
+        db.append_quota_success(&newer).unwrap();
+
+        let state = db.append_quota_success(&snapshot("old-late", 100)).unwrap();
+        assert_eq!(state.last_attempt_at, Some(200));
+        assert_eq!(state.last_success_at, Some(200));
+        assert_eq!(db.latest_quota_snapshot("sub").unwrap(), Some(newer));
+    }
+
+    #[test]
+    fn latest_quota_status_reads_snapshot_and_state_together() {
+        let db = Database::memory().unwrap();
+        save_provider(&db, "sub");
+        let current = snapshot("current", 200);
+        let state = db.append_quota_success(&current).unwrap();
+
+        assert_eq!(
+            db.latest_quota_status("sub").unwrap(),
+            (Some(current), Some(state))
+        );
     }
 }

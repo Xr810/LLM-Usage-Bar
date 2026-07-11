@@ -46,33 +46,47 @@ impl<'a> UsageDashboardService<'a> {
 
         let mut products: BTreeMap<String, ProductAccumulator> = BTreeMap::new();
         for provider in self.db.list_usage_providers()? {
-            if product_group_id.is_some_and(|filter| filter != provider.product_group_id) {
-                continue;
-            }
-            let usage = self.aggregate_provider(&provider, start_at, end_at)?;
-            let product = products
-                .entry(provider.product_group_id.clone())
-                .or_default();
-            product.input_tokens = checked_sum(product.input_tokens, usage.input_tokens)?;
-            product.output_tokens = checked_sum(product.output_tokens, usage.output_tokens)?;
-            product.cache_read_tokens =
-                checked_sum(product.cache_read_tokens, usage.cache_read_tokens)?;
-            product.cache_creation_tokens =
-                checked_sum(product.cache_creation_tokens, usage.cache_creation_tokens)?;
-            if let Some(cost) = usage.total_cost_usd.as_deref() {
-                product.total_cost += parse_decimal(cost)?;
-                product.has_cost = true;
-            }
-            add_cost_counts(&mut product.cost_source_counts, &usage.cost_source_counts)?;
-            for source in &provider.token_sources {
-                product.token_sources.insert(match source {
-                    TokenSource::Proxy => "proxy",
-                    TokenSource::SessionLog => "session_log",
-                });
-            }
-            match provider.billing_kind {
-                BillingKind::Subscription => product.subscription_providers.push(usage),
-                BillingKind::Metered => product.metered_providers.push(usage),
+            let mut groups = self.event_product_groups(&provider.id, start_at, end_at)?;
+            groups.insert(provider.product_group_id.clone());
+            for group_id in groups {
+                if product_group_id.is_some_and(|filter| filter != group_id) {
+                    continue;
+                }
+                let is_current_group = group_id == provider.product_group_id;
+                let usage = self.aggregate_provider(
+                    &provider,
+                    &group_id,
+                    start_at,
+                    end_at,
+                    is_current_group,
+                )?;
+                if usage.event_count == 0 && !is_current_group {
+                    continue;
+                }
+
+                let product = products.entry(group_id).or_default();
+                product.input_tokens = checked_sum(product.input_tokens, usage.input_tokens)?;
+                product.output_tokens = checked_sum(product.output_tokens, usage.output_tokens)?;
+                product.cache_read_tokens =
+                    checked_sum(product.cache_read_tokens, usage.cache_read_tokens)?;
+                product.cache_creation_tokens =
+                    checked_sum(product.cache_creation_tokens, usage.cache_creation_tokens)?;
+                if let Some(cost) = usage.total_cost_usd.as_deref() {
+                    product.total_cost =
+                        checked_cost_sum(product.total_cost, parse_decimal(cost)?)?;
+                    product.has_cost = true;
+                }
+                add_cost_counts(&mut product.cost_source_counts, &usage.cost_source_counts)?;
+                for source in &provider.token_sources {
+                    product.token_sources.insert(match source {
+                        TokenSource::Proxy => "proxy",
+                        TokenSource::SessionLog => "session_log",
+                    });
+                }
+                match provider.billing_kind {
+                    BillingKind::Subscription => product.subscription_providers.push(usage),
+                    BillingKind::Metered => product.metered_providers.push(usage),
+                }
             }
         }
 
@@ -120,8 +134,10 @@ impl<'a> UsageDashboardService<'a> {
     fn aggregate_provider(
         &self,
         provider: &UsageProviderView,
+        product_group_id: &str,
         start_at: i64,
         end_at: i64,
+        include_quota: bool,
     ) -> Result<ProviderUsageView, AppError> {
         let conn = self
             .db
@@ -133,23 +149,27 @@ impl<'a> UsageDashboardService<'a> {
                     total_cost_usd, cost_source
              FROM usage_events AS event
              WHERE event.provider_id = ?1
-               AND event.occurred_at >= ?2 AND event.occurred_at < ?3
+               AND event.product_group_id = ?2
+               AND event.occurred_at >= ?3 AND event.occurred_at < ?4
                AND NOT EXISTS (
                    SELECT 1 FROM usage_event_links AS link
                    WHERE link.duplicate_event_id = event.event_id
                )
              ORDER BY event.occurred_at, event.event_id",
         )?;
-        let rows = statement.query_map(params![provider.id, start_at, end_at], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, i64>(1)?,
-                row.get::<_, i64>(2)?,
-                row.get::<_, i64>(3)?,
-                row.get::<_, Option<String>>(4)?,
-                row.get::<_, String>(5)?,
-            ))
-        })?;
+        let rows = statement.query_map(
+            params![provider.id, product_group_id, start_at, end_at],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, String>(5)?,
+                ))
+            },
+        )?;
 
         let mut event_count = 0_u64;
         let mut input_tokens = 0_u64;
@@ -173,7 +193,7 @@ impl<'a> UsageDashboardService<'a> {
                 non_negative(cache_creation, "cache_creation_tokens")?,
             )?;
             if let Some(cost) = cost {
-                total_cost += parse_decimal(&cost)?;
+                total_cost = checked_cost_sum(total_cost, parse_decimal(&cost)?)?;
                 has_cost = true;
             }
             match source.as_str() {
@@ -190,14 +210,10 @@ impl<'a> UsageDashboardService<'a> {
         drop(statement);
         drop(conn);
 
-        let quota_fetch_state = if provider.billing_kind == BillingKind::Subscription {
-            self.db.get_quota_fetch_state(&provider.id)?
-        } else {
-            None
-        };
-        let quota = if provider.billing_kind == BillingKind::Subscription {
-            match self.db.latest_quota_snapshot(&provider.id)? {
-                Some(snapshot) => Some(QuotaStatusView {
+        let (quota, quota_fetch_state) =
+            if provider.billing_kind == BillingKind::Subscription && include_quota {
+                let (snapshot, fetch_state) = self.db.latest_quota_status(&provider.id)?;
+                let quota = snapshot.map(|snapshot| QuotaStatusView {
                     snapshot_id: snapshot.snapshot_id,
                     fetched_at: snapshot.fetched_at,
                     five_hour_utilization_percent: snapshot.five_hour_utilization_percent,
@@ -205,12 +221,11 @@ impl<'a> UsageDashboardService<'a> {
                     seven_day_utilization_percent: snapshot.seven_day_utilization_percent,
                     seven_day_resets_at: snapshot.seven_day_resets_at,
                     manual_resets_remaining: snapshot.manual_resets_remaining,
-                }),
-                None => None,
-            }
-        } else {
-            None
-        };
+                });
+                (quota, fetch_state)
+            } else {
+                (None, None)
+            };
 
         Ok(ProviderUsageView {
             provider: provider.clone(),
@@ -224,6 +239,34 @@ impl<'a> UsageDashboardService<'a> {
             quota,
             quota_fetch_state,
         })
+    }
+
+    fn event_product_groups(
+        &self,
+        provider_id: &str,
+        start_at: i64,
+        end_at: i64,
+    ) -> Result<BTreeSet<String>, AppError> {
+        let conn = self
+            .db
+            .conn
+            .lock()
+            .map_err(|error| AppError::Database(format!("Mutex lock failed: {error}")))?;
+        let mut statement = conn.prepare(
+            "SELECT DISTINCT event.product_group_id
+             FROM usage_events AS event
+             WHERE event.provider_id = ?1
+               AND event.occurred_at >= ?2 AND event.occurred_at < ?3
+               AND NOT EXISTS (
+                   SELECT 1 FROM usage_event_links AS link
+                   WHERE link.duplicate_event_id = event.event_id
+               )
+             ORDER BY event.product_group_id",
+        )?;
+        let groups = statement
+            .query_map(params![provider_id, start_at, end_at], |row| row.get(0))?
+            .collect::<Result<BTreeSet<_>, _>>()?;
+        Ok(groups)
     }
 }
 
@@ -239,6 +282,11 @@ fn checked_sum(left: u64, right: u64) -> Result<u64, AppError> {
 fn parse_decimal(value: &str) -> Result<Decimal, AppError> {
     Decimal::from_str(value)
         .map_err(|error| AppError::Database(format!("invalid usage cost {value}: {error}")))
+}
+
+fn checked_cost_sum(left: Decimal, right: Decimal) -> Result<Decimal, AppError> {
+    left.checked_add(right)
+        .ok_or_else(|| AppError::Database("usage cost aggregate overflow".to_string()))
 }
 
 fn add_cost_counts(
@@ -259,6 +307,7 @@ mod tests {
         BillingKind, CostSource, QuotaSnapshot, TokenSource, UsageEvent, UsageEventLink,
         UsageProviderInput,
     };
+    use rust_decimal::Decimal;
     use serde_json::json;
 
     fn provider(id: &str, billing_kind: BillingKind, product_group_id: &str) -> UsageProviderInput {
@@ -478,5 +527,98 @@ mod tests {
             fetch_state.last_error.as_deref(),
             Some("credentials unavailable")
         );
+    }
+
+    #[test]
+    fn immutable_event_product_group_survives_provider_reclassification() {
+        let db = Database::memory().unwrap();
+        db.save_usage_provider(&provider("metered", BillingKind::Metered, "old-product"))
+            .unwrap();
+        db.insert_usage_event(&event(
+            "historical",
+            "metered",
+            "old-product",
+            TokenSource::Proxy,
+            CostSource::Upstream,
+            50,
+            Some("0.5"),
+        ))
+        .unwrap();
+        db.save_usage_provider(&provider("metered", BillingKind::Metered, "new-product"))
+            .unwrap();
+
+        let old = UsageDashboardService::new(&db)
+            .get_dashboard(0, 100, Some("old-product"))
+            .unwrap();
+        assert_eq!(old.product_groups.len(), 1);
+        assert_eq!(old.product_groups[0].input_tokens, 10);
+        assert_eq!(old.product_groups[0].metered_providers[0].event_count, 1);
+
+        let new = UsageDashboardService::new(&db)
+            .get_dashboard(0, 100, Some("new-product"))
+            .unwrap();
+        assert_eq!(new.product_groups.len(), 1);
+        assert_eq!(new.product_groups[0].input_tokens, 0);
+        assert_eq!(new.product_groups[0].metered_providers[0].event_count, 0);
+    }
+
+    #[test]
+    fn provider_cost_overflow_returns_an_error_instead_of_panicking() {
+        let db = Database::memory().unwrap();
+        db.save_usage_provider(&provider("metered", BillingKind::Metered, "product"))
+            .unwrap();
+        let maximum = Decimal::MAX.to_string();
+        for (id, cost) in [("maximum", maximum.as_str()), ("one", "1")] {
+            db.insert_usage_event(&event(
+                id,
+                "metered",
+                "product",
+                TokenSource::Proxy,
+                CostSource::Upstream,
+                50,
+                Some(cost),
+            ))
+            .unwrap();
+        }
+
+        let error = UsageDashboardService::new(&db)
+            .get_dashboard(0, 100, None)
+            .unwrap_err();
+        assert!(error.to_string().contains("usage cost aggregate overflow"));
+    }
+
+    #[test]
+    fn product_cost_overflow_returns_an_error_instead_of_panicking() {
+        let db = Database::memory().unwrap();
+        for id in ["first", "second"] {
+            db.save_usage_provider(&provider(id, BillingKind::Metered, "product"))
+                .unwrap();
+        }
+        let maximum = Decimal::MAX.to_string();
+        db.insert_usage_event(&event(
+            "maximum",
+            "first",
+            "product",
+            TokenSource::Proxy,
+            CostSource::Upstream,
+            50,
+            Some(&maximum),
+        ))
+        .unwrap();
+        db.insert_usage_event(&event(
+            "one",
+            "second",
+            "product",
+            TokenSource::Proxy,
+            CostSource::Upstream,
+            50,
+            Some("1"),
+        ))
+        .unwrap();
+
+        let error = UsageDashboardService::new(&db)
+            .get_dashboard(0, 100, None)
+            .unwrap_err();
+        assert!(error.to_string().contains("usage cost aggregate overflow"));
     }
 }

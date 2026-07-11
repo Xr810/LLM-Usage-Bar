@@ -4,7 +4,9 @@ use crate::services::coding_plan::get_coding_plan_quota;
 use crate::services::subscription::{
     get_subscription_quota, SubscriptionQuota, TIER_FIVE_HOUR, TIER_SEVEN_DAY, TIER_WEEKLY_LIMIT,
 };
-use crate::usage::domain::{BillingKind, QuotaFetchState, QuotaSnapshot, UsageProviderStored};
+use crate::usage::domain::{
+    BillingKind, QuotaFetchState, QuotaSnapshot, QuotaStatusView, UsageProviderStored,
+};
 use futures::future::BoxFuture;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -33,7 +35,7 @@ pub struct NormalizedQuota {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QuotaRefreshResult {
-    pub snapshot: QuotaSnapshot,
+    pub snapshot: QuotaStatusView,
     pub fetch_state: QuotaFetchState,
 }
 
@@ -181,7 +183,7 @@ impl QuotaService {
         };
         let fetch_state = self.db.append_quota_success(&snapshot)?;
         Ok(QuotaRefreshResult {
-            snapshot,
+            snapshot: quota_status_view(&snapshot),
             fetch_state,
         })
     }
@@ -307,6 +309,18 @@ impl QuotaService {
             cancel_tx,
             task: Some(task),
         }
+    }
+}
+
+fn quota_status_view(snapshot: &QuotaSnapshot) -> QuotaStatusView {
+    QuotaStatusView {
+        snapshot_id: snapshot.snapshot_id.clone(),
+        fetched_at: snapshot.fetched_at,
+        five_hour_utilization_percent: snapshot.five_hour_utilization_percent.clone(),
+        five_hour_resets_at: snapshot.five_hour_resets_at.clone(),
+        seven_day_utilization_percent: snapshot.seven_day_utilization_percent.clone(),
+        seven_day_resets_at: snapshot.seven_day_resets_at.clone(),
+        manual_resets_remaining: snapshot.manual_resets_remaining,
     }
 }
 
@@ -599,7 +613,9 @@ mod tests {
         let collector = Arc::new(FakeCollector::new(vec![Ok(successful_quota("claude"))]));
         let service = QuotaService::with_collectors(db, vec![collector.clone()]);
 
-        service.refresh_provider("sub").await.unwrap();
+        let refreshed = service.refresh_provider("sub").await.unwrap();
+        let public_json = serde_json::to_value(&refreshed).unwrap();
+        assert!(public_json["snapshot"].get("rawPayload").is_none());
         assert_eq!(collector.calls.load(Ordering::SeqCst), 1);
         assert!(service.refresh_provider("metered").await.is_err());
         assert!(service.refresh_provider("disabled").await.is_err());
