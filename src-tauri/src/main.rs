@@ -31,5 +31,5 @@ fn main() {
         }
     }
 
-    cc_switch_lib::run();
+    llm_usage_bar_lib::run();
 }

@@ -23,6 +23,7 @@ mod mcp;
 mod openclaw_config;
 mod opencode_config;
 mod panic_hook;
+pub mod product_identity;
 mod prompt;
 mod prompt_files;
 mod provider;

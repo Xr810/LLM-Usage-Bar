@@ -1,5 +1,5 @@
 {
-  "name": "cc-switch",
+  "name": "llm-usage-bar",
   "version": "3.16.5",
   "packageManager": "pnpm@11.11.0",
   "description": "All-in-One Assistant for Claude Code, Codex & Gemini CLI",
