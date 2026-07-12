@@ -209,7 +209,7 @@ The WAL test keeps writer and reader transactions open, asserts a nonempty `-wal
 
 - [ ] **Step 2: Verify RED**
 
-Run: `pnpm rust -- test --manifest-path src-tauri/Cargo.toml identity_migration -- --nocapture`
+Run: `pnpm rust -- test --manifest-path src-tauri/Cargo.toml --lib identity_migration -- --nocapture`
 
 Expected: FAIL because the module and API are absent.
 
@@ -259,7 +259,7 @@ pub fn prepare_database_identity(app_dir: &Path) -> Result<DatabaseIdentityOutco
 
 - [ ] **Step 4: Verify GREEN**
 
-Run: `pnpm rust -- test --manifest-path src-tauri/Cargo.toml identity_migration -- --nocapture`
+Run: `pnpm rust -- test --manifest-path src-tauri/Cargo.toml --lib identity_migration -- --nocapture`
 
 Expected: real-schema WAL, both-exist/race, archive collision/rollback, concurrent-call, invalid/future source, original-data alias, and fresh-install tests pass.
 
@@ -302,7 +302,7 @@ Run:
 
 ```bash
 pnpm rust -- test --manifest-path src-tauri/Cargo.toml --test app_config_load -- --nocapture
-pnpm rust -- test --manifest-path src-tauri/Cargo.toml database:: -- --nocapture
+pnpm rust -- test --manifest-path src-tauri/Cargo.toml --lib database:: -- --nocapture
 ```
 
 Expected: startup and database tests pass; migrated and fresh databases open through the new path.
@@ -340,7 +340,7 @@ Test that the renamed storage-location enum serializes to `llm_usage_bar`, deser
 Run:
 
 ```bash
-pnpm rust -- test --manifest-path src-tauri/Cargo.toml identity_discriminator -- --nocapture
+pnpm rust -- test --manifest-path src-tauri/Cargo.toml --lib identity_discriminator -- --nocapture
 pnpm typecheck
 ```
 
@@ -456,8 +456,8 @@ git commit -m "refactor(identity): complete LLM Usage Bar product migration"
 ```bash
 pnpm rust -- fmt --check --manifest-path src-tauri/Cargo.toml
 pnpm rust -- clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
-pnpm rust -- test --manifest-path src-tauri/Cargo.toml identity -- --nocapture
-pnpm rust -- test --manifest-path src-tauri/Cargo.toml database:: -- --nocapture
+pnpm rust -- test --manifest-path src-tauri/Cargo.toml --lib identity -- --nocapture
+pnpm rust -- test --manifest-path src-tauri/Cargo.toml --lib database:: -- --nocapture
 pnpm test:unit tests/config/productIdentity.test.ts
 ```
 
