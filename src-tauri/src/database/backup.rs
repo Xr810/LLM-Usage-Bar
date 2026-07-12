@@ -43,6 +43,16 @@ pub struct BackupEntry {
 }
 
 impl Database {
+    fn authoritative_backup_dir(&self) -> Result<Option<PathBuf>, AppError> {
+        let Some(database_path) = self.database_path() else {
+            return Ok(None);
+        };
+        let parent = database_path
+            .parent()
+            .ok_or_else(|| AppError::Config("无效的数据库路径".to_string()))?;
+        Ok(Some(parent.join("backups")))
+    }
+
     /// 导出为 SQLite 兼容的 SQL 文本（内存字符串，完整导出）
     pub fn export_sql_string(&self) -> Result<String, AppError> {
         let snapshot = self.snapshot_to_memory()?;
@@ -236,10 +246,7 @@ impl Database {
     pub(crate) fn periodic_backup_if_needed(&self) -> Result<(), AppError> {
         let interval_hours = crate::settings::effective_backup_interval_hours();
         if interval_hours > 0 {
-            let backup_dir = get_app_config_dir().join("backups");
-            if !backup_dir.exists() {
-                self.backup_database_file()?;
-            } else {
+            if let Some(backup_dir) = self.authoritative_backup_dir()? {
                 let latest = fs::read_dir(&backup_dir).ok().and_then(|entries| {
                     entries
                         .filter_map(|e| e.ok())
@@ -296,15 +303,16 @@ impl Database {
 
     /// 生成一致性快照备份，返回备份文件路径（不存在主库时返回 None）
     pub(crate) fn backup_database_file(&self) -> Result<Option<PathBuf>, AppError> {
-        let db_path = get_app_config_dir().join("cc-switch.db");
+        let Some(db_path) = self.database_path() else {
+            return Ok(None);
+        };
         if !db_path.exists() {
             return Ok(None);
         }
 
-        let backup_dir = db_path
-            .parent()
-            .ok_or_else(|| AppError::Config("无效的数据库路径".to_string()))?
-            .join("backups");
+        let backup_dir = self
+            .authoritative_backup_dir()?
+            .ok_or_else(|| AppError::Config("内存数据库没有可写入的备份目录".to_string()))?;
 
         fs::create_dir_all(&backup_dir).map_err(|e| AppError::io(&backup_dir, e))?;
 
@@ -561,7 +569,9 @@ impl Database {
             ));
         }
 
-        let backup_dir = get_app_config_dir().join("backups");
+        let backup_dir = self
+            .authoritative_backup_dir()?
+            .ok_or_else(|| AppError::Config("内存数据库没有可恢复的备份目录".to_string()))?;
         let backup_path = backup_dir.join(filename);
 
         if !backup_path.exists() {

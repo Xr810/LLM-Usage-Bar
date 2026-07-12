@@ -73,6 +73,8 @@ pub use usage::domain::{
     UsageSourceBinding,
 };
 
+#[cfg(debug_assertions)]
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 #[cfg(target_os = "macos")]
 use tauri::image::Image;
@@ -80,6 +82,73 @@ use tauri::tray::{TrayIconBuilder, TrayIconEvent};
 use tauri::RunEvent;
 use tauri::{Emitter, Manager};
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
+
+/// Narrow integration-test view of the production database identity decision.
+#[cfg(debug_assertions)]
+#[doc(hidden)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DatabaseIdentityTestReport {
+    pub database_path: PathBuf,
+    pub archived_prior_path: Option<PathBuf>,
+    pub retained_prior_path: Option<PathBuf>,
+    pub migrated: bool,
+    pub durability_warning: Option<String>,
+}
+
+#[cfg(debug_assertions)]
+impl From<database::DatabaseIdentityOutcome> for DatabaseIdentityTestReport {
+    fn from(outcome: database::DatabaseIdentityOutcome) -> Self {
+        Self {
+            database_path: outcome.database_path,
+            archived_prior_path: outcome.archived_prior_path,
+            retained_prior_path: outcome.retained_prior_path,
+            migrated: outcome.migrated,
+            durability_warning: outcome.durability_warning,
+        }
+    }
+}
+
+#[cfg(debug_assertions)]
+#[doc(hidden)]
+pub fn prepare_database_identity_test_hook(
+    app_config_dir: &Path,
+) -> Result<DatabaseIdentityTestReport, AppError> {
+    database::prepare_database_identity(app_config_dir).map(Into::into)
+}
+
+#[cfg(debug_assertions)]
+#[doc(hidden)]
+pub fn runtime_log_paths_test_hook(app_config_dir: &Path) -> (PathBuf, PathBuf) {
+    (
+        panic_hook::file_log_path_for(app_config_dir),
+        panic_hook::crash_log_path_for(app_config_dir),
+    )
+}
+
+fn log_database_identity_outcome(outcome: &database::DatabaseIdentityOutcome) {
+    let archived = outcome
+        .archived_prior_path
+        .as_deref()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "none".to_string());
+    let retained = outcome
+        .retained_prior_path
+        .as_deref()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "none".to_string());
+    let warning = outcome.durability_warning.as_deref().unwrap_or("none");
+    log::info!(
+        "Database identity ready: path={}, migrated={}, archived={}, retained={}, durability_warning={}",
+        outcome.database_path.display(),
+        outcome.migrated,
+        archived,
+        retained,
+        warning
+    );
+    if let Some(warning) = outcome.durability_warning.as_deref() {
+        log::warn!("Database identity migration committed with durability warning: {warning}");
+    }
+}
 
 #[cfg(target_os = "windows")]
 fn set_windows_app_user_model_id(app: &tauri::AppHandle) {
@@ -340,7 +409,7 @@ pub fn run() {
                     log::warn!("初始化 Updater 插件失败，已跳过：{e}");
                 }
             }
-            // 初始化日志（单文件输出到 <app_config_dir>/logs/cc-switch.log）
+            // 初始化日志（单文件输出到 <app_config_dir>/logs/llm-usage-bar.log）
             {
                 use tauri_plugin_log::{RotationStrategy, Target, TargetKind, TimezoneStrategy};
 
@@ -352,7 +421,9 @@ pub fn run() {
                 }
 
                 // 启动时删除旧日志文件，实现单文件覆盖效果
-                let log_file_path = log_dir.join("cc-switch.log");
+                let log_file_path = panic_hook::file_log_path_for(
+                    log_dir.parent().unwrap_or_else(|| std::path::Path::new(".")),
+                );
                 let _ = std::fs::remove_file(&log_file_path);
 
                 app.handle().plugin(
@@ -363,7 +434,7 @@ pub fn run() {
                             Target::new(TargetKind::Stdout),
                             Target::new(TargetKind::Folder {
                                 path: log_dir,
-                                file_name: Some("cc-switch".into()),
+                                file_name: Some(crate::product_identity::LOG_BASENAME.into()),
                             }),
                         ])
                         // 单文件模式：启动时删除旧文件，达到大小时轮转
@@ -384,7 +455,29 @@ pub fn run() {
 
             // 初始化数据库
             let app_config_dir = crate::config::get_app_config_dir();
-            let db_path = app_config_dir.join("cc-switch.db");
+            // 文件名迁移必须先于版本预检或任何 Database open/write，并且本次启动只执行一次。
+            let database_identity =
+                match crate::database::prepare_database_identity(&app_config_dir) {
+                    Ok(outcome) => outcome,
+                    Err(error) => {
+                        let prospective_path =
+                            crate::product_identity::current_database_path(&app_config_dir);
+                        let error_message = error.to_string();
+                        log::error!(
+                            "Failed to prepare authoritative database identity at {}: {}",
+                            prospective_path.display(),
+                            error_message
+                        );
+                        show_database_identity_error_dialog(
+                            app.handle(),
+                            &prospective_path,
+                            &error_message,
+                        );
+                        return Err(Box::new(error));
+                    }
+                };
+            log_database_identity_outcome(&database_identity);
+            let db_path = database_identity.database_path.clone();
             let json_path = app_config_dir.join("config.json");
 
             // 检查是否需要从 config.json 迁移到 SQLite
@@ -455,7 +548,7 @@ pub fn run() {
             }
 
             let db = loop {
-                match crate::database::Database::init() {
+                match crate::database::Database::init_at(&db_path) {
                     Ok(db) => break Arc::new(db),
                     Err(e) => {
                         log::error!("Failed to init database: {e}");
@@ -1944,6 +2037,46 @@ fn show_migration_error_dialog(app: &tauri::AppHandle, error: &str) -> bool {
         .blocking_show()
 }
 
+/// 数据库文件名迁移失败属于启动前的单次故障；显示明确错误后终止本次启动，
+/// 不进入会重复执行数据库初始化的重试循环。
+fn show_database_identity_error_dialog(
+    app: &tauri::AppHandle,
+    database_path: &std::path::Path,
+    error: &str,
+) {
+    let title = if is_chinese_locale() {
+        "数据库迁移失败"
+    } else {
+        "Database Migration Failed"
+    };
+    let message = if is_chinese_locale() {
+        format!(
+            "准备 LLM Usage Bar 数据库时发生错误：\n\n{error}\n\n\
+             目标数据库路径：\n{path}\n\n\
+             应用尚未进入常规数据库初始化。旧数据库及迁移证据会保留，\
+             请检查磁盘空间、文件权限或迁移锁后重新启动。",
+            path = database_path.display()
+        )
+    } else {
+        format!(
+            "LLM Usage Bar could not prepare its database:\n\n{error}\n\n\
+             Target database path:\n{path}\n\n\
+             The app has not entered normal database initialization. The prior database and \
+             migration evidence are retained. Check disk space, file permissions, or the \
+             migration lock, then restart the app.",
+            path = database_path.display()
+        )
+    };
+
+    let _ = app
+        .dialog()
+        .message(&message)
+        .title(title)
+        .kind(MessageDialogKind::Error)
+        .buttons(MessageDialogButtons::Ok)
+        .blocking_show();
+}
+
 /// 显示数据库初始化/Schema 迁移失败对话框
 /// 返回 true 表示用户选择重试，false 表示用户选择退出
 fn show_database_init_error_dialog(
@@ -1964,12 +2097,13 @@ fn show_database_init_error_dialog(
             您的数据尚未丢失，应用不会自动删除数据库文件。\n\
             常见原因包括：数据库版本过新、文件损坏、权限不足、磁盘空间不足等。\n\n\
             建议：\n\
-            1) 先备份整个配置目录（包含 cc-switch.db）\n\
+            1) 先备份整个配置目录（包含 {database_file}）\n\
             2) 如果提示“数据库版本过新”，请升级到更新版本\n\
             3) 如果刚升级出现异常，可回退旧版本导出/备份后再升级\n\n\
             点击「重试」重新尝试初始化\n\
             点击「退出」关闭程序",
-            db = db_path.display()
+            db = db_path.display(),
+            database_file = crate::product_identity::DATABASE_FILE,
         )
     } else {
         format!(
@@ -1978,12 +2112,14 @@ fn show_database_init_error_dialog(
             Your data is NOT lost - the app will not delete the database automatically.\n\
             Common causes include: newer database version, corrupted file, permission issues, or low disk space.\n\n\
             Suggestions:\n\
-            1) Back up the entire config directory (including cc-switch.db)\n\
-            2) If you see “database version is newer”, please upgrade CC Switch\n\
+            1) Back up the entire config directory (including {database_file})\n\
+            2) If you see “database version is newer”, please upgrade {display_name}\n\
             3) If this happened right after upgrading, consider rolling back to export/backup then upgrade again\n\n\
             Click 'Retry' to attempt initialization again\n\
             Click 'Exit' to close the program",
-            db = db_path.display()
+            db = db_path.display(),
+            database_file = crate::product_identity::DATABASE_FILE,
+            display_name = crate::product_identity::DISPLAY_NAME,
         )
     };
 

@@ -40,11 +40,14 @@ pub(crate) use dao::proxy::{
 };
 pub use dao::FailoverQueueItem;
 pub use dao::Profile;
+pub(crate) use identity_migration::{prepare_database_identity, DatabaseIdentityOutcome};
 
 use crate::config::get_app_config_dir;
 use crate::error::AppError;
+use crate::product_identity::current_database_path;
 use rusqlite::{hooks::Action, Connection};
 use serde::Serialize;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 // DAO 方法通过 impl Database 提供，无需额外导出
@@ -78,6 +81,7 @@ pub(crate) use lock_conn;
 pub struct Database {
     pub(crate) conn: Mutex<Connection>,
     pub(crate) usage_source_binding_operation: Mutex<()>,
+    database_path: Option<PathBuf>,
 }
 
 fn register_db_change_hook(conn: &Connection) -> rusqlite::Result<()> {
@@ -95,9 +99,14 @@ fn register_db_change_hook(conn: &Connection) -> rusqlite::Result<()> {
 impl Database {
     /// 初始化数据库连接并创建表
     ///
-    /// 数据库文件位于 `~/.cc-switch/cc-switch.db`
+    /// 数据库文件位于当前应用配置目录的 `llm-usage-bar.db`。
     pub fn init() -> Result<Self, AppError> {
-        let db_path = get_app_config_dir().join("cc-switch.db");
+        let db_path = current_database_path(&get_app_config_dir());
+        Self::init_at(&db_path)
+    }
+
+    /// 使用调用方已经选定的权威路径初始化数据库。
+    pub fn init_at(db_path: &Path) -> Result<Self, AppError> {
         let db_exists = db_path.exists();
 
         // 确保父目录存在
@@ -121,6 +130,7 @@ impl Database {
         let db = Self {
             conn: Mutex::new(conn),
             usage_source_binding_operation: Mutex::new(()),
+            database_path: Some(db_path.to_path_buf()),
         };
         db.create_tables()?;
 
@@ -163,6 +173,11 @@ impl Database {
         Ok(db)
     }
 
+    /// 返回此连接所代表的权威磁盘路径；内存数据库返回 `None`。
+    pub fn database_path(&self) -> Option<&Path> {
+        self.database_path.as_deref()
+    }
+
     /// 读取磁盘上数据库的 `user_version`；仅当它比应用支持的 [`SCHEMA_VERSION`]
     /// 更新时返回 `Some(version)`。
     ///
@@ -193,6 +208,7 @@ impl Database {
         let db = Self {
             conn: Mutex::new(conn),
             usage_source_binding_operation: Mutex::new(()),
+            database_path: None,
         };
         db.create_tables()?;
         db.apply_schema_migrations()?;
