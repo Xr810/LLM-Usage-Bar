@@ -245,6 +245,28 @@ fn database_sidecar_path(database: &Path, suffix: &str) -> PathBuf {
     database.with_file_name(name)
 }
 
+fn retry_stale_legacy_sidecar_cleanup(
+    directory: &PinnedDirectory,
+    old_path: &Path,
+) -> Result<(), AppError> {
+    if path_entry_exists(old_path)? {
+        return Ok(());
+    }
+    for (suffix, purpose) in [("-wal", "retry-legacy-wal"), ("-shm", "retry-legacy-shm")] {
+        let sidecar = database_sidecar_path(old_path, suffix);
+        if !path_entry_exists(&sidecar)? {
+            continue;
+        }
+        let identity = FileIdentity::from_path(&sidecar)?;
+        directory.revalidate(purpose)?;
+        if path_entry_exists(old_path)? {
+            return Ok(());
+        }
+        quarantine_remove(directory, &sidecar, &identity, purpose)?;
+    }
+    Ok(())
+}
+
 fn database_identity_candidates(app_dir: &Path) -> Vec<PathBuf> {
     let old = app_dir.join(LEGACY_DATABASE_FILE);
     let new = app_dir.join(DATABASE_FILE);
@@ -578,6 +600,7 @@ struct DatabaseMigrationLease {
     identity: FileIdentity,
     nonce: String,
     file: Option<File>,
+    armed: bool,
 }
 
 /// Owns the just-created lease name until initialization is complete. Cleanup
@@ -617,6 +640,7 @@ impl LeaseCreationGuard {
                     .take()
                     .expect("lease handle is present before finish"),
             ),
+            armed: true,
         };
         self.committed = true;
         lease
@@ -704,6 +728,35 @@ impl DatabaseMigrationLease {
                 Err(error) => return Err(AppError::io(&path, error)),
             }
         }
+    }
+
+    fn path_is_owned(&self) -> Result<bool, AppError> {
+        let mut file = File::open(&self.path).map_err(|error| AppError::io(&self.path, error))?;
+        if FileIdentity::from_file(&self.path, &file)? != self.identity {
+            return Ok(false);
+        }
+        let mut metadata = String::new();
+        file.read_to_string(&mut metadata)
+            .map_err(|error| AppError::io(&self.path, error))?;
+        let nonce_field = format!("\"nonce\":\"{}\"", self.nonce);
+        Ok(metadata.contains(&nonce_field))
+    }
+
+    fn release_inner(&mut self) -> Result<(), AppError> {
+        if !self.path_is_owned()? {
+            return Err(AppError::Lock(format!(
+                "database migration lease ownership changed; evidence retained at {}",
+                self.path.display()
+            )));
+        }
+        drop(self.file.take());
+        quarantine_remove(&self.directory, &self.path, &self.identity, "lease-cleanup")
+    }
+
+    fn release(mut self) -> Result<(), AppError> {
+        let result = self.release_inner();
+        self.armed = false;
+        result
     }
 }
 
@@ -809,23 +862,16 @@ fn quarantine_remove_with_directory_sync(
 
 impl Drop for DatabaseMigrationLease {
     fn drop(&mut self) {
-        let owned = (|| -> Result<bool, AppError> {
-            let mut file =
-                File::open(&self.path).map_err(|error| AppError::io(&self.path, error))?;
-            if FileIdentity::from_file(&self.path, &file)? != self.identity {
-                return Ok(false);
-            }
-            let mut metadata = String::new();
-            file.read_to_string(&mut metadata)
-                .map_err(|error| AppError::io(&self.path, error))?;
-            let nonce_field = format!("\"nonce\":\"{}\"", self.nonce);
-            Ok(metadata.contains(&nonce_field))
-        })()
-        .unwrap_or(false);
-        if owned {
-            drop(self.file.take());
-            let _ = quarantine_remove(&self.directory, &self.path, &self.identity, "lease-cleanup");
+        if !self.armed {
+            return;
         }
+        if let Err(error) = self.release_inner() {
+            log::warn!(
+                "Fallback database migration lease cleanup failed for {}: {error}",
+                self.path.display()
+            );
+        }
+        self.armed = false;
     }
 }
 
@@ -930,6 +976,7 @@ impl SourceWriteBarrier {
                 ] {
                     let trigger_name =
                         format!("{RETIREMENT_FENCE_TRIGGER_PREFIX}{nonce}_{table_index}_{suffix}");
+                    trigger_names.push(trigger_name.clone());
                     let sql = format!(
                         "CREATE TRIGGER {} BEFORE {operation} ON {} BEGIN SELECT RAISE(ABORT, 'database retired during product identity migration'); END;",
                         quote_sql_identifier(&trigger_name),
@@ -938,7 +985,6 @@ impl SourceWriteBarrier {
                     self.connection.execute_batch(&sql).map_err(|error| {
                         database_error("install source retirement trigger", error)
                     })?;
-                    trigger_names.push(trigger_name);
                 }
             }
             Database::set_user_version(&self.connection, RETIREMENT_FENCE_USER_VERSION)?;
@@ -950,12 +996,26 @@ impl SourceWriteBarrier {
 
         if let Err(error) = install {
             let rollback = self.connection.execute_batch("ROLLBACK;").err();
-            self.transaction_active = false;
             return match rollback {
-                Some(rollback) => Err(AppError::Database(format!(
-                    "{error}; additionally, source retirement fence transaction rollback failed: {rollback}"
-                ))),
-                None => Err(error),
+                Some(rollback) => {
+                    // SQLite may have applied any prefix of the trigger/user
+                    // version writes and may still own the transaction. Keep
+                    // the complete planned metadata and treat the connection as
+                    // active/uncertain so the caller must restore the fence
+                    // before it is allowed to roll published snapshots back.
+                    self.retirement_fence = Some(RetirementFence {
+                        original_user_version,
+                        trigger_names,
+                    });
+                    self.transaction_active = true;
+                    Err(AppError::Database(format!(
+                        "{error}; additionally, source retirement fence transaction rollback failed: {rollback}"
+                    )))
+                }
+                None => {
+                    self.transaction_active = false;
+                    Err(error)
+                }
             };
         }
 
@@ -1451,6 +1511,21 @@ fn rollback_after_retirement_fence(
     }
 }
 
+fn require_unchanged_file_identity(
+    path: &Path,
+    expected: &FileIdentity,
+    checkpoint: &str,
+) -> Result<(), AppError> {
+    let current = FileIdentity::from_path(path)?;
+    if &current != expected {
+        return Err(AppError::Lock(format!(
+            "{checkpoint}: filesystem object identity changed at {}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
 trait MigrationHooks {
     fn after_directory_pinned(&self, _directory: &PinnedDirectory) -> Result<(), AppError> {
         Ok(())
@@ -1459,10 +1534,54 @@ trait MigrationHooks {
     fn after_snapshots(&self, _old_path: &Path) -> Result<(), AppError> {
         Ok(())
     }
+
+    fn after_source_barrier(&self, _old_path: &Path) -> Result<(), AppError> {
+        Ok(())
+    }
+
+    fn before_source_retirement(
+        &self,
+        _old_path: &Path,
+        _new_path: &Path,
+        _archive_path: &Path,
+    ) -> Result<(), AppError> {
+        Ok(())
+    }
 }
 
 struct NoopMigrationHooks;
 impl MigrationHooks for NoopMigrationHooks {}
+
+fn append_durability_warning(target: &mut Option<String>, warning: String) {
+    match target {
+        Some(existing) => {
+            existing.push_str("; ");
+            existing.push_str(&warning);
+        }
+        None => *target = Some(warning),
+    }
+}
+
+fn finish_with_explicit_lease_release(
+    lease: DatabaseMigrationLease,
+    migration_result: Result<DatabaseIdentityOutcome, AppError>,
+) -> Result<DatabaseIdentityOutcome, AppError> {
+    let release_result = lease.release();
+    match (migration_result, release_result) {
+        (Ok(outcome), Ok(())) => Ok(outcome),
+        (Ok(mut outcome), Err(release)) => {
+            append_durability_warning(
+                &mut outcome.durability_warning,
+                format!("database migration lease cleanup failed: {release}"),
+            );
+            Ok(outcome)
+        }
+        (Err(original), Ok(())) => Err(original),
+        (Err(original), Err(release)) => Err(AppError::Database(format!(
+            "{original}; additionally, database migration lease cleanup failed: {release}"
+        ))),
+    }
+}
 
 fn prepare_database_identity_impl(
     app_dir: &Path,
@@ -1471,8 +1590,9 @@ fn prepare_database_identity_impl(
     protected_override: Option<&Path>,
 ) -> Result<DatabaseIdentityOutcome, AppError> {
     let Some(directory) = pin_safe_existing_directory(app_dir, protected_override)? else {
+        let prospective_directory = canonicalize_deepest_existing(app_dir)?;
         return Ok(DatabaseIdentityOutcome {
-            database_path: app_dir.join(DATABASE_FILE),
+            database_path: prospective_directory.join(DATABASE_FILE),
             archived_prior_path: None,
             retained_prior_path: None,
             migrated: false,
@@ -1486,159 +1606,232 @@ fn prepare_database_identity_impl(
     let old_path = directory.join(LEGACY_DATABASE_FILE);
     let archive_path = directory.join(DATABASE_IDENTITY_ARCHIVE_FILE);
 
-    let _lease = DatabaseMigrationLease::acquire(&directory)?;
-    directory.revalidate("authoritative state recheck")?;
+    let lease = DatabaseMigrationLease::acquire(&directory)?;
+    let migration_result = (|| -> Result<DatabaseIdentityOutcome, AppError> {
+        directory.revalidate("authoritative state recheck")?;
 
-    if path_entry_exists(&new_path)? {
-        // Existing current filenames may be the fixed-v13 crash-window output
-        // or any schema this binary supports after startup schema migration.
-        validate_existing_database(&new_path, SchemaValidationPolicy::CurrentAuthoritative)?;
-        return Ok(DatabaseIdentityOutcome {
-            database_path: new_path,
-            archived_prior_path: None,
-            retained_prior_path: path_entry_exists(&old_path)?.then_some(old_path),
-            migrated: false,
-            durability_warning: None,
-        });
-    }
-
-    if !path_entry_exists(&old_path)? {
-        if path_entry_exists(&archive_path)? {
-            return Err(AppError::Database(format!(
-                "database archive exists without an authoritative database: {}",
-                archive_path.display()
-            )));
-        }
-        return Ok(DatabaseIdentityOutcome {
-            database_path: new_path,
-            archived_prior_path: None,
-            retained_prior_path: None,
-            migrated: false,
-            durability_warning: None,
-        });
-    }
-
-    if path_entry_exists(&archive_path)? {
-        return Err(AppError::Database(format!(
-            "refusing to overwrite pre-existing database archive: {}",
-            archive_path.display()
-        )));
-    }
-
-    require_supported_source_retirement()?;
-    let mut source_barrier = Some(SourceWriteBarrier::acquire(&old_path)?);
-    let old_identity = FileIdentity::from_path(&old_path)?;
-    let new_snapshot = create_validated_snapshot(&old_path, &directory)?;
-    // The archive is a second SQLite backup of the validated first snapshot,
-    // never a copy-on-name, hard link, or alias of old/new.
-    let archive_snapshot = create_validated_snapshot(new_snapshot.path(), &directory)?;
-    if FileIdentity::from_path(new_snapshot.path())?
-        == FileIdentity::from_path(archive_snapshot.path())?
-    {
-        return Err(AppError::Database(
-            "new and archive snapshots unexpectedly share a filesystem object".to_string(),
-        ));
-    }
-    hooks.after_snapshots(&old_path)?;
-
-    let published_new = match publish_snapshot_noclobber(new_snapshot, &new_path, &directory)? {
-        PublishOutcome::Existing => {
+        if path_entry_exists(&new_path)? {
+            // Existing current filenames may be the fixed-v13 crash-window output
+            // or any schema this binary supports after startup schema migration.
             validate_existing_database(&new_path, SchemaValidationPolicy::CurrentAuthoritative)?;
+            let retained_prior_path = path_entry_exists(&old_path)?.then_some(old_path.clone());
+            let durability_warning = if retained_prior_path.is_none() {
+                retry_stale_legacy_sidecar_cleanup(&directory, &old_path)
+                    .err()
+                    .map(|error| {
+                        format!(
+                            "identity-checked legacy sidecar cleanup failed beside {}: {error}",
+                            old_path.display()
+                        )
+                    })
+            } else {
+                None
+            };
             return Ok(DatabaseIdentityOutcome {
                 database_path: new_path,
                 archived_prior_path: None,
-                retained_prior_path: Some(old_path),
+                retained_prior_path,
+                migrated: false,
+                durability_warning,
+            });
+        }
+
+        if !path_entry_exists(&old_path)? {
+            if path_entry_exists(&archive_path)? {
+                return Err(AppError::Database(format!(
+                    "database archive exists without an authoritative database: {}",
+                    archive_path.display()
+                )));
+            }
+            return Ok(DatabaseIdentityOutcome {
+                database_path: new_path,
+                archived_prior_path: None,
+                retained_prior_path: None,
                 migrated: false,
                 durability_warning: None,
             });
         }
-        PublishOutcome::Published(published) => published,
-    };
-    if let Err(error) = sync_directory(&directory.canonical_path) {
-        return rollback_after(error, &directory, &[&published_new]);
-    }
 
-    if fault == Some(MigrationFaultPoint::ArchivePublish) {
-        return rollback_after(
-            AppError::Database("injected archive publication failure".to_string()),
-            &directory,
-            &[&published_new],
-        );
-    }
+        if path_entry_exists(&archive_path)? {
+            return Err(AppError::Database(format!(
+                "refusing to overwrite pre-existing database archive: {}",
+                archive_path.display()
+            )));
+        }
 
-    let published_archive =
-        match publish_snapshot_noclobber(archive_snapshot, &archive_path, &directory) {
-            Ok(PublishOutcome::Published(published)) => published,
-            Ok(PublishOutcome::Existing) => {
-                return rollback_after(
-                    AppError::Database(format!(
-                        "refusing to overwrite concurrently-created database archive: {}",
-                        archive_path.display()
-                    )),
+        let old_identity = FileIdentity::from_path(&old_path)?;
+        require_supported_source_retirement()?;
+        let mut source_barrier = Some(SourceWriteBarrier::acquire(&old_path)?);
+        hooks.after_source_barrier(&old_path)?;
+        require_unchanged_file_identity(&old_path, &old_identity, "after source write barrier")?;
+        let new_snapshot = create_validated_snapshot(&old_path, &directory)?;
+        // The archive is a second SQLite backup of the validated first snapshot,
+        // never a copy-on-name, hard link, or alias of old/new.
+        let archive_snapshot = create_validated_snapshot(new_snapshot.path(), &directory)?;
+        if FileIdentity::from_path(new_snapshot.path())?
+            == FileIdentity::from_path(archive_snapshot.path())?
+        {
+            return Err(AppError::Database(
+                "new and archive snapshots unexpectedly share a filesystem object".to_string(),
+            ));
+        }
+        hooks.after_snapshots(&old_path)?;
+        require_unchanged_file_identity(&old_path, &old_identity, "after source snapshot backup")?;
+
+        let published_new = match publish_snapshot_noclobber(new_snapshot, &new_path, &directory)? {
+            PublishOutcome::Existing => {
+                validate_existing_database(
+                    &new_path,
+                    SchemaValidationPolicy::CurrentAuthoritative,
+                )?;
+                return Ok(DatabaseIdentityOutcome {
+                    database_path: new_path,
+                    archived_prior_path: None,
+                    retained_prior_path: Some(old_path),
+                    migrated: false,
+                    durability_warning: None,
+                });
+            }
+            PublishOutcome::Published(published) => published,
+        };
+        if let Err(error) = sync_directory(&directory.canonical_path) {
+            return rollback_after(error, &directory, &[&published_new]);
+        }
+
+        if fault == Some(MigrationFaultPoint::ArchivePublish) {
+            return rollback_after(
+                AppError::Database("injected archive publication failure".to_string()),
+                &directory,
+                &[&published_new],
+            );
+        }
+
+        let published_archive =
+            match publish_snapshot_noclobber(archive_snapshot, &archive_path, &directory) {
+                Ok(PublishOutcome::Published(published)) => published,
+                Ok(PublishOutcome::Existing) => {
+                    return rollback_after(
+                        AppError::Database(format!(
+                            "refusing to overwrite concurrently-created database archive: {}",
+                            archive_path.display()
+                        )),
+                        &directory,
+                        &[&published_new],
+                    );
+                }
+                Err(error) => return rollback_after(error, &directory, &[&published_new]),
+            };
+        if published_new.identity == published_archive.identity {
+            return rollback_after(
+                AppError::Database(
+                    "published database and archive share a filesystem object".to_string(),
+                ),
+                &directory,
+                &[&published_archive, &published_new],
+            );
+        }
+        if let Err(error) = sync_directory(&directory.canonical_path) {
+            return rollback_after(error, &directory, &[&published_archive, &published_new]);
+        }
+
+        if fault == Some(MigrationFaultPoint::OldSourceRemove) {
+            return rollback_after(
+                AppError::Database("injected old source removal failure".to_string()),
+                &directory,
+                &[&published_archive, &published_new],
+            );
+        }
+
+        if let Err(error) = hooks.before_source_retirement(&old_path, &new_path, &archive_path) {
+            return rollback_after(error, &directory, &[&published_archive, &published_new]);
+        }
+        if let Err(error) =
+            require_unchanged_file_identity(&old_path, &old_identity, "before source retirement")
+        {
+            return rollback_after(error, &directory, &[&published_archive, &published_new]);
+        }
+        if let Err(error) = require_unchanged_file_identity(
+            &new_path,
+            &published_new.identity,
+            "published new database identity changed before source retirement",
+        ) {
+            return rollback_after(error, &directory, &[&published_archive, &published_new]);
+        }
+        if let Err(error) = require_unchanged_file_identity(
+            &archive_path,
+            &published_archive.identity,
+            "published archive identity changed before source retirement",
+        ) {
+            return rollback_after(error, &directory, &[&published_archive, &published_new]);
+        }
+
+        if let Err(error) = source_barrier
+            .as_mut()
+            .expect("source barrier remains owned before retirement")
+            .install_and_reacquire_retirement_fence()
+        {
+            return rollback_after_retirement_fence(
+                error,
+                source_barrier
+                    .as_mut()
+                    .expect("source barrier remains owned after fence failure"),
+                &directory,
+                &[&published_archive, &published_new],
+            );
+        }
+
+        for (path, expected, checkpoint) in [
+            (
+                old_path.as_path(),
+                &old_identity,
+                "immediately before old-source unlink",
+            ),
+            (
+                new_path.as_path(),
+                &published_new.identity,
+                "published new database identity changed immediately before old-source unlink",
+            ),
+            (
+                archive_path.as_path(),
+                &published_archive.identity,
+                "published archive identity changed immediately before old-source unlink",
+            ),
+        ] {
+            if let Err(error) = require_unchanged_file_identity(path, expected, checkpoint) {
+                return rollback_after_retirement_fence(
+                    error,
+                    source_barrier
+                        .as_mut()
+                        .expect("source barrier remains owned for final identity rollback"),
                     &directory,
-                    &[&published_new],
+                    &[&published_archive, &published_new],
                 );
             }
-            Err(error) => return rollback_after(error, &directory, &[&published_new]),
+        }
+
+        let retire_result = if fault == Some(MigrationFaultPoint::OldSourceDirectorySyncAfterUnlink)
+        {
+            quarantine_remove_with_directory_sync(
+                &directory,
+                &old_path,
+                &old_identity,
+                "retire-old-main",
+                |_| {
+                    Err(AppError::Database(
+                        "injected directory sync failure after old-source unlink".to_string(),
+                    ))
+                },
+            )
+        } else {
+            quarantine_remove_with_directory_sync(
+                &directory,
+                &old_path,
+                &old_identity,
+                "retire-old-main",
+                sync_directory,
+            )
         };
-    if published_new.identity == published_archive.identity {
-        return rollback_after(
-            AppError::Database(
-                "published database and archive share a filesystem object".to_string(),
-            ),
-            &directory,
-            &[&published_archive, &published_new],
-        );
-    }
-    if let Err(error) = sync_directory(&directory.canonical_path) {
-        return rollback_after(error, &directory, &[&published_archive, &published_new]);
-    }
-
-    if fault == Some(MigrationFaultPoint::OldSourceRemove) {
-        return rollback_after(
-            AppError::Database("injected old source removal failure".to_string()),
-            &directory,
-            &[&published_archive, &published_new],
-        );
-    }
-
-    if let Err(error) = source_barrier
-        .as_mut()
-        .expect("source barrier remains owned before retirement")
-        .install_and_reacquire_retirement_fence()
-    {
-        return rollback_after_retirement_fence(
-            error,
-            source_barrier
-                .as_mut()
-                .expect("source barrier remains owned after fence failure"),
-            &directory,
-            &[&published_archive, &published_new],
-        );
-    }
-
-    let retire_result = if fault == Some(MigrationFaultPoint::OldSourceDirectorySyncAfterUnlink) {
-        quarantine_remove_with_directory_sync(
-            &directory,
-            &old_path,
-            &old_identity,
-            "retire-old-main",
-            |_| {
-                Err(AppError::Database(
-                    "injected directory sync failure after old-source unlink".to_string(),
-                ))
-            },
-        )
-    } else {
-        quarantine_remove_with_directory_sync(
-            &directory,
-            &old_path,
-            &old_identity,
-            "retire-old-main",
-            sync_directory,
-        )
-    };
-    let durability_warning = match retire_result {
+        let mut durability_warning = match retire_result {
         Ok(QuarantineRemoveOutcome::RemovedDurably) => None,
         Ok(QuarantineRemoveOutcome::RemovedWithDurabilityWarning(error)) => {
             Some(format!(
@@ -1656,43 +1849,72 @@ fn prepare_database_identity_impl(
             );
         }
     };
-    source_barrier
-        .as_mut()
-        .expect("source barrier remains owned after committed retirement")
-        .disarm_retirement_fence();
-    drop(source_barrier.take());
+        source_barrier
+            .as_mut()
+            .expect("source barrier remains owned after committed retirement")
+            .disarm_retirement_fence();
+        drop(source_barrier.take());
 
-    // Sidecars are evidence until the old main filename has been removed. Once
-    // that commit point succeeds they are stale and may be cleaned best-effort.
-    for sidecar in [
-        database_sidecar_path(&old_path, "-wal"),
-        database_sidecar_path(&old_path, "-shm"),
-    ] {
-        match std::fs::remove_file(&sidecar) {
-            Ok(()) => {}
-            Err(error) if error.kind() == ErrorKind::NotFound => {}
-            Err(error) => log::warn!(
-                "Failed to remove committed legacy database sidecar {}: {error}",
-                sidecar.display()
-            ),
+        // Open legacy SQLite connections may still own these names and can
+        // recreate them after any fixed-path deletion. Leave visible sidecars
+        // untouched here; the next authoritative-new startup retries cleanup
+        // only when the old main remains absent and after capturing each
+        // sidecar's object identity.
+        let mut deferred_sidecars = Vec::new();
+        let mut sidecar_inspection_failures = Vec::new();
+        for sidecar in [
+            database_sidecar_path(&old_path, "-wal"),
+            database_sidecar_path(&old_path, "-shm"),
+        ] {
+            match path_entry_exists(&sidecar) {
+                Ok(true) => deferred_sidecars.push(sidecar),
+                Ok(false) => {}
+                Err(error) => sidecar_inspection_failures.push(error.to_string()),
+            }
         }
-    }
-    // Both published snapshots were file-synced and the directory was synced
-    // before the old-main commit point. A post-delete directory-sync failure
-    // cannot be rolled back safely without recreating the old object; treat the
-    // completed migration as authoritative and leave a diagnostic. If a crash
-    // resurrects the old directory entry, the validated new filename still wins.
-    if let Err(error) = sync_directory(&directory.canonical_path) {
-        log::warn!("Failed to sync database directory after committed legacy cleanup: {error}");
-    }
+        if !deferred_sidecars.is_empty() {
+            append_durability_warning(
+                &mut durability_warning,
+                format!(
+                    "legacy sidecar cleanup deferred to the next authoritative-new startup: {}",
+                    deferred_sidecars
+                        .iter()
+                        .map(|path| path.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            );
+        }
+        if !sidecar_inspection_failures.is_empty() {
+            append_durability_warning(
+                &mut durability_warning,
+                format!(
+                    "legacy sidecar deferral could not be fully inspected: {}",
+                    sidecar_inspection_failures.join("; ")
+                ),
+            );
+        }
+        // Both published snapshots were file-synced and the directory was synced
+        // before the old-main commit point. A post-delete directory-sync failure
+        // cannot be rolled back safely without recreating the old object; treat the
+        // completed migration as authoritative and leave a diagnostic. If a crash
+        // resurrects the old directory entry, the validated new filename still wins.
+        if let Err(error) = sync_directory(&directory.canonical_path) {
+            append_durability_warning(
+                &mut durability_warning,
+                format!("database directory sync failed after committed legacy cleanup: {error}"),
+            );
+        }
 
-    Ok(DatabaseIdentityOutcome {
-        database_path: new_path,
-        archived_prior_path: Some(archive_path),
-        retained_prior_path: None,
-        migrated: true,
-        durability_warning,
-    })
+        Ok(DatabaseIdentityOutcome {
+            database_path: new_path,
+            archived_prior_path: Some(archive_path),
+            retained_prior_path: None,
+            migrated: true,
+            durability_warning,
+        })
+    })();
+    finish_with_explicit_lease_release(lease, migration_result)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1731,11 +1953,12 @@ fn prepare_database_identity_with_hooks(
 #[cfg(test)]
 mod tests {
     use super::{
-        atomic_move_noreplace_with_mode, backup_and_validate, pin_safe_existing_directory,
-        prepare_database_identity, prepare_database_identity_with_hooks,
-        prepare_database_identity_with_test_fault, quarantine_remove, AtomicMoveMode, FileIdentity,
-        MigrationFaultPoint, MigrationHooks, PinnedDirectory, SourceWriteBarrier,
-        RETIREMENT_FENCE_TRIGGER_PREFIX,
+        atomic_move_noreplace_with_mode, backup_and_validate, database_sidecar_path,
+        pin_safe_existing_directory, prepare_database_identity,
+        prepare_database_identity_with_hooks, prepare_database_identity_with_test_fault,
+        quarantine_remove, rollback_after_retirement_fence, AtomicMoveMode, DatabaseMigrationLease,
+        FileIdentity, MigrationFaultPoint, MigrationHooks, PinnedDirectory, PublishedFile,
+        SourceWriteBarrier, RETIREMENT_FENCE_TRIGGER_PREFIX,
     };
     use crate::database::{Database, SCHEMA_VERSION};
     use crate::product_identity::{
@@ -2175,6 +2398,17 @@ mod tests {
             "archive must not be a hard link or other alias of the new database"
         );
         assert!(!old.exists());
+        assert!(wal_path(&old).exists());
+        assert!(shm_path(&old).exists());
+        assert!(outcome
+            .durability_warning
+            .as_deref()
+            .is_some_and(|warning| warning.contains("sidecar cleanup deferred")));
+
+        let retry = prepare_database_identity(dir.path())
+            .expect("authoritative-new startup retries deferred sidecars");
+        assert_eq!(retry.database_path, new);
+        assert!(!retry.migrated);
         assert!(!wal_path(&old).exists());
         assert!(!shm_path(&old).exists());
     }
@@ -2225,6 +2459,55 @@ mod tests {
         assert_eq!(read_marker(&outcome.database_path), "new-row");
         assert_eq!(std::fs::read(&old).expect("read retained old"), old_before);
         assert!(!dir.path().join(ARCHIVE_FILE).exists());
+    }
+
+    #[test]
+    fn validated_new_filename_retries_stale_legacy_sidecar_cleanup_without_old_main() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let canonical_dir = canonical_test_dir(dir.path());
+        let old = canonical_dir.join(LEGACY_DATABASE_FILE);
+        let new = canonical_dir.join(DATABASE_FILE);
+        let old_wal = database_sidecar_path(&old, "-wal");
+        let old_shm = database_sidecar_path(&old, "-shm");
+        write_real_v13_marker_db(&new, "authoritative-new");
+        std::fs::write(&old_wal, b"stale legacy wal").expect("write stale legacy wal");
+        std::fs::write(&old_shm, b"stale legacy shm").expect("write stale legacy shm");
+
+        let outcome = prepare_database_identity(dir.path()).expect("select authoritative new");
+
+        assert_eq!(outcome.database_path, new);
+        assert!(!outcome.migrated);
+        assert!(!old.exists());
+        assert!(!old_wal.exists(), "stale legacy WAL must be retried safely");
+        assert!(!old_shm.exists(), "stale legacy SHM must be retried safely");
+    }
+
+    #[test]
+    fn validated_new_filename_surfaces_stale_sidecar_cleanup_warning() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let canonical_dir = canonical_test_dir(dir.path());
+        let old = canonical_dir.join(LEGACY_DATABASE_FILE);
+        let new = canonical_dir.join(DATABASE_FILE);
+        let malformed_old_wal = database_sidecar_path(&old, "-wal");
+        write_real_v13_marker_db(&new, "authoritative-new-with-warning");
+        std::fs::create_dir(&malformed_old_wal).expect("create undeletable sidecar-shaped entry");
+
+        let outcome = prepare_database_identity(dir.path()).expect("select authoritative new");
+
+        assert_eq!(outcome.database_path, new);
+        assert!(!outcome.migrated);
+        assert!(
+            outcome
+                .durability_warning
+                .as_deref()
+                .is_some_and(|warning| warning.contains("legacy sidecar cleanup failed")),
+            "sidecar cleanup failure must be visible to startup diagnostics: {:?}",
+            outcome.durability_warning
+        );
+        assert!(
+            malformed_old_wal.is_dir(),
+            "failed cleanup must restore the mismatched sidecar-shaped entry"
+        );
     }
 
     #[test]
@@ -2488,6 +2771,46 @@ mod tests {
         assert_eq!(read_marker(&archive), "post-unlink-sync-source");
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn successful_migration_defers_live_legacy_sidecars_to_next_startup() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let old = canonical_test_dir(dir.path()).join(LEGACY_DATABASE_FILE);
+        let old_wal = database_sidecar_path(&old, "-wal");
+        let old_shm = database_sidecar_path(&old, "-shm");
+        let fixture = create_real_v13_fixture(&old);
+        enable_wal(&fixture);
+        fixture
+            .execute(
+                "INSERT INTO identity_migration_marker (value) VALUES ('live-sidecar-source')",
+                [],
+            )
+            .expect("write live-sidecar fixture marker");
+        assert!(old_wal.exists());
+        assert!(old_shm.exists());
+
+        let outcome = prepare_database_identity(dir.path()).expect("migrate live WAL source");
+
+        assert!(outcome.migrated);
+        assert!(
+            outcome
+                .durability_warning
+                .as_deref()
+                .is_some_and(|warning| warning.contains("sidecar cleanup deferred")),
+            "deferred cleanup must be visible to startup diagnostics: {:?}",
+            outcome.durability_warning
+        );
+        assert!(
+            old_wal.exists(),
+            "live WAL must not be deleted by fixed path"
+        );
+        assert!(
+            old_shm.exists(),
+            "live SHM must not be deleted by fixed path"
+        );
+        drop(fixture);
+    }
+
     fn assert_existing_lease_fails_closed(contents: &[u8]) {
         let dir = tempfile::tempdir().expect("tempdir");
         let old = dir.path().join(LEGACY_DATABASE_FILE);
@@ -2519,6 +2842,21 @@ mod tests {
             std::process::id()
         );
         assert_existing_lease_fails_closed(metadata.as_bytes());
+    }
+
+    #[test]
+    fn database_migration_lease_has_explicit_fallible_release() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let directory = pin_safe_existing_directory(dir.path(), None)
+            .expect("pin lease test directory")
+            .expect("existing directory");
+        let lease_path = canonical_test_dir(dir.path()).join(MIGRATION_LEASE_FILE);
+        let lease = DatabaseMigrationLease::acquire(&directory).expect("acquire lease");
+        assert!(lease_path.exists());
+
+        lease.release().expect("release lease explicitly");
+
+        assert!(!lease_path.exists());
     }
 
     #[test]
@@ -2620,7 +2958,31 @@ mod tests {
 
         let outcome = prepare_database_identity(&missing).expect("fresh identity outcome");
 
-        assert_eq!(outcome.database_path, missing.join(DATABASE_FILE));
+        assert_eq!(
+            outcome.database_path,
+            canonical_test_dir(root.path())
+                .join("not-created-by-migration")
+                .join(DATABASE_FILE)
+        );
+        assert!(!missing.exists(), "identity preparation must not mkdir");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn missing_app_directory_returns_canonical_prospective_database_path() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let real_parent = root.path().join("real-parent");
+        std::fs::create_dir(&real_parent).expect("create real parent");
+        let alias_parent = root.path().join("alias-parent");
+        std::os::unix::fs::symlink(&real_parent, &alias_parent).expect("create parent alias");
+        let missing = alias_parent.join("future-app-dir");
+        let expected = canonical_test_dir(&real_parent)
+            .join("future-app-dir")
+            .join(DATABASE_FILE);
+
+        let outcome = prepare_database_identity(&missing).expect("fresh prospective identity");
+
+        assert_eq!(outcome.database_path, expected);
         assert!(!missing.exists(), "identity preparation must not mkdir");
     }
 
@@ -2649,6 +3011,113 @@ mod tests {
         ));
         drop(barrier);
         assert_eq!(read_marker(&snapshot), "before-barrier");
+    }
+
+    #[test]
+    fn failed_fence_install_with_failed_rollback_remains_recoverable_and_uncertain() {
+        use rusqlite::hooks::{AuthAction, AuthContext, Authorization, TransactionOperation};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let old = dir.path().join(LEGACY_DATABASE_FILE);
+        write_real_v13_marker_db(&old, "uncertain-fence-source");
+        let mut barrier = SourceWriteBarrier::acquire(&old).expect("acquire source barrier");
+        barrier
+            .connection
+            .authorizer(Some(|context: AuthContext<'_>| match context.action {
+                AuthAction::CreateTrigger { .. }
+                | AuthAction::Transaction {
+                    operation: TransactionOperation::Rollback,
+                } => Authorization::Deny,
+                _ => Authorization::Allow,
+            }))
+            .expect("install fence-failure authorizer");
+
+        barrier
+            .install_and_reacquire_retirement_fence()
+            .expect_err("trigger install and transaction rollback are both denied");
+
+        assert!(
+            barrier.retirement_fence.is_some(),
+            "failed rollback must retain enough fence metadata for recovery"
+        );
+        barrier
+            .connection
+            .authorizer(None::<fn(AuthContext<'_>) -> Authorization>)
+            .expect("clear fence-failure authorizer");
+        barrier
+            .restore_retirement_fence()
+            .expect("uncertain fence state must be recoverable");
+        assert!(barrier.retirement_fence.is_none());
+        assert_eq!(
+            Database::get_user_version(&barrier.connection).expect("read restored user_version"),
+            DATABASE_IDENTITY_SOURCE_SCHEMA_VERSION
+        );
+    }
+
+    #[test]
+    fn unrecoverable_uncertain_fence_retains_published_snapshots() {
+        use rusqlite::hooks::{AuthAction, AuthContext, Authorization, TransactionOperation};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let directory = pin_safe_existing_directory(dir.path(), None)
+            .expect("pin uncertain-fence directory")
+            .expect("existing directory");
+        let old = canonical_test_dir(dir.path()).join(LEGACY_DATABASE_FILE);
+        let new = canonical_test_dir(dir.path()).join(DATABASE_FILE);
+        let archive = canonical_test_dir(dir.path()).join(ARCHIVE_FILE);
+        write_real_v13_marker_db(&old, "unrecoverable-fence-source");
+        std::fs::write(&new, b"published-new-evidence").expect("write published new evidence");
+        std::fs::write(&archive, b"published-archive-evidence")
+            .expect("write published archive evidence");
+        let published_new = PublishedFile {
+            path: new.clone(),
+            identity: FileIdentity::from_path(&new).expect("identify published new"),
+        };
+        let published_archive = PublishedFile {
+            path: archive.clone(),
+            identity: FileIdentity::from_path(&archive).expect("identify published archive"),
+        };
+        let mut barrier = SourceWriteBarrier::acquire(&old).expect("acquire source barrier");
+        let mut create_trigger_count = 0_u32;
+        barrier
+            .connection
+            .authorizer(Some(move |context: AuthContext<'_>| match context.action {
+                AuthAction::CreateTrigger { .. } => {
+                    create_trigger_count += 1;
+                    if create_trigger_count == 1 {
+                        Authorization::Allow
+                    } else {
+                        Authorization::Deny
+                    }
+                }
+                AuthAction::DropTrigger { .. }
+                | AuthAction::Transaction {
+                    operation: TransactionOperation::Rollback,
+                } => Authorization::Deny,
+                _ => Authorization::Allow,
+            }))
+            .expect("install unrecoverable-fence authorizer");
+        let install_error = barrier
+            .install_and_reacquire_retirement_fence()
+            .expect_err("fence install and rollback must fail");
+
+        let error = rollback_after_retirement_fence(
+            install_error,
+            &mut barrier,
+            &directory,
+            &[&published_archive, &published_new],
+        )
+        .expect_err("unrestored fence must fail without publication rollback");
+
+        assert!(error.to_string().contains("snapshots were retained"));
+        assert_eq!(
+            std::fs::read(&new).expect("read retained new"),
+            b"published-new-evidence"
+        );
+        assert_eq!(
+            std::fs::read(&archive).expect("read retained archive"),
+            b"published-archive-evidence"
+        );
     }
 
     #[test]
@@ -2776,6 +3245,105 @@ mod tests {
         );
         assert_snapshot_excludes_retirement_fence(&outcome.database_path);
         assert_snapshot_excludes_retirement_fence(outcome.archived_prior_path.as_deref().unwrap());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn source_identity_change_after_write_barrier_fails_before_snapshot_publication() {
+        struct ReplaceSourceAfterBarrier;
+        impl MigrationHooks for ReplaceSourceAfterBarrier {
+            fn after_source_barrier(&self, old_path: &Path) -> Result<(), crate::error::AppError> {
+                let displaced = old_path.with_extension("db.displaced-after-barrier");
+                std::fs::rename(old_path, &displaced)
+                    .map_err(|error| crate::error::AppError::io(old_path, error))?;
+                write_real_v13_marker_db(old_path, "replacement-after-barrier");
+                Ok(())
+            }
+        }
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let old = dir.path().join(LEGACY_DATABASE_FILE);
+        write_real_v13_marker_db(&old, "original-before-barrier");
+
+        let error =
+            prepare_database_identity_with_hooks(dir.path(), &ReplaceSourceAfterBarrier, None)
+                .expect_err("source replacement after barrier must fail closed");
+
+        assert!(
+            error.to_string().contains("after source write barrier"),
+            "error must identify the failed identity checkpoint: {error}"
+        );
+        assert_eq!(read_marker(&old), "replacement-after-barrier");
+        assert!(!dir.path().join(DATABASE_FILE).exists());
+        assert!(!dir.path().join(ARCHIVE_FILE).exists());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn source_identity_change_after_backups_fails_before_snapshot_publication() {
+        struct ReplaceSourceAfterBackups;
+        impl MigrationHooks for ReplaceSourceAfterBackups {
+            fn after_snapshots(&self, old_path: &Path) -> Result<(), crate::error::AppError> {
+                let displaced = old_path.with_extension("db.displaced-after-backups");
+                std::fs::rename(old_path, &displaced)
+                    .map_err(|error| crate::error::AppError::io(old_path, error))?;
+                write_real_v13_marker_db(old_path, "replacement-after-backups");
+                Ok(())
+            }
+        }
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let old = dir.path().join(LEGACY_DATABASE_FILE);
+        write_real_v13_marker_db(&old, "original-before-backups");
+
+        let error =
+            prepare_database_identity_with_hooks(dir.path(), &ReplaceSourceAfterBackups, None)
+                .expect_err("source replacement after backups must fail closed");
+
+        assert!(
+            error.to_string().contains("after source snapshot backup"),
+            "error must identify the failed identity checkpoint: {error}"
+        );
+        assert_eq!(read_marker(&old), "replacement-after-backups");
+        assert!(!dir.path().join(DATABASE_FILE).exists());
+        assert!(!dir.path().join(ARCHIVE_FILE).exists());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn published_identity_change_before_retirement_fails_closed() {
+        struct ReplacePublishedNew;
+        impl MigrationHooks for ReplacePublishedNew {
+            fn before_source_retirement(
+                &self,
+                _old_path: &Path,
+                new_path: &Path,
+                _archive_path: &Path,
+            ) -> Result<(), crate::error::AppError> {
+                std::fs::remove_file(new_path)
+                    .map_err(|error| crate::error::AppError::io(new_path, error))?;
+                write_real_v13_marker_db(new_path, "replacement-published-new");
+                Ok(())
+            }
+        }
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let old = dir.path().join(LEGACY_DATABASE_FILE);
+        let new = canonical_test_dir(dir.path()).join(DATABASE_FILE);
+        write_real_v13_marker_db(&old, "original-published-source");
+
+        let error = prepare_database_identity_with_hooks(dir.path(), &ReplacePublishedNew, None)
+            .expect_err("published replacement before retirement must fail closed");
+
+        assert!(
+            error
+                .to_string()
+                .contains("published new database identity changed"),
+            "error must identify the pre-retirement checkpoint: {error}"
+        );
+        assert_eq!(read_marker(&new), "replacement-published-new");
+        assert_eq!(read_marker(&old), "original-published-source");
+        assert!(!dir.path().join(ARCHIVE_FILE).exists());
     }
 
     #[cfg(unix)]
