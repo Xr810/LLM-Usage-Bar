@@ -6,7 +6,7 @@ use llm_usage_bar_lib::product_identity::{
     DATABASE_FILE, DATABASE_IDENTITY_ARCHIVE_FILE, LEGACY_DATABASE_FILE, LOG_BASENAME,
 };
 use llm_usage_bar_lib::{
-    prepare_database_identity_test_hook, runtime_log_paths_test_hook, AppError, AppType, Database,
+    prepare_database_runtime_test_hook, runtime_log_paths_test_hook, AppError, AppType, Database,
     MultiAppConfig, Provider,
 };
 
@@ -73,8 +73,9 @@ fn database_identity_migrates_v13_and_threads_authoritative_runtime_paths() {
         .expect("seed prior-name database");
     drop(old_db);
 
-    let identity =
-        prepare_database_identity_test_hook(&app_dir).expect("prepare runtime database identity");
+    let prepared =
+        prepare_database_runtime_test_hook(&app_dir).expect("prepare and open runtime database");
+    let identity = &prepared.identity;
     let expected_new_path = canonical_app_dir.join(DATABASE_FILE);
     let expected_archive_path = canonical_app_dir.join(DATABASE_IDENTITY_ARCHIVE_FILE);
 
@@ -90,13 +91,17 @@ fn database_identity_migrates_v13_and_threads_authoritative_runtime_paths() {
     assert!(expected_archive_path.exists());
     assert!(!canonical_app_dir.join(LEGACY_DATABASE_FILE).exists());
 
-    let db = Database::init_at(&identity.database_path).expect("open authoritative database");
-    assert_eq!(db.database_path(), Some(identity.database_path.as_path()));
+    assert_eq!(
+        prepared.database.database_path(),
+        Some(identity.database_path.as_path())
+    );
 
-    let exported = db
+    let exported = prepared
+        .database
         .export_sql_string()
         .expect("export authoritative database");
-    let backup_id = db
+    let backup_id = prepared
+        .database
         .import_sql_string(&exported)
         .expect("import should back up the authoritative database");
     assert!(
@@ -116,6 +121,28 @@ fn database_identity_migrates_v13_and_threads_authoritative_runtime_paths() {
             .join(format!("{LOG_BASENAME}.log"))
     );
     assert_eq!(crash_log, canonical_app_dir.join("crash.log"));
+}
+
+#[test]
+fn database_runtime_fresh_install_opens_the_prepared_authoritative_path() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    reset_test_fs();
+    let home = ensure_test_home();
+    let app_dir = home.join(".llm-usage-bar");
+    fs::create_dir_all(&app_dir).expect("create fresh app config dir");
+    let canonical_app_dir = fs::canonicalize(&app_dir).expect("canonicalize app config dir");
+
+    let prepared =
+        prepare_database_runtime_test_hook(&app_dir).expect("prepare and open fresh database");
+    let expected = canonical_app_dir.join(DATABASE_FILE);
+
+    assert!(!prepared.identity.migrated);
+    assert_eq!(prepared.identity.database_path, expected);
+    assert_eq!(
+        prepared.database.database_path(),
+        Some(prepared.identity.database_path.as_path())
+    );
+    assert!(prepared.identity.database_path.exists());
 }
 
 #[test]

@@ -73,8 +73,9 @@ pub use usage::domain::{
     UsageSourceBinding,
 };
 
+use std::path::Path;
 #[cfg(debug_assertions)]
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 #[cfg(target_os = "macos")]
 use tauri::image::Image;
@@ -82,6 +83,88 @@ use tauri::tray::{TrayIconBuilder, TrayIconEvent};
 use tauri::RunEvent;
 use tauri::{Emitter, Manager};
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
+
+#[derive(Debug)]
+struct PreparedDatabaseRuntime {
+    outcome: database::DatabaseIdentityOutcome,
+}
+
+#[derive(Debug)]
+enum DatabaseRuntimePreflight<'a> {
+    Ready(ReadyDatabaseRuntime<'a>),
+    TooNew { version: i32 },
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ReadyDatabaseRuntime<'a> {
+    prepared: &'a PreparedDatabaseRuntime,
+}
+
+impl PreparedDatabaseRuntime {
+    fn prepare(app_config_dir: &Path) -> Result<Self, AppError> {
+        Self::prepare_with(app_config_dir, database::prepare_database_identity)
+    }
+
+    fn prepare_with<F>(app_config_dir: &Path, prepare: F) -> Result<Self, AppError>
+    where
+        F: FnOnce(&Path) -> Result<database::DatabaseIdentityOutcome, AppError>,
+    {
+        Ok(Self {
+            outcome: prepare(app_config_dir)?,
+        })
+    }
+
+    fn outcome(&self) -> &database::DatabaseIdentityOutcome {
+        &self.outcome
+    }
+
+    fn database_path(&self) -> &Path {
+        &self.outcome.database_path
+    }
+
+    fn database_exists(&self) -> bool {
+        self.database_path().exists()
+    }
+
+    fn needs_json_migration(&self, json_path: &Path) -> bool {
+        !self.database_exists() && json_path.exists()
+    }
+
+    fn preflight(&self) -> Result<DatabaseRuntimePreflight<'_>, AppError> {
+        self.preflight_with(database::Database::stored_user_version_exceeds_supported)
+    }
+
+    fn preflight_with<F>(&self, preflight: F) -> Result<DatabaseRuntimePreflight<'_>, AppError>
+    where
+        F: FnOnce(&Path) -> Result<Option<i32>, AppError>,
+    {
+        match preflight(self.database_path())? {
+            Some(version) => Ok(DatabaseRuntimePreflight::TooNew { version }),
+            None => Ok(DatabaseRuntimePreflight::Ready(self.ready())),
+        }
+    }
+
+    fn ready(&self) -> ReadyDatabaseRuntime<'_> {
+        ReadyDatabaseRuntime { prepared: self }
+    }
+}
+
+impl ReadyDatabaseRuntime<'_> {
+    fn database_path(&self) -> &Path {
+        self.prepared.database_path()
+    }
+
+    fn open(&self) -> Result<database::Database, AppError> {
+        self.open_with(database::Database::init_at)
+    }
+
+    fn open_with<F>(&self, open: F) -> Result<database::Database, AppError>
+    where
+        F: FnOnce(&Path) -> Result<database::Database, AppError>,
+    {
+        open(self.database_path())
+    }
+}
 
 /// Narrow integration-test view of the production database identity decision.
 #[cfg(debug_assertions)]
@@ -96,24 +179,46 @@ pub struct DatabaseIdentityTestReport {
 }
 
 #[cfg(debug_assertions)]
-impl From<database::DatabaseIdentityOutcome> for DatabaseIdentityTestReport {
-    fn from(outcome: database::DatabaseIdentityOutcome) -> Self {
+impl From<&database::DatabaseIdentityOutcome> for DatabaseIdentityTestReport {
+    fn from(outcome: &database::DatabaseIdentityOutcome) -> Self {
         Self {
-            database_path: outcome.database_path,
-            archived_prior_path: outcome.archived_prior_path,
-            retained_prior_path: outcome.retained_prior_path,
+            database_path: outcome.database_path.clone(),
+            archived_prior_path: outcome.archived_prior_path.clone(),
+            retained_prior_path: outcome.retained_prior_path.clone(),
             migrated: outcome.migrated,
-            durability_warning: outcome.durability_warning,
+            durability_warning: outcome.durability_warning.clone(),
         }
     }
 }
 
 #[cfg(debug_assertions)]
 #[doc(hidden)]
-pub fn prepare_database_identity_test_hook(
+pub struct PreparedDatabaseRuntimeTestResult {
+    pub identity: DatabaseIdentityTestReport,
+    pub database: Database,
+}
+
+#[cfg(debug_assertions)]
+#[doc(hidden)]
+pub fn prepare_database_runtime_test_hook(
     app_config_dir: &Path,
-) -> Result<DatabaseIdentityTestReport, AppError> {
-    database::prepare_database_identity(app_config_dir).map(Into::into)
+) -> Result<PreparedDatabaseRuntimeTestResult, AppError> {
+    let runtime = PreparedDatabaseRuntime::prepare(app_config_dir)?;
+    let identity = DatabaseIdentityTestReport::from(runtime.outcome());
+    let ready = match runtime.preflight() {
+        Ok(DatabaseRuntimePreflight::Ready(ready)) => ready,
+        Ok(DatabaseRuntimePreflight::TooNew { version }) => {
+            return Err(AppError::Database(format!(
+                "数据库版本过新（v{version}），无法由测试启动 helper 打开"
+            )))
+        }
+        Err(error) => {
+            log::warn!("测试启动 helper 预检数据库版本失败，继续正常初始化流程: {error}");
+            runtime.ready()
+        }
+    };
+    let database = ready.open()?;
+    Ok(PreparedDatabaseRuntimeTestResult { identity, database })
 }
 
 #[cfg(debug_assertions)]
@@ -456,37 +561,32 @@ pub fn run() {
             // 初始化数据库
             let app_config_dir = crate::config::get_app_config_dir();
             // 文件名迁移必须先于版本预检或任何 Database open/write，并且本次启动只执行一次。
-            let database_identity =
-                match crate::database::prepare_database_identity(&app_config_dir) {
-                    Ok(outcome) => outcome,
-                    Err(error) => {
-                        let prospective_path =
-                            crate::product_identity::current_database_path(&app_config_dir);
-                        let error_message = error.to_string();
-                        log::error!(
-                            "Failed to prepare authoritative database identity at {}: {}",
-                            prospective_path.display(),
-                            error_message
-                        );
-                        show_database_identity_error_dialog(
-                            app.handle(),
-                            &prospective_path,
-                            &error_message,
-                        );
-                        return Err(Box::new(error));
-                    }
-                };
-            log_database_identity_outcome(&database_identity);
-            let db_path = database_identity.database_path.clone();
+            let prepared_database = match PreparedDatabaseRuntime::prepare(&app_config_dir) {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    let prospective_path =
+                        crate::product_identity::current_database_path(&app_config_dir);
+                    let error_message = error.to_string();
+                    log::error!(
+                        "Failed to prepare authoritative database identity at {}: {}",
+                        prospective_path.display(),
+                        error_message
+                    );
+                    show_database_identity_error_dialog(
+                        app.handle(),
+                        &prospective_path,
+                        &error_message,
+                    );
+                    return Err(Box::new(error));
+                }
+            };
+            log_database_identity_outcome(prepared_database.outcome());
             let json_path = app_config_dir.join("config.json");
 
             // 检查是否需要从 config.json 迁移到 SQLite
-            let has_json = json_path.exists();
-            let has_db = db_path.exists();
-
             // 如果需要迁移，先验证 config.json 是否可以加载（在创建数据库之前）
             // 这样如果加载失败用户选择退出，数据库文件还没被创建，下次可以正常重试
-            let migration_config = if !has_db && has_json {
+            let migration_config = if prepared_database.needs_json_migration(&json_path) {
                 log::info!("检测到旧版配置文件，验证配置文件...");
 
                 // 循环：支持用户重试加载配置文件
@@ -521,11 +621,11 @@ pub fn run() {
             //
             // 预检：数据库版本过新时，必须先于任何 schema 写操作（create_tables 内含
             // DROP/ALTER 等 DDL）进入恢复界面，避免旧应用对读不懂的更新版 DB 落写。
-            match crate::database::Database::stored_user_version_exceeds_supported(&db_path) {
-                Ok(Some(version)) => {
+            let ready_database = match prepared_database.preflight() {
+                Ok(DatabaseRuntimePreflight::TooNew { version }) => {
                     log::warn!("数据库版本过新（v{version}），引导用户在应用内升级应用");
                     crate::init_status::set_init_error(crate::init_status::InitErrorPayload {
-                        path: db_path.display().to_string(),
+                        path: prepared_database.database_path().display().to_string(),
                         error: format!(
                             "数据库版本过新（{version}），当前应用仅支持 {}，请升级应用后再尝试。",
                             crate::database::SCHEMA_VERSION
@@ -541,20 +641,24 @@ pub fn run() {
                     }
                     return Ok(());
                 }
-                Ok(None) => {}
+                Ok(DatabaseRuntimePreflight::Ready(ready)) => ready,
                 Err(e) => {
                     log::warn!("预检数据库版本失败，继续正常初始化流程: {e}");
+                    prepared_database.ready()
                 }
-            }
+            };
 
             let db = loop {
-                match crate::database::Database::init_at(&db_path) {
+                match ready_database.open() {
                     Ok(db) => break Arc::new(db),
                     Err(e) => {
                         log::error!("Failed to init database: {e}");
 
-                        if !show_database_init_error_dialog(app.handle(), &db_path, &e.to_string())
-                        {
+                        if !show_database_init_error_dialog(
+                            app.handle(),
+                            ready_database.database_path(),
+                            &e.to_string(),
+                        ) {
                             log::info!("用户选择退出程序");
                             std::process::exit(1);
                         }
@@ -2221,7 +2325,119 @@ pub fn restart_process(app_handle: &tauri::AppHandle) -> ! {
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_exit_request, ExitRequestAction};
+    use super::{
+        classify_exit_request, DatabaseRuntimePreflight, ExitRequestAction, PreparedDatabaseRuntime,
+    };
+    use crate::database::DatabaseIdentityOutcome;
+    use crate::error::AppError;
+    use crate::product_identity::DATABASE_FILE;
+    use std::cell::{Cell, RefCell};
+    use std::path::{Path, PathBuf};
+
+    fn synthetic_identity(database_path: PathBuf) -> DatabaseIdentityOutcome {
+        DatabaseIdentityOutcome {
+            database_path,
+            archived_prior_path: None,
+            retained_prior_path: None,
+            migrated: false,
+            durability_warning: None,
+        }
+    }
+
+    #[test]
+    fn prepared_database_runtime_orders_prepare_preflight_open_once_on_one_path() {
+        let temp = tempfile::tempdir().expect("create prepared runtime test dir");
+        let app_dir = temp.path().join("app");
+        std::fs::create_dir_all(&app_dir).expect("create prepared runtime app dir");
+        let authoritative = app_dir.join(DATABASE_FILE);
+        let prepare_calls = Cell::new(0usize);
+        let events = RefCell::new(Vec::<(&'static str, PathBuf)>::new());
+
+        let runtime = PreparedDatabaseRuntime::prepare_with(&app_dir, |observed_app_dir| {
+            prepare_calls.set(prepare_calls.get() + 1);
+            events
+                .borrow_mut()
+                .push(("prepare", observed_app_dir.to_path_buf()));
+            Ok(synthetic_identity(authoritative.clone()))
+        })
+        .expect("prepare runtime capability");
+
+        let ready = match runtime
+            .preflight_with(|observed_path| {
+                events
+                    .borrow_mut()
+                    .push(("preflight", observed_path.to_path_buf()));
+                Ok(None)
+            })
+            .expect("preflight runtime capability")
+        {
+            DatabaseRuntimePreflight::Ready(ready) => ready,
+            DatabaseRuntimePreflight::TooNew { version } => {
+                panic!("unexpected future database v{version}")
+            }
+        };
+
+        let database = ready
+            .open_with(|observed_path| {
+                events
+                    .borrow_mut()
+                    .push(("open", observed_path.to_path_buf()));
+                crate::database::Database::init_at(observed_path)
+            })
+            .expect("open prepared database");
+
+        assert_eq!(prepare_calls.get(), 1);
+        assert_eq!(database.database_path(), Some(authoritative.as_path()));
+        assert_eq!(
+            events.into_inner(),
+            vec![
+                ("prepare", app_dir),
+                ("preflight", authoritative.clone()),
+                ("open", authoritative),
+            ]
+        );
+    }
+
+    #[test]
+    fn prepared_database_runtime_prepare_error_stops_before_preflight_or_open() {
+        let events = RefCell::new(Vec::<&'static str>::new());
+
+        let error = PreparedDatabaseRuntime::prepare_with(Path::new("unused"), |_| {
+            events.borrow_mut().push("prepare");
+            Err(AppError::Config("injected prepare failure".to_string()))
+        })
+        .expect_err("prepare failure must stop startup capability creation");
+
+        assert!(error.to_string().contains("injected prepare failure"));
+        assert_eq!(events.into_inner(), vec!["prepare"]);
+    }
+
+    #[test]
+    fn prepared_database_runtime_future_version_stops_before_open() {
+        let temp = tempfile::tempdir().expect("create future preflight test dir");
+        let authoritative = temp.path().join(DATABASE_FILE);
+        let events = RefCell::new(Vec::<&'static str>::new());
+        let runtime = PreparedDatabaseRuntime::prepare_with(temp.path(), |_| {
+            Ok(synthetic_identity(authoritative.clone()))
+        })
+        .expect("prepare runtime capability");
+
+        let decision = runtime
+            .preflight_with(|observed_path| {
+                events.borrow_mut().push("preflight");
+                assert_eq!(observed_path, authoritative);
+                Ok(Some(crate::database::SCHEMA_VERSION + 1))
+            })
+            .expect("future-version preflight returns a decision");
+
+        match decision {
+            DatabaseRuntimePreflight::TooNew { version } => {
+                assert_eq!(version, crate::database::SCHEMA_VERSION + 1)
+            }
+            DatabaseRuntimePreflight::Ready(_) => panic!("future database must not be openable"),
+        }
+        assert_eq!(events.into_inner(), vec!["preflight"]);
+    }
 
     #[test]
     fn no_code_keeps_app_alive_in_tray() {
