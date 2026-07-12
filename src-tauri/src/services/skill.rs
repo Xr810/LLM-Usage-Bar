@@ -1,7 +1,7 @@
 //! Skills 服务层
 //!
 //! v3.10.0+ 统一管理架构：
-//! - SSOT（单一事实源）：`~/.cc-switch/skills/`
+//! - SSOT（单一事实源）：`~/.llm-usage-bar/skills/`
 //! - 安装时下载到 SSOT，按需同步到各应用目录
 //! - 数据库存储安装记录和启用状态
 
@@ -19,6 +19,7 @@ use crate::app_config::{AppType, InstalledSkill, SkillApps, UnmanagedSkill};
 use crate::config::get_app_config_dir;
 use crate::database::Database;
 use crate::error::format_skill_error;
+use crate::product_identity::APP_SLUG;
 
 // ========== 数据结构 ==========
 
@@ -39,9 +40,10 @@ pub enum SyncMethod {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum SkillStorageLocation {
-    /// CC Switch 管理目录 (~/.cc-switch/skills/)
+    /// LLM Usage Bar 管理目录 (~/.llm-usage-bar/skills/)
     #[default]
-    CcSwitch,
+    #[serde(alias = "cc_switch")]
+    LlmUsageBar,
     /// Agent Skills 统一标准目录 (~/.agents/skills/)
     Unified,
 }
@@ -451,6 +453,10 @@ impl SkillService {
         Self
     }
 
+    fn current_storage_source_label() -> &'static str {
+        APP_SLUG
+    }
+
     /// 构建 Skill 文档 URL（指向仓库中的 SKILL.md 文件）
     fn build_skill_doc_url(owner: &str, repo: &str, branch: &str, doc_path: &str) -> String {
         format!("https://github.com/{owner}/{repo}/blob/{branch}/{doc_path}")
@@ -476,25 +482,36 @@ impl SkillService {
 
     // ========== 路径管理 ==========
 
-    /// 获取 SSOT 目录（根据设置返回 ~/.cc-switch/skills/ 或 ~/.agents/skills/）
+    fn storage_dir_for_roots(
+        location: SkillStorageLocation,
+        app_config_dir: &Path,
+        home_dir: Option<&Path>,
+    ) -> Result<PathBuf> {
+        match location {
+            SkillStorageLocation::LlmUsageBar => Ok(app_config_dir.join("skills")),
+            SkillStorageLocation::Unified => home_dir
+                .map(|home| home.join(".agents").join("skills"))
+                .ok_or_else(|| {
+                    anyhow!(format_skill_error(
+                        "GET_HOME_DIR_FAILED",
+                        &[],
+                        Some("checkPermission"),
+                    ))
+                }),
+        }
+    }
+
+    /// 获取 SSOT 目录（根据设置返回 ~/.llm-usage-bar/skills/ 或 ~/.agents/skills/）
     pub fn get_ssot_dir() -> Result<PathBuf> {
         let location = crate::settings::get_skill_storage_location();
-        let dir = match location {
-            SkillStorageLocation::CcSwitch => get_app_config_dir().join("skills"),
-            SkillStorageLocation::Unified => {
-                let home = dirs::home_dir().context(format_skill_error(
-                    "GET_HOME_DIR_FAILED",
-                    &[],
-                    Some("checkPermission"),
-                ))?;
-                home.join(".agents").join("skills")
-            }
-        };
+        let app_config_dir = get_app_config_dir();
+        let home_dir = dirs::home_dir();
+        let dir = Self::storage_dir_for_roots(location, &app_config_dir, home_dir.as_deref())?;
         fs::create_dir_all(&dir)?;
         Ok(dir)
     }
 
-    /// 获取 Skill 卸载备份目录（~/.cc-switch/skill-backups/）
+    /// 获取 Skill 卸载备份目录（~/.llm-usage-bar/skill-backups/）
     fn get_backup_dir() -> Result<PathBuf> {
         let dir = get_app_config_dir().join("skill-backups");
         fs::create_dir_all(&dir)?;
@@ -846,7 +863,7 @@ impl SkillService {
             hasher.update(b"\0");
         }
 
-        Ok(format!("{:x}", hasher.finalize()))
+        Ok(hex::encode(hasher.finalize()))
     }
 
     /// 递归收集目录下所有非隐藏文件
@@ -1164,13 +1181,9 @@ impl SkillService {
 
         // 1. 解析旧目录和新目录（不改设置）
         let old_dir = Self::get_ssot_dir()?;
-        let new_dir = match target {
-            SkillStorageLocation::CcSwitch => get_app_config_dir().join("skills"),
-            SkillStorageLocation::Unified => {
-                let home = dirs::home_dir().context("Cannot determine home directory")?;
-                home.join(".agents").join("skills")
-            }
-        };
+        let app_config_dir = get_app_config_dir();
+        let home_dir = dirs::home_dir();
+        let new_dir = Self::storage_dir_for_roots(target, &app_config_dir, home_dir.as_deref())?;
         fs::create_dir_all(&new_dir)?;
 
         // 2. 逐个移动 skill 目录
@@ -1380,7 +1393,7 @@ impl SkillService {
 
     /// 扫描未管理的 Skills
     ///
-    /// 扫描各应用目录，找出未被 CC Switch 管理的 Skills
+    /// 扫描各应用目录，找出未被 LLM Usage Bar 管理的 Skills
     pub fn scan_unmanaged(db: &Arc<Database>) -> Result<Vec<UnmanagedSkill>> {
         let managed_skills = db.get_all_installed_skills()?;
         let managed_dirs: HashSet<String> = managed_skills
@@ -1399,7 +1412,7 @@ impl SkillService {
             scan_sources.push((agents_dir, "agents".to_string()));
         }
         if let Ok(ssot_dir) = Self::get_ssot_dir() {
-            scan_sources.push((ssot_dir, "cc-switch".to_string()));
+            scan_sources.push((ssot_dir, Self::current_storage_source_label().to_string()));
         }
 
         let mut unmanaged: HashMap<String, UnmanagedSkill> = HashMap::new();
@@ -1443,7 +1456,7 @@ impl SkillService {
 
     /// 从应用目录导入 Skills
     ///
-    /// 将未管理的 Skills 导入到 CC Switch 统一管理
+    /// 将未管理的 Skills 导入到 LLM Usage Bar 统一管理
     pub fn import_from_apps(
         db: &Arc<Database>,
         imports: Vec<ImportSkillSelection>,
@@ -1469,7 +1482,10 @@ impl SkillService {
         if let Some(agents_dir) = get_agents_skills_dir() {
             search_sources.push((agents_dir, "agents".to_string()));
         }
-        search_sources.push((ssot_dir.clone(), "cc-switch".to_string()));
+        search_sources.push((
+            ssot_dir.clone(),
+            Self::current_storage_source_label().to_string(),
+        ));
 
         for selection in imports {
             let dir_name = selection.directory;
@@ -3059,6 +3075,56 @@ pub fn migrate_skills_to_ssot(db: &Arc<Database>) -> Result<usize> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn identity_discriminator_skill_storage_serializes_current_and_accepts_legacy_alias() {
+        assert_eq!(
+            serde_json::to_string(&SkillStorageLocation::LlmUsageBar).unwrap(),
+            "\"llm_usage_bar\""
+        );
+        assert_eq!(
+            serde_json::from_str::<SkillStorageLocation>("\"cc_switch\"").unwrap(),
+            SkillStorageLocation::LlmUsageBar
+        );
+        assert!(serde_json::from_str::<SkillStorageLocation>("\"legacy_cc_switch\"").is_err());
+    }
+
+    #[test]
+    fn identity_discriminator_legacy_storage_alias_never_resolves_legacy_root() {
+        let home = Path::new("/Users/tester");
+        let app_dir = home.join(".llm-usage-bar");
+        let legacy: SkillStorageLocation = serde_json::from_str("\"cc_switch\"").unwrap();
+
+        assert_eq!(
+            SkillService::storage_dir_for_roots(legacy, &app_dir, Some(home)).unwrap(),
+            app_dir.join("skills")
+        );
+        assert_eq!(
+            SkillService::storage_dir_for_roots(
+                SkillStorageLocation::Unified,
+                &app_dir,
+                Some(home)
+            )
+            .unwrap(),
+            home.join(".agents").join("skills")
+        );
+        assert_ne!(
+            SkillService::storage_dir_for_roots(legacy, &app_dir, Some(home)).unwrap(),
+            home.join(".cc-switch").join("skills")
+        );
+    }
+
+    #[test]
+    fn identity_discriminator_found_in_uses_current_product_slug() {
+        assert_eq!(
+            SkillService::current_storage_source_label(),
+            crate::product_identity::APP_SLUG
+        );
+        assert_eq!(
+            SkillService::current_storage_source_label(),
+            "llm-usage-bar"
+        );
+    }
 
     fn write_skill(dir: &Path, name: &str) {
         fs::create_dir_all(dir).expect("create skill dir");

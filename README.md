@@ -1,35 +1,32 @@
 <div align="center">
 
-# CC Switch
+# LLM Usage Bar
 
 ### The All-in-One Manager for Claude Code, Claude Desktop, Codex, Gemini CLI, OpenCode, OpenClaw & Hermes Agent
 
-[![Version](https://img.shields.io/github/v/release/farion1231/cc-switch?color=blue&label=version)](https://github.com/farion1231/cc-switch/releases)
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/farion1231/cc-switch/releases)
+[![Version](https://img.shields.io/github/v/release/Xr810/LLM-Usage-Bar?color=blue&label=version)](https://github.com/Xr810/LLM-Usage-Bar/releases)
+[![Platform](https://img.shields.io/badge/platform-macOS-lightgrey.svg)](https://github.com/Xr810/LLM-Usage-Bar/releases)
 [![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-orange.svg)](https://tauri.app/)
-[![Downloads](https://img.shields.io/github/downloads/farion1231/cc-switch/total)](https://github.com/farion1231/cc-switch/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/Xr810/LLM-Usage-Bar/total)](https://github.com/Xr810/LLM-Usage-Bar/releases/latest)
 
-<a href="https://trendshift.io/repositories/15372" target="_blank"><img src="https://trendshift.io/api/badge/repositories/15372" alt="farion1231%2Fcc-switch | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
-<a href="https://www.star-history.com/#farion1231/cc-switch&Date"><picture><source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/badge?repo=farion1231/cc-switch&theme=dark" /><img alt="Star History Rank" src="https://api.star-history.com/badge?repo=farion1231/cc-switch" width="196" height="55" /></picture></a>
-
-### 🌐 The Only Official Website: **[ccswitch.io](https://ccswitch.io)**
+<a href="https://www.star-history.com/#Xr810/LLM-Usage-Bar&Date"><picture><source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/badge?repo=Xr810/LLM-Usage-Bar&theme=dark" /><img alt="Star History Rank" src="https://api.star-history.com/badge?repo=Xr810/LLM-Usage-Bar" width="196" height="55" /></picture></a>
 
 English | [中文](README_ZH.md) | [日本語](README_JA.md) | [Deutsch](README_DE.md) | [Changelog](CHANGELOG.md)
 
 </div>
 
-## Why CC Switch?
+## Why LLM Usage Bar?
 
 Modern AI-powered coding relies on tools like Claude Code, Claude Desktop, Codex, Gemini CLI, OpenCode, OpenClaw, and Hermes — but each has its own configuration format. Switching API providers means manually editing JSON, TOML, or `.env` files, and there is no unified way to manage MCP and Skills across multiple tools.
 
-**CC Switch** gives you a single desktop app to manage all supported AI tools. Instead of editing config files by hand, you get a visual interface to import providers with one click, switch between them instantly, with 50+ built-in provider presets, unified MCP and Skills management, and system tray quick switching — all backed by a reliable SQLite database with atomic writes that protect your configs from corruption.
+**LLM Usage Bar** gives you a single desktop app to manage all supported AI tools. Instead of editing config files by hand, you get a visual interface to import providers with one click, switch between them instantly, with 50+ built-in provider presets, unified MCP and Skills management, and system tray quick switching — all backed by a reliable SQLite database with atomic writes that protect your configs from corruption.
 
 - **One App, Seven Tools** — Manage Claude Code, Claude Desktop, Codex, Gemini CLI, OpenCode, OpenClaw, and Hermes from a single interface
 - **No More Manual Editing** — 50+ provider presets including AWS Bedrock, NVIDIA NIM, and community relays; just pick and switch
 - **Unified MCP & Skills Management** — One panel to manage MCP servers and Skills across Claude, Codex, Gemini, OpenCode, and Hermes with bidirectional sync
 - **System Tray Quick Switch** — Switch providers instantly from the tray menu, no need to open the full app
 - **Cloud Sync** — Sync provider data across devices via Dropbox, OneDrive, iCloud, or WebDAV servers
-- **Cross-Platform** — Native desktop app for Windows, macOS, and Linux, built with Tauri 2
+- **macOS Native** — Native desktop app for macOS 12 and later, built with Tauri 2
 - **Built-in Utilities** — Includes various utilities for first-launch login confirmation, signature bypass, plugin extension sync, and more
 
 ## Screenshots
@@ -55,7 +52,7 @@ Modern AI-powered coding relies on tools like Claude Code, Claude Desktop, Codex
 
 ### MCP, Prompts & Skills
 
-- **Unified MCP panel** — Manage MCP servers across Claude, Codex, Gemini, OpenCode, and Hermes with bidirectional sync and Deep Link import
+- **Unified MCP panel** — Manage MCP servers across Claude, Codex, Gemini, OpenCode, and Hermes with bidirectional sync
 - **Prompts** — Markdown editor with cross-app sync (CLAUDE.md / AGENTS.md / GEMINI.md) and backfill protection
 - **Skills** — One-click install from GitHub repos or ZIP files, custom repository management, with symlink and file copy support
 
@@ -71,15 +68,14 @@ Modern AI-powered coding relies on tools like Claude Code, Claude Desktop, Codex
 ### System & Platform
 
 - **Cloud sync** — Custom config directory (Dropbox, OneDrive, iCloud, NAS) and WebDAV server sync
-- **Deep Link** (`ccswitch://`) — Import providers, MCP servers, prompts, and skills via URL
-- Dark / Light / System theme, auto-launch, auto-updater, atomic writes, auto-backups, i18n (zh/zh-TW/en/ja)
+- Dark / Light / System theme, auto-launch, manual Release updates, atomic writes, auto-backups, i18n (zh/zh-TW/en/ja)
 
 ## FAQ
 
 <details>
-<summary><strong>Which AI tools does CC Switch support?</strong></summary>
+<summary><strong>Which AI tools does LLM Usage Bar support?</strong></summary>
 
-CC Switch supports seven tools: **Claude Code**, **Claude Desktop**, **Codex**, **Gemini CLI**, **OpenCode**, **OpenClaw**, and **Hermes**. Each tool has dedicated provider presets and configuration management.
+LLM Usage Bar supports seven tools: **Claude Code**, **Claude Desktop**, **Codex**, **Gemini CLI**, **OpenCode**, **OpenClaw**, and **Hermes**. Each tool has dedicated provider presets and configuration management.
 
 </details>
 
@@ -93,21 +89,21 @@ For most tools, yes — restart your terminal or the CLI tool for changes to tak
 <details>
 <summary><strong>My plugin configuration disappeared after switching providers — what happened?</strong></summary>
 
-CC Switch provides a "Shared Config Snippet" feature to pass common data (beyond API keys and endpoints) between providers. Go to "Edit Provider" → "Shared Config Panel" → click "Extract from Current Provider" to save all common data. When creating a new provider, check "Write Shared Config" (enabled by default) to include plugin data in the new provider. All your configuration items are preserved in the default provider imported when you first launched the app.
+LLM Usage Bar provides a "Shared Config Snippet" feature to pass common data (beyond API keys and endpoints) between providers. Go to "Edit Provider" → "Shared Config Panel" → click "Extract from Current Provider" to save all common data. When creating a new provider, check "Write Shared Config" (enabled by default) to include plugin data in the new provider. All your configuration items are preserved in the default provider imported when you first launched the app.
 
 </details>
 
 <details>
 <summary><strong>macOS installation</strong></summary>
 
-CC Switch for macOS is code-signed and notarized by Apple. You can download and install it directly — no extra steps needed. We recommend using the `.dmg` installer.
+LLM Usage Bar for macOS is code-signed and notarized by Apple. You can download and install it directly — no extra steps needed. We recommend using the `.dmg` installer.
 
 </details>
 
 <details>
 <summary><strong>Why can't I delete the currently active provider?</strong></summary>
 
-CC Switch follows a "minimal intrusion" design principle — even if you uninstall the app, your CLI tools will continue to work normally. The system always keeps one active configuration, because deleting all configurations would make the corresponding CLI tool unusable. If you rarely use a specific CLI tool, you can hide it in Settings. To switch back to official login, see the next question.
+LLM Usage Bar follows a "minimal intrusion" design principle — even if you uninstall the app, your CLI tools will continue to work normally. The system always keeps one active configuration, because deleting all configurations would make the corresponding CLI tool unusable. If you rarely use a specific CLI tool, you can hide it in Settings. To switch back to official login, see the next question.
 
 </details>
 
@@ -121,24 +117,11 @@ Add an official provider from the preset list. After switching to it, run the Lo
 <details>
 <summary><strong>Where is my data stored?</strong></summary>
 
-- **Database**: `~/.cc-switch/cc-switch.db` (SQLite — providers, MCP, prompts, skills)
-- **Local settings**: `~/.cc-switch/settings.json` (device-level UI preferences)
-- **Backups**: `~/.cc-switch/backups/` (auto-rotated, keeps 10 most recent)
-- **Skills**: `~/.cc-switch/skills/` (symlinked to corresponding apps by default)
-- **Skill Backups**: `~/.cc-switch/skill-backups/` (created automatically before uninstall, keeps 20 most recent)
-
-</details>
-
-<details>
-<summary><strong>Linux (Wayland + NVIDIA): clicks don't register and the window black-screens on resize</strong></summary>
-
-The AppImage forces `GDK_BACKEND=x11` (XWayland) to avoid a historical native-Wayland crash. On newer Wayland + NVIDIA setups this can leave the web content area unclickable (the title-bar buttons still work) and black-screen on resize. Launch with the opt-in escape hatch to switch back to native Wayland:
-
-```bash
-CC_SWITCH_GDK_BACKEND=wayland ./CC-Switch-*.AppImage
-```
-
-If you launch from a desktop icon, add it to the `.desktop` `Exec=` line (e.g. `env CC_SWITCH_GDK_BACKEND=wayland /path/to/AppImage`) or set it in your session environment. The variable is generic: on tiling Wayland compositors (sway/Hyprland) where clicks don't register, try `CC_SWITCH_GDK_BACKEND=x11` instead. Leaving it unset keeps the default behavior.
+- **Database**: `~/.llm-usage-bar/llm-usage-bar.db` (SQLite — providers, MCP, prompts, skills)
+- **Local settings**: `~/.llm-usage-bar/settings.json` (device-level UI preferences)
+- **Backups**: `~/.llm-usage-bar/backups/` (auto-rotated, keeps 10 most recent)
+- **Skills**: `~/.llm-usage-bar/skills/` (symlinked to corresponding apps by default)
+- **Skill Backups**: `~/.llm-usage-bar/skill-backups/` (created automatically before uninstall, keeps 20 most recent)
 
 </details>
 
@@ -168,53 +151,11 @@ For detailed guides on every feature, check out the **[User Manual](docs/user-ma
 
 ## Download & Installation
 
-### System Requirements
+LLM Usage Bar supports **macOS 12 (Monterey) and later**. Download `LLM-Usage-Bar-v{version}-macOS.dmg` (recommended) or `.zip` from the [Releases](https://github.com/Xr810/LLM-Usage-Bar/releases) page.
 
-- **Windows**: Windows 10 and above
-- **macOS**: macOS 12 (Monterey) and above
-- **Linux**: Ubuntu 22.04+ / Debian 11+ / Fedora 34+ and other mainstream distributions
+The app is code-signed and notarized. Managed in-app updates are currently unavailable; use the Release page for updates.
 
-### Windows Users
-
-Download the latest `CC-Switch-v{version}-Windows.msi` installer or `CC-Switch-v{version}-Windows-Portable.zip` portable version from the [Releases](../../releases) page.
-
-### macOS Users
-
-**Method 1: Install via Homebrew (Recommended)**
-
-```bash
-brew install --cask cc-switch
-```
-
-Update:
-
-```bash
-brew upgrade --cask cc-switch
-```
-
-**Method 2: Manual Download**
-
-Download `CC-Switch-v{version}-macOS.dmg` (recommended) or `.zip` from the [Releases](../../releases) page.
-
-> **Note**: CC Switch for macOS is code-signed and notarized by Apple. You can install and open it directly.
-
-### Arch Linux Users
-
-**Install via paru (Recommended)**
-
-```bash
-paru -S cc-switch-bin
-```
-
-### Linux Users
-
-Download the latest Linux build from the [Releases](../../releases) page:
-
-- `CC-Switch-v{version}-Linux.deb` (Debian/Ubuntu)
-- `CC-Switch-v{version}-Linux.rpm` (Fedora/RHEL/openSUSE)
-- `CC-Switch-v{version}-Linux.AppImage` (Universal)
-
-> **Flatpak**: Not included in official releases. You can build it yourself from the `.deb` — see [`flatpak/README.md`](flatpak/README.md) for instructions.
+Compatibility note: LLM Usage Bar does not modify the original Legacy CC Switch data directory at `~/.cc-switch`.
 
 <details>
 <summary><strong>Architecture Overview</strong></summary>
@@ -241,7 +182,7 @@ Download the latest Linux build from the [Releases](../../releases) page:
 
 **Core Design Patterns**
 
-- **SSOT** (Single Source of Truth): All data stored in `~/.cc-switch/cc-switch.db` (SQLite)
+- **SSOT** (Single Source of Truth): All data stored in `~/.llm-usage-bar/llm-usage-bar.db` (SQLite)
 - **Dual-layer Storage**: SQLite for syncable data, JSON for device-level settings
 - **Dual-way Sync**: Write to live files on switch, backfill from live when editing active provider
 - **Atomic Writes**: Temp file + rename pattern prevents config corruption
@@ -303,22 +244,21 @@ pnpm tauri build --debug
 ### Rust Backend Development
 
 ```bash
-cd src-tauri
 
 # Format Rust code
-cargo fmt
+pnpm rust -- fmt --manifest-path src-tauri/Cargo.toml
 
 # Run clippy checks
-cargo clippy
+pnpm rust -- clippy --manifest-path src-tauri/Cargo.toml
 
 # Run backend tests
-cargo test
+pnpm rust -- test --manifest-path src-tauri/Cargo.toml
 
 # Run specific tests
-cargo test test_name
+pnpm rust -- test --manifest-path src-tauri/Cargo.toml test_name
 
 # Run tests with test-hooks feature
-cargo test --features test-hooks
+pnpm rust -- test --manifest-path src-tauri/Cargo.toml --features test-hooks
 ```
 
 ### Testing Guide
@@ -407,7 +347,7 @@ For new features, please open an issue for discussion before submitting a PR. PR
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=farion1231/cc-switch&type=Date)](https://www.star-history.com/#farion1231/cc-switch&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=Xr810/LLM-Usage-Bar&type=Date)](https://www.star-history.com/#Xr810/LLM-Usage-Bar&Date)
 
 ## License
 

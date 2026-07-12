@@ -71,18 +71,18 @@ pub async fn get_status(State(state): State<ProxyState>) -> Result<Json<ProxySta
 /// GET /v1/models — Codex model list (reachability check)
 ///
 /// Codex CLI probes this endpoint at startup and deserializes the response as a
-/// catalog with a top-level `models` field.  Return the cc-switch–managed model
+/// catalog with a top-level `models` field. Return the LLM Usage Bar-managed model
 /// catalog file directly so the format always matches what the current version
 /// of Codex expects.
 ///
 /// Only serves the catalog when the live config.toml still references the
-/// cc-switch–owned `model_catalog_json`, using the same path ownership rules as
+/// LLM Usage Bar-managed `model_catalog_json`, using the same path ownership rules as
 /// Codex live-setting import.
 pub async fn handle_models() -> Result<Json<Value>, ProxyError> {
     let generated_path = crate::codex_config::get_codex_model_catalog_path();
     let active_catalog_path = match crate::codex_config::read_codex_config_text() {
         Ok(config_text) => {
-            crate::codex_config::resolve_cc_switch_catalog_path(&config_text, &generated_path)
+            crate::codex_config::resolve_llm_usage_bar_catalog_path(&config_text, &generated_path)
         }
         Err(_) => None,
     };
@@ -95,7 +95,7 @@ pub async fn handle_models() -> Result<Json<Value>, ProxyError> {
     } else {
         if active_catalog_path.is_none() {
             log::debug!(
-                "[models] stale guard: catalog not served (model_catalog_json not set to cc-switch catalog)"
+                "[models] stale guard: catalog not served (model_catalog_json not set to the managed catalog)"
             );
         }
         json!({"models": []})
@@ -1276,7 +1276,7 @@ fn codex_proxy_error_json(
                 "error": {
                     "message": get_error_message(error),
                     "type": "proxy_error",
-                    "code": codex_proxy_error_code(error),
+                    "code": legacy_compatible_codex_proxy_error_code(error),
                     "param": Value::Null,
                 }
             }),
@@ -1292,15 +1292,15 @@ fn codex_proxy_error_json(
     };
 
     let message = if upstream_status == Some(413) {
-        // 413 来自上游渠道商的网关（典型是 nginx 的 client_max_body_size），不是 CC
-        // Switch 本地代理的限制（本地 DefaultBodyLimit 已放到 200MB）。上游响应体往往是
+        // 413 来自上游渠道商的网关（典型是 nginx 的 client_max_body_size），不是
+        // LLM Usage Bar 本地代理的限制（本地 DefaultBodyLimit 已放到 200MB）。上游响应体往往是
         // 一整段 nginx HTML，对用户毫无价值，这里替换成明确指向上游 + 可操作的指引，
-        // 避免「以为是 CC Switch 封装了 nginx / 是本地代理的锅」这种反复出现的误解。
+        // 避免「以为是 LLM Usage Bar 封装了 nginx / 是本地代理的锅」这种误解。
         format!(
             concat!(
                 "Upstream provider rejected the request with HTTP 413 (Payload Too Large). ",
                 "The request body exceeds the upstream gateway's size limit; this is the ",
-                "provider's server-side limit, not a CC Switch limit. ",
+                "provider's server-side limit, not an LLM Usage Bar limit. ",
                 "Provider: {provider}; model: {model}; endpoint: {endpoint}. ",
                 "To recover, shrink the request: run /compact, remove large pasted logs or ",
                 "inline images, or ask the provider to raise its request body limit ",
@@ -1321,7 +1321,7 @@ fn codex_proxy_error_json(
             .map(|status| format!("; upstream_status: HTTP {status}"))
             .unwrap_or_default();
         format!(
-            "CC Switch local proxy failed while handling Codex endpoint {endpoint}. Provider: {provider_name}; model: {request_model}{status_fragment}; cause: {cause}"
+            "LLM Usage Bar local proxy failed while handling Codex endpoint {endpoint}. Provider: {provider_name}; model: {request_model}{status_fragment}; cause: {cause}"
         )
     };
 
@@ -1342,7 +1342,7 @@ fn codex_proxy_error_json(
     if error_obj.get("code").map(Value::is_null).unwrap_or(true) {
         error_obj.insert(
             "code".to_string(),
-            Value::String(codex_proxy_error_code(error).to_string()),
+            Value::String(legacy_compatible_codex_proxy_error_code(error).to_string()),
         );
     }
 
@@ -1370,7 +1370,7 @@ fn codex_proxy_error_json(
     body
 }
 
-fn codex_proxy_error_code(error: &ProxyError) -> &'static str {
+fn legacy_compatible_codex_proxy_error_code(error: &ProxyError) -> &'static str {
     match error {
         ProxyError::ForwardFailed(_) => "cc_switch_forward_failed",
         ProxyError::Timeout(_) | ProxyError::StreamIdleTimeout(_) => "cc_switch_timeout",
@@ -2126,8 +2126,8 @@ async fn log_usage(
 mod tests {
     use super::{
         body_looks_like_sse, body_snippet, chat_sse_to_response_value, codex_proxy_error_json,
-        responses_sse_to_response_value, should_use_claude_transform_streaming, transform,
-        upstream_body_parse_error,
+        legacy_compatible_codex_proxy_error_code, responses_sse_to_response_value,
+        should_use_claude_transform_streaming, transform, upstream_body_parse_error,
     };
     use crate::proxy::ProxyError;
 
@@ -2745,7 +2745,7 @@ data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\"}}\n
         let body = codex_proxy_error_json("DeepSeek", "deepseek-chat", "/responses", &error);
 
         let message = body["error"]["message"].as_str().unwrap();
-        assert!(message.contains("CC Switch local proxy failed"));
+        assert!(message.contains("LLM Usage Bar local proxy failed"));
         assert!(message.contains("DeepSeek"));
         assert!(message.contains("deepseek-chat"));
         assert!(message.contains("/responses"));
@@ -2753,6 +2753,100 @@ data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\"}}\n
         assert_eq!(body["error"]["code"], "cc_switch_forward_failed");
         assert_eq!(body["error"]["provider"], "DeepSeek");
         assert_eq!(body["error"]["model"], "deepseek-chat");
+    }
+
+    #[test]
+    fn legacy_compatible_codex_proxy_error_codes_preserve_legacy_wire_bytes() {
+        let cases = [
+            (
+                ProxyError::ForwardFailed("x".to_string()),
+                "cc_switch_forward_failed",
+            ),
+            (ProxyError::Timeout("x".to_string()), "cc_switch_timeout"),
+            (ProxyError::StreamIdleTimeout(1), "cc_switch_timeout"),
+            (
+                ProxyError::NoAvailableProvider,
+                "cc_switch_no_available_provider",
+            ),
+            (
+                ProxyError::AllProvidersCircuitOpen,
+                "cc_switch_all_providers_circuit_open",
+            ),
+            (
+                ProxyError::NoProvidersConfigured,
+                "cc_switch_no_providers_configured",
+            ),
+            (
+                ProxyError::MaxRetriesExceeded,
+                "cc_switch_max_retries_exceeded",
+            ),
+            (
+                ProxyError::ProviderUnhealthy("x".to_string()),
+                "cc_switch_provider_unhealthy",
+            ),
+            (
+                ProxyError::RouteNotBound("x".to_string()),
+                "cc_switch_route_not_bound",
+            ),
+            (
+                ProxyError::RouteProviderDisabled("x".to_string()),
+                "cc_switch_route_provider_disabled",
+            ),
+            (
+                ProxyError::RouteProviderNotMetered("x".to_string()),
+                "cc_switch_route_provider_not_metered",
+            ),
+            (
+                ProxyError::RouteConfigIncomplete("x".to_string()),
+                "cc_switch_route_config_incomplete",
+            ),
+            (
+                ProxyError::ConfigError("x".to_string()),
+                "cc_switch_config_error",
+            ),
+            (
+                ProxyError::TransformError("x".to_string()),
+                "cc_switch_transform_error",
+            ),
+            (
+                ProxyError::InvalidRequest("x".to_string()),
+                "cc_switch_invalid_request",
+            ),
+            (
+                ProxyError::AuthError("x".to_string()),
+                "cc_switch_auth_error",
+            ),
+            (
+                ProxyError::UpstreamError {
+                    status: 500,
+                    body: None,
+                },
+                "cc_switch_upstream_error",
+            ),
+            (
+                ProxyError::DatabaseError("x".to_string()),
+                "cc_switch_database_error",
+            ),
+            (
+                ProxyError::Internal("x".to_string()),
+                "cc_switch_internal_error",
+            ),
+            (ProxyError::AlreadyRunning, "cc_switch_proxy_error"),
+            (ProxyError::NotRunning, "cc_switch_proxy_error"),
+            (
+                ProxyError::BindFailed("x".to_string()),
+                "cc_switch_proxy_error",
+            ),
+            (ProxyError::StopTimeout, "cc_switch_proxy_error"),
+            (
+                ProxyError::StopFailed("x".to_string()),
+                "cc_switch_proxy_error",
+            ),
+        ];
+
+        for (error, expected) in cases {
+            assert_eq!(legacy_compatible_codex_proxy_error_code(&error), expected);
+        }
     }
 
     #[test]
@@ -2790,7 +2884,7 @@ data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\"}}\n
 
         let message = body["error"]["message"].as_str().unwrap();
         // 不再误导成「本地代理失败」
-        assert!(!message.contains("CC Switch local proxy failed"));
+        assert!(!message.contains("LLM Usage Bar local proxy failed"));
         // 明确指向上游 + 体积超限 + 可操作指引
         assert!(message.contains("413"));
         assert!(message.to_lowercase().contains("upstream"));

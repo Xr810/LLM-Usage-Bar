@@ -1,16 +1,144 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
-use cc_switch_lib::{AppError, MultiAppConfig};
+use llm_usage_bar_lib::product_identity::{
+    DATABASE_FILE, DATABASE_IDENTITY_ARCHIVE_FILE, LEGACY_DATABASE_FILE, LOG_BASENAME,
+};
+use llm_usage_bar_lib::{
+    create_schema_v13_fixture_test_hook, prepare_database_runtime_test_hook,
+    runtime_log_paths_test_hook, AppError, AppType, MultiAppConfig,
+};
 
-mod support;
-use support::{ensure_test_home, reset_test_fs, test_mutex};
+fn ensure_test_home() -> &'static Path {
+    static HOME: OnceLock<PathBuf> = OnceLock::new();
+    HOME.get_or_init(|| {
+        let base = std::env::temp_dir().join(format!(
+            "llm-usage-bar-app-config-load-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).expect("create isolated test home");
+        std::env::set_var("LLM_USAGE_BAR_TEST_HOME", &base);
+        std::env::set_var("HOME", &base);
+        base
+    })
+    .as_path()
+}
+
+fn reset_test_fs() {
+    let home = ensure_test_home();
+    for subdir in [".llm-usage-bar", ".cc-switch"] {
+        let path = home.join(subdir);
+        if path.exists() {
+            fs::remove_dir_all(&path).expect("reset isolated test directory");
+        }
+    }
+}
+
+fn test_mutex() -> &'static Mutex<()> {
+    static MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
+    MUTEX.get_or_init(|| Mutex::new(()))
+}
 
 fn cfg_path() -> PathBuf {
     let home = std::env::var("HOME").expect("HOME should be set by ensure_test_home");
     PathBuf::from(home)
         .join(".llm-usage-bar")
         .join("config.json")
+}
+
+#[test]
+fn database_identity_migrates_v13_and_threads_authoritative_runtime_paths() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    reset_test_fs();
+    let home = ensure_test_home();
+    let app_dir = home.join(".llm-usage-bar");
+    fs::create_dir_all(&app_dir).expect("create app config dir");
+    let canonical_app_dir = fs::canonicalize(&app_dir).expect("canonicalize app config dir");
+    let old_path = app_dir.join(LEGACY_DATABASE_FILE);
+
+    create_schema_v13_fixture_test_hook(&old_path).expect("create fixed v13 prior-name database");
+    let legacy = rusqlite::Connection::open(&old_path).expect("open fixture for v13 pinning");
+    legacy
+        .execute(
+            "INSERT INTO providers (id, app_type, name, settings_config, meta)
+             VALUES ('identity-fixture', 'claude', 'Identity Fixture', ?1, '{}')",
+            [serde_json::json!({"env": {"ANTHROPIC_AUTH_TOKEN": "fixture-only"}}).to_string()],
+        )
+        .expect("seed fixed v13 prior-name database");
+    drop(legacy);
+
+    let prepared =
+        prepare_database_runtime_test_hook(&app_dir).expect("prepare and open runtime database");
+    let identity = &prepared.identity;
+    let expected_new_path = canonical_app_dir.join(DATABASE_FILE);
+    let expected_archive_path = canonical_app_dir.join(DATABASE_IDENTITY_ARCHIVE_FILE);
+
+    assert!(identity.migrated);
+    assert_eq!(identity.database_path, expected_new_path);
+    assert_eq!(
+        identity.archived_prior_path,
+        Some(expected_archive_path.clone())
+    );
+    assert_eq!(identity.retained_prior_path, None);
+    assert_eq!(identity.durability_warning, None);
+    assert!(identity.database_path.exists());
+    assert!(expected_archive_path.exists());
+    assert!(!canonical_app_dir.join(LEGACY_DATABASE_FILE).exists());
+
+    assert_eq!(
+        prepared.database.database_path(),
+        Some(identity.database_path.as_path())
+    );
+
+    let exported = prepared
+        .database
+        .export_sql_string()
+        .expect("export authoritative database");
+    let backup_id = prepared
+        .database
+        .import_sql_string(&exported)
+        .expect("import should back up the authoritative database");
+    assert!(
+        !backup_id.is_empty(),
+        "disk database backup must be created"
+    );
+    assert!(canonical_app_dir
+        .join("backups")
+        .join(format!("{backup_id}.db"))
+        .exists());
+
+    let (file_log, crash_log) = runtime_log_paths_test_hook(&canonical_app_dir);
+    assert_eq!(
+        file_log,
+        canonical_app_dir
+            .join("logs")
+            .join(format!("{LOG_BASENAME}.log"))
+    );
+    assert_eq!(crash_log, canonical_app_dir.join("crash.log"));
+}
+
+#[test]
+fn database_runtime_fresh_install_opens_the_prepared_authoritative_path() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    reset_test_fs();
+    let home = ensure_test_home();
+    let app_dir = home.join(".llm-usage-bar");
+    fs::create_dir_all(&app_dir).expect("create fresh app config dir");
+    let canonical_app_dir = fs::canonicalize(&app_dir).expect("canonicalize app config dir");
+
+    let prepared =
+        prepare_database_runtime_test_hook(&app_dir).expect("prepare and open fresh database");
+    let expected = canonical_app_dir.join(DATABASE_FILE);
+
+    assert!(!prepared.identity.migrated);
+    assert_eq!(prepared.identity.database_path, expected);
+    assert_eq!(
+        prepared.database.database_path(),
+        Some(prepared.identity.database_path.as_path())
+    );
+    assert!(prepared.identity.database_path.exists());
 }
 
 #[test]
@@ -102,8 +230,6 @@ fn load_valid_v2_config_succeeds() {
 
     let loaded = MultiAppConfig::load().expect("v2 should load successfully");
     assert_eq!(loaded.version, 2);
-    assert!(loaded
-        .get_manager(&cc_switch_lib::AppType::Claude)
-        .is_some());
-    assert!(loaded.get_manager(&cc_switch_lib::AppType::Codex).is_some());
+    assert!(loaded.get_manager(&AppType::Claude).is_some());
+    assert!(loaded.get_manager(&AppType::Codex).is_some());
 }

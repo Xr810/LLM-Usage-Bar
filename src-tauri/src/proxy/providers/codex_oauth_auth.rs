@@ -54,8 +54,8 @@ const DEVICE_CODE_DEFAULT_EXPIRES_IN: u64 = 900;
 /// 轮询间隔安全余量（秒）
 const POLLING_SAFETY_MARGIN_SECS: u64 = 3;
 
-/// User-Agent
-const CODEX_USER_AGENT: &str = "cc-switch-codex-oauth";
+/// Historical User-Agent retained for OAuth server compatibility.
+const CODEX_USER_AGENT: &str = crate::product_identity::LEGACY_CODEX_OAUTH_USER_AGENT;
 
 /// Codex OAuth 错误
 #[derive(Debug, thiserror::Error)]
@@ -969,6 +969,11 @@ fn extract_identity_from_tokens(tokens: &OAuthTokenResponse) -> (Option<String>,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn codex_oauth_user_agent_preserves_legacy_wire_bytes() {
+        assert_eq!(CODEX_USER_AGENT, "cc-switch-codex-oauth");
+    }
 
     #[test]
     fn test_parse_interval_number() {

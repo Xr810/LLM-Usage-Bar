@@ -1,4 +1,4 @@
-use crate::database::{lock_conn, Database};
+use crate::database::{lock_conn, Database, UsageSyncCursor};
 use crate::error::AppError;
 use crate::proxy::usage::calculator::{CostBreakdown, CostCalculator, ModelPricing};
 use crate::proxy::usage::cost_parser::UpstreamCost;
@@ -116,51 +116,92 @@ impl<'a> UsageIngestionService<'a> {
         validate_input(input)?;
         let mut conn = lock_conn!(self.db.conn);
         let transaction = conn.transaction()?;
-
-        let provider = load_and_validate_provider(&transaction, input)?;
-        let trusted_cost = decide_cost(&transaction, input, &provider)?;
         let created_at = now_timestamp()?;
-        let stable_match = find_stable_cross_source_match(&transaction, input)?;
-        let event = build_event(input, &provider, &trusted_cost, created_at);
-        let inserted = insert_event(&transaction, &event)?;
+        let outcome = ingest_on_transaction(&transaction, input, created_at)?;
 
-        if !inserted {
-            transaction.commit()?;
-            return Ok(UsageIngestionOutcome {
-                inserted: false,
-                link_created: false,
-            });
+        transaction.commit()?;
+        if outcome.inserted {
+            crate::usage_events::notify_log_recorded();
+        }
+        Ok(outcome)
+    }
+
+    /// Persist a parsed source batch and its durable cursors in one SQLite
+    /// transaction. Callers may pass an empty input slice when a successfully
+    /// parsed resource contains no billable events but its cursor still needs
+    /// to advance.
+    pub fn ingest_batch_and_advance_cursors(
+        &self,
+        inputs: &[UsageIngestionInput],
+        cursors: &[UsageSyncCursor],
+    ) -> Result<Vec<UsageIngestionOutcome>, AppError> {
+        for input in inputs {
+            validate_input(input)?;
         }
 
-        let link_created = if let Some((canonical_event_id, link_kind, link_value)) = stable_match {
-            transaction.execute(
-                "INSERT INTO usage_event_links (
-                    canonical_event_id, duplicate_event_id, link_kind, link_value, created_at
-                 ) VALUES (?1, ?2, ?3, ?4, ?5)
-                 ON CONFLICT DO NOTHING",
-                params![
-                    canonical_event_id,
-                    input.event_id,
-                    link_kind,
-                    link_value,
-                    created_at,
-                ],
-            )? == 1
-        } else {
-            false
-        };
-
-        if let Some(legacy) = &input.legacy {
-            insert_legacy_log(&transaction, input, legacy, &trusted_cost, created_at)?;
+        let mut conn = lock_conn!(self.db.conn);
+        let transaction = conn.transaction()?;
+        let created_at = now_timestamp()?;
+        let mut outcomes = Vec::with_capacity(inputs.len());
+        for input in inputs {
+            outcomes.push(ingest_on_transaction(&transaction, input, created_at)?);
+        }
+        for cursor in cursors {
+            Database::put_usage_sync_cursor_on_conn(&transaction, cursor)?;
         }
 
         transaction.commit()?;
-        crate::usage_events::notify_log_recorded();
-        Ok(UsageIngestionOutcome {
-            inserted: true,
-            link_created,
-        })
+        if outcomes.iter().any(|outcome| outcome.inserted) {
+            crate::usage_events::notify_log_recorded();
+        }
+        Ok(outcomes)
     }
+}
+
+fn ingest_on_transaction(
+    transaction: &Transaction<'_>,
+    input: &UsageIngestionInput,
+    created_at: i64,
+) -> Result<UsageIngestionOutcome, AppError> {
+    let provider = load_and_validate_provider(transaction, input)?;
+    let trusted_cost = decide_cost(transaction, input, &provider)?;
+    let stable_match = find_stable_cross_source_match(transaction, input)?;
+    let event = build_event(input, &provider, &trusted_cost, created_at);
+    let inserted = insert_event(transaction, &event)?;
+
+    if !inserted {
+        return Ok(UsageIngestionOutcome {
+            inserted: false,
+            link_created: false,
+        });
+    }
+
+    let link_created = if let Some((canonical_event_id, link_kind, link_value)) = stable_match {
+        transaction.execute(
+            "INSERT INTO usage_event_links (
+                    canonical_event_id, duplicate_event_id, link_kind, link_value, created_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT DO NOTHING",
+            params![
+                canonical_event_id,
+                input.event_id,
+                link_kind,
+                link_value,
+                created_at,
+            ],
+        )? == 1
+    } else {
+        false
+    };
+
+    if let Some(legacy) = &input.legacy {
+        insert_legacy_log(transaction, input, legacy, &trusted_cost, created_at)?;
+    }
+
+    Ok(UsageIngestionOutcome {
+        inserted: true,
+        link_created,
+    })
 }
 
 fn validate_input(input: &UsageIngestionInput) -> Result<(), AppError> {
@@ -474,7 +515,7 @@ mod tests {
     use super::{
         LegacyLogInput, UsageIngestionInput, UsageIngestionOutcome, UsageIngestionService,
     };
-    use crate::database::Database;
+    use crate::database::{Database, UsageSyncCursor};
     use crate::proxy::usage::cost_parser::UpstreamCost;
     use crate::proxy::usage::parser::TokenUsage;
     use crate::usage::domain::{BillingKind, CostSource, TokenSource, UsageProviderInput};
@@ -562,6 +603,110 @@ mod tests {
             is_streaming: false,
             cost_multiplier: Decimal::ONE,
         }
+    }
+
+    fn cursor(byte_offset: i64) -> UsageSyncCursor {
+        UsageSyncCursor {
+            source: "claude".to_string(),
+            cursor_key: "session.jsonl".to_string(),
+            resource_path: Some("/tmp/session.jsonl".to_string()),
+            resource_identity: Some("dev:1:ino:2".to_string()),
+            modified_at_ns: 123,
+            size_bytes: byte_offset,
+            byte_offset,
+            line_offset: 2,
+            parser_state_json: Some("{\"version\":1}".to_string()),
+            last_success_at: 456,
+        }
+    }
+
+    #[test]
+    fn batch_commits_all_events_and_cursor_together() {
+        let db = Database::memory().unwrap();
+        save_provider(&db, "global-provider", None);
+        let service = UsageIngestionService::new(&db);
+        let inputs = [
+            input("batch-first", TokenSource::SessionLog),
+            input("batch-second", TokenSource::SessionLog),
+        ];
+        let next_cursor = cursor(200);
+
+        let outcomes = service
+            .ingest_batch_and_advance_cursors(&inputs, std::slice::from_ref(&next_cursor))
+            .unwrap();
+
+        assert_eq!(
+            outcomes,
+            vec![
+                UsageIngestionOutcome {
+                    inserted: true,
+                    link_created: false,
+                },
+                UsageIngestionOutcome {
+                    inserted: true,
+                    link_created: false,
+                },
+            ]
+        );
+        assert_eq!(
+            db.get_usage_sync_cursor("claude", "session.jsonl").unwrap(),
+            Some(next_cursor)
+        );
+        let conn = db.conn.lock().unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM usage_events", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn batch_failure_rolls_back_prior_events_and_cursor() {
+        let db = Database::memory().unwrap();
+        save_provider(&db, "global-provider", None);
+        let service = UsageIngestionService::new(&db);
+        let first = input("batch-rollback-first", TokenSource::SessionLog);
+        let mut second = input("batch-rollback-second", TokenSource::SessionLog);
+        second.provider_id = "missing-provider".to_string();
+
+        assert!(service
+            .ingest_batch_and_advance_cursors(&[first, second], &[cursor(300)])
+            .is_err());
+
+        assert!(db
+            .get_usage_sync_cursor("claude", "session.jsonl")
+            .unwrap()
+            .is_none());
+        let conn = db.conn.lock().unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM usage_events", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn batch_duplicate_still_advances_cursor() {
+        let db = Database::memory().unwrap();
+        save_provider(&db, "global-provider", None);
+        let service = UsageIngestionService::new(&db);
+        let duplicate = input("batch-duplicate", TokenSource::SessionLog);
+        assert!(service.ingest(&duplicate).unwrap().inserted);
+        let next_cursor = cursor(400);
+
+        let outcomes = service
+            .ingest_batch_and_advance_cursors(&[duplicate], std::slice::from_ref(&next_cursor))
+            .unwrap();
+
+        assert_eq!(
+            outcomes,
+            vec![UsageIngestionOutcome {
+                inserted: false,
+                link_created: false,
+            }]
+        );
+        assert_eq!(
+            db.get_usage_sync_cursor("claude", "session.jsonl").unwrap(),
+            Some(next_cursor)
+        );
     }
 
     #[test]

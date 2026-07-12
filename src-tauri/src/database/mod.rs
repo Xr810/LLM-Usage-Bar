@@ -25,6 +25,7 @@
 
 pub(crate) mod backup;
 mod dao;
+mod identity_migration;
 mod migration;
 mod schema;
 
@@ -37,20 +38,24 @@ pub(crate) use dao::proxy::{
     validate_cost_multiplier, validate_pricing_source, PRICING_SOURCE_REQUEST,
     PRICING_SOURCE_RESPONSE,
 };
+pub use dao::usage_sync_cursors::UsageSyncCursor;
 pub use dao::FailoverQueueItem;
 pub use dao::Profile;
+pub(crate) use identity_migration::{prepare_database_identity, DatabaseIdentityOutcome};
 
 use crate::config::get_app_config_dir;
 use crate::error::AppError;
+use crate::product_identity::current_database_path;
 use rusqlite::{hooks::Action, Connection};
 use serde::Serialize;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 // DAO 方法通过 impl Database 提供，无需额外导出
 
 /// 当前 Schema 版本号
 /// 每次修改表结构时递增，并在 schema.rs 中添加相应的迁移逻辑
-pub(crate) const SCHEMA_VERSION: i32 = 13;
+pub(crate) const SCHEMA_VERSION: i32 = 14;
 
 /// 安全地序列化 JSON，避免 unwrap panic
 pub(crate) fn to_json_string<T: Serialize>(value: &T) -> Result<String, AppError> {
@@ -77,9 +82,10 @@ pub(crate) use lock_conn;
 pub struct Database {
     pub(crate) conn: Mutex<Connection>,
     pub(crate) usage_source_binding_operation: Mutex<()>,
+    database_path: Option<PathBuf>,
 }
 
-fn register_db_change_hook(conn: &Connection) {
+fn register_db_change_hook(conn: &Connection) -> rusqlite::Result<()> {
     conn.update_hook(Some(
         |action: Action, _database: &str, table: &str, _row_id: i64| match action {
             Action::SQLITE_INSERT | Action::SQLITE_UPDATE | Action::SQLITE_DELETE => {
@@ -88,23 +94,31 @@ fn register_db_change_hook(conn: &Connection) {
             }
             _ => {}
         },
-    ));
+    ))
 }
 
 impl Database {
     /// 初始化数据库连接并创建表
     ///
-    /// 数据库文件位于 `~/.cc-switch/cc-switch.db`
+    /// 数据库文件位于当前应用配置目录的 `llm-usage-bar.db`。
     pub fn init() -> Result<Self, AppError> {
-        let db_path = get_app_config_dir().join("cc-switch.db");
+        let db_path = current_database_path(&get_app_config_dir());
+        Self::init_at(&db_path)
+    }
+
+    /// 使用调用方已经选定的权威路径初始化数据库。
+    pub fn init_at(db_path: &Path) -> Result<Self, AppError> {
         let db_exists = db_path.exists();
+        // Resolve external source roots before opening or migrating SQLite so
+        // v13 cursor classification never depends on post-database state.
+        let usage_source_roots = crate::usage::source_roots::UsageSourceRoots::resolve_runtime();
 
         // 确保父目录存在
         if let Some(parent) = db_path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
         }
 
-        let conn = Connection::open(&db_path).map_err(|e| AppError::Database(e.to_string()))?;
+        let conn = Connection::open(db_path).map_err(|e| AppError::Database(e.to_string()))?;
 
         // 启用外键约束
         conn.execute("PRAGMA foreign_keys = ON;", [])
@@ -115,11 +129,12 @@ impl Database {
             conn.execute("PRAGMA auto_vacuum = INCREMENTAL;", [])
                 .map_err(|e| AppError::Database(e.to_string()))?;
         }
-        register_db_change_hook(&conn);
+        register_db_change_hook(&conn)?;
 
         let db = Self {
             conn: Mutex::new(conn),
             usage_source_binding_operation: Mutex::new(()),
+            database_path: Some(db_path.to_path_buf()),
         };
         db.create_tables()?;
 
@@ -138,7 +153,7 @@ impl Database {
             }
         }
 
-        db.apply_schema_migrations()?;
+        db.apply_schema_migrations_with_roots(&usage_source_roots)?;
         if let Err(e) = db.ensure_incremental_auto_vacuum() {
             log::warn!("Failed to ensure incremental auto-vacuum: {e}");
         }
@@ -160,6 +175,11 @@ impl Database {
         }
 
         Ok(db)
+    }
+
+    /// 返回此连接所代表的权威磁盘路径；内存数据库返回 `None`。
+    pub fn database_path(&self) -> Option<&Path> {
+        self.database_path.as_deref()
     }
 
     /// 读取磁盘上数据库的 `user_version`；仅当它比应用支持的 [`SCHEMA_VERSION`]
@@ -187,11 +207,12 @@ impl Database {
             .map_err(|e| AppError::Database(e.to_string()))?;
         conn.execute("PRAGMA auto_vacuum = INCREMENTAL;", [])
             .map_err(|e| AppError::Database(e.to_string()))?;
-        register_db_change_hook(&conn);
+        register_db_change_hook(&conn)?;
 
         let db = Self {
             conn: Mutex::new(conn),
             usage_source_binding_operation: Mutex::new(()),
+            database_path: None,
         };
         db.create_tables()?;
         db.apply_schema_migrations()?;

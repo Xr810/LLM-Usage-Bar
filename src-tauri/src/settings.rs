@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{OnceLock, RwLock};
+use tempfile::NamedTempFile;
 
 use crate::app_config::AppType;
 use crate::error::AppError;
@@ -95,7 +96,7 @@ pub struct WebDavSyncStatus {
 }
 
 fn default_remote_root() -> String {
-    "cc-switch-sync".to_string()
+    crate::product_identity::LEGACY_SYNC_REMOTE_ROOT.to_string()
 }
 fn default_profile() -> String {
     "default".to_string()
@@ -445,7 +446,7 @@ pub struct AppSettings {
     /// Skill 同步方式：auto（默认，优先 symlink）、symlink、copy
     #[serde(default)]
     pub skill_sync_method: SyncMethod,
-    /// Skill 存储位置：cc_switch（默认）或 unified（~/.agents/skills/）
+    /// Skill 存储位置：llm_usage_bar（默认）或 unified（~/.agents/skills/）
     #[serde(default)]
     pub skill_storage_location: SkillStorageLocation,
 
@@ -611,14 +612,51 @@ impl AppSettings {
         }
     }
 
-    fn load_from_file() -> Self {
-        let Some(path) = Self::settings_path() else {
-            return Self::default();
+    fn decode_settings_json(
+        content: &str,
+    ) -> Result<(Self, Option<serde_json::Value>), serde_json::Error> {
+        let mut value: serde_json::Value = serde_json::from_str(content)?;
+        let used_legacy_storage_alias = value
+            .get("skillStorageLocation")
+            .and_then(serde_json::Value::as_str)
+            == Some("cc_switch");
+        let mut settings: Self = serde_json::from_value(value.clone())?;
+        settings.normalize_paths();
+        let canonical_value = if used_legacy_storage_alias {
+            value
+                .as_object_mut()
+                .expect("typed AppSettings JSON must be an object")
+                .insert(
+                    "skillStorageLocation".to_string(),
+                    serde_json::Value::String("llm_usage_bar".to_string()),
+                );
+            Some(value)
+        } else {
+            None
         };
-        if let Ok(content) = fs::read_to_string(&path) {
-            match serde_json::from_str::<AppSettings>(&content) {
-                Ok(mut settings) => {
-                    settings.normalize_paths();
+        Ok((settings, canonical_value))
+    }
+
+    fn load_from_path(path: &Path) -> Self {
+        Self::load_from_path_with_writer(path, write_canonical_settings_value)
+    }
+
+    fn load_from_path_with_writer<F>(path: &Path, write_canonical: F) -> Self
+    where
+        F: FnOnce(&Path, &serde_json::Value) -> Result<(), AppError>,
+    {
+        if let Ok(content) = fs::read_to_string(path) {
+            match Self::decode_settings_json(&content) {
+                Ok((settings, canonical_value)) => {
+                    if let Some(canonical_value) = canonical_value.as_ref() {
+                        if let Err(error) = write_canonical(path, canonical_value) {
+                            log::warn!(
+                                "已读取旧 skillStorageLocation，但规范化写回失败。路径: {}, 错误: {}",
+                                path.display(),
+                                error
+                            );
+                        }
+                    }
                     settings
                 }
                 Err(err) => {
@@ -634,43 +672,67 @@ impl AppSettings {
             Self::default()
         }
     }
+
+    fn load_from_file() -> Self {
+        Self::settings_path()
+            .map(|path| Self::load_from_path(&path))
+            .unwrap_or_default()
+    }
 }
 
-fn save_settings_file(settings: &AppSettings) -> Result<(), AppError> {
+fn write_settings_json_atomically(path: &Path, json: &str) -> Result<(), AppError> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| AppError::Config("无效的设置文件路径".to_string()))?;
+    fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
+
+    let mut temp = NamedTempFile::new_in(parent).map_err(|e| AppError::io(parent, e))?;
+    temp.write_all(json.as_bytes())
+        .map_err(|e| AppError::io(temp.path(), e))?;
+    temp.flush().map_err(|e| AppError::io(temp.path(), e))?;
+    temp.as_file()
+        .sync_all()
+        .map_err(|e| AppError::io(temp.path(), e))?;
+
+    #[cfg(unix)]
+    if let Ok(metadata) = fs::metadata(path) {
+        fs::set_permissions(temp.path(), metadata.permissions())
+            .map_err(|e| AppError::io(temp.path(), e))?;
+    }
+
+    temp.persist(path).map_err(|error| AppError::IoContext {
+        context: format!("原子替换设置文件失败: {}", path.display()),
+        source: error.error,
+    })?;
+
+    #[cfg(unix)]
+    fs::File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|e| AppError::io(parent, e))?;
+
+    Ok(())
+}
+
+fn write_canonical_settings_value(path: &Path, value: &serde_json::Value) -> Result<(), AppError> {
+    let json =
+        serde_json::to_string_pretty(value).map_err(|e| AppError::JsonSerialize { source: e })?;
+    write_settings_json_atomically(path, &json)
+}
+
+fn save_settings_file_at(path: &Path, settings: &AppSettings) -> Result<(), AppError> {
     let mut normalized = settings.clone();
     normalized.normalize_paths();
-    let Some(path) = AppSettings::settings_path() else {
-        return Err(AppError::Config("无法获取用户主目录".to_string()));
-    };
-
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
-    }
 
     let json = serde_json::to_string_pretty(&normalized)
         .map_err(|e| AppError::JsonSerialize { source: e })?;
-    #[cfg(unix)]
-    {
-        use std::fs::OpenOptions;
-        use std::os::unix::fs::OpenOptionsExt;
+    write_settings_json_atomically(path, &json)
+}
 
-        let mut file = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&path)
-            .map_err(|e| AppError::io(&path, e))?;
-        file.write_all(json.as_bytes())
-            .map_err(|e| AppError::io(&path, e))?;
-    }
-
-    #[cfg(not(unix))]
-    {
-        fs::write(&path, json).map_err(|e| AppError::io(&path, e))?;
-    }
-
-    Ok(())
+fn save_settings_file(settings: &AppSettings) -> Result<(), AppError> {
+    let Some(path) = AppSettings::settings_path() else {
+        return Err(AppError::Config("无法获取用户主目录".to_string()));
+    };
+    save_settings_file_at(&path, settings)
 }
 
 static SETTINGS_STORE: OnceLock<RwLock<AppSettings>> = OnceLock::new();
@@ -1111,6 +1173,94 @@ pub fn update_s3_sync_status(status: WebDavSyncStatus) -> Result<(), AppError> {
 mod tests {
     use super::*;
     use crate::app_config::AppType;
+    use tempfile::tempdir;
+
+    #[test]
+    fn sync_defaults_preserve_existing_remote_root_bytes() {
+        assert_eq!(
+            WebDavSyncSettings::default().remote_root,
+            crate::product_identity::LEGACY_SYNC_REMOTE_ROOT
+        );
+        assert_eq!(
+            S3SyncSettings::default().remote_root,
+            crate::product_identity::LEGACY_SYNC_REMOTE_ROOT
+        );
+        assert_eq!(
+            crate::product_identity::LEGACY_SYNC_REMOTE_ROOT,
+            "cc-switch-sync"
+        );
+    }
+
+    #[test]
+    fn identity_discriminator_settings_load_rewrites_legacy_storage_value() {
+        let temp = tempdir().expect("create settings migration tempdir");
+        let path = temp.path().join("settings.json");
+        fs::write(
+            &path,
+            r#"{
+              "showInTray": true,
+              "minimizeToTrayOnClose": true,
+              "skillStorageLocation": "cc_switch",
+              "webdavSync": {
+                "baseUrl": "https://sync.example.test",
+                "username": "fixture",
+                "remoteRoot": "cc-switch-sync"
+              },
+              "futurePluginSetting": {
+                "identity": "cc-switch-plugin-wire",
+                "enabled": true
+              }
+            }"#,
+        )
+        .expect("write legacy settings");
+
+        let settings = AppSettings::load_from_path(&path);
+        assert_eq!(
+            settings.skill_storage_location,
+            SkillStorageLocation::LlmUsageBar
+        );
+
+        let rewritten: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).expect("read canonical settings"))
+                .expect("parse canonical settings");
+        assert_eq!(rewritten["skillStorageLocation"], "llm_usage_bar");
+        assert_eq!(rewritten["webdavSync"]["remoteRoot"], "cc-switch-sync");
+        assert_eq!(
+            rewritten["futurePluginSetting"],
+            serde_json::json!({
+                "identity": "cc-switch-plugin-wire",
+                "enabled": true
+            })
+        );
+    }
+
+    #[test]
+    fn identity_discriminator_settings_keeps_decoded_value_when_rewrite_fails() {
+        let temp = tempdir().expect("create settings failure tempdir");
+        let path = temp.path().join("settings.json");
+        fs::write(
+            &path,
+            r#"{"skillStorageLocation":"cc_switch","language":"zh"}"#,
+        )
+        .expect("write legacy settings");
+
+        let write_attempted = std::cell::Cell::new(false);
+        let settings = AppSettings::load_from_path_with_writer(&path, |_, _| {
+            write_attempted.set(true);
+            Err(AppError::Config(
+                "injected canonicalization failure".to_string(),
+            ))
+        });
+        assert_eq!(
+            settings.skill_storage_location,
+            SkillStorageLocation::LlmUsageBar
+        );
+        assert_eq!(settings.language.as_deref(), Some("zh"));
+        assert!(write_attempted.get());
+        assert!(fs::read_to_string(&path)
+            .expect("read unchanged settings")
+            .contains("cc_switch"));
+    }
 
     #[test]
     fn device_settings_follow_the_isolated_app_data_directory() {

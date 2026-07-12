@@ -17,7 +17,13 @@ import { setSessionFixtures } from "../msw/state";
 const toastSuccessMock = vi.fn();
 const toastErrorMock = vi.fn();
 const GROUP_EXPANSION_STORAGE_KEY =
+  "llm-usage-bar:session-manager:group-expansion";
+const LIST_VIEW_MODE_STORAGE_KEY =
+  "llm-usage-bar:session-manager:list-view-mode";
+const LEGACY_GROUP_EXPANSION_STORAGE_KEY =
   "cc-switch.sessionManager.groupExpansionState";
+const LEGACY_LIST_VIEW_MODE_STORAGE_KEY =
+  "cc-switch.sessionManager.listViewMode";
 
 vi.mock("sonner", () => ({
   toast: {
@@ -154,8 +160,10 @@ describe("SessionManagerPage", () => {
     toastSuccessMock.mockReset();
     toastErrorMock.mockReset();
     Element.prototype.scrollIntoView = vi.fn();
-    window.localStorage.removeItem("cc-switch.sessionManager.listViewMode");
+    window.localStorage.removeItem(LIST_VIEW_MODE_STORAGE_KEY);
     window.localStorage.removeItem(GROUP_EXPANSION_STORAGE_KEY);
+    window.localStorage.removeItem(LEGACY_LIST_VIEW_MODE_STORAGE_KEY);
+    window.localStorage.removeItem(LEGACY_GROUP_EXPANSION_STORAGE_KEY);
 
     const sessions: SessionMeta[] = [
       {
@@ -442,6 +450,35 @@ describe("SessionManagerPage", () => {
     expect(
       screen.queryByRole("button", { name: /Alpha Session/ }),
     ).not.toBeInTheDocument();
+  });
+
+  it("migrates valid legacy session preferences to LLM Usage Bar keys", async () => {
+    window.localStorage.setItem(LEGACY_LIST_VIEW_MODE_STORAGE_KEY, "grouped");
+    window.localStorage.setItem(
+      LEGACY_GROUP_EXPANSION_STORAGE_KEY,
+      JSON.stringify({
+        expandedProviderIds: ["codex"],
+        expandedDirectoryKeys: [],
+      }),
+    );
+
+    renderPage();
+
+    expect(
+      screen.getByRole("button", { name: /全部收起/i }),
+    ).toBeInTheDocument();
+    expect(window.localStorage.getItem(LIST_VIEW_MODE_STORAGE_KEY)).toBe(
+      "grouped",
+    );
+    expect(window.localStorage.getItem(GROUP_EXPANSION_STORAGE_KEY)).not.toBe(
+      null,
+    );
+    expect(
+      window.localStorage.getItem(LEGACY_LIST_VIEW_MODE_STORAGE_KEY),
+    ).toBeNull();
+    expect(
+      window.localStorage.getItem(LEGACY_GROUP_EXPANSION_STORAGE_KEY),
+    ).toBeNull();
   });
 
   it("persists manual expansion and collapses all grouped sessions", async () => {

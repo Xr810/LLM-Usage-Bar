@@ -1,7 +1,7 @@
-//! Deep link import functionality for CC Switch
+//! Deep link import functionality for LLM Usage Bar.
 //!
-//! This module implements the ccswitch:// protocol for importing configurations
-//! via deep links. Supports importing:
+//! The historical `ccswitch://` protocol remains a wire-compatibility boundary.
+//! This module supports importing:
 //! - Provider configurations (Claude/Codex/Gemini)
 //! - MCP server configurations
 //! - Prompts
@@ -19,6 +19,14 @@ mod utils;
 mod tests;
 
 use serde::{Deserialize, Serialize};
+
+/// Historical deep-link scheme retained byte-for-byte for existing links.
+pub const LEGACY_DEEP_LINK_SCHEME: &str = "ccswitch";
+
+pub(crate) fn has_legacy_deep_link_scheme(url: &str) -> bool {
+    url.split_once("://")
+        .is_some_and(|(scheme, _)| scheme == LEGACY_DEEP_LINK_SCHEME)
+}
 
 // Re-export public API
 pub use mcp::import_mcp_from_deeplink;

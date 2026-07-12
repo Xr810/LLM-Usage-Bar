@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
 import type { AppId } from "@/lib/api/types";
+import type { SkillStorageLocation } from "@/types";
 
 export type AppType =
   | "claude"
@@ -205,9 +206,7 @@ export const skillsApi = {
   },
 
   /** 迁移 Skill 存储位置 */
-  async migrateStorage(
-    target: "cc_switch" | "unified",
-  ): Promise<MigrationResult> {
+  async migrateStorage(target: SkillStorageLocation): Promise<MigrationResult> {
     return await invoke("migrate_skill_storage", { target });
   },
 

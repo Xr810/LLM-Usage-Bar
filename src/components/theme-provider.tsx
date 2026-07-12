@@ -6,6 +6,12 @@ import React, {
   useState,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import {
+  LEGACY_LOCAL_STORAGE_KEYS,
+  LOCAL_STORAGE_KEYS,
+  readMigratedLocalStorage,
+  writeMigratedLocalStorage,
+} from "@/lib/localStorageMigration";
 
 type Theme = "light" | "dark" | "system";
 
@@ -27,19 +33,25 @@ const ThemeProviderContext = createContext<ThemeContextValue | undefined>(
 export function ThemeProvider({
   children,
   defaultTheme = "system",
-  storageKey = "cc-switch-theme",
+  storageKey = LOCAL_STORAGE_KEYS.theme,
 }: ThemeProviderProps) {
   const getInitialTheme = () => {
     if (typeof window === "undefined") {
       return defaultTheme;
     }
 
-    const stored = window.localStorage.getItem(storageKey) as Theme | null;
-    if (stored === "light" || stored === "dark" || stored === "system") {
-      return stored;
-    }
-
-    return defaultTheme;
+    return readMigratedLocalStorage<Theme>({
+      currentKey: storageKey,
+      legacyKeys:
+        storageKey === LOCAL_STORAGE_KEYS.theme
+          ? LEGACY_LOCAL_STORAGE_KEYS.theme
+          : [],
+      defaultValue: defaultTheme,
+      parse: (value) =>
+        value === "light" || value === "dark" || value === "system"
+          ? value
+          : null,
+    });
   };
 
   const [theme, setThemeState] = useState<Theme>(getInitialTheme);
@@ -49,7 +61,13 @@ export function ThemeProvider({
       return;
     }
 
-    window.localStorage.setItem(storageKey, theme);
+    writeMigratedLocalStorage(
+      storageKey,
+      storageKey === LOCAL_STORAGE_KEYS.theme
+        ? LEGACY_LOCAL_STORAGE_KEYS.theme
+        : [],
+      theme,
+    );
   }, [theme, storageKey]);
 
   useEffect(() => {

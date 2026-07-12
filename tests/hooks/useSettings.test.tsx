@@ -299,7 +299,8 @@ describe("useSettings hook", () => {
       official: false,
     });
     expect(metadataMock.setRequiresRestart).toHaveBeenCalledWith(true);
-    expect(window.localStorage.getItem("language")).toBe("en");
+    expect(window.localStorage.getItem("llm-usage-bar:language")).toBe("en");
+    expect(window.localStorage.getItem("language")).toBeNull();
     expect(toastErrorMock).not.toHaveBeenCalled();
     // 插件同步已包含 syncCurrentProvidersLiveSafe，目录变更不再重复调用
     expect(syncCurrentProvidersLiveMock).toHaveBeenCalledTimes(1);
@@ -420,7 +421,9 @@ describe("useSettings hook", () => {
     });
 
     // 修复生效：读的是缓存实时值 true，payload=false，差异触发 clear_claude_config
-    expect(applyClaudePluginConfigMock).toHaveBeenCalledWith({ official: true });
+    expect(applyClaudePluginConfigMock).toHaveBeenCalledWith({
+      official: true,
+    });
     expect(syncCurrentProvidersLiveMock).toHaveBeenCalled();
   });
 

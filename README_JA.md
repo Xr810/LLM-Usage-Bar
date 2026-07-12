@@ -1,35 +1,32 @@
 <div align="center">
 
-# CC Switch
+# LLM Usage Bar
 
 ### Claude Code、Claude Desktop、Codex、Gemini CLI、OpenCode、OpenClaw、Hermes Agent のオールインワン管理ツール
 
-[![Version](https://img.shields.io/github/v/release/farion1231/cc-switch?color=blue&label=version)](https://github.com/farion1231/cc-switch/releases)
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/farion1231/cc-switch/releases)
+[![Version](https://img.shields.io/github/v/release/Xr810/LLM-Usage-Bar?color=blue&label=version)](https://github.com/Xr810/LLM-Usage-Bar/releases)
+[![Platform](https://img.shields.io/badge/platform-macOS-lightgrey.svg)](https://github.com/Xr810/LLM-Usage-Bar/releases)
 [![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-orange.svg)](https://tauri.app/)
-[![Downloads](https://img.shields.io/github/downloads/farion1231/cc-switch/total)](https://github.com/farion1231/cc-switch/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/Xr810/LLM-Usage-Bar/total)](https://github.com/Xr810/LLM-Usage-Bar/releases/latest)
 
-<a href="https://trendshift.io/repositories/15372" target="_blank"><img src="https://trendshift.io/api/badge/repositories/15372" alt="farion1231%2Fcc-switch | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
-<a href="https://www.star-history.com/#farion1231/cc-switch&Date"><picture><source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/badge?repo=farion1231/cc-switch&theme=dark" /><img alt="Star History Rank" src="https://api.star-history.com/badge?repo=farion1231/cc-switch" width="196" height="55" /></picture></a>
-
-### 🌐 唯一の公式サイト：**[ccswitch.io](https://ccswitch.io)**
+<a href="https://www.star-history.com/#Xr810/LLM-Usage-Bar&Date"><picture><source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/badge?repo=Xr810/LLM-Usage-Bar&theme=dark" /><img alt="Star History Rank" src="https://api.star-history.com/badge?repo=Xr810/LLM-Usage-Bar" width="196" height="55" /></picture></a>
 
 [English](README.md) | [中文](README_ZH.md) | 日本語 | [Deutsch](README_DE.md) | [Changelog](CHANGELOG.md)
 
 </div>
 
-## CC Switch を選ぶ理由
+## LLM Usage Bar を選ぶ理由
 
 最新の AI コーディングは Claude Code、Claude Desktop、Codex、Gemini CLI、OpenCode、OpenClaw、Hermes などのツールに依存していますが、各ツールの設定形式はバラバラです。API プロバイダを切り替えるたびに JSON、TOML、`.env` ファイルを手動で編集する必要があり、複数ツール間で MCP や Skills を統一的に管理する手段もありません。
 
-**CC Switch** は、対応する AI ツールを 1 つのデスクトップアプリで一元管理できます。設定ファイルを手作業で編集する代わりに、ワンクリックでプロバイダをインポートし、瞬時に切り替えられるビジュアルインターフェースを提供します。50 以上の組み込みプリセット、統一 MCP・Skills 管理、システムトレイからの即時切り替え機能を搭載。すべてはアトミック書き込みによる信頼性の高い SQLite データベースに支えられており、設定の破損を防ぎます。
+**LLM Usage Bar** は、対応する AI ツールを 1 つのデスクトップアプリで一元管理できます。設定ファイルを手作業で編集する代わりに、ワンクリックでプロバイダをインポートし、瞬時に切り替えられるビジュアルインターフェースを提供します。50 以上の組み込みプリセット、統一 MCP・Skills 管理、システムトレイからの即時切り替え機能を搭載。すべてはアトミック書き込みによる信頼性の高い SQLite データベースに支えられており、設定の破損を防ぎます。
 
 - **1 つのアプリで 7 つのツール** -- Claude Code、Claude Desktop、Codex、Gemini CLI、OpenCode、OpenClaw、Hermes を単一インターフェースで管理
 - **手動編集は不要** -- AWS Bedrock、NVIDIA NIM、コミュニティリレーなど 50 以上のプロバイダプリセットを内蔵。選んで切り替えるだけ
 - **統一 MCP・Skills 管理** -- 1 つのパネルで Claude、Codex、Gemini、OpenCode、Hermes の MCP サーバーと Skills を双方向同期で管理
 - **システムトレイでクイック切り替え** -- トレイメニューから即座にプロバイダを切り替え。アプリを開く必要なし
 - **クラウド同期** -- Dropbox、OneDrive、iCloud、または WebDAV サーバー経由でデバイス間のプロバイダデータを同期
-- **クロスプラットフォーム** -- Tauri 2 で構築された Windows、macOS、Linux 対応のネイティブデスクトップアプリ
+- **macOS ネイティブ** -- Tauri 2 で構築、macOS 12 以降に対応
 - **便利ツール内蔵** -- 初回起動時のログイン確認、署名バイパス、プラグイン拡張の同期など、さまざまなユーティリティを搭載
 
 ## スクリーンショット
@@ -55,7 +52,7 @@
 
 ### MCP、Prompts & Skills
 
-- **統一 MCP パネル** -- Claude、Codex、Gemini、OpenCode、Hermes の MCP サーバーを管理、双方向同期、Deep Link インポート対応
+- **統一 MCP パネル** -- Claude、Codex、Gemini、OpenCode、Hermes の MCP サーバーを管理、双方向同期
 - **Prompts** -- Markdown エディタ、クロスアプリ同期（CLAUDE.md / AGENTS.md / GEMINI.md）、バックフィル保護
 - **Skills** -- GitHub リポジトリまたは ZIP ファイルからワンクリックインストール、カスタムリポジトリ管理、シンボリックリンクとファイルコピーに対応
 
@@ -71,15 +68,14 @@
 ### システム & プラットフォーム
 
 - **クラウド同期** -- カスタム設定ディレクトリ（Dropbox、OneDrive、iCloud、NAS）および WebDAV サーバー同期
-- **Deep Link** (`ccswitch://`) -- URL 経由でプロバイダ、MCP サーバー、Prompts、Skills をワンクリックインポート
-- ダーク / ライト / システムテーマ、自動起動、自動アップデーター、アトミック書き込み、自動バックアップ、多言語対応（簡体中文/繁體中文/英/日）
+- ダーク / ライト / システムテーマ、自動起動、Release ページからの手動更新、アトミック書き込み、自動バックアップ、多言語対応（簡体中文/繁體中文/英/日）
 
 ## よくある質問
 
 <details>
-<summary><strong>CC Switch はどの AI ツールに対応していますか？</strong></summary>
+<summary><strong>LLM Usage Bar はどの AI ツールに対応していますか？</strong></summary>
 
-CC Switch は **Claude Code**、**Claude Desktop**、**Codex**、**Gemini CLI**、**OpenCode**、**OpenClaw**、**Hermes** の 7 つのツールに対応しています。各ツールに専用のプロバイダプリセットと設定管理が用意されています。
+LLM Usage Bar は **Claude Code**、**Claude Desktop**、**Codex**、**Gemini CLI**、**OpenCode**、**OpenClaw**、**Hermes** の 7 つのツールに対応しています。各ツールに専用のプロバイダプリセットと設定管理が用意されています。
 
 </details>
 
@@ -93,21 +89,21 @@ CC Switch は **Claude Code**、**Claude Desktop**、**Codex**、**Gemini CLI**�
 <details>
 <summary><strong>プロバイダを切り替えた後、プラグイン設定が消えてしまいました。どうすればよいですか？</strong></summary>
 
-CC Switch には「共有設定スニペット」機能があり、APIキーやエンドポイント以外の共通データをプロバイダ間で引き継ぐことができます。「プロバイダ編集」→「共有設定パネル」→「現在のプロバイダから抽出」をクリックして、すべての共通データを保存してください。新しいプロバイダを作成する際に「共有設定を適用」にチェック（デフォルトで有効）を入れれば、プラグインなどのデータが新しいプロバイダ設定に含まれます。すべての設定項目は、アプリ初回起動時にインポートされたデフォルトプロバイダに保存されており、失われることはありません。
+LLM Usage Bar には「共有設定スニペット」機能があり、APIキーやエンドポイント以外の共通データをプロバイダ間で引き継ぐことができます。「プロバイダ編集」→「共有設定パネル」→「現在のプロバイダから抽出」をクリックして、すべての共通データを保存してください。新しいプロバイダを作成する際に「共有設定を適用」にチェック（デフォルトで有効）を入れれば、プラグインなどのデータが新しいプロバイダ設定に含まれます。すべての設定項目は、アプリ初回起動時にインポートされたデフォルトプロバイダに保存されており、失われることはありません。
 
 </details>
 
 <details>
 <summary><strong>macOS のインストールについて</strong></summary>
 
-CC Switch の macOS 版は Apple によるコード署名と公証が完了しています。直接ダウンロードしてインストールできます — 追加の手順は不要です。`.dmg` インストーラの使用を推奨します。
+LLM Usage Bar の macOS 版は Apple によるコード署名と公証が完了しています。直接ダウンロードしてインストールできます — 追加の手順は不要です。`.dmg` インストーラの使用を推奨します。
 
 </details>
 
 <details>
 <summary><strong>現在アクティブなプロバイダを削除できないのはなぜですか？</strong></summary>
 
-CC Switch は「最小限の介入」という設計原則に従っています。アプリをアンインストールしても、CLI ツールは正常に動作し続けます。すべての設定を削除すると対応する CLI ツールが使用できなくなるため、システムは常にアクティブな設定を 1 つ保持します。特定の CLI ツールをあまり使用しない場合は、設定で非表示にできます。公式ログインに戻す方法は、次の質問をご覧ください。
+LLM Usage Bar は「最小限の介入」という設計原則に従っています。アプリをアンインストールしても、CLI ツールは正常に動作し続けます。すべての設定を削除すると対応する CLI ツールが使用できなくなるため、システムは常にアクティブな設定を 1 つ保持します。特定の CLI ツールをあまり使用しない場合は、設定で非表示にできます。公式ログインに戻す方法は、次の質問をご覧ください。
 
 </details>
 
@@ -121,24 +117,11 @@ CC Switch は「最小限の介入」という設計原則に従っています�
 <details>
 <summary><strong>データはどこに保存されますか？</strong></summary>
 
-- **データベース**: `~/.cc-switch/cc-switch.db`（SQLite -- プロバイダ、MCP、Prompts、Skills）
-- **ローカル設定**: `~/.cc-switch/settings.json`（デバイスレベルの UI 設定）
-- **バックアップ**: `~/.cc-switch/backups/`（自動ローテーション、最新 10 件を保持）
-- **Skills**: `~/.cc-switch/skills/`（デフォルトでシンボリックリンクにより対応アプリに接続）
-- **Skill バックアップ**: `~/.cc-switch/skill-backups/`（アンインストール前に自動作成、最新 20 件を保持）
-
-</details>
-
-<details>
-<summary><strong>Linux（Wayland + NVIDIA）：Web コンテンツがクリックできない・リサイズで黒画面になる</strong></summary>
-
-AppImage は過去のネイティブ Wayland クラッシュを避けるため `GDK_BACKEND=x11`（XWayland）を強制します。新しい Wayland + NVIDIA 環境ではこれが原因で Web コンテンツ領域がクリックできなくなり（タイトルバーのボタンは動作します）、リサイズ時に黒画面になることがあります。内蔵のエスケープハッチでネイティブ Wayland に戻せます：
-
-```bash
-CC_SWITCH_GDK_BACKEND=wayland ./CC-Switch-*.AppImage
-```
-
-デスクトップアイコンから起動する場合は、`.desktop` の `Exec=` 行に追記するか（例：`env CC_SWITCH_GDK_BACKEND=wayland /path/to/AppImage`）、セッション環境で設定してください。この変数は汎用です：タイル型 Wayland コンポジタ（sway/Hyprland）でクリックが効かない場合は、逆に `CC_SWITCH_GDK_BACKEND=x11` を試してください。未設定の場合は既定の動作のままです。
+- **データベース**: `~/.llm-usage-bar/llm-usage-bar.db`（SQLite -- プロバイダ、MCP、Prompts、Skills）
+- **ローカル設定**: `~/.llm-usage-bar/settings.json`（デバイスレベルの UI 設定）
+- **バックアップ**: `~/.llm-usage-bar/backups/`（自動ローテーション、最新 10 件を保持）
+- **Skills**: `~/.llm-usage-bar/skills/`（デフォルトでシンボリックリンクにより対応アプリに接続）
+- **Skill バックアップ**: `~/.llm-usage-bar/skill-backups/`（アンインストール前に自動作成、最新 20 件を保持）
 
 </details>
 
@@ -168,53 +151,11 @@ CC_SWITCH_GDK_BACKEND=wayland ./CC-Switch-*.AppImage
 
 ## ダウンロード & インストール
 
-### システム要件
+LLM Usage Bar は **macOS 12 (Monterey) 以降**に対応しています。[Releases](https://github.com/Xr810/LLM-Usage-Bar/releases) から `LLM-Usage-Bar-v{version}-macOS.dmg`（推奨）または `.zip` をダウンロードしてください。
 
-- **Windows**: Windows 10 以上
-- **macOS**: macOS 12 (Monterey) 以上
-- **Linux**: Ubuntu 22.04+ / Debian 11+ / Fedora 34+ など主要ディストリビューション
+アプリは Apple のコード署名と公証済みです。アプリ内の管理アップデートは現在無効のため、Release ページから手動で更新してください。
 
-### Windows ユーザー
-
-[Releases](../../releases) ページから最新版の `CC-Switch-v{version}-Windows.msi` インストーラー、またはポータブル版 `CC-Switch-v{version}-Windows-Portable.zip` をダウンロード。
-
-### macOS ユーザー
-
-**方法 1: Homebrew でインストール（推奨）**
-
-```bash
-brew install --cask cc-switch
-```
-
-アップデート:
-
-```bash
-brew upgrade --cask cc-switch
-```
-
-**方法 2: 手動ダウンロード**
-
-[Releases](../../releases) から `CC-Switch-v{version}-macOS.zip` をダウンロードして展開。
-
-> **注意**: 開発者アカウント未登録のため、初回起動時に「開発元を確認できません」と表示される場合があります。一度閉じてから「システム設定」→「プライバシーとセキュリティ」→「このまま開く」をクリックしてください。以降は通常通り起動できます。
-
-### Arch Linux ユーザー
-
-**paru でインストール（推奨）**
-
-```bash
-paru -S cc-switch-bin
-```
-
-### Linux ユーザー
-
-[Releases](../../releases) から最新版の Linux ビルドをダウンロード：
-
-- `CC-Switch-v{version}-Linux.deb`（Debian/Ubuntu）
-- `CC-Switch-v{version}-Linux.rpm`（Fedora/RHEL/openSUSE）
-- `CC-Switch-v{version}-Linux.AppImage`（汎用）
-
-> **Flatpak**：公式リリースには含まれていません。`.deb` から自分でビルドできます — 手順は [`flatpak/README.md`](flatpak/README.md) を参照してください。
+互換性に関する注意：LLM Usage Bar はオリジナルの Legacy CC Switch データディレクトリ `~/.cc-switch` を変更しません。
 
 <details>
 <summary><strong>アーキテクチャ概要</strong></summary>
@@ -241,7 +182,7 @@ paru -S cc-switch-bin
 
 **コア設計パターン**
 
-- **SSOT** (Single Source of Truth): すべてのデータを `~/.cc-switch/cc-switch.db`（SQLite）に集約
+- **SSOT** (Single Source of Truth): すべてのデータを `~/.llm-usage-bar/llm-usage-bar.db`（SQLite）に集約
 - **二層ストレージ**: 同期データは SQLite、デバイスデータは JSON
 - **双方向同期**: 切り替え時はライブファイルへ書き込み、編集時はアクティブプロバイダから逆同期
 - **アトミック書き込み**: 一時ファイル + rename パターンで設定破損を防止
@@ -303,22 +244,21 @@ pnpm tauri build --debug
 ### Rust バックエンド開発
 
 ```bash
-cd src-tauri
 
 # Rust コード整形
-cargo fmt
+pnpm rust -- fmt --manifest-path src-tauri/Cargo.toml
 
 # clippy チェック
-cargo clippy
+pnpm rust -- clippy --manifest-path src-tauri/Cargo.toml
 
 # バックエンドテスト
-cargo test
+pnpm rust -- test --manifest-path src-tauri/Cargo.toml
 
 # 特定テストのみ実行
-cargo test test_name
+pnpm rust -- test --manifest-path src-tauri/Cargo.toml test_name
 
 # test-hooks フィーチャー付きでテスト
-cargo test --features test-hooks
+pnpm rust -- test --manifest-path src-tauri/Cargo.toml --features test-hooks
 ```
 
 ### テストガイド
@@ -407,7 +347,7 @@ PR を送る前に以下をご確認ください：
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=farion1231/cc-switch&type=Date)](https://www.star-history.com/#farion1231/cc-switch&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=Xr810/LLM-Usage-Bar&type=Date)](https://www.star-history.com/#Xr810/LLM-Usage-Bar&Date)
 
 ## ライセンス
 

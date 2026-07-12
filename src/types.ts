@@ -21,7 +21,7 @@ export interface Provider {
   notes?: string;
   // 新增：是否为商业合作伙伴
   isPartner?: boolean;
-  // 可选：供应商元数据（仅存于 ~/.cc-switch/config.json，不写入 live 配置）
+  // 可选：供应商元数据（仅存于 ~/.llm-usage-bar/config.json，不写入 live 配置）
   meta?: ProviderMeta;
   // 图标配置
   icon?: string; // 图标名称（如 "openai", "anthropic"）
@@ -138,10 +138,7 @@ export interface ClaudeDesktopModelRoute {
 }
 
 export type CodexChatThinkingParam =
-  | "none"
-  | "thinking"
-  | "enable_thinking"
-  | "reasoning_split";
+  "none" | "thinking" | "enable_thinking" | "reasoning_split";
 
 export type CodexChatEffortParam =
   | "none"
@@ -208,10 +205,7 @@ export interface ProviderMeta {
   // - "openai_responses": OpenAI Responses API 格式，需要格式转换
   // - "gemini_native": Gemini Native generateContent API 格式，需要格式转换
   apiFormat?:
-    | "anthropic"
-    | "openai_chat"
-    | "openai_responses"
-    | "gemini_native";
+    "anthropic" | "openai_chat" | "openai_responses" | "gemini_native";
   // 通用认证绑定
   authBinding?: AuthBinding;
   // Claude 认证字段名
@@ -238,7 +232,7 @@ export interface ProviderMeta {
 export type SkillSyncMethod = "auto" | "symlink" | "copy";
 
 // Skill 存储位置
-export type SkillStorageLocation = "cc_switch" | "unified";
+export type SkillStorageLocation = "llm_usage_bar" | "unified";
 
 // Claude API 格式类型
 // - "anthropic": 原生 Anthropic Messages API 格式，直接透传
@@ -246,10 +240,7 @@ export type SkillStorageLocation = "cc_switch" | "unified";
 // - "openai_responses": OpenAI Responses API 格式，需要格式转换
 // - "gemini_native": Gemini Native generateContent API 格式，需要格式转换
 export type ClaudeApiFormat =
-  | "anthropic"
-  | "openai_chat"
-  | "openai_responses"
-  | "gemini_native";
+  "anthropic" | "openai_chat" | "openai_responses" | "gemini_native";
 
 // Codex API 格式类型
 // - "openai_responses": OpenAI Responses API 格式，直接透传
@@ -338,7 +329,7 @@ export interface RemoteSnapshotInfo {
 }
 
 // 应用设置类型（用于设置对话框与 Tauri API）
-// 存储在本地 ~/.cc-switch/settings.json，不随数据库同步
+// 存储在本地 ~/.llm-usage-bar/settings.json，不随数据库同步
 export interface Settings {
   // ===== 设备级 UI 设置 =====
   // 是否在系统托盘（macOS 菜单栏）显示图标
@@ -414,7 +405,7 @@ export interface Settings {
   // ===== Skill 同步设置 =====
   // Skill 同步方式：auto（默认，优先 symlink）、symlink、copy
   skillSyncMethod?: SkillSyncMethod;
-  // Skill 存储位置：cc_switch（默认）或 unified（~/.agents/skills/）
+  // Skill 存储位置：llm_usage_bar（默认）或 unified（~/.agents/skills/）
   skillStorageLocation?: SkillStorageLocation;
 
   // ===== WebDAV v2 同步设置 =====

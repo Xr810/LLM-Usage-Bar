@@ -1,4 +1,4 @@
-use cc_switch_lib::{
+use llm_usage_bar_lib::{
     get_route_bindings_test_hook, get_usage_dashboard_test_hook, get_usage_events_test_hook,
     list_usage_providers_test_hook, refresh_provider_quota_test_hook,
     save_usage_provider_test_hook, set_route_binding_test_hook,
@@ -75,6 +75,8 @@ fn event() -> UsageEvent {
 }
 
 #[tokio::test]
+// This guard serializes process-wide HOME mutations with synchronous integration tests.
+#[allow(clippy::await_holding_lock)]
 async fn nine_command_adapters_validate_and_never_serialize_provider_secrets() {
     let _guard = test_mutex().lock().expect("acquire test mutex");
     reset_test_fs();

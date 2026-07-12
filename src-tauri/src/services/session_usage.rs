@@ -808,7 +808,7 @@ mod tests {
 
     #[test]
     fn test_collect_jsonl_files_includes_subagents() {
-        let tmp = std::env::temp_dir().join(format!("cc-switch-test-{}", uuid::Uuid::new_v4()));
+        let tmp = std::env::temp_dir().join(format!("llm-usage-bar-test-{}", uuid::Uuid::new_v4()));
         let project = tmp.join("project");
         let session_dir = project.join("test-session");
         let subagents_dir = session_dir.join("subagents");
@@ -833,7 +833,7 @@ mod tests {
     fn test_collect_jsonl_files_includes_workflow_subagents() {
         // Claude Code Workflow 把子 agent transcript 嵌在
         // 项目/SESSION_ID/subagents/workflows/wf_<ID>/ 下，比普通子 agent 深一层。
-        let tmp = std::env::temp_dir().join(format!("cc-switch-test-{}", uuid::Uuid::new_v4()));
+        let tmp = std::env::temp_dir().join(format!("llm-usage-bar-test-{}", uuid::Uuid::new_v4()));
         let project = tmp.join("project");
         let session_dir = project.join("test-session");
         let subagents_dir = session_dir.join("subagents");
@@ -870,7 +870,7 @@ mod tests {
         // 子 agent 常见的「只有 message_start 快照、没写最终块」形态）必须被计入，
         // 不能因缺 stop_reason 或 output==0 而整条丢弃；全 0 token 的占位行仍应跳过。
         let db = Database::memory()?;
-        let tmp = std::env::temp_dir().join(format!("cc-switch-test-{}", uuid::Uuid::new_v4()));
+        let tmp = std::env::temp_dir().join(format!("llm-usage-bar-test-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&tmp).unwrap();
         let file = tmp.join("agent-wf.jsonl");
 
@@ -925,7 +925,7 @@ mod tests {
         db.set_usage_source_binding("claude", "claude-sub")?;
 
         let tmp = std::env::temp_dir().join(format!(
-            "cc-switch-bound-session-test-{}",
+            "llm-usage-bar-bound-session-test-{}",
             uuid::Uuid::new_v4()
         ));
         fs::create_dir_all(&tmp).unwrap();
@@ -1001,7 +1001,7 @@ mod tests {
         })?;
 
         let tmp = std::env::temp_dir().join(format!(
-            "cc-switch-bound-link-test-{}",
+            "llm-usage-bar-bound-link-test-{}",
             uuid::Uuid::new_v4()
         ));
         fs::create_dir_all(&tmp).unwrap();

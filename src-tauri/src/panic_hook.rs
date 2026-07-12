@@ -3,10 +3,11 @@
 //! 在应用崩溃时捕获 panic 信息并记录到 `<app_config_dir>/crash.log` 文件中（默认 `~/.llm-usage-bar/crash.log`）。
 //! 便于用户和开发者诊断闪退问题。
 
+use crate::product_identity::LOG_BASENAME;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::panic;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 /// 应用版本号（从 Cargo.toml 读取）
@@ -35,12 +36,22 @@ fn get_app_config_dir() -> PathBuf {
 
 /// 获取崩溃日志文件路径
 fn get_crash_log_path() -> PathBuf {
-    get_app_config_dir().join("crash.log")
+    crash_log_path_for(&get_app_config_dir())
 }
 
 /// 获取日志目录路径
 pub fn get_log_dir() -> PathBuf {
     get_app_config_dir().join("logs")
+}
+
+pub(crate) fn file_log_path_for(app_config_dir: &Path) -> PathBuf {
+    app_config_dir
+        .join("logs")
+        .join(format!("{LOG_BASENAME}.log"))
+}
+
+pub(crate) fn crash_log_path_for(app_config_dir: &Path) -> PathBuf {
+    app_config_dir.join("crash.log")
 }
 
 /// 安全获取环境信息（不会 panic）

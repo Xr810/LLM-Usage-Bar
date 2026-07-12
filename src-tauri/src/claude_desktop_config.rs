@@ -11,8 +11,11 @@ use crate::database::CLAUDE_DESKTOP_OFFICIAL_PROVIDER_ID;
 use crate::error::AppError;
 use crate::provider::{ClaudeDesktopMode, Provider};
 
-pub const PROFILE_ID: &str = "00000000-0000-4000-8000-000000157210";
-pub const PROFILE_NAME: &str = "CC Switch";
+pub const PROFILE_ID: &str = "00000000-0000-4000-8000-000000157220";
+pub const PROFILE_NAME: &str = "LLM Usage Bar";
+pub const LEGACY_CC_SWITCH_PROFILE_ID: &str = "00000000-0000-4000-8000-000000157210";
+#[cfg(test)]
+pub const LEGACY_CC_SWITCH_PROFILE_NAME: &str = "CC Switch";
 
 #[cfg(any(target_os = "macos", windows, test))]
 const CONFIG_FILE: &str = "claude_desktop_config.json";
@@ -1008,7 +1011,7 @@ fn apply_provider_to_paths_inner(
 fn restore_official_at_paths_inner(paths: &ClaudeDesktopPaths) -> Result<(), AppError> {
     write_deployment_mode(&paths.normal_config_path, "1p")?;
     write_deployment_mode(&paths.threep_config_path, "1p")?;
-    remove_cc_switch_enterprise_config(&paths.threep_config_path)?;
+    remove_llm_usage_bar_enterprise_config(&paths.threep_config_path)?;
 
     if paths.profile_path.exists() {
         delete_file(&paths.profile_path)?;
@@ -1107,7 +1110,7 @@ fn write_deployment_mode(path: &Path, mode: &str) -> Result<(), AppError> {
     write_json_file(path, &value)
 }
 
-fn remove_cc_switch_enterprise_config(path: &Path) -> Result<(), AppError> {
+fn remove_llm_usage_bar_enterprise_config(path: &Path) -> Result<(), AppError> {
     if !path.exists() {
         return Ok(());
     }
@@ -1153,7 +1156,13 @@ fn write_meta(path: &Path, applied_profile_id: Option<&str>) -> Result<(), AppEr
         .cloned()
         .unwrap_or_default();
 
-    entries.retain(|entry| entry.get("id").and_then(Value::as_str) != Some(PROFILE_ID));
+    entries.retain(|entry| match entry.get("id").and_then(Value::as_str) {
+        // The legacy profile belongs to the old app. It must remain byte-for-byte
+        // user-controlled during both apply and restore.
+        Some(LEGACY_CC_SWITCH_PROFILE_ID) => true,
+        Some(PROFILE_ID) => false,
+        _ => true,
+    });
 
     match applied_profile_id {
         Some(id) => {
@@ -1169,14 +1178,9 @@ fn write_meta(path: &Path, applied_profile_id: Option<&str>) -> Result<(), AppEr
                 .and_then(Value::as_str)
                 .is_some_and(|id| id == PROFILE_ID);
             if should_clear_applied {
-                if let Some(next_id) = entries
-                    .iter()
-                    .find_map(|entry| entry.get("id").and_then(Value::as_str))
-                {
-                    obj.insert("appliedId".to_string(), Value::String(next_id.to_string()));
-                } else {
-                    obj.remove("appliedId");
-                }
+                // Restoring LLM Usage Bar must not implicitly activate any
+                // unrelated or legacy profile that happens to remain in meta.
+                obj.remove("appliedId");
             }
         }
     }
@@ -1336,6 +1340,12 @@ mod tests {
 
     fn test_db() -> Database {
         Database::memory().expect("memory db")
+    }
+
+    #[test]
+    fn claude_desktop_profile_identity_uses_llm_usage_bar_namespace() {
+        assert_eq!(PROFILE_ID, "00000000-0000-4000-8000-000000157220");
+        assert_eq!(PROFILE_NAME, "LLM Usage Bar");
     }
 
     fn set_proxy_port(db: &Database, port: u16) {
@@ -2120,7 +2130,7 @@ mod tests {
     }
 
     #[test]
-    fn claude_desktop_restore_switches_to_1p_and_removes_cc_switch_profile() {
+    fn claude_desktop_restore_switches_to_1p_and_removes_llm_usage_bar_profile() {
         let temp = TempDir::new().expect("tempdir");
         let paths = test_paths(temp.path());
         let provider = direct_provider("direct");
@@ -2142,6 +2152,65 @@ mod tests {
             .expect("entries")
             .iter()
             .any(|entry| entry["id"] == json!(PROFILE_ID)));
+    }
+
+    #[test]
+    fn claude_desktop_apply_and_restore_preserve_legacy_profile() {
+        let temp = TempDir::new().expect("tempdir");
+        let paths = test_paths(temp.path());
+        let provider = direct_provider("direct");
+        let db = test_db();
+        let legacy_profile_path = paths
+            .config_library_path
+            .join(format!("{LEGACY_CC_SWITCH_PROFILE_ID}.json"));
+        let legacy_profile = json!({"legacy": "must remain byte-stable"});
+        write_json_file(&legacy_profile_path, &legacy_profile).expect("seed legacy profile");
+        write_json_file(
+            &paths.meta_path,
+            &json!({
+                "appliedId": LEGACY_CC_SWITCH_PROFILE_ID,
+                "entries": [{
+                    "id": LEGACY_CC_SWITCH_PROFILE_ID,
+                    "name": LEGACY_CC_SWITCH_PROFILE_NAME
+                }]
+            }),
+        )
+        .expect("seed legacy meta entry");
+
+        apply_provider_to_paths(&db, &provider, &paths).expect("apply current profile");
+
+        assert_eq!(
+            read_json_file::<Value>(&legacy_profile_path).expect("read legacy profile after apply"),
+            legacy_profile
+        );
+        assert!(paths.profile_path.exists());
+        assert_ne!(paths.profile_path, legacy_profile_path);
+        let applied_meta: Value = read_json_file(&paths.meta_path).expect("read applied meta");
+        assert_eq!(applied_meta["appliedId"], json!(PROFILE_ID));
+        assert!(applied_meta["entries"]
+            .as_array()
+            .expect("entries")
+            .iter()
+            .any(|entry| entry["id"] == json!(LEGACY_CC_SWITCH_PROFILE_ID)
+                && entry["name"] == json!(LEGACY_CC_SWITCH_PROFILE_NAME)));
+
+        restore_official_at_paths(&paths).expect("restore official profile");
+
+        assert!(!paths.profile_path.exists());
+        assert_eq!(
+            read_json_file::<Value>(&legacy_profile_path)
+                .expect("read legacy profile after restore"),
+            legacy_profile
+        );
+        let restored_meta: Value = read_json_file(&paths.meta_path).expect("read restored meta");
+        assert!(restored_meta.get("appliedId").is_none());
+        assert_eq!(
+            restored_meta["entries"],
+            json!([{
+                "id": LEGACY_CC_SWITCH_PROFILE_ID,
+                "name": LEGACY_CC_SWITCH_PROFILE_NAME
+            }])
+        );
     }
 
     #[test]

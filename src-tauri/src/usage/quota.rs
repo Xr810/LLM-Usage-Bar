@@ -15,8 +15,8 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tauri::async_runtime::JoinHandle;
 use tokio::sync::watch;
-use tokio::task::JoinHandle;
 use uuid::Uuid;
 
 pub const DEFAULT_QUOTA_INTERVAL_SECONDS: u64 = 300;
@@ -274,7 +274,7 @@ impl QuotaService {
 
     pub fn start_scheduler(self: Arc<Self>) -> QuotaSchedulerHandle {
         let (cancel_tx, mut cancel_rx) = watch::channel(false);
-        let task = tokio::spawn(async move {
+        let task = tauri::async_runtime::spawn(async move {
             let mut interval =
                 tokio::time::interval(std::time::Duration::from_secs(SCHEDULER_TICK_SECONDS));
             interval.tick().await;
@@ -563,6 +563,15 @@ mod tests {
             );
             assert_eq!(normalized.manual_resets_remaining, None);
         }
+    }
+
+    #[test]
+    fn scheduler_can_start_without_an_ambient_tokio_runtime() {
+        let service = Arc::new(QuotaService::new(Arc::new(Database::memory().unwrap())));
+
+        let scheduler = service.start_scheduler();
+
+        drop(scheduler);
     }
 
     #[tokio::test]

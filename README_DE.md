@@ -1,41 +1,38 @@
 <div align="center">
 
-# CC Switch
+# LLM Usage Bar
 
 ### Der All-in-One-Manager für Claude Code, Claude Desktop, Codex, Gemini CLI, OpenCode, OpenClaw & Hermes Agent
 
-[![Version](https://img.shields.io/github/v/release/farion1231/cc-switch?color=blue&label=version)](https://github.com/farion1231/cc-switch/releases)
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/farion1231/cc-switch/releases)
+[![Version](https://img.shields.io/github/v/release/Xr810/LLM-Usage-Bar?color=blue&label=version)](https://github.com/Xr810/LLM-Usage-Bar/releases)
+[![Platform](https://img.shields.io/badge/platform-macOS-lightgrey.svg)](https://github.com/Xr810/LLM-Usage-Bar/releases)
 [![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-orange.svg)](https://tauri.app/)
-[![Downloads](https://img.shields.io/github/downloads/farion1231/cc-switch/total)](https://github.com/farion1231/cc-switch/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/Xr810/LLM-Usage-Bar/total)](https://github.com/Xr810/LLM-Usage-Bar/releases/latest)
 
-<a href="https://trendshift.io/repositories/15372" target="_blank"><img src="https://trendshift.io/api/badge/repositories/15372" alt="farion1231%2Fcc-switch | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
-<a href="https://www.star-history.com/#farion1231/cc-switch&Date"><picture><source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/badge?repo=farion1231/cc-switch&theme=dark" /><img alt="Star History Rank" src="https://api.star-history.com/badge?repo=farion1231/cc-switch" width="196" height="55" /></picture></a>
-
-### 🌐 Die einzige offizielle Website: **[ccswitch.io](https://ccswitch.io)**
+<a href="https://www.star-history.com/#Xr810/LLM-Usage-Bar&Date"><picture><source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/badge?repo=Xr810/LLM-Usage-Bar&theme=dark" /><img alt="Star History Rank" src="https://api.star-history.com/badge?repo=Xr810/LLM-Usage-Bar" width="196" height="55" /></picture></a>
 
 [English](README.md) | [中文](README_ZH.md) | [日本語](README_JA.md) | Deutsch | [Changelog](CHANGELOG.md)
 
 </div>
 
-## Warum CC Switch?
+## Warum LLM Usage Bar?
 
 Modernes KI-gestütztes Programmieren stützt sich auf Werkzeuge wie Claude Code, Claude Desktop, Codex, Gemini CLI, OpenCode, OpenClaw und Hermes — doch jedes hat sein eigenes Konfigurationsformat. Der Wechsel des API-Anbieters bedeutet, JSON-, TOML- oder `.env`-Dateien von Hand zu bearbeiten, und es gibt keine einheitliche Möglichkeit, MCP und Skills über mehrere Werkzeuge hinweg zu verwalten.
 
-**CC Switch** gibt Ihnen eine einzige Desktop-App, um alle unterstützten KI-Werkzeuge zu verwalten. Statt Konfigurationsdateien von Hand zu bearbeiten, erhalten Sie eine visuelle Oberfläche, um Anbieter mit einem Klick zu importieren und sofort zwischen ihnen zu wechseln — mit 50+ integrierten Anbieter-Presets, einheitlicher MCP- und Skills-Verwaltung und schnellem Umschalten über das System-Tray. Das Ganze gestützt auf eine zuverlässige SQLite-Datenbank mit atomaren Schreibvorgängen, die Ihre Konfigurationen vor Beschädigung schützen.
+**LLM Usage Bar** gibt Ihnen eine einzige Desktop-App, um alle unterstützten KI-Werkzeuge zu verwalten. Statt Konfigurationsdateien von Hand zu bearbeiten, erhalten Sie eine visuelle Oberfläche, um Anbieter mit einem Klick zu importieren und sofort zwischen ihnen zu wechseln — mit 50+ integrierten Anbieter-Presets, einheitlicher MCP- und Skills-Verwaltung und schnellem Umschalten über das System-Tray. Das Ganze gestützt auf eine zuverlässige SQLite-Datenbank mit atomaren Schreibvorgängen, die Ihre Konfigurationen vor Beschädigung schützen.
 
 - **Eine App, sieben Werkzeuge** — Verwalten Sie Claude Code, Claude Desktop, Codex, Gemini CLI, OpenCode, OpenClaw und Hermes über eine einzige Oberfläche
 - **Kein manuelles Bearbeiten mehr** — 50+ Anbieter-Presets einschließlich AWS Bedrock, NVIDIA NIM und Community-Relays; einfach auswählen und umschalten
 - **Einheitliche MCP- & Skills-Verwaltung** — Ein Panel zur Verwaltung von MCP-Servern und Skills für Claude, Codex, Gemini, OpenCode und Hermes mit bidirektionaler Synchronisierung
 - **Schnellumschaltung über System-Tray** — Wechseln Sie Anbieter sofort über das Tray-Menü, ohne die vollständige App öffnen zu müssen
 - **Cloud-Synchronisierung** — Synchronisieren Sie Anbieterdaten geräteübergreifend über Dropbox, OneDrive, iCloud oder WebDAV-Server
-- **Plattformübergreifend** — Native Desktop-App für Windows, macOS und Linux, gebaut mit Tauri 2
+- **macOS-nativ** — Native Desktop-App für macOS 12 und neuer, gebaut mit Tauri 2
 - **Integrierte Hilfsprogramme** — Enthält diverse Hilfsprogramme für die Login-Bestätigung beim Erststart, das Umgehen von Signaturen, die Synchronisierung von Plugin-Erweiterungen und mehr
 
 ## Screenshots
 
 |                  Hauptoberfläche                   |                  Anbieter hinzufügen                  |
-| :-----------------------------------------------: | :--------------------------------------------: |
+| :------------------------------------------------: | :---------------------------------------------------: |
 | ![Hauptoberfläche](assets/screenshots/main-en.png) | ![Anbieter hinzufügen](assets/screenshots/add-en.png) |
 
 ## Funktionen
@@ -55,7 +52,7 @@ Modernes KI-gestütztes Programmieren stützt sich auf Werkzeuge wie Claude Code
 
 ### MCP, Prompts & Skills
 
-- **Einheitliches MCP-Panel** — Verwalten Sie MCP-Server für Claude, Codex, Gemini, OpenCode und Hermes mit bidirektionaler Synchronisierung und Deep-Link-Import
+- **Einheitliches MCP-Panel** — Verwalten Sie MCP-Server für Claude, Codex, Gemini, OpenCode und Hermes mit bidirektionaler Synchronisierung
 - **Prompts** — Markdown-Editor mit App-übergreifender Synchronisierung (CLAUDE.md / AGENTS.md / GEMINI.md) und Backfill-Schutz
 - **Skills** — Installation mit einem Klick aus GitHub-Repositorys oder ZIP-Dateien, Verwaltung eigener Repositorys, mit Unterstützung für Symlinks und Dateikopien
 
@@ -71,15 +68,14 @@ Modernes KI-gestütztes Programmieren stützt sich auf Werkzeuge wie Claude Code
 ### System & Plattform
 
 - **Cloud-Synchronisierung** — Eigenes Konfigurationsverzeichnis (Dropbox, OneDrive, iCloud, NAS) und WebDAV-Server-Synchronisierung
-- **Deep Link** (`ccswitch://`) — Importieren Sie Anbieter, MCP-Server, Prompts und Skills per URL
-- Dunkles / Helles / System-Theme, automatischer Start, automatischer Updater, atomare Schreibvorgänge, automatische Backups, i18n (zh/zh-TW/en/ja)
+- Dunkles / Helles / System-Theme, automatischer Start, manuelle Updates über die Release-Seite, atomare Schreibvorgänge, automatische Backups, i18n (zh/zh-TW/en/ja)
 
 ## FAQ
 
 <details>
-<summary><strong>Welche KI-Werkzeuge unterstützt CC Switch?</strong></summary>
+<summary><strong>Welche KI-Werkzeuge unterstützt LLM Usage Bar?</strong></summary>
 
-CC Switch unterstützt sieben Werkzeuge: **Claude Code**, **Claude Desktop**, **Codex**, **Gemini CLI**, **OpenCode**, **OpenClaw** und **Hermes**. Jedes Werkzeug verfügt über dedizierte Anbieter-Presets und Konfigurationsverwaltung.
+LLM Usage Bar unterstützt sieben Werkzeuge: **Claude Code**, **Claude Desktop**, **Codex**, **Gemini CLI**, **OpenCode**, **OpenClaw** und **Hermes**. Jedes Werkzeug verfügt über dedizierte Anbieter-Presets und Konfigurationsverwaltung.
 
 </details>
 
@@ -93,21 +89,21 @@ Bei den meisten Werkzeugen ja — starten Sie Ihr Terminal oder das CLI-Werkzeug
 <details>
 <summary><strong>Meine Plugin-Konfiguration ist nach einem Anbieterwechsel verschwunden — was ist passiert?</strong></summary>
 
-CC Switch bietet eine Funktion „Gemeinsames Konfigurations-Snippet", um gemeinsame Daten (über API-Schlüssel und Endpunkte hinaus) zwischen Anbietern weiterzugeben. Gehen Sie zu „Anbieter bearbeiten" → „Panel für gemeinsame Konfiguration" → klicken Sie auf „Aus aktuellem Anbieter extrahieren", um alle gemeinsamen Daten zu speichern. Aktivieren Sie beim Anlegen eines neuen Anbieters die Option „Gemeinsame Konfiguration schreiben" (standardmäßig aktiviert), um die Plugin-Daten in den neuen Anbieter aufzunehmen. Alle Ihre Konfigurationspunkte bleiben im Standardanbieter erhalten, der beim ersten Start der App importiert wurde.
+LLM Usage Bar bietet eine Funktion „Gemeinsames Konfigurations-Snippet", um gemeinsame Daten (über API-Schlüssel und Endpunkte hinaus) zwischen Anbietern weiterzugeben. Gehen Sie zu „Anbieter bearbeiten" → „Panel für gemeinsame Konfiguration" → klicken Sie auf „Aus aktuellem Anbieter extrahieren", um alle gemeinsamen Daten zu speichern. Aktivieren Sie beim Anlegen eines neuen Anbieters die Option „Gemeinsame Konfiguration schreiben" (standardmäßig aktiviert), um die Plugin-Daten in den neuen Anbieter aufzunehmen. Alle Ihre Konfigurationspunkte bleiben im Standardanbieter erhalten, der beim ersten Start der App importiert wurde.
 
 </details>
 
 <details>
 <summary><strong>Installation unter macOS</strong></summary>
 
-CC Switch für macOS ist von Apple code-signiert und notarisiert. Sie können es direkt herunterladen und installieren — es sind keine zusätzlichen Schritte erforderlich. Wir empfehlen die Verwendung des `.dmg`-Installationsprogramms.
+LLM Usage Bar für macOS ist von Apple code-signiert und notarisiert. Sie können es direkt herunterladen und installieren — es sind keine zusätzlichen Schritte erforderlich. Wir empfehlen die Verwendung des `.dmg`-Installationsprogramms.
 
 </details>
 
 <details>
 <summary><strong>Warum kann ich den aktuell aktiven Anbieter nicht löschen?</strong></summary>
 
-CC Switch folgt dem Designprinzip der „minimalen Eingriffstiefe" — selbst wenn Sie die App deinstallieren, funktionieren Ihre CLI-Werkzeuge weiterhin normal. Das System behält immer eine aktive Konfiguration bei, da das Löschen aller Konfigurationen das entsprechende CLI-Werkzeug unbrauchbar machen würde. Wenn Sie ein bestimmtes CLI-Werkzeug selten verwenden, können Sie es in den Einstellungen ausblenden. Wie Sie zurück zum offiziellen Login wechseln, erfahren Sie in der nächsten Frage.
+LLM Usage Bar folgt dem Designprinzip der „minimalen Eingriffstiefe" — selbst wenn Sie die App deinstallieren, funktionieren Ihre CLI-Werkzeuge weiterhin normal. Das System behält immer eine aktive Konfiguration bei, da das Löschen aller Konfigurationen das entsprechende CLI-Werkzeug unbrauchbar machen würde. Wenn Sie ein bestimmtes CLI-Werkzeug selten verwenden, können Sie es in den Einstellungen ausblenden. Wie Sie zurück zum offiziellen Login wechseln, erfahren Sie in der nächsten Frage.
 
 </details>
 
@@ -121,24 +117,11 @@ Fügen Sie einen offiziellen Anbieter aus der Preset-Liste hinzu. Führen Sie na
 <details>
 <summary><strong>Wo werden meine Daten gespeichert?</strong></summary>
 
-- **Datenbank**: `~/.cc-switch/cc-switch.db` (SQLite — Anbieter, MCP, Prompts, Skills)
-- **Lokale Einstellungen**: `~/.cc-switch/settings.json` (gerätebezogene UI-Einstellungen)
-- **Backups**: `~/.cc-switch/backups/` (automatisch rotiert, behält die 10 neuesten)
-- **Skills**: `~/.cc-switch/skills/` (standardmäßig per Symlink mit den entsprechenden Apps verbunden)
-- **Skill-Backups**: `~/.cc-switch/skill-backups/` (vor der Deinstallation automatisch erstellt, behält die 20 neuesten)
-
-</details>
-
-<details>
-<summary><strong>Linux (Wayland + NVIDIA): Klicks im Webinhalt reagieren nicht, schwarzer Bildschirm beim Größenändern</strong></summary>
-
-Das AppImage erzwingt `GDK_BACKEND=x11` (XWayland), um einen historischen nativen Wayland-Absturz zu vermeiden. Auf neueren Wayland-+-NVIDIA-Systemen kann das dazu führen, dass der Webinhalt nicht anklickbar ist (die Titelleisten-Schaltflächen funktionieren weiterhin) und das Fenster beim Größenändern schwarz wird. Starten Sie mit dem optionalen Notausgang, um zu nativem Wayland zu wechseln:
-
-```bash
-CC_SWITCH_GDK_BACKEND=wayland ./CC-Switch-*.AppImage
-```
-
-Wenn Sie über ein Desktop-Symbol starten, fügen Sie es der `Exec=`-Zeile der `.desktop`-Datei hinzu (z. B. `env CC_SWITCH_GDK_BACKEND=wayland /pfad/zum/AppImage`) oder setzen Sie es in Ihrer Sitzungsumgebung. Die Variable ist generisch: Auf Tiling-Wayland-Compositors (sway/Hyprland), bei denen Klicks nicht reagieren, versuchen Sie umgekehrt `CC_SWITCH_GDK_BACKEND=x11`. Bleibt sie ungesetzt, bleibt das Standardverhalten erhalten.
+- **Datenbank**: `~/.llm-usage-bar/llm-usage-bar.db` (SQLite — Anbieter, MCP, Prompts, Skills)
+- **Lokale Einstellungen**: `~/.llm-usage-bar/settings.json` (gerätebezogene UI-Einstellungen)
+- **Backups**: `~/.llm-usage-bar/backups/` (automatisch rotiert, behält die 10 neuesten)
+- **Skills**: `~/.llm-usage-bar/skills/` (standardmäßig per Symlink mit den entsprechenden Apps verbunden)
+- **Skill-Backups**: `~/.llm-usage-bar/skill-backups/` (vor der Deinstallation automatisch erstellt, behält die 20 neuesten)
 
 </details>
 
@@ -168,53 +151,11 @@ Ausführliche Anleitungen zu jeder Funktion finden Sie im **[Benutzerhandbuch](d
 
 ## Download & Installation
 
-### Systemanforderungen
+LLM Usage Bar unterstützt **macOS 12 (Monterey) und neuer**. Laden Sie `LLM-Usage-Bar-v{version}-macOS.dmg` (empfohlen) oder `.zip` von der [Releases-Seite](https://github.com/Xr810/LLM-Usage-Bar/releases) herunter.
 
-- **Windows**: Windows 10 und höher
-- **macOS**: macOS 12 (Monterey) und höher
-- **Linux**: Ubuntu 22.04+ / Debian 11+ / Fedora 34+ und andere gängige Distributionen
+Die App ist von Apple codesigniert und notarisiert. Verwaltete In-App-Updates sind derzeit nicht verfügbar; aktualisieren Sie manuell über die Release-Seite.
 
-### Windows-Nutzer
-
-Laden Sie das neueste Installationsprogramm `CC-Switch-v{version}-Windows.msi` oder die portable Version `CC-Switch-v{version}-Windows-Portable.zip` von der Seite [Releases](../../releases) herunter.
-
-### macOS-Nutzer
-
-**Methode 1: Installation über Homebrew (empfohlen)**
-
-```bash
-brew install --cask cc-switch
-```
-
-Aktualisieren:
-
-```bash
-brew upgrade --cask cc-switch
-```
-
-**Methode 2: Manueller Download**
-
-Laden Sie `CC-Switch-v{version}-macOS.dmg` (empfohlen) oder `.zip` von der Seite [Releases](../../releases) herunter.
-
-> **Hinweis**: CC Switch für macOS ist von Apple code-signiert und notarisiert. Sie können es direkt installieren und öffnen.
-
-### Arch-Linux-Nutzer
-
-**Installation über paru (empfohlen)**
-
-```bash
-paru -S cc-switch-bin
-```
-
-### Linux-Nutzer
-
-Laden Sie den neuesten Linux-Build von der Seite [Releases](../../releases) herunter:
-
-- `CC-Switch-v{version}-Linux.deb` (Debian/Ubuntu)
-- `CC-Switch-v{version}-Linux.rpm` (Fedora/RHEL/openSUSE)
-- `CC-Switch-v{version}-Linux.AppImage` (universell)
-
-> **Flatpak**: Nicht in den offiziellen Releases enthalten. Sie können es selbst aus dem `.deb` bauen — eine Anleitung finden Sie unter [`flatpak/README.md`](flatpak/README.md).
+Kompatibilitätshinweis: LLM Usage Bar verändert das Datenverzeichnis der ursprünglichen Legacy CC Switch-App unter `~/.cc-switch` nicht.
 
 <details>
 <summary><strong>Architekturüberblick</strong></summary>
@@ -241,7 +182,7 @@ Laden Sie den neuesten Linux-Build von der Seite [Releases](../../releases) heru
 
 **Kern-Designmuster**
 
-- **SSOT** (Single Source of Truth): Alle Daten werden in `~/.cc-switch/cc-switch.db` (SQLite) gespeichert
+- **SSOT** (Single Source of Truth): Alle Daten werden in `~/.llm-usage-bar/llm-usage-bar.db` (SQLite) gespeichert
 - **Zweischichtiger Speicher**: SQLite für synchronisierbare Daten, JSON für gerätebezogene Einstellungen
 - **Bidirektionale Synchronisierung**: Schreiben in Live-Dateien beim Umschalten, Backfill aus den Live-Dateien beim Bearbeiten des aktiven Anbieters
 - **Atomare Schreibvorgänge**: Das Muster aus temporärer Datei + Umbenennen verhindert die Beschädigung von Konfigurationen
@@ -303,22 +244,21 @@ pnpm tauri build --debug
 ### Entwicklung des Rust-Backends
 
 ```bash
-cd src-tauri
 
 # Rust-Code formatieren
-cargo fmt
+pnpm rust -- fmt --manifest-path src-tauri/Cargo.toml
 
 # Clippy-Prüfungen ausführen
-cargo clippy
+pnpm rust -- clippy --manifest-path src-tauri/Cargo.toml
 
 # Backend-Tests ausführen
-cargo test
+pnpm rust -- test --manifest-path src-tauri/Cargo.toml
 
 # Bestimmte Tests ausführen
-cargo test test_name
+pnpm rust -- test --manifest-path src-tauri/Cargo.toml test_name
 
 # Tests mit dem Feature test-hooks ausführen
-cargo test --features test-hooks
+pnpm rust -- test --manifest-path src-tauri/Cargo.toml --features test-hooks
 ```
 
 ### Testleitfaden
@@ -407,7 +347,7 @@ Eröffnen Sie für neue Funktionen bitte vor dem Einreichen eines PR ein Issue z
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=farion1231/cc-switch&type=Date)](https://www.star-history.com/#farion1231/cc-switch&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=Xr810/LLM-Usage-Bar&type=Date)](https://www.star-history.com/#Xr810/LLM-Usage-Bar&Date)
 
 ## Lizenz
 

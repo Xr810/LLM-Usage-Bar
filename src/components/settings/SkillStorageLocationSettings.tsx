@@ -79,11 +79,11 @@ export function SkillStorageLocationSettings({
       </header>
       <div className="inline-flex gap-1 rounded-md border border-border-default bg-background p-1">
         <StorageButton
-          active={value === "cc_switch"}
+          active={value === "llm_usage_bar"}
           disabled={isMigrating}
-          onClick={() => handleSelect("cc_switch")}
+          onClick={() => handleSelect("llm_usage_bar")}
         >
-          {t("settings.skillStorage.ccSwitch")}
+          {t("settings.skillStorage.llmUsageBar")}
         </StorageButton>
         <StorageButton
           active={value === "unified"}
@@ -99,7 +99,7 @@ export function SkillStorageLocationSettings({
       <p className="text-xs text-muted-foreground">
         {value === "unified"
           ? t("settings.skillStorage.unifiedHint")
-          : t("settings.skillStorage.ccSwitchHint")}
+          : t("settings.skillStorage.llmUsageBarHint")}
       </p>
 
       {/* 迁移确认对话框 */}
