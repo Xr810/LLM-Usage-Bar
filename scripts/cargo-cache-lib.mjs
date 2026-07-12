@@ -6,9 +6,11 @@ import {
   constants,
   existsSync,
   fsyncSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   renameSync,
   rmSync,
@@ -52,6 +54,191 @@ export function resolveCargoTarget(cwd = process.cwd()) {
     lockfile,
     lockHash,
     targetDir: path.join(commonRoot, ".cache", "cargo-targets", lockHash),
+  };
+}
+
+function parseWorktreePorcelain(output) {
+  const worktrees = [];
+  for (const field of output.split("\0")) {
+    if (field.startsWith("worktree ")) {
+      worktrees.push(field.slice("worktree ".length));
+    }
+  }
+  if (worktrees.length === 0) {
+    throw new Error("git did not report any worktrees");
+  }
+  return worktrees;
+}
+
+function safeWorktreeLockfile(worktree) {
+  let root;
+  let lockfile;
+  try {
+    root = realpathSync(worktree);
+    const rootMetadata = lstatSync(root);
+    if (!rootMetadata.isDirectory() || rootMetadata.isSymbolicLink()) {
+      throw new Error("worktree root is not a real directory");
+    }
+    lockfile = path.join(root, "src-tauri", "Cargo.lock");
+    const lockMetadata = lstatSync(lockfile);
+    if (!lockMetadata.isFile() || lockMetadata.isSymbolicLink()) {
+      throw new Error("Cargo.lock is not a regular file");
+    }
+    const resolvedLockfile = realpathSync(lockfile);
+    if (!isWithinDirectory(root, resolvedLockfile)) {
+      throw new Error("Cargo.lock escapes its worktree");
+    }
+    return resolvedLockfile;
+  } catch (error) {
+    throw new Error(
+      `cannot safely read worktree Cargo.lock at ${lockfile ?? worktree}: ${error.message}`,
+      { cause: error },
+    );
+  }
+}
+
+export function collectReferencedCargoHashes(cwd = process.cwd()) {
+  const output = execFileSync(
+    "git",
+    ["worktree", "list", "--porcelain", "-z"],
+    { cwd, encoding: "utf8" },
+  );
+  const worktrees = parseWorktreePorcelain(output);
+  const referencedHashes = new Set();
+
+  for (const worktree of worktrees) {
+    const lockfile = safeWorktreeLockfile(worktree);
+    referencedHashes.add(sha256File(lockfile));
+  }
+
+  return {
+    commonRoot: gitCommonRoot(cwd),
+    referencedHashes,
+    worktrees,
+  };
+}
+
+function safeCacheRoot(commonRoot) {
+  const resolvedCommonRoot = realpathSync(commonRoot);
+  const cacheParent = path.join(resolvedCommonRoot, ".cache");
+  const cacheRoot = path.join(cacheParent, "cargo-targets");
+
+  for (const [candidate, label] of [
+    [cacheParent, "cache parent"],
+    [cacheRoot, "Cargo cache root"],
+  ]) {
+    let metadata;
+    try {
+      metadata = lstatSync(candidate);
+    } catch (error) {
+      if (error.code === "ENOENT") return { cacheRoot, exists: false };
+      throw error;
+    }
+    if (!metadata.isDirectory() || metadata.isSymbolicLink()) {
+      throw new Error(`${label} must be a real directory: ${candidate}`);
+    }
+  }
+
+  const resolvedCacheRoot = realpathSync(cacheRoot);
+  if (!isWithinDirectory(resolvedCommonRoot, resolvedCacheRoot)) {
+    throw new Error(`Cargo cache root escapes the repository: ${cacheRoot}`);
+  }
+  return { cacheRoot: resolvedCacheRoot, exists: true };
+}
+
+function inspectBucketLeases(bucketPath, hash) {
+  const activeDir = path.join(bucketPath, ".active");
+  let activeMetadata;
+  try {
+    activeMetadata = lstatSync(activeDir);
+  } catch (error) {
+    if (error.code === "ENOENT") return { liveLeases: [], unsafeReasons: [] };
+    return {
+      liveLeases: [],
+      unsafeReasons: [`${hash}: cannot inspect lease directory: ${error.message}`],
+    };
+  }
+  if (!activeMetadata.isDirectory() || activeMetadata.isSymbolicLink()) {
+    return {
+      liveLeases: [],
+      unsafeReasons: [`${hash}: lease path is not a real directory`],
+    };
+  }
+
+  let entries;
+  try {
+    entries = readdirSync(activeDir, { withFileTypes: true });
+  } catch (error) {
+    return {
+      liveLeases: [],
+      unsafeReasons: [`${hash}: cannot enumerate leases: ${error.message}`],
+    };
+  }
+
+  const liveLeases = [];
+  const unsafeReasons = [];
+  for (const entry of entries) {
+    const leasePath = path.join(activeDir, entry.name);
+    if (!entry.isFile() || !entry.name.endsWith(".json")) {
+      unsafeReasons.push(`${hash}: unexpected or temporary lease ${entry.name}`);
+      continue;
+    }
+
+    try {
+      const metadata = lstatSync(leasePath);
+      if (!metadata.isFile() || metadata.isSymbolicLink()) {
+        throw new Error("lease is not a regular file");
+      }
+      const lease = JSON.parse(readFileSync(leasePath, "utf8"));
+      if (
+        !lease ||
+        typeof lease !== "object" ||
+        lease.version !== 1 ||
+        !new Set(["pending", "running", "orphaned"]).has(lease.state)
+      ) {
+        throw new Error("lease schema is malformed");
+      }
+      liveLeases.push({ ...lease, leasePath });
+    } catch (error) {
+      unsafeReasons.push(`${hash}: malformed lease ${entry.name}: ${error.message}`);
+    }
+  }
+  return { liveLeases, unsafeReasons };
+}
+
+export function listCargoCacheBuckets(commonRoot) {
+  const cache = safeCacheRoot(commonRoot);
+  if (!cache.exists) return [];
+  const { cacheRoot } = cache;
+  let entries;
+  try {
+    entries = readdirSync(cacheRoot, { withFileTypes: true });
+  } catch (error) {
+    if (error.code === "ENOENT") return [];
+    throw error;
+  }
+
+  const buckets = [];
+  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+    if (!entry.isDirectory() || !/^[a-f0-9]{64}$/.test(entry.name)) continue;
+    const bucketPath = path.join(cacheRoot, entry.name);
+    const metadata = lstatSync(bucketPath);
+    if (!metadata.isDirectory() || metadata.isSymbolicLink()) continue;
+    const leaseState = inspectBucketLeases(bucketPath, entry.name);
+    buckets.push({
+      hash: entry.name,
+      path: bucketPath,
+      ...leaseState,
+    });
+  }
+  return buckets;
+}
+
+export function createPruneSnapshot(cwd = process.cwd()) {
+  const references = collectReferencedCargoHashes(cwd);
+  return {
+    ...references,
+    buckets: listCargoCacheBuckets(references.commonRoot),
   };
 }
 
@@ -574,4 +761,139 @@ export function finalizeLeaseAfterTreeExit(leasePath) {
     lastProbe: probe,
   });
   return false;
+}
+
+function classifyBucketLeases(bucket, probeBuildProcessTreeFn) {
+  const unsafeReasons = [...(bucket.unsafeReasons ?? [])];
+  let keep = unsafeReasons.length > 0;
+
+  for (const lease of bucket.liveLeases ?? []) {
+    if (lease?.state === "pending") {
+      keep = true;
+      unsafeReasons.push(`${bucket.hash}: pending lease cannot be pruned`);
+      continue;
+    }
+    if (
+      lease?.state === "orphaned" &&
+      lease.bootIdentity === currentBootIdentity()
+    ) {
+      keep = true;
+      unsafeReasons.push(`${bucket.hash}: current-boot orphan lease is unsafe`);
+      continue;
+    }
+
+    let probe;
+    try {
+      probe = probeBuildProcessTreeFn(lease);
+    } catch (error) {
+      probe = { state: "unknown", reason: `process-tree-probe-failed-${error.message}` };
+    }
+    if (probe?.state === "active") {
+      keep = true;
+    } else if (probe?.state !== "empty") {
+      keep = true;
+      unsafeReasons.push(
+        `${bucket.hash}: ${probe?.reason ?? "lease-state-unknown"}`,
+      );
+    }
+  }
+
+  return { keep, unsafeReasons };
+}
+
+export function planPrune({
+  referencedHashes,
+  buckets,
+  probeBuildProcessTree: probeBuildProcessTreeFn,
+}) {
+  const keep = [];
+  const remove = [];
+  const unsafeReasons = [];
+
+  for (const bucket of buckets) {
+    const leaseState = classifyBucketLeases(
+      bucket,
+      probeBuildProcessTreeFn,
+    );
+    unsafeReasons.push(...leaseState.unsafeReasons);
+    (referencedHashes.has(bucket.hash) || leaseState.keep ? keep : remove).push(
+      bucket,
+    );
+  }
+
+  return { keep, remove, unsafeReasons };
+}
+
+function failedApply(deleted, error) {
+  return {
+    ok: false,
+    deleted,
+    error: error instanceof Error ? error.message : String(error),
+  };
+}
+
+export function applyPrunePlan({
+  cwd = process.cwd(),
+  plannedBuckets,
+  probeBuildProcessTree: probeBuildProcessTreeFn = probeBuildProcessTree,
+  removeBucket = (bucket) =>
+    rmSync(bucket.path, { recursive: true, force: false }),
+}) {
+  const deleted = [];
+  const plannedHashes = [];
+  try {
+    for (const bucket of plannedBuckets) {
+      if (!/^[a-f0-9]{64}$/.test(bucket?.hash ?? "")) {
+        throw new Error(`refusing non-hash cache bucket: ${bucket?.hash ?? "<missing>"}`);
+      }
+      if (!plannedHashes.includes(bucket.hash)) plannedHashes.push(bucket.hash);
+    }
+    plannedHashes.sort();
+
+    // Preflight every worktree and lockfile before the first deletion.
+    createPruneSnapshot(cwd);
+  } catch (error) {
+    return failedApply(deleted, `apply preflight failed: ${error.message}`);
+  }
+
+  for (const hash of plannedHashes) {
+    let snapshot;
+    try {
+      // Re-enumerate all worktrees and leases immediately before each deletion.
+      snapshot = createPruneSnapshot(cwd);
+    } catch (error) {
+      return failedApply(deleted, `apply revalidation failed: ${error.message}`);
+    }
+
+    if (snapshot.referencedHashes.has(hash)) {
+      return failedApply(deleted, `apply revalidation kept referenced bucket ${hash}`);
+    }
+    const bucket = snapshot.buckets.find((candidate) => candidate.hash === hash);
+    if (!bucket) continue;
+    const freshPlan = planPrune({
+      referencedHashes: snapshot.referencedHashes,
+      buckets: [bucket],
+      probeBuildProcessTree: probeBuildProcessTreeFn,
+    });
+    if (freshPlan.remove.length !== 1) {
+      const detail = freshPlan.unsafeReasons.join("; ") || "active lease";
+      return failedApply(
+        deleted,
+        `apply revalidation kept unsafe bucket ${hash}: ${detail}`,
+      );
+    }
+
+    try {
+      const metadata = lstatSync(bucket.path);
+      if (!metadata.isDirectory() || metadata.isSymbolicLink()) {
+        throw new Error("bucket is no longer a real directory");
+      }
+      removeBucket(bucket);
+      deleted.push(hash);
+    } catch (error) {
+      return failedApply(deleted, `failed to delete ${hash}: ${error.message}`);
+    }
+  }
+
+  return { ok: true, deleted, error: null };
 }
