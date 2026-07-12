@@ -19,6 +19,9 @@ use tempfile::NamedTempFile;
 const BACKUP_DEADLINE: Duration = Duration::from_secs(5);
 const BACKUP_RETRY_PAUSE: Duration = Duration::from_millis(10);
 const BACKUP_PAGES_PER_STEP: i32 = 128;
+const RETIREMENT_FENCE_REACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
+const RETIREMENT_FENCE_USER_VERSION: i32 = i32::MAX;
+const RETIREMENT_FENCE_TRIGGER_PREFIX: &str = "__llm_usage_bar_retirement_fence_";
 #[cfg(not(test))]
 const LEASE_WAIT_DEADLINE: Duration = Duration::from_secs(12);
 #[cfg(test)]
@@ -64,6 +67,7 @@ pub(crate) struct DatabaseIdentityOutcome {
     pub archived_prior_path: Option<PathBuf>,
     pub retained_prior_path: Option<PathBuf>,
     pub migrated: bool,
+    pub durability_warning: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -709,6 +713,25 @@ fn quarantine_remove(
     expected: &FileIdentity,
     purpose: &str,
 ) -> Result<(), AppError> {
+    match quarantine_remove_with_directory_sync(directory, path, expected, purpose, sync_directory)?
+    {
+        QuarantineRemoveOutcome::RemovedDurably => Ok(()),
+        QuarantineRemoveOutcome::RemovedWithDurabilityWarning(error) => Err(error),
+    }
+}
+
+enum QuarantineRemoveOutcome {
+    RemovedDurably,
+    RemovedWithDurabilityWarning(AppError),
+}
+
+fn quarantine_remove_with_directory_sync(
+    directory: &PinnedDirectory,
+    path: &Path,
+    expected: &FileIdentity,
+    purpose: &str,
+    sync_after_unlink: impl FnOnce(&Path) -> Result<(), AppError>,
+) -> Result<QuarantineRemoveOutcome, AppError> {
     directory.revalidate(purpose)?;
     let quarantine = directory.join(format!(
         ".llm-usage-bar-quarantine-{}-{}",
@@ -778,7 +801,10 @@ fn quarantine_remove(
             ))),
         };
     }
-    sync_directory(&directory.canonical_path)
+    Ok(match sync_after_unlink(&directory.canonical_path) {
+        Ok(()) => QuarantineRemoveOutcome::RemovedDurably,
+        Err(error) => QuarantineRemoveOutcome::RemovedWithDurabilityWarning(error),
+    })
 }
 
 impl Drop for DatabaseMigrationLease {
@@ -809,12 +835,20 @@ enum SchemaValidationPolicy {
     CurrentAuthoritative,
 }
 
-/// Holds SQLite's single-writer reservation from before the first snapshot
-/// until the old source object has been retired. Backup readers remain allowed,
-/// while any independent writer fails immediately instead of committing data
-/// that is absent from the published snapshots.
+/// Holds SQLite's single-writer reservation while snapshots are published, then
+/// persists a trigger fence before briefly releasing and reacquiring the write
+/// lock. A writer already waiting in SQLite can therefore acquire the retired
+/// source only long enough to fail its DML against the durable fence.
 struct SourceWriteBarrier {
     connection: Connection,
+    transaction_active: bool,
+    retirement_fence: Option<RetirementFence>,
+}
+
+#[derive(Clone)]
+struct RetirementFence {
+    original_user_version: i32,
+    trigger_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -864,14 +898,183 @@ impl SourceWriteBarrier {
         connection
             .execute_batch("BEGIN IMMEDIATE;")
             .map_err(|error| database_error("acquire source BEGIN IMMEDIATE barrier", error))?;
-        Ok(Self { connection })
+        Ok(Self {
+            connection,
+            transaction_active: true,
+            retirement_fence: None,
+        })
+    }
+
+    fn install_and_reacquire_retirement_fence(&mut self) -> Result<(), AppError> {
+        if !self.transaction_active || self.retirement_fence.is_some() {
+            return Err(AppError::Database(
+                "source retirement fence entered from an invalid transaction state".to_string(),
+            ));
+        }
+
+        let original_user_version = Database::get_user_version(&self.connection)?;
+        let tables = source_user_tables(&self.connection)?;
+        if tables.is_empty() {
+            return Err(AppError::Database(
+                "source retirement fence found no user tables".to_string(),
+            ));
+        }
+        let nonce = uuid::Uuid::new_v4().simple().to_string();
+        let mut trigger_names = Vec::with_capacity(tables.len() * 3);
+        let install = (|| -> Result<(), AppError> {
+            for (table_index, table) in tables.iter().enumerate() {
+                for (operation, suffix) in [
+                    ("INSERT", "insert"),
+                    ("UPDATE", "update"),
+                    ("DELETE", "delete"),
+                ] {
+                    let trigger_name =
+                        format!("{RETIREMENT_FENCE_TRIGGER_PREFIX}{nonce}_{table_index}_{suffix}");
+                    let sql = format!(
+                        "CREATE TRIGGER {} BEFORE {operation} ON {} BEGIN SELECT RAISE(ABORT, 'database retired during product identity migration'); END;",
+                        quote_sql_identifier(&trigger_name),
+                        quote_sql_identifier(table),
+                    );
+                    self.connection.execute_batch(&sql).map_err(|error| {
+                        database_error("install source retirement trigger", error)
+                    })?;
+                    trigger_names.push(trigger_name);
+                }
+            }
+            Database::set_user_version(&self.connection, RETIREMENT_FENCE_USER_VERSION)?;
+            self.connection
+                .execute_batch("COMMIT;")
+                .map_err(|error| database_error("commit source retirement fence", error))?;
+            Ok(())
+        })();
+
+        if let Err(error) = install {
+            let rollback = self.connection.execute_batch("ROLLBACK;").err();
+            self.transaction_active = false;
+            return match rollback {
+                Some(rollback) => Err(AppError::Database(format!(
+                    "{error}; additionally, source retirement fence transaction rollback failed: {rollback}"
+                ))),
+                None => Err(error),
+            };
+        }
+
+        self.transaction_active = false;
+        self.retirement_fence = Some(RetirementFence {
+            original_user_version,
+            trigger_names,
+        });
+        self.connection
+            .busy_timeout(RETIREMENT_FENCE_REACQUIRE_TIMEOUT)
+            .map_err(|error| database_error("set retirement-fence reacquire timeout", error))?;
+        self.connection
+            .execute_batch("BEGIN IMMEDIATE;")
+            .map_err(|error| {
+                database_error("reacquire source barrier after retirement fence", error)
+            })?;
+        self.transaction_active = true;
+        Ok(())
+    }
+
+    fn restore_retirement_fence(&mut self) -> Result<(), AppError> {
+        let Some(fence) = self.retirement_fence.clone() else {
+            return Ok(());
+        };
+        if !self.transaction_active {
+            self.connection
+                .busy_timeout(RETIREMENT_FENCE_REACQUIRE_TIMEOUT)
+                .map_err(|error| database_error("set retirement-fence rollback timeout", error))?;
+            self.connection
+                .execute_batch("BEGIN IMMEDIATE;")
+                .map_err(|error| {
+                    database_error("acquire source barrier to rollback fence", error)
+                })?;
+            self.transaction_active = true;
+        }
+
+        let restore = (|| -> Result<(), AppError> {
+            for trigger_name in &fence.trigger_names {
+                self.connection
+                    .execute_batch(&format!(
+                        "DROP TRIGGER IF EXISTS {};",
+                        quote_sql_identifier(trigger_name)
+                    ))
+                    .map_err(|error| database_error("drop source retirement trigger", error))?;
+            }
+            Database::set_user_version(&self.connection, fence.original_user_version)?;
+            self.connection.execute_batch("COMMIT;").map_err(|error| {
+                database_error("commit source retirement fence rollback", error)
+            })?;
+            Ok(())
+        })();
+        if let Err(error) = restore {
+            let rollback = self.connection.execute_batch("ROLLBACK;").err();
+            self.transaction_active = false;
+            return match rollback {
+                Some(rollback) => Err(AppError::Database(format!(
+                    "{error}; additionally, retirement-fence rollback transaction failed: {rollback}"
+                ))),
+                None => Err(error),
+            };
+        }
+
+        self.transaction_active = false;
+        self.retirement_fence = None;
+        Ok(())
+    }
+
+    fn disarm_retirement_fence(&mut self) {
+        self.retirement_fence = None;
     }
 }
 
 impl Drop for SourceWriteBarrier {
     fn drop(&mut self) {
-        let _ = self.connection.execute_batch("ROLLBACK;");
+        if self.retirement_fence.is_some() {
+            if let Err(error) = self.restore_retirement_fence() {
+                log::error!("Failed to restore durable source retirement fence: {error}");
+            }
+        }
+        if self.transaction_active {
+            let _ = self.connection.execute_batch("ROLLBACK;");
+            self.transaction_active = false;
+        }
     }
+}
+
+fn quote_sql_identifier(identifier: &str) -> String {
+    format!("\"{}\"", identifier.replace('"', "\"\""))
+}
+
+fn source_user_tables(connection: &Connection) -> Result<Vec<String>, AppError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT name, COALESCE(sql, '') FROM sqlite_schema
+             WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+             ORDER BY name;",
+        )
+        .map_err(|error| database_error("prepare retirement-fence table inventory", error))?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|error| database_error("query retirement-fence table inventory", error))?;
+    let mut tables = Vec::new();
+    for row in rows {
+        let (name, sql) =
+            row.map_err(|error| database_error("read retirement-fence table inventory", error))?;
+        if sql
+            .trim_start()
+            .to_ascii_uppercase()
+            .starts_with("CREATE VIRTUAL TABLE")
+        {
+            return Err(AppError::Database(format!(
+                "cannot install a persistent retirement fence on virtual table {name}"
+            )));
+        }
+        tables.push(name);
+    }
+    Ok(tables)
 }
 
 fn database_error(context: &str, error: impl std::fmt::Display) -> AppError {
@@ -1234,6 +1437,20 @@ fn rollback_after(
     }
 }
 
+fn rollback_after_retirement_fence(
+    original: AppError,
+    source_barrier: &mut SourceWriteBarrier,
+    directory: &PinnedDirectory,
+    published: &[&PublishedFile],
+) -> Result<DatabaseIdentityOutcome, AppError> {
+    match source_barrier.restore_retirement_fence() {
+        Ok(()) => rollback_after(original, directory, published),
+        Err(restore) => Err(AppError::Database(format!(
+            "{original}; additionally, the durable source retirement fence could not be rolled back ({restore}); published database snapshots were retained"
+        ))),
+    }
+}
+
 trait MigrationHooks {
     fn after_directory_pinned(&self, _directory: &PinnedDirectory) -> Result<(), AppError> {
         Ok(())
@@ -1259,6 +1476,7 @@ fn prepare_database_identity_impl(
             archived_prior_path: None,
             retained_prior_path: None,
             migrated: false,
+            durability_warning: None,
         });
     };
     hooks.after_directory_pinned(&directory)?;
@@ -1280,6 +1498,7 @@ fn prepare_database_identity_impl(
             archived_prior_path: None,
             retained_prior_path: path_entry_exists(&old_path)?.then_some(old_path),
             migrated: false,
+            durability_warning: None,
         });
     }
 
@@ -1295,6 +1514,7 @@ fn prepare_database_identity_impl(
             archived_prior_path: None,
             retained_prior_path: None,
             migrated: false,
+            durability_warning: None,
         });
     }
 
@@ -1329,6 +1549,7 @@ fn prepare_database_identity_impl(
                 archived_prior_path: None,
                 retained_prior_path: Some(old_path),
                 migrated: false,
+                durability_warning: None,
             });
         }
         PublishOutcome::Published(published) => published,
@@ -1381,9 +1602,64 @@ fn prepare_database_identity_impl(
         );
     }
 
-    if let Err(error) = quarantine_remove(&directory, &old_path, &old_identity, "retire-old-main") {
-        return rollback_after(error, &directory, &[&published_archive, &published_new]);
+    if let Err(error) = source_barrier
+        .as_mut()
+        .expect("source barrier remains owned before retirement")
+        .install_and_reacquire_retirement_fence()
+    {
+        return rollback_after_retirement_fence(
+            error,
+            source_barrier
+                .as_mut()
+                .expect("source barrier remains owned after fence failure"),
+            &directory,
+            &[&published_archive, &published_new],
+        );
     }
+
+    let retire_result = if fault == Some(MigrationFaultPoint::OldSourceDirectorySyncAfterUnlink) {
+        quarantine_remove_with_directory_sync(
+            &directory,
+            &old_path,
+            &old_identity,
+            "retire-old-main",
+            |_| {
+                Err(AppError::Database(
+                    "injected directory sync failure after old-source unlink".to_string(),
+                ))
+            },
+        )
+    } else {
+        quarantine_remove_with_directory_sync(
+            &directory,
+            &old_path,
+            &old_identity,
+            "retire-old-main",
+            sync_directory,
+        )
+    };
+    let durability_warning = match retire_result {
+        Ok(QuarantineRemoveOutcome::RemovedDurably) => None,
+        Ok(QuarantineRemoveOutcome::RemovedWithDurabilityWarning(error)) => {
+            Some(format!(
+                "legacy database was unlinked, but directory durability could not be confirmed: {error}"
+            ))
+        }
+        Err(error) => {
+            return rollback_after_retirement_fence(
+                error,
+                source_barrier
+                    .as_mut()
+                    .expect("source barrier remains owned before retirement rollback"),
+                &directory,
+                &[&published_archive, &published_new],
+            );
+        }
+    };
+    source_barrier
+        .as_mut()
+        .expect("source barrier remains owned after committed retirement")
+        .disarm_retirement_fence();
     drop(source_barrier.take());
 
     // Sidecars are evidence until the old main filename has been removed. Once
@@ -1415,6 +1691,7 @@ fn prepare_database_identity_impl(
         archived_prior_path: Some(archive_path),
         retained_prior_path: None,
         migrated: true,
+        durability_warning,
     })
 }
 
@@ -1422,6 +1699,7 @@ fn prepare_database_identity_impl(
 enum MigrationFaultPoint {
     ArchivePublish,
     OldSourceRemove,
+    OldSourceDirectorySyncAfterUnlink,
 }
 
 pub(crate) fn prepare_database_identity(
@@ -1457,6 +1735,7 @@ mod tests {
         prepare_database_identity, prepare_database_identity_with_hooks,
         prepare_database_identity_with_test_fault, quarantine_remove, AtomicMoveMode, FileIdentity,
         MigrationFaultPoint, MigrationHooks, PinnedDirectory, SourceWriteBarrier,
+        RETIREMENT_FENCE_TRIGGER_PREFIX,
     };
     use crate::database::{Database, SCHEMA_VERSION};
     use crate::product_identity::{
@@ -1470,7 +1749,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::process::Command;
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{Arc, Barrier};
+    use std::sync::{mpsc::sync_channel, Arc, Barrier, Mutex};
 
     const ARCHIVE_FILE: &str = "cc-switch.db.pre-llm-usage-bar-v14";
     const CRASH_FIXTURE_ENV: &str = "LLM_USAGE_BAR_CRASH_WAL_FIXTURE";
@@ -1530,6 +1809,28 @@ mod tests {
             |row| row.get(0),
         )
         .expect("read migration marker")
+    }
+
+    fn assert_snapshot_excludes_retirement_fence(path: &Path) {
+        let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .expect("open migration snapshot read-only");
+        assert_eq!(
+            Database::get_user_version(&connection).expect("read snapshot user_version"),
+            DATABASE_IDENTITY_SOURCE_SCHEMA_VERSION,
+            "migration snapshot must retain the source schema version"
+        );
+        let fence_pattern = format!("{RETIREMENT_FENCE_TRIGGER_PREFIX}%");
+        let fence_trigger_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'trigger' AND name LIKE ?1;",
+                [fence_pattern],
+                |row| row.get(0),
+            )
+            .expect("count retirement-fence triggers in snapshot");
+        assert_eq!(
+            fence_trigger_count, 0,
+            "retirement fence must never leak into a published snapshot"
+        );
     }
 
     fn enable_wal(conn: &Connection) {
@@ -2158,6 +2459,35 @@ mod tests {
         assert_old_only(dir.path(), "delete-fault-source");
     }
 
+    #[test]
+    fn post_unlink_directory_sync_failure_keeps_committed_publications() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let old = dir.path().join(LEGACY_DATABASE_FILE);
+        let new = canonical_test_dir(dir.path()).join(DATABASE_FILE);
+        let archive = canonical_test_dir(dir.path()).join(ARCHIVE_FILE);
+        write_real_v13_marker_db(&old, "post-unlink-sync-source");
+
+        let outcome = prepare_database_identity_with_test_fault(
+            dir.path(),
+            MigrationFaultPoint::OldSourceDirectorySyncAfterUnlink,
+        )
+        .expect("unlink is the irreversible migration commit point");
+
+        assert!(outcome.migrated);
+        assert!(
+            outcome.durability_warning.is_some(),
+            "post-commit sync failure must be surfaced to startup diagnostics"
+        );
+        assert_eq!(outcome.database_path, new);
+        assert_eq!(
+            outcome.archived_prior_path.as_deref(),
+            Some(archive.as_path())
+        );
+        assert!(!old.exists());
+        assert_eq!(read_marker(&new), "post-unlink-sync-source");
+        assert_eq!(read_marker(&archive), "post-unlink-sync-source");
+    }
+
     fn assert_existing_lease_fails_closed(contents: &[u8]) {
         let dir = tempfile::tempdir().expect("tempdir");
         let old = dir.path().join(LEGACY_DATABASE_FILE);
@@ -2364,6 +2694,88 @@ mod tests {
             read_marker(outcome.archived_prior_path.as_deref().unwrap()),
             "snapshot-boundary"
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn migration_rejects_writer_already_waiting_with_nonzero_busy_timeout() {
+        struct WaitingWriterHook {
+            writer: Mutex<Option<std::thread::JoinHandle<rusqlite::Result<usize>>>>,
+        }
+
+        impl MigrationHooks for WaitingWriterHook {
+            fn after_snapshots(&self, old_path: &Path) -> Result<(), crate::error::AppError> {
+                let competitor = Connection::open(old_path)?;
+                competitor.busy_timeout(std::time::Duration::from_secs(5))?;
+                let (started_tx, started_rx) = sync_channel(0);
+                let writer = std::thread::spawn(move || {
+                    started_tx
+                        .send(())
+                        .expect("migration test must observe writer start");
+                    competitor.execute(
+                        "INSERT INTO identity_migration_marker (value) VALUES ('waiting-writer-row')",
+                        [],
+                    )
+                });
+                started_rx
+                    .recv()
+                    .expect("waiting writer must reach its INSERT");
+                // The migration still owns BEGIN IMMEDIATE, so a writer that
+                // has not returned after this interval is inside SQLite's
+                // nonzero busy wait rather than merely waiting to be scheduled.
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                assert!(
+                    !writer.is_finished(),
+                    "writer must be waiting on the barrier"
+                );
+                *self.writer.lock().expect("lock writer handle") = Some(writer);
+                Ok(())
+            }
+        }
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let old = dir.path().join(LEGACY_DATABASE_FILE);
+        let fixture = create_real_v13_fixture(&old);
+        enable_wal(&fixture);
+        fixture
+            .execute(
+                "INSERT INTO identity_migration_marker (value) VALUES ('waiting-writer-boundary')",
+                [],
+            )
+            .expect("write waiting-writer fixture marker");
+        drop(fixture);
+        let hook = WaitingWriterHook {
+            writer: Mutex::new(None),
+        };
+
+        let outcome = prepare_database_identity_with_hooks(dir.path(), &hook, None)
+            .expect("migration with waiting writer");
+        let writer = hook
+            .writer
+            .lock()
+            .expect("lock writer handle")
+            .take()
+            .expect("waiting writer handle");
+        let error = writer
+            .join()
+            .expect("waiting writer must not panic")
+            .expect_err("retirement fence must reject an already-waiting write");
+
+        assert_eq!(
+            error.sqlite_error_code(),
+            Some(rusqlite::ErrorCode::ConstraintViolation),
+            "persistent retirement fence must reject the write: {error}"
+        );
+        assert_eq!(
+            read_marker(&outcome.database_path),
+            "waiting-writer-boundary"
+        );
+        assert_eq!(
+            read_marker(outcome.archived_prior_path.as_deref().unwrap()),
+            "waiting-writer-boundary"
+        );
+        assert_snapshot_excludes_retirement_fence(&outcome.database_path);
+        assert_snapshot_excludes_retirement_fence(outcome.archived_prior_path.as_deref().unwrap());
     }
 
     #[cfg(unix)]
