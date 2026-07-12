@@ -384,11 +384,8 @@ git commit -m "refactor(identity): migrate app-owned internal identifiers"
 - Modify: current-product files enumerated by `runtimeAndCurrentDocs()` under `src/`; the expected typed/runtime set includes `src/types.ts`, `src/lib/api/skills.ts`, `src/lib/schemas/settings.ts`, `src/hooks/useProviderActions.ts`, `src/components/DatabaseUpgrade.tsx`, `src/components/settings/AboutSection.tsx`, `src/components/settings/DirectorySettings.tsx`, and `src/components/settings/SkillStorageLocationSettings.tsx`
 - Modify: `README.md`, `README_ZH.md`, `README_DE.md`, `README_JA.md`, `CONTRIBUTING.md`, `SECURITY.md`, `SUPPORT.md`
 - Modify: `.github/CODEOWNERS`, `.github/FUNDING.yml`, `.github/ISSUE_TEMPLATE/bug_report.yml`, `.github/ISSUE_TEMPLATE/config.yml`, `.github/ISSUE_TEMPLATE/doc_issue.yml`, `.github/ISSUE_TEMPLATE/feature_request.yml`, `.github/ISSUE_TEMPLATE/question.yml`, `.github/workflows/release.yml`
-- Modify: `src-tauri/tauri.conf.json`, `src-tauri/Info.plist`, `src-tauri/src/commands/misc.rs`, `src-tauri/src/auto_launch.rs`, `src-tauri/src/deeplink/mod.rs`, `src-tauri/wix/per-user-main.wxs`
-- Rename/modify: `flatpak/com.ccswitch.desktop.desktop` to `flatpak/com.llmusagebar.desktop.desktop`
-- Rename/modify: `flatpak/com.ccswitch.desktop.metainfo.xml` to `flatpak/com.llmusagebar.desktop.metainfo.xml`
-- Rename/modify: `flatpak/com.ccswitch.desktop.yml` to `flatpak/com.llmusagebar.desktop.yml`
-- Modify: `flatpak/README.md`
+- Modify: `src-tauri/tauri.conf.json`, `src-tauri/Info.plist`, `src-tauri/src/commands/misc.rs`, `src-tauri/src/auto_launch.rs`, `src-tauri/src/deeplink/mod.rs`
+- Leave unsupported Windows WiX and Linux Flatpak packaging outside the active identity audit; this delivery target is macOS only.
 - Modify: `tests/config/productIdentity.test.ts`
 
 **Interfaces:**
@@ -412,7 +409,7 @@ it("classifies every old identity occurrence and leaves no owned rename", () => 
 });
 ```
 
-`runtimeAndCurrentDocs()` must enumerate `src/**`, `src-tauri/src/**`, `src-tauri/tests/**`, locales, manifests, packaging, and current root docs. It excludes historical `docs/superpowers/plans`, `docs/task-state`, generated output, and protocol literals only through exact entries from `productIdentityAllowlist.ts`; regex-only blanket exemptions are forbidden.
+`runtimeAndCurrentDocs()` must enumerate `src/**`, `src-tauri/src/**`, `src-tauri/tests/**`, locales, macOS manifests/packaging, and current root docs. It excludes unsupported `src-tauri/wix/**` and `flatpak/**`, historical `docs/superpowers/plans`, `docs/task-state`, generated output, and protocol literals only through exact entries from `productIdentityAllowlist.ts`; regex-only blanket exemptions are forbidden.
 
 - [ ] **Step 2: Verify RED and capture the exact inventory**
 
@@ -422,7 +419,7 @@ Expected: FAIL listing every remaining unapproved current-product identity occur
 
 - [ ] **Step 3: Replace owned identity and label preserved compatibility**
 
-Classify every failure first. Rename only `ownedRename` entries, label `legacyReadOnly` entries, and keep `externalWireStable` bytes unchanged with focused contract tests. Old SQL export headers remain accepted on import, while new exports use `LLM Usage Bar SQLite export`. Replace upstream update checks with a deterministic `managed updates unavailable` response until a reachable LLM Usage Bar endpoint exists. Rename Flatpak/app IDs and auto-start labels. Keep partner coupon codes and inherited issue URLs only where they are external literals, and label explanatory UI as legacy.
+Classify every failure first. Rename only `ownedRename` entries, label `legacyReadOnly` entries, and keep `externalWireStable` bytes unchanged with focused contract tests. Old SQL export headers remain accepted on import, while new exports use `LLM Usage Bar SQLite export`. Replace upstream update checks with a deterministic `managed updates unavailable` response until a reachable LLM Usage Bar endpoint exists. Rename the macOS app/bundle and auto-start labels. Keep partner coupon codes and inherited issue URLs only where they are external literals, and label explanatory UI as legacy.
 
 - [ ] **Step 4: Verify GREEN**
 
@@ -441,7 +438,7 @@ Expected: identity audit and all frontend gates pass.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src src-tauri flatpak README*.md CONTRIBUTING.md SECURITY.md SUPPORT.md .github tests/config/productIdentity.test.ts tests/config/productIdentityAllowlist.ts
+git add src src-tauri README*.md CONTRIBUTING.md SECURITY.md SUPPORT.md .github tests/config/productIdentity.test.ts tests/config/productIdentityAllowlist.ts
 git commit -m "refactor(identity): complete LLM Usage Bar product migration"
 ```
 
