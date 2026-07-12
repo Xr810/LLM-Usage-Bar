@@ -77,7 +77,7 @@ Define `cursor_fixture(source, key, byte_offset)` in the test module and populat
 
 - [ ] **Step 2: Verify RED**
 
-Run: `pnpm rust -- test --manifest-path src-tauri/Cargo.toml usage_sync_cursor -- --nocapture`
+Run: `pnpm rust -- test --manifest-path src-tauri/Cargo.toml --lib usage_sync_cursor -- --nocapture`
 
 Expected: FAIL because the table/domain/DAO do not exist and schema version is 13.
 
@@ -119,7 +119,7 @@ Use a single `INSERT ... ON CONFLICT(source,cursor_key) DO UPDATE` statement ass
 
 - [ ] **Step 4: Verify focused GREEN**
 
-Run: `pnpm rust -- test --manifest-path src-tauri/Cargo.toml usage_sync_cursor -- --nocapture`
+Run: `pnpm rust -- test --manifest-path src-tauri/Cargo.toml --lib usage_sync_cursor -- --nocapture`
 
 Expected: DAO tests pass; the explicit v13-to-v14 migration test is still pending Task 2.
 
@@ -139,6 +139,7 @@ git commit -m "feat(usage): add durable sync cursor storage"
 - Modify: `src-tauri/src/database/schema.rs`
 - Modify: `src-tauri/src/database/mod.rs`
 - Modify: `src-tauri/src/database/tests.rs`
+- Modify: `src-tauri/src/database/identity_migration.rs`
 
 **Interfaces:**
 - Produces `migrate_v13_to_v14(conn, roots) -> Result<()>` and `classify_legacy_cursor(path, roots) -> &'static str`.
@@ -147,11 +148,11 @@ git commit -m "feat(usage): add durable sync cursor storage"
 
 - [ ] **Step 1: Write failing migration tests**
 
-Create a v13 fixture with Claude, Codex, Gemini, OpenCode, and unknown `session_log_sync` rows. Assert migration renames the old table to `session_log_sync_v13_archive`, copies rows with source classification, preserves line offsets, sets byte offset/state to zero/NULL, labels unknown rows `legacy`, and sets `user_version=14`. Also assert a forced SQL failure rolls back the table rename and version.
+Create a v13 fixture with Claude, Codex, Gemini, OpenCode, and unknown `session_log_sync` rows. Assert migration renames the old table to `session_log_sync_v13_archive`, copies rows with source classification, preserves line offsets, sets byte offset/state to zero/NULL, labels unknown rows `legacy`, and sets `user_version=14`. Also assert a forced SQL failure rolls back the table rename and version. Update the database-filename migration test fixture so it still constructs an explicit schema-v13 source after global `SCHEMA_VERSION` becomes 14; it must not call the full current migration chain or silently create a v14 source. Re-run the crash-residue filename migration test to prove a fixed-v13 old filename still becomes a supported new-name v14 database through normal startup migration.
 
 - [ ] **Step 2: Verify RED**
 
-Run: `pnpm rust -- test --manifest-path src-tauri/Cargo.toml migration_v13_to_v14 -- --nocapture`
+Run: `pnpm rust -- test --manifest-path src-tauri/Cargo.toml --lib migration_v13_to_v14 -- --nocapture`
 
 Expected: FAIL because schema 13 has no migration arm or cursor archive.
 
@@ -175,8 +176,9 @@ Do not create a nested `rusqlite::Transaction` and do not set or commit `user_ve
 Run:
 
 ```bash
-pnpm rust -- test --manifest-path src-tauri/Cargo.toml migration_v13_to_v14 -- --nocapture
-pnpm rust -- test --manifest-path src-tauri/Cargo.toml database::tests -- --nocapture
+pnpm rust -- test --manifest-path src-tauri/Cargo.toml --lib migration_v13_to_v14 -- --nocapture
+pnpm rust -- test --manifest-path src-tauri/Cargo.toml --lib database::tests -- --nocapture
+pnpm rust -- test --manifest-path src-tauri/Cargo.toml --lib crash_residue_wal_is_preserved_in_independent_new_and_archive_snapshots -- --nocapture
 ```
 
 Expected: migration/rollback and all earlier schema tests pass.
@@ -205,7 +207,7 @@ Use a temp JSONL with real Claude assistant records. First sync records the curs
 
 - [ ] **Step 2: Verify RED**
 
-Run: `pnpm rust -- test --manifest-path src-tauri/Cargo.toml session_usage::tests::v14_ -- --nocapture`
+Run: `pnpm rust -- test --manifest-path src-tauri/Cargo.toml --lib session_usage::tests::v14_ -- --nocapture`
 
 Expected: FAIL because the importer still reads from byte zero and writes `session_log_sync` directly.
 
@@ -258,7 +260,7 @@ Create a real Codex JSONL with `session_meta`, `turn_context`, and cumulative `t
 
 - [ ] **Step 2: Verify RED**
 
-Run: `pnpm rust -- test --manifest-path src-tauri/Cargo.toml session_usage_codex::tests::v14_ -- --nocapture`
+Run: `pnpm rust -- test --manifest-path src-tauri/Cargo.toml --lib session_usage_codex::tests::v14_ -- --nocapture`
 
 Expected: FAIL because `FileParseState` is rebuilt by replaying all lines.
 
@@ -313,8 +315,8 @@ Assert unchanged Gemini JSON is skipped, changed JSON replays once, and parse/Nt
 Run:
 
 ```bash
-pnpm rust -- test --manifest-path src-tauri/Cargo.toml session_usage_gemini -- --nocapture
-pnpm rust -- test --manifest-path src-tauri/Cargo.toml session_usage_opencode -- --nocapture
+pnpm rust -- test --manifest-path src-tauri/Cargo.toml --lib session_usage_gemini -- --nocapture
+pnpm rust -- test --manifest-path src-tauri/Cargo.toml --lib session_usage_opencode -- --nocapture
 ```
 
 Expected: FAIL because both modules still access `session_log_sync` helpers.
@@ -366,7 +368,7 @@ Add tests that default is 300 seconds, custom 60/600/3600-second windows gate co
 
 - [ ] **Step 2: Verify RED**
 
-Run: `pnpm rust -- test --manifest-path src-tauri/Cargo.toml watcher_state -- --nocapture`
+Run: `pnpm rust -- test --manifest-path src-tauri/Cargo.toml --lib watcher_state -- --nocapture`
 
 Expected: FAIL because the state machine does not exist.
 
@@ -376,7 +378,7 @@ Use a monotonic `u64` seconds value supplied by the caller; the state machine mu
 
 - [ ] **Step 4: Verify GREEN**
 
-Run: `pnpm rust -- test --manifest-path src-tauri/Cargo.toml watcher_state -- --nocapture`
+Run: `pnpm rust -- test --manifest-path src-tauri/Cargo.toml --lib watcher_state -- --nocapture`
 
 Expected: all deterministic tests pass without sleeps.
 
@@ -415,7 +417,7 @@ Use temp external source/app/repo/cache roots. Assert only allowed extensions/na
 
 - [ ] **Step 2: Verify RED**
 
-Run: `pnpm rust -- test --manifest-path src-tauri/Cargo.toml usage::watcher -- --nocapture`
+Run: `pnpm rust -- test --manifest-path src-tauri/Cargo.toml --lib usage::watcher -- --nocapture`
 
 Expected: FAIL because native watcher/lifecycle/filter APIs are absent.
 
@@ -432,8 +434,8 @@ After app state and UI readiness, mark all sources dirty and run one background 
 Run:
 
 ```bash
-pnpm rust -- test --manifest-path src-tauri/Cargo.toml usage::watcher -- --nocapture
-pnpm rust -- test --manifest-path src-tauri/Cargo.toml usage::session -- --nocapture
+pnpm rust -- test --manifest-path src-tauri/Cargo.toml --lib usage::watcher -- --nocapture
+pnpm rust -- test --manifest-path src-tauri/Cargo.toml --lib usage::session -- --nocapture
 ```
 
 Expected: deterministic tests pass; one temp directory create/append event marks the source dirty without immediate sync; excluded app-data write produces no source event; default UI/settings value is 5 minutes and a 10-minute change re-arms one existing scheduler.
@@ -458,9 +460,9 @@ git commit -m "feat(usage): add configurable filesystem watcher"
 ```bash
 pnpm rust -- fmt --check --manifest-path src-tauri/Cargo.toml
 pnpm rust -- clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
-pnpm rust -- test --manifest-path src-tauri/Cargo.toml usage_sync_cursor -- --nocapture
-pnpm rust -- test --manifest-path src-tauri/Cargo.toml session_usage -- --nocapture
-pnpm rust -- test --manifest-path src-tauri/Cargo.toml usage::watcher -- --nocapture
+pnpm rust -- test --manifest-path src-tauri/Cargo.toml --lib usage_sync_cursor -- --nocapture
+pnpm rust -- test --manifest-path src-tauri/Cargo.toml --lib session_usage -- --nocapture
+pnpm rust -- test --manifest-path src-tauri/Cargo.toml --lib usage::watcher -- --nocapture
 ```
 
 Expected: all pass with no warnings.
