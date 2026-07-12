@@ -320,22 +320,25 @@ git commit -m "refactor(identity): use LLM Usage Bar runtime paths"
 
 **Files:**
 - Modify: `src-tauri/src/services/skill.rs`
+- Modify: `src-tauri/src/settings.rs`
 - Modify: `src-tauri/src/app_config.rs`
 - Modify: `src-tauri/src/database/schema.rs`
 - Modify: `src-tauri/src/database/tests.rs`
 - Modify: `src/types.ts`
 - Modify: `src/lib/api/skills.ts`
+- Modify: `src/lib/schemas/settings.ts`
 - Modify: `src/components/settings/SkillStorageLocationSettings.tsx`
 - Create: `tests/config/productIdentityAllowlist.ts`
 
 **Interfaces:**
 - Skill storage wire value is exactly `llm_usage_bar`; legacy `cc_switch` is read as an alias, and `unified` remains unchanged. There is no writable Legacy CC Switch storage variant.
-- Database provenance/current-product discriminators use exactly `llm-usage-bar`; original-product provenance uses `legacy-cc-switch` in a separate read-only origin type.
-- Produces `migrate_app_owned_identity_v14(conn: &rusqlite::Connection) -> Result<()>`; the caller owns the surrounding savepoint/transaction and `user_version`.
+- A successfully decoded `settings.json` that used the old alias is immediately canonicalized through typed serialization; a canonicalization write failure is warning-only and does not discard valid settings.
+- Current SSOT `foundIn` values use `product_identity::APP_SLUG`; they are transient and are not migrated in SQLite.
+- Reconnaissance confirmed that v13 has no product origin/provenance column and no app-owned old product discriminator in SQLite. `migrate_app_owned_identity_v14(conn)` therefore validates the expected v13 boundary and is deliberately data-no-op; the later schema-v14 caller owns the surrounding savepoint and `user_version`.
 
 - [ ] **Step 1: Write failing serialization and migration tests**
 
-Test that the renamed storage-location enum serializes to `llm_usage_bar`, deserializes old `cc_switch` as an alias, and can write only the current app directory or unified standards directory. Build a v13 fixture, open one savepoint, call `migrate_app_owned_identity_v14(&conn)` directly, and assert rows whose meaning is current-app become `llm-usage-bar`, imported original rows become `legacy-cc-switch`, and unrelated provider/protocol IDs remain byte-for-byte unchanged. Roll the test savepoint back so this task does not bump `user_version`. Add a path test proving no decoded storage value resolves under real `~/.cc-switch`.
+Test that the renamed storage-location enum serializes to `llm_usage_bar`, deserializes old `cc_switch` as an alias, and can write only the current app directory or unified standards directory. Decode a real-shaped `settings.json`, prove the old alias is rewritten to the current value through typed serialization, and prove external values such as `cc-switch-sync` remain byte-for-byte unchanged. Build a fixed v13 fixture, open one savepoint, call `migrate_app_owned_identity_v14(&conn)` directly, and assert representative provider JSON, profile payload, protocol/source values, and settings rows remain unchanged because no enumerated app-owned discriminator column exists. Roll the test savepoint back so this task does not bump `user_version`. Add a path test proving no decoded storage value resolves under real `~/.cc-switch`.
 
 - [ ] **Step 2: Verify RED**
 
@@ -362,7 +365,7 @@ pub enum SkillStorageLocation {
 }
 ```
 
-Before changing code, commit an exact classification table in `tests/config/productIdentityAllowlist.ts`: each old literal is `ownedRename`, `legacyReadOnly`, or `externalWireStable`, with exact file and constant/key context. At minimum, remote roots/protocols `cc-switch-sync` and `cc-switch-webdav-sync`, existing Codex catalog/provider identifiers, OAuth compatibility headers, legacy SQL import header, old environment-variable aliases, and serialized error codes are wire-stable unless a dual-read/dual-write migration is separately tested. Add byte-stability tests in their owning Rust/TypeScript modules. Add `migrate_app_owned_identity_v14` with explicit SQL updates only for enumerated columns/settings keys. Decode JSON settings into typed values before rewriting. Do not update protocol/provider IDs globally. Do not call the helper from schema 13; the watcher plan invokes it inside the existing schema savepoint.
+Before changing code, commit an exact classification table in `tests/config/productIdentityAllowlist.ts`: each old literal is `ownedRename`, `legacyReadOnly`, or `externalWireStable`, with exact file and constant/key context. At minimum, remote roots/protocols `cc-switch-sync` and `cc-switch-webdav-sync`, existing Codex catalog/provider identifiers, OAuth compatibility headers, legacy SQL import header, old environment-variable aliases, and serialized error codes are wire-stable unless a dual-read/dual-write migration is separately tested. Add byte-stability tests in their owning Rust/TypeScript modules. Add `migrate_app_owned_identity_v14` as an explicit schema-boundary validator and documented no-op; do not fabricate or globally update providers, profiles, MCP JSON, settings rows, usage sources, protocol IDs, URLs, or affiliate values. Decode file-backed JSON settings into typed values before rewriting. Do not call the helper from schema 13; the watcher plan invokes it inside the existing schema savepoint.
 
 - [ ] **Step 4: Verify GREEN**
 
@@ -373,7 +376,7 @@ Expected: identity tests and typecheck pass; approved legacy values remain.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src-tauri/src/services/skill.rs src-tauri/src/app_config.rs src-tauri/src/database/schema.rs src-tauri/src/database/tests.rs src
+git add src-tauri/src/services/skill.rs src-tauri/src/settings.rs src-tauri/src/app_config.rs src-tauri/src/database/schema.rs src-tauri/src/database/tests.rs src tests/config/productIdentityAllowlist.ts tests/config/productIdentity.test.ts
 git commit -m "refactor(identity): migrate app-owned internal identifiers"
 ```
 

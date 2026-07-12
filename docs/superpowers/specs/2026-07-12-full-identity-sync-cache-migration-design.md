@@ -121,22 +121,28 @@ metadata point to `Xr810/LLM-Usage-Bar`.
 
 ### 1.4 App-owned internal identifiers
 
-Schema v14 performs an explicit, column-by-column migration of app-owned
-discriminators, settings keys, storage-location enum values, auto-start labels,
-and current-product profile names from `cc-switch` to `llm-usage-bar`. Code
-variants such as `SkillStorageLocation::CcSwitch` become LLM Usage Bar variants.
+Implementation reconnaissance against both the real v13 schema and the current
+`~/.llm-usage-bar/cc-switch.db` found no product-origin/provenance column and no
+app-owned `cc-switch`, `cc_switch`, or `ccswitch` value in SQLite. The writable
+storage-location discriminator instead lives in
+`~/.llm-usage-bar/settings.json`, while the current SSOT `foundIn` label is a
+transient API value. The migration therefore changes those real typed surfaces,
+plus auto-start labels and current-product profile names, without inventing a
+database provenance model. Code variants such as
+`SkillStorageLocation::CcSwitch` become LLM Usage Bar variants.
 
 This is not a global text or SQL replacement:
 
 - Provider/source IDs such as `claude`, `codex`, `gemini`, `opencode`, and
   `kimi` retain their protocol meaning.
-- Rows that identify imported original-product data become the explicit value
-  `legacy-cc-switch` instead of being relabeled as current-product data.
+- If a future schema introduces a real origin field, imported original-product
+  data must use the explicit value `legacy-cc-switch`; schema v14 does not add
+  such a field merely to satisfy a rename.
 - Serialized third-party compatibility values remain unchanged when the
   external consumer requires the old value.
-- The migration enumerates every affected table and column in code; JSON blobs
-  are decoded and rewritten through typed structures rather than string
-  substitution.
+- `migrate_app_owned_identity_v14` explicitly validates the expected v13
+  boundary but is data-no-op today. `settings.json` is decoded and rewritten
+  through typed structures rather than string substitution.
 
 Tests assert both sides of this boundary: no app-owned current value remains
 `cc-switch`, and no approved legacy value is accidentally rewritten.
