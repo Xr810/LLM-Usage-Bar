@@ -1,9 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { usageDashboardApi } from "@/lib/api/usageDashboard";
-import type { UsageProviderInput } from "@/types/usageDashboard";
+import type {
+  DashboardModuleInput,
+  UsageProviderInput,
+} from "@/types/usageDashboard";
 
 export const usageDashboardKeys = {
   all: ["usage-dashboard"] as const,
+  modules: () => [...usageDashboardKeys.all, "modules"] as const,
   providers: () => [...usageDashboardKeys.all, "providers"] as const,
   provider: (providerId: string) =>
     [...usageDashboardKeys.providers(), providerId] as const,
@@ -34,6 +38,13 @@ export const usageDashboardKeys = {
       pageSize,
     ] as const,
 };
+
+export function useDashboardModules() {
+  return useQuery({
+    queryKey: usageDashboardKeys.modules(),
+    queryFn: usageDashboardApi.listDashboardModules,
+  });
+}
 
 export function useUsageProviders() {
   return useQuery({
@@ -86,12 +97,54 @@ export function useUsageEvents(
 function useInvalidateConfiguration() {
   const queryClient = useQueryClient();
   return () => {
+    queryClient.invalidateQueries({ queryKey: usageDashboardKeys.modules() });
     queryClient.invalidateQueries({ queryKey: usageDashboardKeys.providers() });
     queryClient.invalidateQueries({ queryKey: usageDashboardKeys.bindings() });
     queryClient.invalidateQueries({
       queryKey: usageDashboardKeys.dashboards(),
     });
   };
+}
+
+export function useSaveDashboardModule() {
+  const invalidate = useInvalidateConfiguration();
+  return useMutation({
+    mutationFn: (input: DashboardModuleInput) =>
+      usageDashboardApi.saveDashboardModule(input),
+    onSuccess: invalidate,
+  });
+}
+
+export function useReorderDashboardModules() {
+  const invalidate = useInvalidateConfiguration();
+  return useMutation({
+    mutationFn: (moduleIds: string[]) =>
+      usageDashboardApi.reorderDashboardModules(moduleIds),
+    onSuccess: invalidate,
+  });
+}
+
+export function useSetDashboardModuleVisibility() {
+  const invalidate = useInvalidateConfiguration();
+  return useMutation({
+    mutationFn: ({
+      moduleId,
+      visible,
+    }: {
+      moduleId: string;
+      visible: boolean;
+    }) => usageDashboardApi.setDashboardModuleVisibility(moduleId, visible),
+    onSuccess: invalidate,
+  });
+}
+
+export function useDeleteDashboardModule() {
+  const invalidate = useInvalidateConfiguration();
+  return useMutation({
+    mutationFn: (moduleId: string) =>
+      usageDashboardApi.deleteDashboardModule(moduleId),
+    onSuccess: invalidate,
+  });
 }
 
 export function useSaveUsageProvider() {

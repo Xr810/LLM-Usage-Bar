@@ -2,6 +2,25 @@ export type BillingKind = "subscription" | "metered";
 export type TokenSource = "proxy" | "session_log";
 export type SessionSource = "claude" | "codex";
 export type CostSource = "upstream" | "estimated" | "unavailable";
+export type DashboardModuleKind = "subscription" | "api";
+
+export interface DashboardModuleView {
+  id: string;
+  name: string;
+  kind: DashboardModuleKind;
+  sortOrder: number;
+  visible: boolean;
+  isSystem: boolean;
+  providerCount: number;
+}
+
+export interface DashboardModuleInput {
+  id: string | null;
+  name: string;
+  kind: DashboardModuleKind;
+  sortOrder: number;
+  visible: boolean;
+}
 
 export interface UsageProviderInput {
   id: string;
@@ -15,6 +34,7 @@ export interface UsageProviderInput {
   routeAppType?: string | null;
   routeConfig?: Record<string, unknown> | null;
   quotaConfig?: Record<string, unknown> | null;
+  dashboardModuleId?: string | null;
   enabled: boolean;
 }
 
@@ -34,6 +54,7 @@ export interface UsageProviderView {
   updatedAt: number;
   routeBaseUrl: string | null;
   hasRouteCredentials: boolean;
+  dashboardModuleId: string | null;
 }
 
 export interface RouteBinding {

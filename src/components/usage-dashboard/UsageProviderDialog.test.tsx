@@ -27,6 +27,7 @@ function existingProvider(): UsageProviderView {
     updatedAt: 1,
     routeBaseUrl: null,
     hasRouteCredentials: false,
+    dashboardModuleId: null,
   };
 }
 

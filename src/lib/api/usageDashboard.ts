@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  DashboardModuleInput,
+  DashboardModuleView,
   ProviderSessionSyncResult,
   QuotaRefreshResult,
   RouteBinding,
@@ -10,6 +12,22 @@ import type {
 } from "@/types/usageDashboard";
 
 export const usageDashboardApi = {
+  listDashboardModules: (): Promise<DashboardModuleView[]> =>
+    invoke("list_dashboard_modules"),
+  saveDashboardModule: (
+    input: DashboardModuleInput,
+  ): Promise<DashboardModuleView> => invoke("save_dashboard_module", { input }),
+  reorderDashboardModules: (
+    moduleIds: string[],
+  ): Promise<DashboardModuleView[]> =>
+    invoke("reorder_dashboard_modules", { moduleIds }),
+  setDashboardModuleVisibility: (
+    moduleId: string,
+    visible: boolean,
+  ): Promise<DashboardModuleView> =>
+    invoke("set_dashboard_module_visibility", { moduleId, visible }),
+  deleteDashboardModule: (moduleId: string): Promise<void> =>
+    invoke("delete_dashboard_module", { moduleId }),
   listProviders: (): Promise<UsageProviderView[]> =>
     invoke("list_usage_providers"),
   saveProvider: (input: UsageProviderInput): Promise<UsageProviderView> =>
