@@ -15,7 +15,8 @@ The work is intentionally split into three independently reviewable
 subprojects:
 
 1. Product identity and database migration.
-2. Durable session cursors and the five-minute watcher runtime.
+2. Durable session cursors and a configurable watcher runtime with a
+   five-minute default.
 3. Worktree-aware Cargo cache routing and pruning.
 
 Each subproject must be testable and committable on its own. The final desktop
@@ -46,11 +47,13 @@ smoke test covers their combined behavior.
    `~/.llm-usage-bar/cc-switch.db`, which belongs to the new application but
    retained the old filename during development.
 3. Never copy a live SQLite database with `fs::copy`. Use SQLite's Backup API,
-   validate the destination, and publish it with an atomic rename.
+   validate the destination, and publish it atomically without overwriting an
+   independently created destination.
 4. No watcher callback may read session files, query SQLite, write application
    state, or start a sync. Callbacks may only classify an event and mark a
    source dirty through a bounded channel.
-5. A source may begin at most one automatic sync in any five-minute window.
+5. A source may begin at most one automatic sync in the configured window;
+   that window defaults to five minutes and cannot be set below one minute.
 6. Automatic synchronization must never overlap for the same source and must
    not catch up missed timer ticks in a burst.
 7. A cursor advances only after every yielded usage record and the associated
@@ -144,17 +147,21 @@ checks reject aliases that resolve into `~/.cc-switch`.
 
 ### 2.2 Backup protocol
 
-1. Open the source read-only with SQLite.
-2. Use `rusqlite::backup` to create a temporary destination in the same
+1. Acquire an exclusive per-directory migration lease and re-check both
+   filenames plus the fixed archive path. An existing archive is evidence and
+   is never overwritten.
+2. Open the source read-only with SQLite.
+3. Use `rusqlite::backup` to create a unique temporary destination in the same
    directory. This captures committed WAL content through SQLite rather than
    copying sidecar files manually.
-3. Run `PRAGMA quick_check`, read `user_version`, and verify required tables.
-4. Flush and atomically rename the temporary destination to
-   `llm-usage-bar.db`.
-5. Rename the old current-app file to
+4. Run `PRAGMA quick_check`, read `user_version`, and verify required tables.
+5. Flush and atomically publish the destination with no-clobber semantics. If
+   another valid new file already exists, it wins and the old file is retained.
+6. Archive the old current-app file with no-clobber semantics as
    `cc-switch.db.pre-llm-usage-bar-v14`. Do not delete it automatically.
-6. If any step fails, remove only the incomplete temporary destination, leave
-   the source untouched, and surface a recoverable initialization error.
+7. If archiving fails after this invocation published the new file, remove
+   only that invocation's output before releasing the lease. Every error path
+   restores the old-only state or preserves an independently created new file.
 
 If both filenames exist, the new filename is authoritative. The application
 never attempts a merge between two databases.
@@ -231,9 +238,9 @@ offset. Deduplication remains the final correctness guard.
 ### 4.3 Commit order
 
 1. Parse into an in-memory batch.
-2. Ingest the complete batch transactionally.
-3. Persist the new v14 cursor.
-4. Publish the sync result.
+2. In one database transaction, ingest the complete batch and persist the new
+   v14 cursor.
+3. Publish the sync result only after that transaction commits.
 
 Failures in steps 1-3 leave the old cursor unchanged.
 
@@ -274,33 +281,43 @@ The native callback:
 It never calls a sync function and never writes a file. Reads performed by a
 sync therefore cannot recursively schedule another sync.
 
-### 5.3 Five-minute state machine
+### 5.3 Configurable state machine (five-minute default)
 
 Each source has `Clean`, `Dirty`, or `Syncing` state plus `next_allowed_at`.
 
+The automatic sync interval is one persisted global setting. Its default is
+five minutes, the UI exposes 1, 5, 10, 15, 30, and 60 minute choices, and the
+backend accepts only 1 through 1440 minutes. Invalid persisted values fall
+back to five minutes and are reported in diagnostics. Changing the setting
+updates the existing scheduler through its serialized command channel; it
+does not create another watcher, trigger an immediate catch-up run, or replay
+missed ticks.
+
 - Startup performs one background reconciliation after application state and
-  the UI are ready; that run starts the first five-minute window.
+  the UI are ready; that run starts the first configured window.
 - Watcher events coalesce into `Dirty`.
-- A scheduler tick every five minutes uses
+- A scheduler tick at the configured interval uses
   `tokio::time::MissedTickBehavior::Skip`.
 - At a tick, a source starts only if dirty and not already syncing.
 - An event received during `Syncing` leaves the source dirty, but the follow-up
-  cannot start until the next five-minute tick.
+  cannot start until the next configured tick.
 - Success clears dirty state only if no newer event arrived.
 - Failure keeps the source dirty and retries no sooner than the next tick.
-  Repeated failures back off to 10, 20, then 30 minutes.
+  Consecutive failures use the configured interval multiplied by 1, 2, 4,
+  then 6; the five-minute default therefore backs off 5, 10, 20, then 30
+  minutes.
 - Watcher error or queue overflow marks all sources dirty for the next tick; it
   never launches an immediate full scan.
 
-The scheduler performs a lightweight metadata reconciliation every five
-minutes. Parser work still occurs only for resources whose cursor metadata
-changed. This reconciliation closes watcher-loss gaps without creating a hot
-polling loop.
+The scheduler performs a lightweight metadata reconciliation at the
+configured interval. Parser work still occurs only for resources whose cursor
+metadata changed. This reconciliation closes watcher-loss gaps without
+creating a hot polling loop.
 
 All synchronous file parsing and external SQLite queries run in
 `tauri::async_runtime::spawn_blocking`. Manual provider sync uses the same
 per-source gate, returns a visible `sync already in progress` result instead
-of blocking, and resets the five-minute window on success.
+of blocking, and resets the configured window on success.
 
 ## 6. Watcher Lifecycle
 
@@ -311,6 +328,9 @@ quota scheduler pattern.
 - Startup constructs watch roots only after database/config initialization.
 - Provider source-binding changes update watched roots through a serialized
   command; no second watcher is created.
+- Sync-interval changes update the same scheduler through that serialized
+  command and reset the next deadline from the change time without running a
+  sync immediately.
 - Shutdown cancels the scheduler, closes the event channel, unwatches roots,
   waits for in-flight blocking work, and then drops the native watcher.
 - Poisoned locks and watcher backend errors are logged and reflected in a
@@ -326,9 +346,12 @@ Add a cross-platform Node wrapper that:
 2. Hashes `src-tauri/Cargo.lock` with SHA-256.
 3. Sets `CARGO_TARGET_DIR` to
    `<main-repo>/.cache/cargo-targets/<lock-hash>`.
-4. Writes an active-process lease containing PID, start time, worktree, and
-   command.
-5. Spawns Cargo or Tauri with inherited stdio and removes the lease on exit.
+4. Atomically writes an active-process lease containing wrapper/direct-child
+   identities plus a verifiable build process-group/tree identity, worktree,
+   boot identity, and command. Pending or unverifiable leases are fail-closed.
+5. Resolves and spawns the real Cargo executable or Tauri Node bin without a
+   shell. It removes the lease only after the entire build process group/tree
+   is definitively empty.
 
 Worktrees with the same dependency lock reuse one cache. Dependency-upgrade
 branches receive a separate bucket and therefore cannot poison or serialize
@@ -344,8 +367,13 @@ Add a cache-management command with these invariants:
 
 - Default mode is status/dry-run.
 - `--apply` deletes only cache hashes not referenced by any current worktree.
-- A bucket with a live lease is never deleted.
+- A bucket with a live or indeterminate process-group/tree lease is never deleted.
 - Stale leases are removed only after their PID/start identity is invalid.
+- Apply aborts if any worktree/lock cannot be enumerated and revalidates both
+  references and leases immediately before each deletion.
+- Malformed, half-written, or indeterminate leases keep their bucket; orphaned
+  Cargo/rustc descendants remain protected after wrappers or intermediate
+  processes exit unexpectedly.
 - Legacy per-worktree `src-tauri/target` directories are reported but never
   automatically deleted by the prevention script.
 - The command never touches `.cargo`, `.rustup`, application data, or source
@@ -389,7 +417,8 @@ redesign work.
 
 - Database filename or v14 migration failure leaves the old database and v13
   archive intact and shows a recoverable startup error.
-- Watcher initialization failure degrades to five-minute reconciliation only.
+- Watcher initialization failure degrades to reconciliation-only mode at the
+  configured interval (five minutes by default).
 - Watcher runtime failure marks all sources dirty for the next scheduled
   reconciliation and exposes diagnostics.
 - Cursor decode failure replays that resource from zero; it does not abort
@@ -435,7 +464,8 @@ database because the existing future-version guard will reject it.
 - Application data, repository, cache, and legacy data paths are rejected.
 - A sync-generated application database/log write cannot map to a watched
   source.
-- No source starts twice inside five minutes.
+- With the default setting, no source starts twice inside five minutes; with a
+  custom setting, no source starts twice inside the configured interval.
 - Events during a sync wait for the next tick.
 - Missed ticks skip rather than burst.
 - Repeated failures back off and never enter a tight retry loop.
@@ -463,7 +493,7 @@ clock so the suite is deterministic.
 - Frontend typecheck, format check, unit suite, and renderer build.
 - Cache-script Node tests on macOS and CI-supported Windows/Linux runners.
 - Isolated-HOME desktop smoke: v13 current-app filename migration to v14,
-  watcher diagnostics, five-minute state, Dashboard rendering, manual sync,
+  watcher diagnostics, default/custom interval state, Dashboard rendering, manual sync,
   clean shutdown, and no access to real `~/.cc-switch`.
 
 ## 11. Acceptance Criteria
@@ -479,7 +509,8 @@ clock so the suite is deterministic.
    operation.
 5. Watcher event storms, self-output, failures, and missed ticks cannot cause a
    recursive or tight synchronization loop.
-6. Automatic sync frequency is no more than once per source per five minutes.
+6. Automatic sync defaults to five minutes and is user-adjustable from 1 to
+   1440 minutes; each source runs no more than once per configured interval.
 7. Same-lock worktrees reuse one Cargo target bucket; different locks remain
    isolated.
 8. Cache cleanup is dry-run by default and refuses active/referenced buckets.
