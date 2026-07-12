@@ -1,3 +1,5 @@
+import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   Dialog,
   DialogContent,
@@ -5,8 +7,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { UsageDashboardPage } from "@/components/usage-dashboard/UsageDashboardPage";
-import { useTranslation } from "react-i18next";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { DashboardModulesSettings } from "./DashboardModulesSettings";
+import { ProxyRoutingSettings } from "./ProxyRoutingSettings";
+import { UsageProvidersSettings } from "./UsageProvidersSettings";
 
 interface SettingsDialogProps {
   open: boolean;
@@ -15,34 +19,79 @@ interface SettingsDialogProps {
   defaultTab?: string;
 }
 
-/**
- * Milestone-3 settings surface.
- *
- * Legacy callers may still pass historical tab names. They intentionally all
- * resolve to the provider-aware usage surface instead of mounting a hidden or
- * blank legacy panel. The legacy component modules remain in the repository
- * for the compatibility window but are not reachable from this render tree.
- */
-export function SettingsPage({ open, onOpenChange }: SettingsDialogProps) {
+type SettingsTab = "modules" | "providers" | "proxy";
+
+function resolveSettingsTab(tab?: string): SettingsTab {
+  return tab === "providers" || tab === "proxy" || tab === "modules"
+    ? tab
+    : "modules";
+}
+
+export function SettingsPage({
+  open,
+  onOpenChange,
+  defaultTab,
+}: SettingsDialogProps) {
   const { t } = useTranslation();
+  const [tab, setTab] = useState<SettingsTab>(() =>
+    resolveSettingsTab(defaultTab),
+  );
+
+  useEffect(() => {
+    if (open) setTab(resolveSettingsTab(defaultTab));
+  }, [defaultTab, open]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex h-[90vh] max-w-6xl flex-col overflow-hidden">
         <DialogHeader>
           <DialogTitle>
-            {t("usageDashboard.title", { defaultValue: "Usage dashboard" })}
+            {t("settings.title", { defaultValue: "Settings" })}
           </DialogTitle>
           <DialogDescription>
-            {t("usageDashboard.description", {
+            {t("settings.usageConfigurationDescription", {
               defaultValue:
-                "Provider-aware tokens, costs and subscription quota",
+                "Manage usage modules, Provider identities, and proxy forwarding.",
             })}
           </DialogDescription>
         </DialogHeader>
-        <div className="min-h-0 flex-1 overflow-y-auto px-6">
-          <UsageDashboardPage />
-        </div>
+
+        <Tabs
+          value={tab}
+          onValueChange={(value) => setTab(resolveSettingsTab(value))}
+          className="flex min-h-0 flex-1 flex-col px-6"
+        >
+          <TabsList
+            aria-label={t("settings.sections", {
+              defaultValue: "Settings sections",
+            })}
+            className="w-full flex-shrink-0 justify-start overflow-x-auto"
+          >
+            <TabsTrigger value="modules">
+              {t("settings.usageModules", { defaultValue: "Usage modules" })}
+            </TabsTrigger>
+            <TabsTrigger value="providers">
+              {t("settings.provider", { defaultValue: "Provider" })}
+            </TabsTrigger>
+            <TabsTrigger value="proxy">
+              {t("settings.proxyRouting", {
+                defaultValue: "Proxy & routing",
+              })}
+            </TabsTrigger>
+          </TabsList>
+
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <TabsContent value="modules">
+              <DashboardModulesSettings />
+            </TabsContent>
+            <TabsContent value="providers">
+              <UsageProvidersSettings />
+            </TabsContent>
+            <TabsContent value="proxy">
+              <ProxyRoutingSettings />
+            </TabsContent>
+          </div>
+        </Tabs>
       </DialogContent>
     </Dialog>
   );

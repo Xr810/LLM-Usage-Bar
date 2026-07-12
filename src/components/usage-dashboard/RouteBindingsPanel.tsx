@@ -1,6 +1,12 @@
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import type { RouteBinding, UsageProviderView } from "@/types/usageDashboard";
 import { useTranslation } from "react-i18next";
 
@@ -11,6 +17,8 @@ interface Props {
   bindings: RouteBinding[];
   onSave: (protocol: string, providerId: string) => Promise<unknown>;
   isPending?: boolean;
+  title?: string;
+  description?: string;
 }
 
 export function RouteBindingsPanel({
@@ -18,6 +26,8 @@ export function RouteBindingsPanel({
   bindings,
   onSave,
   isPending = false,
+  title,
+  description,
 }: Props) {
   const { t } = useTranslation();
   const eligible = providers.filter(
@@ -50,8 +60,10 @@ export function RouteBindingsPanel({
     <Card>
       <CardHeader>
         <CardTitle className="text-base">
-          {t("usageDashboard.routes", { defaultValue: "Static routes" })}
+          {title ??
+            t("usageDashboard.routes", { defaultValue: "Static routes" })}
         </CardTitle>
+        {description ? <CardDescription>{description}</CardDescription> : null}
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="grid gap-3 md:grid-cols-3">

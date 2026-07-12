@@ -99,6 +99,27 @@ describe("usage dashboard main path", () => {
     expect(startProxy).not.toHaveBeenCalled();
   });
 
+  it("preserves the selected dashboard module after Settings closes", async () => {
+    const user = userEvent.setup();
+    renderApp();
+
+    const metered = await screen.findByRole("tab", { name: "Metered usage" });
+    await user.click(metered);
+    expect(metered).toHaveAttribute("aria-selected", "true");
+
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+    expect(
+      await screen.findByRole("heading", { name: "Settings" }),
+    ).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+
+    await waitFor(() =>
+      expect(screen.queryByRole("heading", { name: "Settings" })).toBeNull(),
+    );
+    expect(metered).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("Metered API")).toBeInTheDocument();
+  });
+
   it("keeps a draggable title area and gates native window controls by settings", async () => {
     setSettings({ useAppWindowControls: true, language: "en" });
     const { container } = renderApp();
