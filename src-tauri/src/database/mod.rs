@@ -78,7 +78,7 @@ pub struct Database {
     pub(crate) conn: Mutex<Connection>,
 }
 
-fn register_db_change_hook(conn: &Connection) {
+fn register_db_change_hook(conn: &Connection) -> rusqlite::Result<()> {
     conn.update_hook(Some(
         |action: Action, _database: &str, table: &str, _row_id: i64| match action {
             Action::SQLITE_INSERT | Action::SQLITE_UPDATE | Action::SQLITE_DELETE => {
@@ -87,7 +87,7 @@ fn register_db_change_hook(conn: &Connection) {
             }
             _ => {}
         },
-    ));
+    ))
 }
 
 impl Database {
@@ -114,7 +114,7 @@ impl Database {
             conn.execute("PRAGMA auto_vacuum = INCREMENTAL;", [])
                 .map_err(|e| AppError::Database(e.to_string()))?;
         }
-        register_db_change_hook(&conn);
+        register_db_change_hook(&conn)?;
 
         let db = Self {
             conn: Mutex::new(conn),
@@ -185,7 +185,7 @@ impl Database {
             .map_err(|e| AppError::Database(e.to_string()))?;
         conn.execute("PRAGMA auto_vacuum = INCREMENTAL;", [])
             .map_err(|e| AppError::Database(e.to_string()))?;
-        register_db_change_hook(&conn);
+        register_db_change_hook(&conn)?;
 
         let db = Self {
             conn: Mutex::new(conn),
