@@ -46,6 +46,13 @@ smoke test covers their combined behavior.
 
 ## Global Safety Constraints
 
+The desktop threat model is a single-user macOS application. These safeguards
+cover crashes, ordinary concurrent app/database activity, stale aliases, and
+cooperating LLM Usage Bar instances. They do not attempt to defend against a
+malicious process already running as the same user that deliberately swaps
+directory entries, drops SQLite retirement triggers, or edits both application
+databases; such a process already has direct authority over all in-scope data.
+
 1. Never write to, rename, migrate in place, or take ownership of the original
    `~/.cc-switch` directory or its `cc-switch.db` database.
 2. The only automatically migrated legacy database is
@@ -160,9 +167,14 @@ checks reject aliases that resolve into `~/.cc-switch`.
    filename migration; normal fresh-database initialization owns that step.
 2. Open the source read-only with SQLite.
    Separately acquire a zero-timeout SQLite write barrier on the old source and
-   hold it from before the first snapshot until the old filename is atomically
-   retired. A concurrent/legacy writer therefore makes migration fail closed
-   instead of committing rows after the snapshot.
+   hold it before the first snapshot. After both snapshots are durable, install
+   a persistent retirement fence in that transaction: every actual user table
+   receives `BEFORE INSERT`, `BEFORE UPDATE`, and `BEFORE DELETE` triggers that
+   abort with a migration error, and the old source receives a future
+   `user_version`. Commit the fence and immediately reacquire `BEGIN IMMEDIATE`
+   before retirement. A writer waiting with a nonzero busy timeout must then
+   fail after SQLite schema revalidation instead of reporting a successful
+   commit to a retired inode.
 3. Use `rusqlite::backup` to create a unique temporary destination in the same
    directory. This captures committed WAL content through SQLite rather than
    copying sidecar files manually.
@@ -186,12 +198,17 @@ checks reject aliases that resolve into `~/.cc-switch`.
 7. Retire the old main filename only after both complete snapshots are durable.
    Move it atomically with no-replace semantics to a unique same-directory
    quarantine, verify the moved object's pinned identity, then unlink that
-   private quarantine. Rollback uses the same move-then-verify pattern so a
-   check-then-unlink race cannot delete a replacement path. Old WAL/SHM
-   sidecars are no longer authoritative after the old-main commit point.
-8. If archiving or old-source removal fails after this invocation published the new file, remove
-   only that invocation's output before releasing the lease. Every error path
-   restores the old-only state or preserves an independently created new file.
+   private quarantine. Before retirement-fence commit, rollback uses the same
+   move-then-verify pattern so a check-then-unlink race cannot delete a
+   replacement path. Fence commit is the irreversible migration commit point:
+   later cleanup failure retains the valid new database and archive, plus the
+   fenced old source when it can be restored. A directory-sync failure after
+   unlink is a durability warning and must never roll back the two snapshots.
+   Old WAL/SHM sidecars are no longer authoritative after the old-main commit
+   point and are retried with identity checks on a later new-wins startup.
+8. Before the fence commits, an archiving or validation failure removes only
+   this invocation's output and restores old-only state. After fence commit,
+   no error path deletes the durable new database or archive.
 
 If both filenames exist, the new filename is authoritative. The application
 never attempts a merge between two databases.
