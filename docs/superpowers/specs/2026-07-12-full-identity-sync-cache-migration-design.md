@@ -157,9 +157,15 @@ checks reject aliases that resolve into `~/.cc-switch`.
 4. Run `PRAGMA quick_check`, read `user_version`, and verify required tables.
 5. Flush and atomically publish the destination with no-clobber semantics. If
    another valid new file already exists, it wins and the old file is retained.
-6. Archive the old current-app file with no-clobber semantics as
-   `cc-switch.db.pre-llm-usage-bar-v14`. Do not delete it automatically.
-7. If archiving fails after this invocation published the new file, remove
+6. Materialize a second, independently owned complete SQLite snapshot from the
+   validated backup, validate it, and publish it with no-clobber semantics as
+   `cc-switch.db.pre-llm-usage-bar-v14`. The new database and archive must not
+   share an inode/file identity, because schema v14 will mutate only the new
+   database. This also ensures a crash-residue WAL is represented in both
+   snapshots instead of archiving an incomplete main file under a new basename.
+7. Remove the old main filename only after both complete snapshots are durable.
+   Old WAL/SHM sidecars are no longer authoritative after that point.
+8. If archiving or old-source removal fails after this invocation published the new file, remove
    only that invocation's output before releasing the lease. Every error path
    restores the old-only state or preserves an independently created new file.
 

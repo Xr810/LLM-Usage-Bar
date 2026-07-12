@@ -205,7 +205,7 @@ fn failed_validation_leaves_source_unchanged() {
 }
 ```
 
-The WAL test keeps writer and reader transactions open, asserts a nonempty `-wal` contains the committed row before backup, and verifies the backup before either connection closes; it therefore cannot pass through an automatic last-connection checkpoint. The separate end-to-end migration test closes the fixture writer before archive/publish assertions for cross-platform behavior. `backup_and_validate` must enumerate the required v13 tables used by the application, so a marker-only database is intentionally invalid. Add tests for quick-check failure, future/unsupported `user_version`, an existing archive path, two concurrent callers, a forced archive failure after publish, fail-closed live/malformed/stale lease files, and an app-dir/old-path alias to real `~/.cc-switch` that leaves the forbidden directory entry list and bytes unchanged.
+The WAL test keeps writer and reader transactions open, asserts a nonempty `-wal` contains the committed row before backup, and verifies the backup before either connection closes; it therefore cannot pass through an automatic last-connection checkpoint. Add a subprocess fixture that commits a real-v13 WAL row and calls `process::exit` before SQLite destructors run; after migration, both the new database and the archive must contain that row, must have different filesystem object identities, and mutating the new database must not alter the archive. The separate ordinary end-to-end migration test closes the fixture writer before archive/publish assertions for cross-platform behavior. `backup_and_validate` must enumerate the required v13 tables used by the application, so a marker-only database is intentionally invalid. Add tests for quick-check failure, future/unsupported `user_version`, an existing archive path, two concurrent callers, a forced archive failure after publish, fail-closed live/malformed/stale lease files, and an app-dir/old-path alias to real `~/.cc-switch` that leaves the forbidden directory entry list and bytes unchanged.
 
 - [ ] **Step 2: Verify RED**
 
@@ -241,21 +241,21 @@ pub fn prepare_database_identity(app_dir: &Path) -> Result<DatabaseIdentityOutco
     reject_legacy_namespace_candidates(app_dir, [&temp_path])?;
     fail_if_archive_already_exists(&archive_path)?;
     backup_and_validate(&old_path, &temp_path)?;
+    let archive_temp = unique_same_directory_temp(app_dir)?;
+    reject_legacy_namespace_candidates(app_dir, [&archive_temp])?;
+    materialize_independent_validated_snapshot(&temp_path, &archive_temp)?;
     if publish_noclobber(&temp_path, &new_path)? == PublishOutcome::ExistingWon {
         return Ok(DatabaseIdentityOutcome { database_path: new_path, archived_prior_path: None, retained_prior_path: Some(old_path), migrated: false });
     }
-    let (archived_prior_path, retained_prior_path) = match archive_without_overwrite(&old_path, &archive_path) {
-        Ok(state) => state,
-        Err(error) => {
-            remove_only_this_migration_output(&new_path)?;
-            return Err(error);
-        }
-    };
-    Ok(DatabaseIdentityOutcome { database_path: new_path, archived_prior_path, retained_prior_path, migrated: true })
+    if let Err(error) = publish_archive_and_remove_prior(&archive_temp, &archive_path, &old_path) {
+        rollback_only_this_invocation(&temp_path, &new_path, &archive_temp, &archive_path)?;
+        return Err(error);
+    }
+    Ok(DatabaseIdentityOutcome { database_path: new_path, archived_prior_path: Some(archive_path), retained_prior_path: None, migrated: true })
 }
 ```
 
-`reject_legacy_namespace_before_any_io` and the candidate guard perform lexical normalization, canonical comparison where paths exist, and Unix device/inode checks before any `mkdir`, lease creation, file open, or authoritative-path early return. An app-dir alias to real `~/.cc-switch` must leave the directory entry list and bytes completely unchanged. `DatabaseMigrationLease` is an RAII `create_new` lock with owner metadata and bounded waiting. Lock recovery is fail-closed in this task: live, malformed, partial, indeterminate, age-old, and even apparently dead-owner lock files are never unlinked automatically because a PID probe plus path recheck cannot eliminate the read/probe/remove ABA race with only the current standard-library file scope. The returned error names the lock path for deliberate operator recovery. `backup_and_validate` opens source read-only, creates a unique same-directory destination, runs `rusqlite::backup::Backup::new`, completes to `StepResult::Done`, executes `PRAGMA quick_check`, verifies required schema/user version, flushes, and removes only its temporary destination on error. `publish_noclobber` uses an atomic same-directory no-clobber publish; if another valid new database appears, discard only the temporary copy and return the new filename as authoritative. Never use `rename` semantics that can overwrite the new path. `archive_without_overwrite` uses no-clobber semantics and never replaces existing evidence. If archive fails after this invocation published the new path, remove only this invocation's archive link and new file after object-identity checks so the old-only state is restored; a rollback-cleanup failure is surfaced explicitly and never causes deletion of pre-existing evidence.
+`reject_legacy_namespace_before_any_io` and the candidate guard perform lexical normalization, canonical comparison where paths exist, and Unix device/inode checks before any `mkdir`, lease creation, file open, or authoritative-path early return. An app-dir alias to real `~/.cc-switch` must leave the directory entry list and bytes completely unchanged. `DatabaseMigrationLease` is an RAII `create_new` lock with owner metadata and bounded waiting. Lock recovery is fail-closed in this task: live, malformed, partial, indeterminate, age-old, and even apparently dead-owner lock files are never unlinked automatically because a PID probe plus path recheck cannot eliminate the read/probe/remove ABA race with only the current standard-library file scope. The returned error names the lock path for deliberate operator recovery. `backup_and_validate` opens source read-only, creates a unique same-directory destination, runs `rusqlite::backup::Backup::new`, completes to `StepResult::Done`, executes `PRAGMA quick_check`, verifies required schema/user version, flushes, and removes only its temporary destination on error. `publish_noclobber` uses an atomic same-directory no-clobber publish; if another valid new database appears, discard only the temporary copy and return the new filename as authoritative. Never use `rename` semantics that can overwrite the new path. The archive is a second validated snapshot with a different filesystem identity from the new database, not a hard link of either the new snapshot or the old main file. This preserves committed crash-residue WAL rows and prevents later v14 writes from changing the archive. Archive publication and old-source removal use no-clobber semantics and never replace existing evidence. If either fails after this invocation published the new path, remove only this invocation's archive and new file after object-identity checks so the old-only state is restored; a rollback-cleanup failure is surfaced explicitly and never causes deletion of pre-existing evidence.
 
 - [ ] **Step 4: Verify GREEN**
 
