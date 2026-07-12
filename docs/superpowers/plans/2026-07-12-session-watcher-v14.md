@@ -2,25 +2,28 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace line-only session sync state with durable source-aware byte/parser cursors and run external-source synchronization through a non-recursive filesystem watcher whose per-source interval is configurable and defaults to five minutes.
+**Goal:** Replace line-only session sync state with durable source-aware byte/parser cursors and run external-source synchronization through one macOS filesystem watcher whose per-source interval is configurable and defaults to five minutes.
 
-**Architecture:** Schema v14 introduces `usage_sync_cursors` and archives v13 state conservatively. Claude/Codex resume append parsing from byte offsets with versioned parser state; Gemini/OpenCode retain their format-specific semantics behind one cursor DAO. A pure rate-limit state machine accepts bounded watcher hints, while native `notify` callbacks only mark sources dirty; blocking parsers run behind per-source gates.
+**Architecture:** Schema v14 introduces `usage_sync_cursors` and archives v13 state conservatively. Claude/Codex resume append parsing from byte offsets with versioned parser state; Gemini/OpenCode retain their format-specific semantics behind one cursor DAO. A pure rate-limit state machine accepts bounded watcher hints, while native `notify` callbacks only mark sources dirty; blocking parsers run behind per-source gates and one service-wide concurrency permit.
 
 **Tech Stack:** Rust 1.95, rusqlite, serde_json, Tauri async runtime, Tokio, notify 8.2.0, tempfile-based tests.
 
 ## Global Constraints
 
 - Use `pnpm rust -- ...` for every local Rust command.
+- The supported runtime and watcher target is macOS only.
 - Increase schema from 13 to 14 exactly once; v14 must keep `session_log_sync_v13_archive` for forensic recovery.
 - Cursor primary key is `(source, cursor_key)` and includes resource identity, mtime ns, size, byte/line offset, versioned parser state, and last success time.
 - Cursor advances only after every parsed record is ingested successfully.
 - Real `~/.cc-switch`, application data, logs, repository, worktrees, node modules, and Cargo caches are never watched.
+- Nested external source roots are watched recursively; excluded output roots are omitted entirely rather than recursively filtered after registration.
 - Native callbacks only perform lexical classification against prevalidated watched roots and enqueue dirty source IDs through a bounded channel; filesystem identity checks happen in workers before parsing.
 - Automatic sync uses one persisted global interval: default 5 minutes, valid range 1-1440 minutes; each source begins at most one automatic sync per configured window.
 - Tokio missed ticks use `MissedTickBehavior::Skip`; no burst catch-up.
 - Events during sync wait until a future configured tick.
 - With the default interval, failures back off 5, 10, 20, then 30 minutes; custom intervals back off by 1x/2x/4x/6x and never tight-loop.
 - All synchronous file/SQLite source parsing runs in `spawn_blocking`.
+- Exactly one watcher scheduler replaces the old 60-second loop; automatic parser concurrency is one job, and startup reconciliation begins only after an explicit UI-ready signal.
 - Tests use real parser/filesystem behavior and a fake clock/event source; do not add production APIs used only by tests.
 
 ---
@@ -35,7 +38,7 @@
 - Modify: `src-tauri/src/database/tests.rs`
 
 **Interfaces:**
-- Produces `UsageSyncCursor`, `get_usage_sync_cursor(source, key)`, `put_usage_sync_cursor(cursor)`, `put_usage_sync_cursor_on_conn(conn, cursor)`, and `delete_usage_sync_cursor(source, key)`; the connection-level form enables one transaction with usage ingestion.
+- Produces `UsageSyncCursor`, `get_usage_sync_cursor(source, key)`, `list_usage_sync_cursors(source)`, `put_usage_sync_cursor(cursor)`, `put_usage_sync_cursor_on_conn(conn, cursor)`, and `delete_usage_sync_cursor(source, key)`; the connection-level form enables one transaction with usage ingestion, while the source-scoped list drives periodic metadata reconciliation without reading the archived v13 table.
 
 - [ ] **Step 1: Write failing DAO and schema tests**
 
@@ -73,7 +76,7 @@ fn cursor_update_is_atomic_and_source_scoped() {
 }
 ```
 
-Define `cursor_fixture(source, key, byte_offset)` in the test module and populate every field, so the test exercises the real `INSERT ... ON CONFLICT` statement without mocks.
+Define `cursor_fixture(source, key, byte_offset)` in the test module and populate every field, so the test exercises the real `INSERT ... ON CONFLICT` statement without mocks. Add a source-scoped list test proving reconciliation sees every cursor for one source and no cursor owned by another source.
 
 - [ ] **Step 2: Verify RED**
 
@@ -345,7 +348,7 @@ git commit -m "refactor(usage): unify session source cursors"
 - Modify: `src-tauri/src/usage/mod.rs`
 
 **Interfaces:**
-- Produces `SourceId`, `SourceScheduleState`, `WatcherSchedule`, `mark_dirty`, `begin_due(now)`, `finish(source, generation, now, result)`, and `set_interval(now, seconds)`.
+- Produces `SourceId`, `SourceScheduleState`, `WatcherSchedule`, `mark_dirty`, `begin_due(now)`, `finish(source, generation, schedule_epoch, now, result)`, and `set_interval(now, seconds)`.
 - `WatcherSchedule::default()` is exactly 300 seconds; accepted settings are 60-86400 seconds.
 
 - [ ] **Step 1: Write failing deterministic state tests**
@@ -363,7 +366,7 @@ fn event_storm_coalesces_and_never_starts_twice_inside_five_minutes() {
 }
 ```
 
-Add tests for event-during-sync generation preservation, stale completion, failure backoff 5/10/20/30 minutes, success reset, overflow dirty-all, and idempotent shutdown.
+Add tests for event-during-sync generation preservation, stale completion, failure backoff 5/10/20/30 minutes, success reset, overflow dirty-all, and idempotent shutdown. Add a test where `set_interval` runs during an in-flight sync and the older completion cannot overwrite the new epoch's re-armed deadline.
 Add tests that default is 300 seconds, custom 60/600/3600-second windows gate correctly, a 60-second interval backs off exactly 60/120/240/360 seconds, invalid values normalize to 300 seconds, and changing the interval resets the next deadline from `now` without making a clean source dirty or launching immediately.
 
 - [ ] **Step 2: Verify RED**
@@ -374,7 +377,7 @@ Expected: FAIL because the state machine does not exist.
 
 - [ ] **Step 3: Implement without wall-clock or watcher dependencies**
 
-Use a monotonic `u64` seconds value supplied by the caller; the state machine must not read wall clock. Store configured interval, dirty generation, syncing generation, next allowed second, consecutive failures, and shutdown flag per source. `mark_dirty` only increments generation. `begin_due` returns `(SourceId, generation)` and transitions eligible Dirty to Syncing once. `finish` clears only the generation it started; newer generation remains Dirty. Failure delays use the configured interval multiplied by `[1, 2, 4, 6]`, indexed by `consecutive_failures.saturating_sub(1).min(3)`; the five-minute default therefore yields exactly 5/10/20/30 minutes. Success resets failures and enforces the configured window. `set_interval` validates 60-86400 seconds and re-arms deadlines from `now` without immediate work.
+Use a monotonic `u64` seconds value supplied by the caller; the state machine must not read wall clock. Store configured interval, schedule epoch, dirty generation, syncing generation/epoch, next allowed second, consecutive failures, and shutdown flag per source. `mark_dirty` only increments generation. `begin_due` returns `(SourceId, generation, schedule_epoch)` and transitions eligible Dirty to Syncing once. `finish` clears only the generation it started; newer generation remains Dirty, and a completion from an older schedule epoch cannot replace a deadline set by `set_interval`. Failure delays use the configured interval multiplied by `[1, 2, 4, 6]`, indexed by `consecutive_failures.saturating_sub(1).min(3)`; the five-minute default therefore yields exactly 5/10/20/30 minutes. Success resets failures and enforces the configured window. `set_interval` validates 60-86400 seconds, increments the epoch, and re-arms deadlines from `now` without immediate work.
 
 - [ ] **Step 4: Verify GREEN**
 
@@ -399,13 +402,19 @@ git commit -m "feat(usage): add configurable watcher state machine"
 - Modify: `src-tauri/src/store.rs`
 - Modify: `src-tauri/src/lib.rs`
 - Modify: `src-tauri/src/commands/usage_dashboard.rs`
+- Modify: `src-tauri/src/commands/usage.rs`
 - Modify: `src-tauri/src/settings.rs`
 - Modify: `src-tauri/src/commands/settings.rs`
 - Modify: `src/types.ts`
+- Modify: `src/types/usageDashboard.ts`
+- Modify: `src/lib/api/usageDashboard.ts`
+- Modify: `src/lib/query/usageDashboard.ts`
 - Modify: `src/lib/schemas/settings.ts`
+- Modify: `src/components/usage-dashboard/DataSourceBar.tsx`
 - Modify: `src/components/usage-dashboard/UsageDashboardPage.tsx`
 - Modify: `src/components/usage-dashboard/UsageDashboardPage.test.tsx`
 - Modify: `src/i18n/locales/en.json`, `src/i18n/locales/ja.json`, `src/i18n/locales/zh-TW.json`, `src/i18n/locales/zh.json`
+- Test: `src-tauri/tests/usage_dashboard_commands.rs`
 
 **Interfaces:**
 - Produces `SessionWatcherService`, `SessionWatcherHandle`, `WatcherDiagnosticView`; manual sync becomes async and shares the same per-source gate.
@@ -413,7 +422,7 @@ git commit -m "feat(usage): add configurable watcher state machine"
 
 - [ ] **Step 1: Write failing path filter, overflow, lifecycle, and blocking tests**
 
-Use temp external source/app/repo/cache roots. Assert only allowed extensions/names lexically map to a source. Put symlink/case aliases to excluded roots under an allowed source and assert the worker-side identity guard rejects them before parsing. Feed 1000 events into a small bounded channel and assert one `dirty_all`. Assert dropping/stopping twice succeeds. Use a real slow closure on `spawn_blocking` and prove an async heartbeat remains responsive. Add fake-clock tests for immediate startup reconciliation, watcher-backend initialization failure with reconciliation-only degradation, persisted default/custom interval, and hot interval update without a second watcher or immediate run. Do not assert mock calls.
+Use temp external source/app/repo/cache roots. Assert only allowed extensions/names lexically map to a source. Put symlink/case aliases to excluded roots under an allowed source and assert the worker-side identity guard rejects them before parsing. Feed 1000 events into a small bounded channel and assert one `dirty_all`; `need_rescan()` has the same result. Assert dropping/stopping twice succeeds. Use a real slow closure on `spawn_blocking` and prove an async heartbeat remains responsive, plus a service-wide one-permit semaphore test proving four dirty startup sources do not parse concurrently. Add fake-clock tests for UI-ready startup reconciliation, watcher-backend initialization failure with reconciliation-only degradation, a missing root that never broadens to HOME and is retried later, persisted default/custom interval, and hot interval update without a second watcher or immediate run. Cover both manual provider sync and sync-all through the same gates. Do not assert mock calls.
 
 - [ ] **Step 2: Verify RED**
 
@@ -423,11 +432,11 @@ Expected: FAIL because native watcher/lifecycle/filter APIs are absent.
 
 - [ ] **Step 3: Add notify 8.2.0 and implement the callback boundary**
 
-Add `notify = "8.2.0"`. Canonicalize and validate allow/deny roots when installing or updating watches. The `recommended_watcher` callback filters `Access` events, performs only lexical root/name/extension classification, `try_send`s `SourceId`, sets `dirty_all` on backend error/full channel, and returns. It performs no filesystem, database, or sync I/O and holds no DB/service lock. Before a worker opens a source, canonicalize the resource and compare path plus object identity against the deny set; rejection records a diagnostic and does not advance a cursor.
+Add `notify = "8.2.0"`. Canonicalize and validate allow/deny roots when installing or updating recursive source watches; application/repository/cache roots are never registered. A missing source root remains reconciliation-only and is retried on later configured ticks; never fall back to watching HOME. The `recommended_watcher` callback converts `need_rescan()` and backend errors to `dirty_all`, filters `Access` events, performs only lexical root/name/extension classification and source deduplication, `try_send`s `SourceId`, sets `dirty_all` on a full channel, and returns. It performs no filesystem, database, sync I/O, or repeated per-event logging and holds no DB/service lock. Before a worker opens a source, canonicalize the resource and compare path plus macOS object identity against the deny set; rejection records a diagnostic and does not advance a cursor.
 
 - [ ] **Step 4: Implement scheduler and app lifecycle**
 
-After app state and UI readiness, mark all sources dirty and run one background reconciliation, then arm the next deadline at `now + configured_interval`. Use `interval_at` with the persisted interval and `MissedTickBehavior::Skip`; each due source spawns one blocking closure and reports completion through the generation API. If `recommended_watcher` construction fails, keep the scheduler in reconciliation-only mode and expose a degraded diagnostic instead of disabling sync. Perform lightweight cursor metadata reconciliation each tick and mark only changed sources dirty for that same gated tick. Manual sync uses `try_begin_manual`, returns a visible busy result, and resets the configured window after success. Settings save validates 1-1440 minutes and sends `SetInterval` through the existing serialized watcher channel; it re-arms from the change time without immediate sync or watcher recreation. Source-binding changes update the root set through that channel; they never construct a second native watcher. `AppState` owns one optional handle; shutdown cancels interval, closes channel, waits for in-flight jobs, unwatches, then drops the watcher.
+Delete the existing independent 60-second session loop. After app state and an explicit UI-ready latch, mark all sources dirty and run one background reconciliation, then arm the next deadline at `now + configured_interval`. Use `interval_at` with the persisted interval and `MissedTickBehavior::Skip`; each due source enters its per-source gate and a service-wide one-permit semaphore before spawning blocking work, then reports completion through generation plus schedule epoch. If `recommended_watcher` construction fails, keep the scheduler in reconciliation-only mode and expose a degraded diagnostic instead of disabling sync. Add a source-scoped cursor metadata listing/reconciliation API; run reconciliation in `spawn_blocking`, then mark only changed sources dirty for that same gated tick. Treat a nominally successful parser result containing errors as failure/backoff. Both manual provider sync and sync-all use `try_begin_manual` in fixed source order, return a visible busy result without partial work, and reset the configured window after success. Keep `usage_session_sync_interval_minutes` independent from frontend query refresh. Settings save validates integer 1-1440 minutes and sends acknowledged `SetInterval`/`UpdateRoots` commands through the existing serialized watcher channel; persistence must roll back or fail if runtime acknowledgement fails. It re-arms from the change time without immediate sync or watcher recreation. Provider source-binding save/enable changes send an acknowledged `RefreshActiveSources`; the owner only watch/unwatches roots on its one existing native watcher. `AppState` owns one optional handle. Shutdown marks state stopped, cancels interval, closes channels, unwatches roots, awaits every blocking job, then drops the watcher; repeated stop is idempotent.
 
 - [ ] **Step 5: Verify GREEN including one real watcher smoke**
 
@@ -443,7 +452,7 @@ Expected: deterministic tests pass; one temp directory create/append event marks
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src-tauri/Cargo.toml src-tauri/Cargo.lock src-tauri/src/usage src-tauri/src/store.rs src-tauri/src/lib.rs src-tauri/src/commands/usage_dashboard.rs src-tauri/src/commands/settings.rs src-tauri/src/settings.rs src/types.ts src/lib/schemas/settings.ts src/components/usage-dashboard/UsageDashboardPage.tsx src/components/usage-dashboard/UsageDashboardPage.test.tsx src/i18n/locales
+git add src-tauri/Cargo.toml src-tauri/Cargo.lock src-tauri/src/usage src-tauri/src/store.rs src-tauri/src/lib.rs src-tauri/src/commands/usage.rs src-tauri/src/commands/usage_dashboard.rs src-tauri/src/commands/settings.rs src-tauri/src/settings.rs src-tauri/tests/usage_dashboard_commands.rs src/types.ts src/types/usageDashboard.ts src/lib/api/usageDashboard.ts src/lib/query/usageDashboard.ts src/lib/schemas/settings.ts src/components/usage-dashboard/DataSourceBar.tsx src/components/usage-dashboard/UsageDashboardPage.tsx src/components/usage-dashboard/UsageDashboardPage.test.tsx src/i18n/locales
 git commit -m "feat(usage): add configurable filesystem watcher"
 ```
 

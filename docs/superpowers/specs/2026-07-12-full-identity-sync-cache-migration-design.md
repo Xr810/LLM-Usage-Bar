@@ -290,6 +290,12 @@ Watch only registered external usage sources:
 - Gemini chat roots.
 - The OpenCode database and WAL parent directory with exact filename filters.
 
+Source roots are registered recursively where their session files are nested.
+Loop prevention comes from never registering application/repository/cache roots,
+not from weakening source watches to non-recursive mode. A missing source root
+does not cause a HOME fallback; reconciliation-only mode retries that root at
+the configured interval.
+
 Never watch:
 
 - `~/.llm-usage-bar` or `~/.cc-switch`.
@@ -302,11 +308,12 @@ Never watch:
 
 The native callback:
 
-1. Rejects access-only events and paths outside the source allowlist.
-2. Maps accepted paths to a source ID.
-3. Attempts to enqueue the source ID into a bounded channel.
-4. On channel overflow, sets one atomic `dirty_all` flag.
-5. Returns immediately.
+1. Converts `need_rescan()` and backend errors into one `dirty_all` hint.
+2. Rejects access-only events and paths outside the source allowlist.
+3. Maps accepted paths to deduplicated source IDs.
+4. Attempts to enqueue each source ID into a bounded channel.
+5. On channel overflow, sets one atomic `dirty_all` flag.
+6. Returns immediately.
 
 It never calls a sync function and never writes a file. Reads performed by a
 sync therefore cannot recursively schedule another sync.
@@ -323,6 +330,11 @@ updates the existing scheduler through its serialized command channel; it
 does not create another watcher, trigger an immediate catch-up run, or replay
 missed ticks.
 
+The setting is independent from the frontend query-refresh interval. Saving a
+new value or source root requires a command acknowledgement from the existing
+watcher owner before persistence is considered successful, preventing disk and
+runtime configuration from diverging.
+
 - Startup performs one background reconciliation after application state and
   the UI are ready; that run starts the first configured window.
 - Watcher events coalesce into `Dirty`.
@@ -332,6 +344,8 @@ missed ticks.
 - An event received during `Syncing` leaves the source dirty, but the follow-up
   cannot start until the next configured tick.
 - Success clears dirty state only if no newer event arrived.
+- Interval updates carry a schedule epoch. An older in-flight completion cannot
+  overwrite the deadline re-armed by a newer interval setting.
 - Failure keeps the source dirty and retries no sooner than the next tick.
   Consecutive failures use the configured interval multiplied by 1, 2, 4,
   then 6; the five-minute default therefore backs off 5, 10, 20, then 30
@@ -345,9 +359,13 @@ metadata changed. This reconciliation closes watcher-loss gaps without
 creating a hot polling loop.
 
 All synchronous file parsing and external SQLite queries run in
-`tauri::async_runtime::spawn_blocking`. Manual provider sync uses the same
-per-source gate, returns a visible `sync already in progress` result instead
-of blocking, and resets the configured window on success.
+`tauri::async_runtime::spawn_blocking`. One service-wide semaphore serializes
+automatic parser jobs so startup cannot peg every CPU core, while per-source
+gates preserve correctness. Both manual provider sync and the legacy
+"sync all sources" entry point use those same gates, return a visible
+`sync already in progress` result instead of blocking, and reset the configured
+window on success. A parser result containing per-record errors is a failed
+sync and enters backoff; it never clears dirty state.
 
 ## 6. Watcher Lifecycle
 
@@ -355,14 +373,18 @@ Add a `SessionWatcherService` and `SessionWatcherHandle` beside the existing
 quota scheduler pattern.
 
 - `AppState` owns the session service and one optional watcher handle.
-- Startup constructs watch roots only after database/config initialization.
+- The old independent 60-second session loop is removed; exactly one scheduler
+  exists.
+- Startup constructs watch roots only after database/config initialization and
+  begins its one-time reconciliation through an explicit UI-ready latch.
 - Provider source-binding changes update watched roots through a serialized
   command; no second watcher is created.
 - Sync-interval changes update the same scheduler through that serialized
   command and reset the next deadline from the change time without running a
   sync immediately.
-- Shutdown cancels the scheduler, closes the event channel, unwatches roots,
-  waits for in-flight blocking work, and then drops the native watcher.
+- Shutdown marks the schedule stopped, cancels its interval, closes channels,
+  unwatches roots, waits for every in-flight blocking job, and only then drops
+  the native watcher. Repeated stop calls are idempotent.
 - Poisoned locks and watcher backend errors are logged and reflected in a
   diagnostic status DTO; they never restart recursively.
 
