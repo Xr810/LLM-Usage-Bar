@@ -8,7 +8,7 @@ use crate::product_identity::{
 };
 use rusqlite::backup::{Backup, StepResult};
 use rusqlite::{Connection, OpenFlags};
-use std::ffi::OsString;
+use std::ffi::{CString, OsString};
 use std::fs::{File, OpenOptions};
 use std::io::{ErrorKind, Read, Write};
 use std::path::{Component, Path, PathBuf};
@@ -267,11 +267,191 @@ fn path_entry_exists(path: &Path) -> Result<bool, AppError> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AtomicMoveOutcome {
+    Moved,
+    DestinationExists,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AtomicMoveMode {
+    Platform,
+    #[cfg(test)]
+    UnsupportedForTest,
+}
+
+fn atomic_move_noreplace(source: &Path, destination: &Path) -> Result<AtomicMoveOutcome, AppError> {
+    atomic_move_noreplace_with_mode(source, destination, AtomicMoveMode::Platform)
+}
+
+fn atomic_move_noreplace_with_mode(
+    source: &Path,
+    destination: &Path,
+    mode: AtomicMoveMode,
+) -> Result<AtomicMoveOutcome, AppError> {
+    #[cfg(test)]
+    if mode == AtomicMoveMode::UnsupportedForTest {
+        return Err(AppError::IoContext {
+            context: "atomic no-replace move is unsupported on this platform".to_string(),
+            source: std::io::Error::new(ErrorKind::Unsupported, "injected unsupported backend"),
+        });
+    }
+    let _ = mode;
+
+    if source.parent() != destination.parent() {
+        return Err(AppError::InvalidInput(format!(
+            "atomic no-replace move must stay in one directory: {} -> {}",
+            source.display(),
+            destination.display()
+        )));
+    }
+
+    #[cfg(target_os = "linux")]
+    let result = {
+        use std::os::unix::ffi::OsStrExt;
+
+        const AT_FDCWD: i32 = -100;
+        const RENAME_NOREPLACE: u32 = 1;
+        unsafe extern "C" {
+            fn renameat2(
+                olddirfd: i32,
+                oldpath: *const std::ffi::c_char,
+                newdirfd: i32,
+                newpath: *const std::ffi::c_char,
+                flags: u32,
+            ) -> i32;
+        }
+        let old = CString::new(source.as_os_str().as_bytes()).map_err(|_| {
+            AppError::InvalidInput(format!("source path contains NUL: {}", source.display()))
+        })?;
+        let new = CString::new(destination.as_os_str().as_bytes()).map_err(|_| {
+            AppError::InvalidInput(format!(
+                "destination path contains NUL: {}",
+                destination.display()
+            ))
+        })?;
+        // SAFETY: both C strings remain alive for this call and point to paths
+        // in the same pinned directory. RENAME_NOREPLACE forbids clobbering.
+        let status = unsafe {
+            renameat2(
+                AT_FDCWD,
+                old.as_ptr(),
+                AT_FDCWD,
+                new.as_ptr(),
+                RENAME_NOREPLACE,
+            )
+        };
+        (status == 0)
+            .then_some(())
+            .ok_or_else(std::io::Error::last_os_error)
+    };
+
+    #[cfg(target_os = "macos")]
+    let result = {
+        use std::os::unix::ffi::OsStrExt;
+
+        const AT_FDCWD: i32 = -2;
+        const RENAME_EXCL: u32 = 0x0000_0004;
+        unsafe extern "C" {
+            fn renameatx_np(
+                fromfd: i32,
+                from: *const std::ffi::c_char,
+                tofd: i32,
+                to: *const std::ffi::c_char,
+                flags: u32,
+            ) -> i32;
+        }
+        let old = CString::new(source.as_os_str().as_bytes()).map_err(|_| {
+            AppError::InvalidInput(format!("source path contains NUL: {}", source.display()))
+        })?;
+        let new = CString::new(destination.as_os_str().as_bytes()).map_err(|_| {
+            AppError::InvalidInput(format!(
+                "destination path contains NUL: {}",
+                destination.display()
+            ))
+        })?;
+        // SAFETY: both C strings remain valid for the duration of the call;
+        // RENAME_EXCL makes the move fail rather than overwrite destination.
+        let status =
+            unsafe { renameatx_np(AT_FDCWD, old.as_ptr(), AT_FDCWD, new.as_ptr(), RENAME_EXCL) };
+        (status == 0)
+            .then_some(())
+            .ok_or_else(std::io::Error::last_os_error)
+    };
+
+    #[cfg(windows)]
+    let result = {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::MoveFileExW;
+
+        let old = source
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        let new = destination
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        // SAFETY: both UTF-16 buffers are NUL-terminated and live through the
+        // call. A zero flag set intentionally omits MOVEFILE_REPLACE_EXISTING.
+        let status = unsafe { MoveFileExW(old.as_ptr(), new.as_ptr(), 0) };
+        (status != 0)
+            .then_some(())
+            .ok_or_else(std::io::Error::last_os_error)
+    };
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+    let result: std::io::Result<()> = Err(std::io::Error::new(
+        ErrorKind::Unsupported,
+        "atomic no-replace move has no audited backend for this target",
+    ));
+
+    match result {
+        Ok(()) => Ok(AtomicMoveOutcome::Moved),
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+            Ok(AtomicMoveOutcome::DestinationExists)
+        }
+        Err(error) => Err(AppError::IoContext {
+            context: format!(
+                "atomic no-replace move {} -> {} failed",
+                source.display(),
+                destination.display()
+            ),
+            source: error,
+        }),
+    }
+}
+
 fn legacy_namespace_error(path: &Path) -> AppError {
     AppError::InvalidInput(format!(
         "database identity migration refuses protected legacy namespace {LEGACY_DATA_DIR}: {}",
         path.display()
     ))
+}
+
+#[derive(Debug, Clone)]
+struct PinnedDirectory {
+    canonical_path: PathBuf,
+    identity: FileIdentity,
+}
+
+impl PinnedDirectory {
+    fn revalidate(&self, operation: &str) -> Result<(), AppError> {
+        let current = FileIdentity::from_path(&self.canonical_path)?;
+        if current != self.identity {
+            return Err(AppError::Lock(format!(
+                "database directory identity changed before {operation}: {}",
+                self.canonical_path.display()
+            )));
+        }
+        Ok(())
+    }
+
+    fn join(&self, name: impl AsRef<Path>) -> PathBuf {
+        self.canonical_path.join(name)
+    }
 }
 
 /// Read-only guard. This must run before mkdir, lease creation, SQLite open, or
@@ -282,21 +462,27 @@ fn reject_legacy_namespace_before_any_io(app_dir: &Path) -> Result<(), AppError>
             "cannot resolve home directory for protected .cc-switch guard".to_string(),
         )
     })?;
-    let protected = home.join(LEGACY_DATA_DIR);
+    reject_legacy_namespace_with_protected(app_dir, &home.join(LEGACY_DATA_DIR))
+}
+
+fn reject_legacy_namespace_with_protected(
+    app_dir: &Path,
+    protected: &Path,
+) -> Result<(), AppError> {
     let app_lexical = absolute_lexical(app_dir)?;
-    let protected_lexical = absolute_lexical(&protected)?;
+    let protected_lexical = absolute_lexical(protected)?;
     if path_starts_with_platform(&app_lexical, &protected_lexical) {
         return Err(legacy_namespace_error(app_dir));
     }
 
     let app_resolved = canonicalize_deepest_existing(app_dir)?;
-    let protected_resolved = canonicalize_deepest_existing(&protected)?;
+    let protected_resolved = canonicalize_deepest_existing(protected)?;
     if path_starts_with_platform(&app_resolved, &protected_resolved) {
         return Err(legacy_namespace_error(app_dir));
     }
 
     let local_candidates = database_identity_candidates(app_dir);
-    let protected_candidates = database_identity_candidates(&protected);
+    let protected_candidates = database_identity_candidates(protected);
     for candidate in &local_candidates {
         let lexical = absolute_lexical(candidate)?;
         if path_starts_with_platform(&lexical, &protected_lexical) {
@@ -311,8 +497,8 @@ fn reject_legacy_namespace_before_any_io(app_dir: &Path) -> Result<(), AppError>
     #[cfg(any(unix, windows))]
     {
         let mut protected_objects = Vec::new();
-        if path_entry_exists(&protected)? {
-            protected_objects.push(FileIdentity::from_path(&protected)?);
+        if path_entry_exists(protected)? {
+            protected_objects.push(FileIdentity::from_path(protected)?);
         }
         for candidate in &protected_candidates {
             if path_entry_exists(candidate)? {
@@ -338,6 +524,38 @@ fn reject_legacy_namespace_before_any_io(app_dir: &Path) -> Result<(), AppError>
     Ok(())
 }
 
+fn pin_safe_existing_directory(
+    app_dir: &Path,
+    protected_override: Option<&Path>,
+) -> Result<Option<PinnedDirectory>, AppError> {
+    match protected_override {
+        Some(protected) => reject_legacy_namespace_with_protected(app_dir, protected)?,
+        None => reject_legacy_namespace_before_any_io(app_dir)?,
+    }
+    if !path_entry_exists(app_dir)? {
+        return Ok(None);
+    }
+    let canonical_path =
+        std::fs::canonicalize(app_dir).map_err(|error| AppError::io(app_dir, error))?;
+    let metadata =
+        std::fs::metadata(&canonical_path).map_err(|error| AppError::io(&canonical_path, error))?;
+    if !metadata.is_dir() {
+        return Err(AppError::InvalidInput(format!(
+            "database application path is not a directory: {}",
+            app_dir.display()
+        )));
+    }
+    match protected_override {
+        Some(protected) => reject_legacy_namespace_with_protected(&canonical_path, protected)?,
+        None => reject_legacy_namespace_before_any_io(&canonical_path)?,
+    }
+    let identity = FileIdentity::from_path(&canonical_path)?;
+    Ok(Some(PinnedDirectory {
+        canonical_path,
+        identity,
+    }))
+}
+
 #[cfg(unix)]
 fn sync_directory(path: &Path) -> Result<(), AppError> {
     File::open(path)
@@ -351,10 +569,11 @@ fn sync_directory(_path: &Path) -> Result<(), AppError> {
 }
 
 struct DatabaseMigrationLease {
+    directory: PinnedDirectory,
     path: PathBuf,
     identity: FileIdentity,
     nonce: String,
-    _file: File,
+    file: Option<File>,
 }
 
 /// Owns the just-created lease name until initialization is complete. Cleanup
@@ -362,6 +581,7 @@ struct DatabaseMigrationLease {
 /// if even handle metadata is unavailable, the entry is deliberately retained
 /// fail-closed for operator inspection instead of deleting by path.
 struct LeaseCreationGuard {
+    directory: PinnedDirectory,
     path: PathBuf,
     file: Option<File>,
     identity: Option<FileIdentity>,
@@ -369,8 +589,9 @@ struct LeaseCreationGuard {
 }
 
 impl LeaseCreationGuard {
-    fn new(path: PathBuf, file: File) -> Self {
+    fn new(directory: PinnedDirectory, path: PathBuf, file: File) -> Self {
         Self {
+            directory,
             path,
             file: Some(file),
             identity: None,
@@ -378,18 +599,20 @@ impl LeaseCreationGuard {
         }
     }
 
-    fn finish(mut self, nonce: String) -> DatabaseMigrationLease {
+    fn finish(mut self, directory: PinnedDirectory, nonce: String) -> DatabaseMigrationLease {
         let lease = DatabaseMigrationLease {
+            directory,
             path: self.path.clone(),
             identity: self
                 .identity
                 .clone()
                 .expect("lease identity is established before finish"),
             nonce,
-            _file: self
-                .file
-                .take()
-                .expect("lease handle is present before finish"),
+            file: Some(
+                self.file
+                    .take()
+                    .expect("lease handle is present before finish"),
+            ),
         };
         self.committed = true;
         lease
@@ -404,19 +627,18 @@ impl Drop for LeaseCreationGuard {
         let Some(identity) = self.identity.as_ref() else {
             return;
         };
-        if remove_path_if_identity(&self.path, identity).is_ok() {
-            if let Some(parent) = self.path.parent() {
-                let _ = sync_directory(parent);
-            }
-        }
+        drop(self.file.take());
+        let _ = quarantine_remove(&self.directory, &self.path, identity, "lease-init-cleanup");
     }
 }
 
 impl DatabaseMigrationLease {
-    fn acquire(app_dir: &Path) -> Result<Self, AppError> {
-        let path = app_dir.join(DATABASE_IDENTITY_LEASE_FILE);
+    fn acquire(directory: &PinnedDirectory) -> Result<Self, AppError> {
+        directory.revalidate("migration lease creation")?;
+        let path = directory.join(DATABASE_IDENTITY_LEASE_FILE);
         let deadline = Instant::now() + LEASE_WAIT_DEADLINE;
         loop {
+            directory.revalidate("migration lease create_new attempt")?;
             match OpenOptions::new()
                 .read(true)
                 .write(true)
@@ -424,7 +646,8 @@ impl DatabaseMigrationLease {
                 .open(&path)
             {
                 Ok(file) => {
-                    let mut creation = LeaseCreationGuard::new(path.clone(), file);
+                    let mut creation =
+                        LeaseCreationGuard::new(directory.clone(), path.clone(), file);
                     let identity = match FileIdentity::from_file(
                         &path,
                         creation.file.as_ref().expect("creation handle"),
@@ -458,8 +681,8 @@ impl DatabaseMigrationLease {
                     {
                         return Err(AppError::io(&path, error));
                     }
-                    let lease = creation.finish(nonce);
-                    if let Err(error) = sync_directory(app_dir) {
+                    let lease = creation.finish(directory.clone(), nonce);
+                    if let Err(error) = sync_directory(&directory.canonical_path) {
                         drop(lease);
                         return Err(error);
                     }
@@ -480,23 +703,82 @@ impl DatabaseMigrationLease {
     }
 }
 
-fn remove_path_if_identity(path: &Path, expected: &FileIdentity) -> Result<(), AppError> {
-    let actual = FileIdentity::from_path(path)?;
-    if &actual != expected {
-        return Err(AppError::Lock(format!(
-            "refused to remove replaced database migration lease: {}",
-            path.display()
-        )));
+fn quarantine_remove(
+    directory: &PinnedDirectory,
+    path: &Path,
+    expected: &FileIdentity,
+    purpose: &str,
+) -> Result<(), AppError> {
+    directory.revalidate(purpose)?;
+    let quarantine = directory.join(format!(
+        ".llm-usage-bar-quarantine-{}-{}",
+        purpose,
+        uuid::Uuid::new_v4()
+    ));
+    match atomic_move_noreplace(path, &quarantine)? {
+        AtomicMoveOutcome::Moved => {}
+        AtomicMoveOutcome::DestinationExists => {
+            return Err(AppError::Lock(format!(
+                "unique quarantine unexpectedly exists: {}",
+                quarantine.display()
+            )));
+        }
     }
-    std::fs::remove_file(path).map_err(|error| AppError::io(path, error))
-}
 
-fn remove_path_if_identity_and_sync(path: &Path, expected: &FileIdentity) -> Result<(), AppError> {
-    remove_path_if_identity(path, expected)?;
-    if let Some(parent) = path.parent() {
-        sync_directory(parent)?;
+    let moved_identity = FileIdentity::from_path(&quarantine);
+    if !matches!(moved_identity, Ok(ref identity) if identity == expected) {
+        let mismatch = match moved_identity {
+            Ok(_) => "moved object identity did not match expected object".to_string(),
+            Err(error) => format!("could not identify quarantined object: {error}"),
+        };
+        return match atomic_move_noreplace(&quarantine, path) {
+            Ok(AtomicMoveOutcome::Moved) => match sync_directory(&directory.canonical_path) {
+                Ok(()) => Err(AppError::Lock(format!(
+                    "{mismatch}; replacement was atomically restored to {}",
+                    path.display()
+                ))),
+                Err(sync) => Err(AppError::Lock(format!(
+                    "{mismatch}; replacement was restored to {}, but directory sync failed: {sync}",
+                    path.display()
+                ))),
+            },
+            Ok(AtomicMoveOutcome::DestinationExists) => Err(AppError::Lock(format!(
+                "{mismatch}; restore destination was occupied; evidence retained at {}",
+                quarantine.display()
+            ))),
+            Err(restore) => Err(AppError::Lock(format!(
+                "{mismatch}; atomic restore failed ({restore}); evidence retained at {}",
+                quarantine.display()
+            ))),
+        };
     }
-    Ok(())
+
+    if let Err(remove_error) = std::fs::remove_file(&quarantine) {
+        return match atomic_move_noreplace(&quarantine, path) {
+            Ok(AtomicMoveOutcome::Moved) => {
+                let sync = sync_directory(&directory.canonical_path).err();
+                Err(AppError::IoContext {
+                    context: format!(
+                        "quarantine unlink failed; original object restored to {}{}",
+                        path.display(),
+                        sync.as_ref()
+                            .map(|error| format!(", but directory sync failed: {error}"))
+                            .unwrap_or_default()
+                    ),
+                    source: remove_error,
+                })
+            }
+            Ok(AtomicMoveOutcome::DestinationExists) => Err(AppError::Database(format!(
+                "quarantine unlink failed ({remove_error}); restore destination occupied; evidence retained at {}",
+                quarantine.display()
+            ))),
+            Err(restore) => Err(AppError::Database(format!(
+                "quarantine unlink failed ({remove_error}); restore failed ({restore}); evidence retained at {}",
+                quarantine.display()
+            ))),
+        };
+    }
+    sync_directory(&directory.canonical_path)
 }
 
 impl Drop for DatabaseMigrationLease {
@@ -514,10 +796,9 @@ impl Drop for DatabaseMigrationLease {
             Ok(metadata.contains(&nonce_field))
         })()
         .unwrap_or(false);
-        if owned && remove_path_if_identity(&self.path, &self.identity).is_ok() {
-            if let Some(parent) = self.path.parent() {
-                let _ = sync_directory(parent);
-            }
+        if owned {
+            drop(self.file.take());
+            let _ = quarantine_remove(&self.directory, &self.path, &self.identity, "lease-cleanup");
         }
     }
 }
@@ -526,6 +807,71 @@ impl Drop for DatabaseMigrationLease {
 enum SchemaValidationPolicy {
     ExactMigrationSource,
     CurrentAuthoritative,
+}
+
+/// Holds SQLite's single-writer reservation from before the first snapshot
+/// until the old source object has been retired. Backup readers remain allowed,
+/// while any independent writer fails immediately instead of committing data
+/// that is absent from the published snapshots.
+struct SourceWriteBarrier {
+    connection: Connection,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SourceRetirementStrategy {
+    HoldBarrierThroughAtomicRetirement,
+    #[cfg(windows)]
+    WindowsFailClosed,
+}
+
+fn source_retirement_strategy() -> SourceRetirementStrategy {
+    #[cfg(windows)]
+    {
+        SourceRetirementStrategy::WindowsFailClosed
+    }
+    #[cfg(not(windows))]
+    {
+        SourceRetirementStrategy::HoldBarrierThroughAtomicRetirement
+    }
+}
+
+fn require_supported_source_retirement() -> Result<(), AppError> {
+    match source_retirement_strategy() {
+        SourceRetirementStrategy::HoldBarrierThroughAtomicRetirement => Ok(()),
+        #[cfg(windows)]
+        SourceRetirementStrategy::WindowsFailClosed => Err(AppError::Database(
+            "safe old-database retirement is unavailable on Windows: SQLite's own write-barrier handle denies delete sharing, and releasing it would create a data-loss race"
+                .to_string(),
+        )),
+    }
+}
+
+impl SourceWriteBarrier {
+    fn acquire(source: &Path) -> Result<Self, AppError> {
+        let connection = Connection::open_with_flags(
+            source,
+            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(|error| {
+            database_error(
+                &format!("open source write barrier {}", source.display()),
+                error,
+            )
+        })?;
+        connection
+            .busy_timeout(Duration::ZERO)
+            .map_err(|error| database_error("set source write barrier timeout", error))?;
+        connection
+            .execute_batch("BEGIN IMMEDIATE;")
+            .map_err(|error| database_error("acquire source BEGIN IMMEDIATE barrier", error))?;
+        Ok(Self { connection })
+    }
+}
+
+impl Drop for SourceWriteBarrier {
+    fn drop(&mut self) {
+        let _ = self.connection.execute_batch("ROLLBACK;");
+    }
 }
 
 fn database_error(context: &str, error: impl std::fmt::Display) -> AppError {
@@ -708,11 +1054,15 @@ fn validate_existing_database(path: &Path, policy: SchemaValidationPolicy) -> Re
     validate_database(&conn, policy)
 }
 
-fn create_validated_snapshot(source: &Path, app_dir: &Path) -> Result<NamedTempFile, AppError> {
+fn create_validated_snapshot(
+    source: &Path,
+    directory: &PinnedDirectory,
+) -> Result<NamedTempFile, AppError> {
+    directory.revalidate("snapshot creation")?;
     let snapshot = tempfile::Builder::new()
         .prefix(".llm-usage-bar-db-snapshot-")
-        .tempfile_in(app_dir)
-        .map_err(|error| AppError::io(app_dir, error))?;
+        .tempfile_in(&directory.canonical_path)
+        .map_err(|error| AppError::io(&directory.canonical_path, error))?;
     backup_into_existing_destination(source, snapshot.path())?;
     snapshot
         .as_file()
@@ -732,23 +1082,79 @@ enum PublishOutcome {
     Existing,
 }
 
+struct OwnedSnapshotName {
+    directory: PinnedDirectory,
+    path: PathBuf,
+    identity: FileIdentity,
+    armed: bool,
+}
+
+impl OwnedSnapshotName {
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for OwnedSnapshotName {
+    fn drop(&mut self) {
+        if !self.armed || !path_entry_exists(&self.path).unwrap_or(true) {
+            return;
+        }
+        if let Err(error) = quarantine_remove(
+            &self.directory,
+            &self.path,
+            &self.identity,
+            "snapshot-cleanup",
+        ) {
+            log::warn!(
+                "Failed to clean owned migration snapshot {}: {error}",
+                self.path.display()
+            );
+        }
+    }
+}
+
 fn publish_snapshot_noclobber(
     snapshot: NamedTempFile,
     target: &Path,
+    directory: &PinnedDirectory,
 ) -> Result<PublishOutcome, AppError> {
+    directory.revalidate("snapshot publication")?;
     let snapshot_identity = FileIdentity::from_file(snapshot.path(), snapshot.as_file())?;
     snapshot
         .as_file()
         .sync_all()
         .map_err(|error| AppError::io(snapshot.path(), error))?;
-    match snapshot.persist_noclobber(target) {
-        Ok(file) => {
+    let (file, temp_path) = snapshot.into_parts();
+    let source_path = match temp_path.keep() {
+        Ok(path) => path,
+        Err(error) => {
+            let source = error.error;
+            let path = error.path.to_path_buf();
+            drop(error.path);
+            return Err(AppError::io(path, source));
+        }
+    };
+    let mut owned_source = OwnedSnapshotName {
+        directory: directory.clone(),
+        path: source_path.clone(),
+        identity: snapshot_identity.clone(),
+        armed: true,
+    };
+    match atomic_move_noreplace(&source_path, target)? {
+        AtomicMoveOutcome::Moved => {
+            owned_source.disarm();
             let identity = match FileIdentity::from_file(target, &file) {
                 Ok(identity) => identity,
                 Err(original) => {
                     #[cfg(any(unix, windows))]
                     {
-                        return match remove_path_if_identity_and_sync(target, &snapshot_identity) {
+                        return match quarantine_remove(
+                            directory,
+                            target,
+                            &snapshot_identity,
+                            "publish-identity-cleanup",
+                        ) {
                             Ok(()) => Err(original),
                             Err(cleanup) => Err(AppError::Database(format!(
                                 "{original}; additionally, post-publish identity cleanup failed: {cleanup}"
@@ -770,7 +1176,8 @@ fn publish_snapshot_noclobber(
             }
             if let Err(error) = file.sync_all() {
                 let original = AppError::io(target, error);
-                return match remove_path_if_identity_and_sync(target, &identity) {
+                return match quarantine_remove(directory, target, &identity, "publish-sync-cleanup")
+                {
                     Ok(()) => Err(original),
                     Err(cleanup) => Err(AppError::Database(format!(
                         "{original}; additionally, post-publish cleanup failed: {cleanup}"
@@ -782,43 +1189,26 @@ fn publish_snapshot_noclobber(
                 identity,
             }))
         }
-        Err(error) if error.error.kind() == ErrorKind::AlreadyExists => {
-            drop(error.file);
+        AtomicMoveOutcome::DestinationExists => {
+            drop(file);
             Ok(PublishOutcome::Existing)
-        }
-        Err(error) => {
-            let source = error.error;
-            drop(error.file);
-            Err(AppError::io(target, source))
         }
     }
 }
 
-fn rollback_published(files: &[&PublishedFile]) -> Result<(), AppError> {
+fn rollback_published(
+    directory: &PinnedDirectory,
+    files: &[&PublishedFile],
+) -> Result<(), AppError> {
     let mut failures = Vec::new();
-    for published in files {
-        match FileIdentity::from_path(&published.path) {
-            Ok(identity) if identity == published.identity => {
-                if let Err(error) = std::fs::remove_file(&published.path) {
-                    failures.push(format!("remove {}: {error}", published.path.display()));
-                }
-            }
-            Ok(_) => failures.push(format!(
-                "refused to remove replaced object {}",
-                published.path.display()
-            )),
-            Err(error) => failures.push(format!(
-                "verify owned object {}: {error}",
-                published.path.display()
-            )),
-        }
-    }
-    for parent in files.iter().filter_map(|published| published.path.parent()) {
-        if let Err(error) = sync_directory(parent) {
-            failures.push(format!(
-                "sync rollback directory {}: {error}",
-                parent.display()
-            ));
+    for (index, published) in files.iter().enumerate() {
+        if let Err(error) = quarantine_remove(
+            directory,
+            &published.path,
+            &published.identity,
+            &format!("rollback-{index}"),
+        ) {
+            failures.push(format!("rollback {}: {error}", published.path.display()));
         }
     }
     if failures.is_empty() {
@@ -833,9 +1223,10 @@ fn rollback_published(files: &[&PublishedFile]) -> Result<(), AppError> {
 
 fn rollback_after(
     original: AppError,
+    directory: &PinnedDirectory,
     published: &[&PublishedFile],
 ) -> Result<DatabaseIdentityOutcome, AppError> {
-    match rollback_published(published) {
+    match rollback_published(directory, published) {
         Ok(()) => Err(original),
         Err(rollback) => Err(AppError::Database(format!(
             "{original}; additionally, {rollback}"
@@ -843,40 +1234,42 @@ fn rollback_after(
     }
 }
 
+trait MigrationHooks {
+    fn after_directory_pinned(&self, _directory: &PinnedDirectory) -> Result<(), AppError> {
+        Ok(())
+    }
+
+    fn after_snapshots(&self, _old_path: &Path) -> Result<(), AppError> {
+        Ok(())
+    }
+}
+
+struct NoopMigrationHooks;
+impl MigrationHooks for NoopMigrationHooks {}
+
 fn prepare_database_identity_impl(
     app_dir: &Path,
     fault: Option<MigrationFaultPoint>,
+    hooks: &dyn MigrationHooks,
+    protected_override: Option<&Path>,
 ) -> Result<DatabaseIdentityOutcome, AppError> {
-    reject_legacy_namespace_before_any_io(app_dir)?;
+    let Some(directory) = pin_safe_existing_directory(app_dir, protected_override)? else {
+        return Ok(DatabaseIdentityOutcome {
+            database_path: app_dir.join(DATABASE_FILE),
+            archived_prior_path: None,
+            retained_prior_path: None,
+            migrated: false,
+        });
+    };
+    hooks.after_directory_pinned(&directory)?;
+    directory.revalidate("migration lease")?;
 
-    let new_path = app_dir.join(DATABASE_FILE);
-    let old_path = app_dir.join(LEGACY_DATABASE_FILE);
-    let archive_path = app_dir.join(DATABASE_IDENTITY_ARCHIVE_FILE);
+    let new_path = directory.join(DATABASE_FILE);
+    let old_path = directory.join(LEGACY_DATABASE_FILE);
+    let archive_path = directory.join(DATABASE_IDENTITY_ARCHIVE_FILE);
 
-    if !path_entry_exists(app_dir)? {
-        // The anti-alias guard above resolves every existing ancestor before
-        // this mkdir. Creating the directory lets even a fresh install take
-        // the same exclusive lease and state recheck as an upgrade.
-        std::fs::create_dir_all(app_dir).map_err(|error| AppError::io(app_dir, error))?;
-        reject_legacy_namespace_before_any_io(app_dir)?;
-        if let Some(parent) = app_dir.parent() {
-            sync_directory(parent)?;
-        }
-    }
-    if !std::fs::metadata(app_dir)
-        .map_err(|error| AppError::io(app_dir, error))?
-        .is_dir()
-    {
-        return Err(AppError::InvalidInput(format!(
-            "database application path is not a directory: {}",
-            app_dir.display()
-        )));
-    }
-
-    let _lease = DatabaseMigrationLease::acquire(app_dir)?;
-    // State may have changed while waiting for another valid owner. Re-run the
-    // read-only anti-alias guard before any SQLite open.
-    reject_legacy_namespace_before_any_io(app_dir)?;
+    let _lease = DatabaseMigrationLease::acquire(&directory)?;
+    directory.revalidate("authoritative state recheck")?;
 
     if path_entry_exists(&new_path)? {
         // Existing current filenames may be the fixed-v13 crash-window output
@@ -912,11 +1305,13 @@ fn prepare_database_identity_impl(
         )));
     }
 
+    require_supported_source_retirement()?;
+    let mut source_barrier = Some(SourceWriteBarrier::acquire(&old_path)?);
     let old_identity = FileIdentity::from_path(&old_path)?;
-    let new_snapshot = create_validated_snapshot(&old_path, app_dir)?;
+    let new_snapshot = create_validated_snapshot(&old_path, &directory)?;
     // The archive is a second SQLite backup of the validated first snapshot,
     // never a copy-on-name, hard link, or alias of old/new.
-    let archive_snapshot = create_validated_snapshot(new_snapshot.path(), app_dir)?;
+    let archive_snapshot = create_validated_snapshot(new_snapshot.path(), &directory)?;
     if FileIdentity::from_path(new_snapshot.path())?
         == FileIdentity::from_path(archive_snapshot.path())?
     {
@@ -924,8 +1319,9 @@ fn prepare_database_identity_impl(
             "new and archive snapshots unexpectedly share a filesystem object".to_string(),
         ));
     }
+    hooks.after_snapshots(&old_path)?;
 
-    let published_new = match publish_snapshot_noclobber(new_snapshot, &new_path)? {
+    let published_new = match publish_snapshot_noclobber(new_snapshot, &new_path, &directory)? {
         PublishOutcome::Existing => {
             validate_existing_database(&new_path, SchemaValidationPolicy::CurrentAuthoritative)?;
             return Ok(DatabaseIdentityOutcome {
@@ -937,70 +1333,58 @@ fn prepare_database_identity_impl(
         }
         PublishOutcome::Published(published) => published,
     };
-    if let Err(error) = sync_directory(app_dir) {
-        return rollback_after(error, &[&published_new]);
+    if let Err(error) = sync_directory(&directory.canonical_path) {
+        return rollback_after(error, &directory, &[&published_new]);
     }
 
     if fault == Some(MigrationFaultPoint::ArchivePublish) {
         return rollback_after(
             AppError::Database("injected archive publication failure".to_string()),
+            &directory,
             &[&published_new],
         );
     }
 
-    let published_archive = match publish_snapshot_noclobber(archive_snapshot, &archive_path) {
-        Ok(PublishOutcome::Published(published)) => published,
-        Ok(PublishOutcome::Existing) => {
-            return rollback_after(
-                AppError::Database(format!(
-                    "refusing to overwrite concurrently-created database archive: {}",
-                    archive_path.display()
-                )),
-                &[&published_new],
-            );
-        }
-        Err(error) => return rollback_after(error, &[&published_new]),
-    };
+    let published_archive =
+        match publish_snapshot_noclobber(archive_snapshot, &archive_path, &directory) {
+            Ok(PublishOutcome::Published(published)) => published,
+            Ok(PublishOutcome::Existing) => {
+                return rollback_after(
+                    AppError::Database(format!(
+                        "refusing to overwrite concurrently-created database archive: {}",
+                        archive_path.display()
+                    )),
+                    &directory,
+                    &[&published_new],
+                );
+            }
+            Err(error) => return rollback_after(error, &directory, &[&published_new]),
+        };
     if published_new.identity == published_archive.identity {
         return rollback_after(
             AppError::Database(
                 "published database and archive share a filesystem object".to_string(),
             ),
+            &directory,
             &[&published_archive, &published_new],
         );
     }
-    if let Err(error) = sync_directory(app_dir) {
-        return rollback_after(error, &[&published_archive, &published_new]);
+    if let Err(error) = sync_directory(&directory.canonical_path) {
+        return rollback_after(error, &directory, &[&published_archive, &published_new]);
     }
 
     if fault == Some(MigrationFaultPoint::OldSourceRemove) {
         return rollback_after(
             AppError::Database("injected old source removal failure".to_string()),
+            &directory,
             &[&published_archive, &published_new],
         );
     }
 
-    match FileIdentity::from_path(&old_path) {
-        Ok(identity) if identity == old_identity => {}
-        Ok(_) => {
-            return rollback_after(
-                AppError::Database(format!(
-                    "old database object changed during migration: {}",
-                    old_path.display()
-                )),
-                &[&published_archive, &published_new],
-            );
-        }
-        Err(error) => {
-            return rollback_after(error, &[&published_archive, &published_new]);
-        }
+    if let Err(error) = quarantine_remove(&directory, &old_path, &old_identity, "retire-old-main") {
+        return rollback_after(error, &directory, &[&published_archive, &published_new]);
     }
-    if let Err(error) = std::fs::remove_file(&old_path) {
-        return rollback_after(
-            AppError::io(&old_path, error),
-            &[&published_archive, &published_new],
-        );
-    }
+    drop(source_barrier.take());
 
     // Sidecars are evidence until the old main filename has been removed. Once
     // that commit point succeeds they are stale and may be cleaned best-effort.
@@ -1022,7 +1406,7 @@ fn prepare_database_identity_impl(
     // cannot be rolled back safely without recreating the old object; treat the
     // completed migration as authoritative and leave a diagnostic. If a crash
     // resurrects the old directory entry, the validated new filename still wins.
-    if let Err(error) = sync_directory(app_dir) {
+    if let Err(error) = sync_directory(&directory.canonical_path) {
         log::warn!("Failed to sync database directory after committed legacy cleanup: {error}");
     }
 
@@ -1043,7 +1427,7 @@ enum MigrationFaultPoint {
 pub(crate) fn prepare_database_identity(
     app_dir: &Path,
 ) -> Result<DatabaseIdentityOutcome, AppError> {
-    prepare_database_identity_impl(app_dir, None)
+    prepare_database_identity_impl(app_dir, None, &NoopMigrationHooks, None)
 }
 
 #[cfg(test)]
@@ -1051,7 +1435,16 @@ fn prepare_database_identity_with_test_fault(
     app_dir: &Path,
     fault: MigrationFaultPoint,
 ) -> Result<DatabaseIdentityOutcome, AppError> {
-    prepare_database_identity_impl(app_dir, Some(fault))
+    prepare_database_identity_impl(app_dir, Some(fault), &NoopMigrationHooks, None)
+}
+
+#[cfg(test)]
+fn prepare_database_identity_with_hooks(
+    app_dir: &Path,
+    hooks: &dyn MigrationHooks,
+    protected_override: Option<&Path>,
+) -> Result<DatabaseIdentityOutcome, AppError> {
+    prepare_database_identity_impl(app_dir, None, hooks, protected_override)
 }
 
 // Database filename migration tests live beside the private implementation so
@@ -1060,8 +1453,10 @@ fn prepare_database_identity_with_test_fault(
 #[cfg(test)]
 mod tests {
     use super::{
-        backup_and_validate, prepare_database_identity, prepare_database_identity_with_test_fault,
-        MigrationFaultPoint,
+        atomic_move_noreplace_with_mode, backup_and_validate, pin_safe_existing_directory,
+        prepare_database_identity, prepare_database_identity_with_hooks,
+        prepare_database_identity_with_test_fault, quarantine_remove, AtomicMoveMode, FileIdentity,
+        MigrationFaultPoint, MigrationHooks, PinnedDirectory, SourceWriteBarrier,
     };
     use crate::database::{Database, SCHEMA_VERSION};
     use crate::product_identity::{
@@ -1074,6 +1469,7 @@ mod tests {
     use std::panic::{catch_unwind, AssertUnwindSafe};
     use std::path::{Path, PathBuf};
     use std::process::Command;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Barrier};
 
     const ARCHIVE_FILE: &str = "cc-switch.db.pre-llm-usage-bar-v14";
@@ -1176,6 +1572,10 @@ mod tests {
             .collect::<Vec<_>>();
         names.sort();
         names
+    }
+
+    fn canonical_test_dir(dir: &Path) -> PathBuf {
+        std::fs::canonicalize(dir).expect("canonicalize test app directory")
     }
 
     fn assert_old_only(dir: &Path, expected_marker: &str) {
@@ -1374,7 +1774,7 @@ mod tests {
     #[test]
     fn backup_captures_committed_uncheckpointed_wal() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let old = dir.path().join(LEGACY_DATABASE_FILE);
+        let old = canonical_test_dir(dir.path()).join(LEGACY_DATABASE_FILE);
         let snapshot = dir.path().join("backup-test.db");
         let writer = create_real_v13_fixture(&old);
 
@@ -1435,8 +1835,8 @@ mod tests {
     fn crash_residue_wal_is_preserved_in_independent_new_and_archive_snapshots() {
         let dir = tempfile::tempdir().expect("tempdir");
         let old = dir.path().join(LEGACY_DATABASE_FILE);
-        let new = dir.path().join(DATABASE_FILE);
-        let archive = dir.path().join(ARCHIVE_FILE);
+        let new = canonical_test_dir(dir.path()).join(DATABASE_FILE);
+        let archive = canonical_test_dir(dir.path()).join(ARCHIVE_FILE);
         spawn_crash_wal_fixture(&old);
 
         assert!(
@@ -1482,8 +1882,8 @@ mod tests {
     fn migrates_real_v13_database_and_archives_source() {
         let dir = tempfile::tempdir().expect("tempdir");
         let old = dir.path().join(LEGACY_DATABASE_FILE);
-        let new = dir.path().join(DATABASE_FILE);
-        let archive = dir.path().join(ARCHIVE_FILE);
+        let new = canonical_test_dir(dir.path()).join(DATABASE_FILE);
+        let archive = canonical_test_dir(dir.path()).join(ARCHIVE_FILE);
         let writer = create_real_v13_fixture(&old);
         enable_wal(&writer);
         writer
@@ -1510,8 +1910,8 @@ mod tests {
     #[test]
     fn validated_new_filename_wins_when_both_files_exist() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let old = dir.path().join(LEGACY_DATABASE_FILE);
-        let new = dir.path().join(DATABASE_FILE);
+        let old = canonical_test_dir(dir.path()).join(LEGACY_DATABASE_FILE);
+        let new = canonical_test_dir(dir.path()).join(DATABASE_FILE);
         write_real_v13_marker_db(&old, "old-row");
         write_real_v13_marker_db(&new, "new-row");
         let old_before = std::fs::read(&old).expect("snapshot old database");
@@ -1531,7 +1931,10 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let outcome = prepare_database_identity(dir.path()).expect("prepare fresh install");
 
-        assert_eq!(outcome.database_path, dir.path().join(DATABASE_FILE));
+        assert_eq!(
+            outcome.database_path,
+            canonical_test_dir(dir.path()).join(DATABASE_FILE)
+        );
         assert_eq!(outcome.archived_prior_path, None);
         assert_eq!(outcome.retained_prior_path, None);
         assert!(!outcome.migrated);
@@ -1712,9 +2115,9 @@ mod tests {
             outcomes.iter().filter(|outcome| outcome.migrated).count(),
             1
         );
-        assert!(outcomes
-            .iter()
-            .all(|outcome| outcome.database_path == app_dir.join(DATABASE_FILE)));
+        assert!(outcomes.iter().all(
+            |outcome| outcome.database_path == canonical_test_dir(&app_dir).join(DATABASE_FILE)
+        ));
         assert_eq!(
             read_marker(&app_dir.join(DATABASE_FILE)),
             "concurrent-source"
@@ -1878,5 +2281,188 @@ mod tests {
         assert!(!temp.path().join(DATABASE_FILE).exists());
         assert!(!temp.path().join(ARCHIVE_FILE).exists());
         assert!(!temp.path().join(MIGRATION_LEASE_FILE).exists());
+    }
+
+    #[test]
+    fn missing_app_directory_returns_fresh_path_without_creating_directory() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let missing = root.path().join("not-created-by-migration");
+
+        let outcome = prepare_database_identity(&missing).expect("fresh identity outcome");
+
+        assert_eq!(outcome.database_path, missing.join(DATABASE_FILE));
+        assert!(!missing.exists(), "identity preparation must not mkdir");
+    }
+
+    #[test]
+    fn source_write_barrier_allows_backup_but_rejects_competing_commit() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let old = dir.path().join(LEGACY_DATABASE_FILE);
+        write_real_v13_marker_db(&old, "before-barrier");
+        let barrier = SourceWriteBarrier::acquire(&old).expect("acquire source write barrier");
+        let snapshot = dir.path().join("barrier-snapshot.db");
+
+        backup_and_validate(&old, &snapshot).expect("backup while BEGIN IMMEDIATE is held");
+        let competitor = Connection::open(&old).expect("open competing writer");
+        competitor
+            .busy_timeout(std::time::Duration::ZERO)
+            .expect("zero competitor timeout");
+        let error = competitor
+            .execute(
+                "INSERT INTO identity_migration_marker (value) VALUES ('after-snapshot')",
+                [],
+            )
+            .expect_err("competing commit must not pass the write barrier");
+        assert!(matches!(
+            error.sqlite_error_code(),
+            Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+        ));
+        drop(barrier);
+        assert_eq!(read_marker(&snapshot), "before-barrier");
+    }
+
+    #[test]
+    fn migration_hook_proves_post_snapshot_competing_commit_cannot_succeed() {
+        struct CompetingWriterHook {
+            attempted: Arc<AtomicBool>,
+        }
+        impl MigrationHooks for CompetingWriterHook {
+            fn after_snapshots(&self, old_path: &Path) -> Result<(), crate::error::AppError> {
+                let competitor = Connection::open(old_path)?;
+                competitor.busy_timeout(std::time::Duration::ZERO)?;
+                let error = competitor
+                    .execute(
+                        "INSERT INTO identity_migration_marker (value) VALUES ('lost-race-row')",
+                        [],
+                    )
+                    .expect_err("post-snapshot competing writer must remain blocked");
+                if !matches!(
+                    error.sqlite_error_code(),
+                    Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+                ) {
+                    return Err(error.into());
+                }
+                self.attempted.store(true, Ordering::SeqCst);
+                Ok(())
+            }
+        }
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let old = dir.path().join(LEGACY_DATABASE_FILE);
+        write_real_v13_marker_db(&old, "snapshot-boundary");
+        let attempted = Arc::new(AtomicBool::new(false));
+        let hook = CompetingWriterHook {
+            attempted: Arc::clone(&attempted),
+        };
+
+        let outcome = prepare_database_identity_with_hooks(dir.path(), &hook, None)
+            .expect("migration with competing writer probe");
+
+        assert!(attempted.load(Ordering::SeqCst));
+        assert_eq!(read_marker(&outcome.database_path), "snapshot-boundary");
+        assert_eq!(
+            read_marker(outcome.archived_prior_path.as_deref().unwrap()),
+            "snapshot-boundary"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pinned_canonical_directory_ignores_later_alias_swap_to_protected_root() {
+        struct SwapAliasHook {
+            alias: PathBuf,
+            protected: PathBuf,
+        }
+        impl MigrationHooks for SwapAliasHook {
+            fn after_directory_pinned(
+                &self,
+                _directory: &PinnedDirectory,
+            ) -> Result<(), crate::error::AppError> {
+                std::fs::remove_file(&self.alias)
+                    .map_err(|error| crate::error::AppError::io(&self.alias, error))?;
+                std::os::unix::fs::symlink(&self.protected, &self.alias)
+                    .map_err(|error| crate::error::AppError::io(&self.alias, error))
+            }
+        }
+
+        let root = tempfile::tempdir().expect("tempdir");
+        let safe = root.path().join("safe-app-dir");
+        let protected = root.path().join("fake-protected-legacy");
+        let alias = root.path().join("app-dir-alias");
+        std::fs::create_dir(&safe).expect("create safe directory");
+        std::fs::create_dir(&protected).expect("create fake protected directory");
+        std::os::unix::fs::symlink(&safe, &alias).expect("create initial safe alias");
+        let protected_before = directory_entry_names(&protected);
+        let hook = SwapAliasHook {
+            alias: alias.clone(),
+            protected: protected.clone(),
+        };
+
+        let outcome = prepare_database_identity_with_hooks(&alias, &hook, Some(&protected))
+            .expect("pinned safe directory remains authoritative");
+
+        assert_eq!(
+            outcome.database_path,
+            canonical_test_dir(&safe).join(DATABASE_FILE)
+        );
+        assert_eq!(directory_entry_names(&protected), protected_before);
+        assert!(directory_entry_names(&safe).is_empty());
+        assert_eq!(
+            std::fs::canonicalize(&alias).unwrap(),
+            std::fs::canonicalize(&protected).unwrap()
+        );
+    }
+
+    #[test]
+    fn successful_publication_leaves_no_hidden_snapshot_or_quarantine_name() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_real_v13_marker_db(&dir.path().join(LEGACY_DATABASE_FILE), "no-hidden-link");
+
+        prepare_database_identity(dir.path()).expect("migrate database");
+
+        let names = directory_entry_names(dir.path());
+        assert_eq!(names, vec![ARCHIVE_FILE, DATABASE_FILE]);
+        assert!(names
+            .iter()
+            .all(|name| !name.starts_with(".llm-usage-bar-")));
+    }
+
+    #[test]
+    fn unsupported_atomic_move_fails_closed_without_changing_either_name() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = dir.path().join("source");
+        let destination = dir.path().join("destination");
+        std::fs::write(&source, b"source-evidence").expect("write source");
+
+        let error = atomic_move_noreplace_with_mode(
+            &source,
+            &destination,
+            AtomicMoveMode::UnsupportedForTest,
+        )
+        .expect_err("unsupported backend must fail closed");
+
+        assert!(error.to_string().contains("unsupported"));
+        assert_eq!(std::fs::read(&source).unwrap(), b"source-evidence");
+        assert!(!destination.exists());
+    }
+
+    #[test]
+    fn quarantine_identity_mismatch_restores_replacement_instead_of_deleting_it() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let directory = pin_safe_existing_directory(dir.path(), None)
+            .expect("pin test directory")
+            .expect("existing test directory");
+        let path = directory.join("published.db");
+        std::fs::write(&path, b"owned-object").expect("write owned object");
+        let expected = FileIdentity::from_path(&path).expect("capture owned identity");
+        std::fs::remove_file(&path).expect("remove owned object before replacement");
+        std::fs::write(&path, b"replacement-evidence").expect("write replacement");
+
+        let error = quarantine_remove(&directory, &path, &expected, "mismatch-test")
+            .expect_err("replacement identity must not be deleted");
+
+        assert!(error.to_string().contains("restored"));
+        assert_eq!(std::fs::read(&path).unwrap(), b"replacement-evidence");
+        assert_eq!(directory_entry_names(dir.path()), vec!["published.db"]);
     }
 }
