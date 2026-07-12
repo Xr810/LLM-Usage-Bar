@@ -155,6 +155,11 @@ checks reject aliases that resolve into `~/.cc-switch`.
    directory. This captures committed WAL content through SQLite rather than
    copying sidecar files manually.
 4. Run `PRAGMA quick_check`, read `user_version`, and verify required tables.
+   Old-name sources and both migration snapshots are fixed to schema v13 even
+   after the application adds v14. An already-authoritative new-name database
+   may be any validated version from 13 through the application's current
+   supported schema, allowing both the publication-before-schema-migration
+   crash window and subsequent v14 restarts while still rejecting future data.
 5. Flush and atomically publish the destination with no-clobber semantics. If
    another valid new file already exists, it wins and the old file is retained.
 6. Materialize a second, independently owned complete SQLite snapshot from the
