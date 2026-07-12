@@ -6,13 +6,16 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   readdir,
   rm,
   stat,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import {
   currentBootIdentity,
@@ -125,11 +128,45 @@ async function cleanupRepoProcesses(root) {
   }
 }
 
-function spawnWrapper(root, command, args) {
+function spawnWrapper(root, command, args, options = {}) {
   return spawn(process.execPath, [wrapperPath, command, ...args], {
     cwd: root,
     stdio: ["ignore", "pipe", "pipe"],
+    ...options,
   });
+}
+
+function knownBootIdentityPattern() {
+  if (process.platform === "linux") {
+    return /^linux:[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
+  }
+  if (process.platform === "darwin") return /^darwin:\d+:\d{1,6}$/;
+  if (process.platform === "win32") {
+    return /^win32:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,7})?Z$/;
+  }
+  return null;
+}
+
+function previousKnownBootIdentity() {
+  if (process.platform === "linux") {
+    return "linux:00000000-0000-0000-0000-000000000001";
+  }
+  if (process.platform === "darwin") return "darwin:1:0";
+  if (process.platform === "win32") {
+    return "win32:2000-01-01T00:00:00.0000000Z";
+  }
+  return null;
+}
+
+function invalidKnownBootIdentityShape() {
+  if (process.platform === "linux") {
+    return "linux:00000000-0000-0000-0000-00000000000g";
+  }
+  if (process.platform === "darwin") return "darwin:9007199254740992:0";
+  if (process.platform === "win32") {
+    return "win32:2026-02-30T00:00:00.0000000Z";
+  }
+  return `${process.platform}:unsupported`;
 }
 
 test("main and linked worktree with the same lockfile share one bucket", async () => {
@@ -189,7 +226,7 @@ test("build commands resolve to executables without shell wrappers", async (t) =
 
   const tauri = resolveBuildCommand("tauri", ["dev"], fixture);
   assert.equal(tauri.executable, process.execPath);
-  assert.equal(tauri.args[0], path.join(packageDir, "tauri.js"));
+  assert.equal(tauri.args[0], await realpath(path.join(packageDir, "tauri.js")));
   assert.deepEqual(tauri.args.slice(1), ["dev"]);
 
   const batch = path.join(fixture, "cargo.cmd");
@@ -198,6 +235,69 @@ test("build commands resolve to executables without shell wrappers", async (t) =
   assert.throws(
     () => resolveBuildCommand(batch, [], fixture),
     /shell wrapper/i,
+  );
+});
+
+test("Tauri package-bin symlinks cannot escape the real package root", async (t) => {
+  const fixture = await mkdtemp(path.join(tmpdir(), "llm-cache-tauri-link-"));
+  const packageDir = path.join(
+    fixture,
+    "node_modules",
+    "@tauri-apps",
+    "cli",
+  );
+  const outsideDir = path.join(fixture, "outside-package");
+  const outsideBin = path.join(outsideDir, "tauri.js");
+  t.after(() => rm(fixture, { recursive: true, force: true }));
+
+  await mkdir(packageDir, { recursive: true });
+  await mkdir(outsideDir);
+  await writeFile(path.join(fixture, "package.json"), "{\"private\":true}\n");
+  await writeFile(
+    path.join(packageDir, "package.json"),
+    JSON.stringify({
+      name: "@tauri-apps/cli",
+      version: "0.0.0-test",
+      bin: { tauri: "escaped/tauri.js" },
+    }),
+  );
+  await writeFile(outsideBin, "process.exit(0);\n");
+  await symlink(
+    outsideDir,
+    path.join(packageDir, "escaped"),
+    process.platform === "win32" ? "junction" : "dir",
+  );
+
+  assert.throws(
+    () => resolveBuildCommand("tauri", ["dev"], fixture),
+    /package root|regular file|escapes/i,
+  );
+});
+
+test("Tauri package bin must resolve to a regular file", async (t) => {
+  const fixture = await mkdtemp(path.join(tmpdir(), "llm-cache-tauri-file-"));
+  const packageDir = path.join(
+    fixture,
+    "node_modules",
+    "@tauri-apps",
+    "cli",
+  );
+  t.after(() => rm(fixture, { recursive: true, force: true }));
+
+  await mkdir(path.join(packageDir, "tauri.js"), { recursive: true });
+  await writeFile(path.join(fixture, "package.json"), "{\"private\":true}\n");
+  await writeFile(
+    path.join(packageDir, "package.json"),
+    JSON.stringify({
+      name: "@tauri-apps/cli",
+      version: "0.0.0-test",
+      bin: { tauri: "tauri.js" },
+    }),
+  );
+
+  assert.throws(
+    () => resolveBuildCommand("tauri", ["dev"], fixture),
+    /regular file/i,
   );
 });
 
@@ -248,7 +348,14 @@ test("an unknown boot identity never proves that a lease is from an old boot", (
 });
 
 test("a malformed or cross-platform boot identity fails closed", () => {
-  for (const bootIdentity of ["malformed", "another-platform:known-boot"]) {
+  for (const bootIdentity of [
+    "",
+    "malformed",
+    `${process.platform}:`,
+    `${process.platform}:garbage`,
+    invalidKnownBootIdentityShape(),
+    "another-platform:known-boot",
+  ]) {
     const probe = probeBuildProcessTree({
       version: 1,
       state: "orphaned",
@@ -258,6 +365,56 @@ test("a malformed or cross-platform boot identity fails closed", () => {
 
     assert.equal(probe.state, "unknown");
   }
+});
+
+test("current boot identities are canonical or explicitly unknown", () => {
+  const identity = currentBootIdentity();
+  if (identity === `${process.platform}:unknown`) return;
+
+  const pattern = knownBootIdentityPattern();
+  assert.ok(pattern, `unsupported known boot identity: ${identity}`);
+  assert.match(identity, pattern);
+});
+
+test("only a previous valid boot identity proves an old process tree is empty", () => {
+  const bootIdentity = previousKnownBootIdentity();
+  if (!bootIdentity || bootIdentity === currentBootIdentity()) return;
+
+  assert.deepEqual(
+    probeBuildProcessTree({
+      version: 1,
+      state: "orphaned",
+      bootIdentity,
+      processTree: { kind: "unknown" },
+    }),
+    { state: "empty", reason: "previous-boot" },
+  );
+});
+
+test("Windows snapshot fails closed when exited ancestors hide a deep descendant", async () => {
+  const module = await import("./cargo-cache-lib.mjs");
+  assert.equal(typeof module.probeWindowsProcessTree, "function");
+
+  const probe = module.probeWindowsProcessTree(
+    {
+      version: 1,
+      state: "orphaned",
+      child: { pid: 100, startedAtToken: "root-start" },
+      processTree: { kind: "windows-descendants" },
+    },
+    [
+      {
+        pid: 300,
+        parentPid: 200,
+        startedAtToken: "deep-grandchild-start",
+      },
+    ],
+  );
+
+  assert.deepEqual(probe, {
+    state: "unknown",
+    reason: "windows-root-missing",
+  });
 });
 
 test("wrapper exposes target directory and propagates child exit code", async (t) => {
@@ -280,7 +437,7 @@ test("wrapper exposes target directory and propagates child exit code", async (t
   assert.equal(result.status, 7, result.stderr?.toString());
 });
 
-test("lease is removed after a successful child exit", async (t) => {
+test("successful child exit removes a lease only when tree emptiness is provable", async (t) => {
   const root = await makeRepo("version = 4\n");
   t.after(async () => {
     await cleanupRepoProcesses(root);
@@ -294,7 +451,18 @@ test("lease is removed after a successful child exit", async (t) => {
   );
   assert.equal(result.status, 0, result.stderr?.toString());
   const { targetDir } = resolveCargoTarget(root);
-  assert.deepEqual(await readdir(path.join(targetDir, ".active")), []);
+  const activeDir = path.join(targetDir, ".active");
+  const active = await readdir(activeDir);
+  if (process.platform === "win32") {
+    assert.equal(active.length, 1);
+    const lease = JSON.parse(
+      await readFile(path.join(activeDir, active[0]), "utf8"),
+    );
+    assert.equal(lease.state, "orphaned");
+    assert.equal(lease.lastProbe?.state, "unknown");
+  } else {
+    assert.deepEqual(active, []);
+  }
 });
 
 test(
@@ -327,6 +495,53 @@ test(
       }
       return (await readLeases(root)).length === 0;
     }, "terminated build group to become empty");
+  },
+);
+
+test(
+  "a signal raised inside spawn is queued and forwarded once the child exists",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const root = await makeRepo("version = 4\n");
+    const preloadPath = path.join(root, "signal-during-spawn.mjs");
+    await writeFile(
+      preloadPath,
+      [
+        "import childProcess from 'node:child_process';",
+        "import { syncBuiltinESMExports } from 'node:module';",
+        "const realSpawn = childProcess.spawn;",
+        "childProcess.spawn = function (...args) {",
+        "  const child = realSpawn.apply(this, args);",
+        "  process.emit('SIGTERM');",
+        "  return child;",
+        "};",
+        "syncBuiltinESMExports();",
+      ].join("\n"),
+    );
+    const childScript = [
+      "setTimeout(() => process.exit(0), 300);",
+      "setInterval(() => {}, 100);",
+    ].join(" ");
+    const wrapper = spawnWrapper(root, process.execPath, ["-e", childScript], {
+      env: {
+        ...process.env,
+        NODE_OPTIONS: `--import=${pathToFileURL(preloadPath).href}`,
+      },
+    });
+    t.after(async () => {
+      if (wrapper.exitCode === null && wrapper.signalCode === null) {
+        wrapper.kill("SIGKILL");
+      }
+      await cleanupRepoProcesses(root);
+      await rm(root, { recursive: true, force: true });
+    });
+
+    const exit = await waitForExit(wrapper);
+    assert.deepEqual(exit, { code: null, signal: "SIGTERM" });
+    await waitUntil(
+      async () => (await readLeases(root)).length === 0,
+      "spawn-window signal lease cleanup",
+    );
   },
 );
 

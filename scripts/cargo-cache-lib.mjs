@@ -9,6 +9,7 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -120,9 +121,33 @@ function findTauriPackage(cwd) {
   throw new Error("@tauri-apps/cli is not installed for this workspace");
 }
 
+function isWithinDirectory(directory, candidate) {
+  const relative = path.relative(directory, candidate);
+  return (
+    relative === "" ||
+    (relative !== ".." &&
+      !relative.startsWith(`..${path.sep}`) &&
+      !path.isAbsolute(relative))
+  );
+}
+
 function resolveTauriBin(cwd) {
-  const packageJson = findTauriPackage(cwd);
-  const packageRoot = path.dirname(packageJson);
+  const discoveredPackageJson = findTauriPackage(cwd);
+  let packageRoot;
+  let packageJson;
+  try {
+    packageRoot = realpathSync(path.dirname(discoveredPackageJson));
+    packageJson = realpathSync(discoveredPackageJson);
+  } catch {
+    throw new Error("@tauri-apps/cli package root is not readable");
+  }
+  if (
+    !statSync(packageRoot).isDirectory() ||
+    !isWithinDirectory(packageRoot, packageJson)
+  ) {
+    throw new Error("@tauri-apps/cli package metadata escapes its real package root");
+  }
+
   const metadata = JSON.parse(readFileSync(packageJson, "utf8"));
   const relativeBin = typeof metadata.bin === "string"
     ? metadata.bin
@@ -132,10 +157,17 @@ function resolveTauriBin(cwd) {
     throw new Error("@tauri-apps/cli does not declare a safe tauri bin");
   }
 
-  const executable = path.resolve(packageRoot, relativeBin);
-  const relative = path.relative(packageRoot, executable);
-  if (relative.startsWith("..") || path.isAbsolute(relative) || !existsSync(executable)) {
-    throw new Error("@tauri-apps/cli tauri bin is missing or escapes its package");
+  let executable;
+  try {
+    executable = realpathSync(path.resolve(packageRoot, relativeBin));
+  } catch {
+    throw new Error("@tauri-apps/cli tauri bin is missing");
+  }
+  if (!isWithinDirectory(packageRoot, executable)) {
+    throw new Error("@tauri-apps/cli tauri bin escapes its real package root");
+  }
+  if (!statSync(executable).isFile()) {
+    throw new Error("@tauri-apps/cli tauri bin must be a regular file");
   }
   return executable;
 }
@@ -174,15 +206,86 @@ function powershellJson(script, env = process.env) {
   }
 }
 
+function isValidWindowsBootTime(value) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,7}))?Z$/.exec(
+    value,
+  );
+  if (!match) return false;
+
+  const [, yearText, monthText, dayText, hourText, minuteText, secondText] = match;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  const second = Number(secondText);
+  if (
+    year < 1601 ||
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    hour > 23 ||
+    minute > 59 ||
+    second > 59
+  ) {
+    return false;
+  }
+
+  const calendarDate = new Date(Date.UTC(year, month - 1, day));
+  return (
+    calendarDate.getUTCFullYear() === year &&
+    calendarDate.getUTCMonth() === month - 1 &&
+    calendarDate.getUTCDate() === day
+  );
+}
+
+function classifyBootIdentity(identity) {
+  if (typeof identity !== "string" || identity.length === 0) return "invalid";
+  if (identity === `${process.platform}:unknown`) return "unknown";
+
+  if (process.platform === "linux") {
+    return /^linux:[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(
+      identity,
+    )
+      ? "known"
+      : "invalid";
+  }
+
+  if (process.platform === "darwin") {
+    const match = /^darwin:(\d+):(\d{1,6})$/.exec(identity);
+    const seconds = match ? Number(match[1]) : Number.NaN;
+    const microseconds = match ? Number(match[2]) : Number.NaN;
+    return match &&
+      Number.isSafeInteger(seconds) &&
+      seconds > 0 &&
+      Number.isSafeInteger(microseconds) &&
+      microseconds < 1_000_000
+      ? "known"
+      : "invalid";
+  }
+
+  if (process.platform === "win32") {
+    return identity.startsWith("win32:") &&
+      isValidWindowsBootTime(identity.slice("win32:".length))
+      ? "known"
+      : "invalid";
+  }
+
+  return "invalid";
+}
+
 export function currentBootIdentity() {
   if (cachedBootIdentity) return cachedBootIdentity;
 
   if (process.platform === "linux") {
     try {
-      cachedBootIdentity = `linux:${readFileSync(
+      const candidate = `linux:${readFileSync(
         "/proc/sys/kernel/random/boot_id",
         "utf8",
-      ).trim()}`;
+      ).trim().toLowerCase()}`;
+      cachedBootIdentity = classifyBootIdentity(candidate) === "known"
+        ? candidate
+        : "linux:unknown";
       return cachedBootIdentity;
     } catch {
       cachedBootIdentity = "linux:unknown";
@@ -195,7 +298,13 @@ export function currentBootIdentity() {
       const bootTime = execFileSync("sysctl", ["-n", "kern.boottime"], {
         encoding: "utf8",
       }).trim();
-      cachedBootIdentity = `darwin:${bootTime}`;
+      const match = /\bsec\s*=\s*(\d+),\s*usec\s*=\s*(\d+)\b/.exec(bootTime);
+      const candidate = match
+        ? `darwin:${BigInt(match[1])}:${Number(match[2])}`
+        : "darwin:unknown";
+      cachedBootIdentity = classifyBootIdentity(candidate) === "known"
+        ? candidate
+        : "darwin:unknown";
       return cachedBootIdentity;
     } catch {
       cachedBootIdentity = "darwin:unknown";
@@ -207,8 +316,11 @@ export function currentBootIdentity() {
     const bootTime = powershellJson(
       "(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().ToString('o') | ConvertTo-Json -Compress",
     );
-    cachedBootIdentity = typeof bootTime === "string"
+    const candidate = typeof bootTime === "string"
       ? `win32:${bootTime}`
+      : "win32:unknown";
+    cachedBootIdentity = classifyBootIdentity(candidate) === "known"
+      ? candidate
       : "win32:unknown";
     return cachedBootIdentity;
   }
@@ -356,7 +468,7 @@ function windowsProcessSnapshot() {
   return items;
 }
 
-function probeWindowsTree(lease) {
+export function probeWindowsProcessTree(lease, processes) {
   if (lease.processTree?.kind !== "windows-descendants") {
     return { state: "unknown", reason: "unsupported-process-tree-kind" };
   }
@@ -366,9 +478,8 @@ function probeWindowsTree(lease) {
     return { state: "unknown", reason: "missing-child-identity" };
   }
 
-  const processes = windowsProcessSnapshot();
-  if (!processes) {
-    return { state: "unknown", reason: "windows-enumeration-unavailable" };
+  if (!Array.isArray(processes)) {
+    return { state: "unknown", reason: "invalid-windows-process-snapshot" };
   }
 
   const root = processes.find((process) => process.pid === childPid);
@@ -384,22 +495,15 @@ function probeWindowsTree(lease) {
     return { state: "active", reason: "child-process-active" };
   }
 
-  const ancestors = new Set([childPid]);
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const process of processes) {
-      if (!ancestors.has(process.pid) && ancestors.has(process.parentPid)) {
-        ancestors.add(process.pid);
-        changed = true;
-      }
-    }
-  }
+  return { state: "unknown", reason: "windows-root-missing" };
+}
 
-  if (ancestors.size > 1) {
-    return { state: "active", reason: "descendant-process-active" };
+function probeWindowsTree(lease) {
+  const processes = windowsProcessSnapshot();
+  if (!processes) {
+    return { state: "unknown", reason: "windows-enumeration-unavailable" };
   }
-  return { state: "empty", reason: "windows-tree-empty" };
+  return probeWindowsProcessTree(lease, processes);
 }
 
 export function probeBuildProcessTree(lease) {
@@ -407,25 +511,16 @@ export function probeBuildProcessTree(lease) {
     return { state: "unknown", reason: "invalid-lease" };
   }
 
-  if (typeof lease.bootIdentity !== "string") {
-    return { state: "unknown", reason: "missing-boot-identity" };
-  }
-
   const bootIdentity = currentBootIdentity();
-  const separator = lease.bootIdentity.indexOf(":");
-  const bootPlatform = separator > 0
-    ? lease.bootIdentity.slice(0, separator)
-    : null;
-  if (bootPlatform !== process.platform) {
+  const leaseBootState = classifyBootIdentity(lease.bootIdentity);
+  const currentBootState = classifyBootIdentity(bootIdentity);
+  if (leaseBootState === "invalid") {
     return { state: "unknown", reason: "invalid-boot-identity" };
   }
+  if (leaseBootState === "unknown" || currentBootState !== "known") {
+    return { state: "unknown", reason: "boot-identity-unavailable" };
+  }
   if (lease.bootIdentity !== bootIdentity) {
-    if (
-      lease.bootIdentity.endsWith(":unknown") ||
-      bootIdentity.endsWith(":unknown")
-    ) {
-      return { state: "unknown", reason: "boot-identity-unavailable" };
-    }
     return { state: "empty", reason: "previous-boot" };
   }
 

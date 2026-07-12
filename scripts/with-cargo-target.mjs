@@ -35,7 +35,39 @@ writeLeaseAtomic(
   pendingLease(process.pid, process.cwd(), [command, ...args]),
 );
 
-let child;
+let child = null;
+let childPid = null;
+let finished = false;
+let forwardedSignal = null;
+const signalHandlers = new Map();
+
+function removeSignalHandlers() {
+  for (const [signal, handler] of signalHandlers) {
+    process.off(signal, handler);
+  }
+}
+
+function forwardSignalToChild(signal) {
+  if (!child || !Number.isSafeInteger(childPid)) return false;
+  try {
+    if (process.platform !== "win32") process.kill(-childPid, signal);
+    else child.kill(signal);
+    return true;
+  } catch (error) {
+    if (error.code !== "ESRCH") console.error(error.message);
+    return false;
+  }
+}
+
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+  const handler = () => {
+    forwardedSignal ??= signal;
+    forwardSignalToChild(signal);
+  };
+  signalHandlers.set(signal, handler);
+  process.on(signal, handler);
+}
+
 try {
   child = spawn(invocation.executable, invocation.args, {
     stdio: "inherit",
@@ -44,12 +76,14 @@ try {
     detached: process.platform !== "win32",
   });
 } catch (error) {
+  removeSignalHandlers();
   removeLease(leasePath);
   console.error(error.message);
+  if (forwardedSignal) process.kill(process.pid, forwardedSignal);
   process.exit(1);
 }
 
-const childPid = child.pid;
+childPid = child.pid;
 if (Number.isSafeInteger(childPid)) {
   writeLeaseAtomic(
     leasePath,
@@ -64,32 +98,6 @@ if (Number.isSafeInteger(childPid)) {
   );
 }
 
-const signalHandlers = new Map();
-let forwardedSignal = null;
-for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
-  const handler = () => {
-    forwardedSignal ??= signal;
-    try {
-      if (process.platform !== "win32" && Number.isSafeInteger(childPid)) {
-        process.kill(-childPid, signal);
-      } else {
-        child.kill(signal);
-      }
-    } catch (error) {
-      if (error.code !== "ESRCH") console.error(error.message);
-    }
-  };
-  signalHandlers.set(signal, handler);
-  process.on(signal, handler);
-}
-
-let finished = false;
-function removeSignalHandlers() {
-  for (const [signal, handler] of signalHandlers) {
-    process.off(signal, handler);
-  }
-}
-
 child.on("error", (error) => {
   if (finished) return;
   finished = true;
@@ -97,6 +105,10 @@ child.on("error", (error) => {
   if (Number.isSafeInteger(childPid)) finalizeLeaseAfterTreeExit(leasePath);
   else removeLease(leasePath);
   console.error(error.message);
+  if (forwardedSignal) {
+    process.kill(process.pid, forwardedSignal);
+    return;
+  }
   process.exitCode = 1;
 });
 
@@ -113,3 +125,5 @@ child.on("exit", (code, signal) => {
   }
   process.exitCode = code ?? 1;
 });
+
+if (forwardedSignal) forwardSignalToChild(forwardedSignal);
