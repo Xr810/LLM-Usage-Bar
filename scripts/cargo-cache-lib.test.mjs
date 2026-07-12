@@ -42,6 +42,23 @@ test("project scripts route local Cargo and Tauri through the wrapper", () => {
   assert.equal(pkg.scripts["cargo:cache"], "node scripts/cargo-cache.mjs");
 });
 
+test("pnpm 11 build policy explicitly allows trusted native builds", () => {
+  const workspace = readFileSync(
+    new URL("../pnpm-workspace.yaml", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(
+    workspace,
+    /allowBuilds:\n  '@tailwindcss\/oxide': true\n  esbuild: true\n  msw: false\n?$/,
+  );
+  assert.doesNotMatch(
+    workspace,
+    /^\s*(?:onlyBuiltDependencies|ignoredBuiltDependencies):/m,
+  );
+  assert.doesNotMatch(workspace, /set this to true or false/);
+});
+
 function git(cwd, ...args) {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 }
