@@ -39,6 +39,11 @@ export function MeteredProviderCard({
       defaultValue: "Unavailable",
     });
   };
+  const providerCostBadges = [
+    usage.costSourceCounts.upstream > 0 ? "upstream" : null,
+    usage.costSourceCounts.estimated > 0 ? "estimated" : null,
+    usage.costSourceCounts.unavailable > 0 ? "unavailable" : null,
+  ].filter((source): source is string => source != null);
   return (
     <Card data-testid={`metered-provider-${usage.provider.id}`}>
       <CardHeader className="pb-3">
@@ -66,8 +71,20 @@ export function MeteredProviderCard({
           </div>
           <div>
             <div className="text-muted-foreground">USD</div>
-            <div className="font-semibold">{usage.totalCostUsd ?? "—"}</div>
+            <div className="font-semibold">
+              {usage.totalCostUsd ??
+                t("usageDashboard.costUnavailableSummary", {
+                  defaultValue: "Cost unavailable",
+                })}
+            </div>
           </div>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {providerCostBadges.map((source) => (
+            <Badge key={source} variant="outline">
+              {costSourceLabel(source)}
+            </Badge>
+          ))}
         </div>
         {events.error ? (
           <Alert
@@ -101,7 +118,9 @@ export function MeteredProviderCard({
                 <span>
                   {event.totalCostUsd == null
                     ? costSourceLabel(event.costSource)
-                    : `$${event.totalCostUsd}`}
+                    : `$${event.totalCostUsd} · ${costSourceLabel(
+                        event.costSource,
+                      )}`}
                 </span>
               </div>
             ))}

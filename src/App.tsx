@@ -128,7 +128,10 @@ export default function App() {
         ) : modules.isLoading ? (
           <div>{t("common.loading", { defaultValue: "Loading" })}</div>
         ) : selectedModule ? (
-          <UsageDashboardPage />
+          <UsageDashboardPage
+            selectedModule={selectedModule}
+            onOpenSettings={() => setSettingsOpen(true)}
+          />
         ) : (
           <div className="rounded-lg border border-dashed p-8 text-center">
             <p className="text-sm text-muted-foreground">

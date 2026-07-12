@@ -45,17 +45,21 @@ describe("usage dashboard main path", () => {
     Object.values(windowMocks).forEach((mock) => mock.mockReset());
   });
 
-  it("renders the real dashboard and no legacy business entry points", async () => {
+  it("renders one monitoring module at a time and no home configuration controls", async () => {
+    const user = userEvent.setup();
     renderApp();
 
     expect(
       await screen.findAllByText("Official Subscription"),
     ).not.toHaveLength(0);
-    expect(screen.getAllByText("Metered API")).not.toHaveLength(0);
-    expect(screen.getByText("Static routes")).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Start proxy" }),
-    ).toBeInTheDocument();
+    expect(screen.queryByText("Metered API")).toBeNull();
+    expect(screen.queryByText("Static routes")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Start proxy" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add Provider" })).toBeNull();
+
+    await user.click(screen.getByRole("tab", { name: "Metered usage" }));
+    expect(await screen.findByText("Metered API")).toBeInTheDocument();
+    expect(screen.queryByText("Official Subscription")).toBeNull();
     for (const label of legacyLabels) {
       expect(
         screen.queryByText(label, { exact: false }),

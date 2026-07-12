@@ -1,38 +1,33 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { UsageDateRangePicker } from "@/components/usage/UsageDateRangePicker";
-import { resolveUsageRange } from "@/lib/usageRange";
-import type { UsageRangeSelection } from "@/types/usage";
-import type { UsageProviderView } from "@/types/usageDashboard";
+import { useUsageEventBridge } from "@/hooks/useUsageEventBridge";
 import {
   useRefreshProviderQuota,
-  useRouteBindings,
-  useSaveUsageProvider,
-  useSetRouteBinding,
-  useSetUsageProviderEnabled,
   useSyncProviderSessionUsage,
   useUsageDashboard,
-  useUsageProviders,
 } from "@/lib/query/usageDashboard";
-import {
-  useIsProxyRunning,
-  useStartProxyServer,
-  useStopProxyServer,
-} from "@/lib/query/proxy";
-import { ProductUsageGroup } from "./ProductUsageGroup";
-import { RouteBindingsPanel } from "./RouteBindingsPanel";
-import { UsageProviderDialog } from "./UsageProviderDialog";
-import { useTranslation } from "react-i18next";
-import { useUsageEventBridge } from "@/hooks/useUsageEventBridge";
+import { resolveUsageRange } from "@/lib/usageRange";
+import type { UsageRangeSelection } from "@/types/usage";
+import type { DashboardModuleView } from "@/types/usageDashboard";
+import { ApiUsagePage } from "./ApiUsagePage";
+import { SubscriptionModulePage } from "./SubscriptionModulePage";
+import { projectDashboardModule } from "./usageDashboardProjection";
 
-export function UsageDashboardPage() {
+interface UsageDashboardPageProps {
+  selectedModule?: DashboardModuleView | null;
+  onOpenSettings?: () => void;
+}
+
+export function UsageDashboardPage({
+  selectedModule = null,
+  onOpenSettings,
+}: UsageDashboardPageProps) {
   const { t } = useTranslation();
   const [rangeClockMs, setRangeClockMs] = useState(() => Date.now());
-  const advanceRangeClock = useCallback(() => {
-    setRangeClockMs(Date.now());
-  }, []);
+  const advanceRangeClock = useCallback(() => setRangeClockMs(Date.now()), []);
   useUsageEventBridge(advanceRangeClock);
   useEffect(() => {
     const interval = globalThis.setInterval(advanceRangeClock, 30_000);
@@ -41,29 +36,22 @@ export function UsageDashboardPage() {
   const [selection, setSelection] = useState<UsageRangeSelection>({
     preset: "today",
   });
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [editing, setEditing] = useState<UsageProviderView | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [errors, setErrors] = useState<string[]>([]);
   const range = useMemo(
     () => resolveUsageRange(selection, rangeClockMs),
     [rangeClockMs, selection],
   );
-  const dashboard = useUsageDashboard(
-    range.startDate,
-    range.endDate,
-    undefined,
-  );
-  const providers = useUsageProviders();
-  const bindings = useRouteBindings();
-  const saveProvider = useSaveUsageProvider();
-  const setEnabled = useSetUsageProviderEnabled();
-  const setBinding = useSetRouteBinding();
+  const dashboard = useUsageDashboard(range.startDate, range.endDate);
   const refreshQuota = useRefreshProviderQuota();
   const syncSession = useSyncProviderSessionUsage();
-  const proxyRunning = useIsProxyRunning();
-  const startProxy = useStartProxyServer();
-  const stopProxy = useStopProxyServer();
+  const projection = useMemo(
+    () =>
+      selectedModule && dashboard.data
+        ? projectDashboardModule(selectedModule, dashboard.data)
+        : null,
+    [dashboard.data, selectedModule],
+  );
 
   const errorText = (cause: unknown) =>
     cause instanceof Error ? cause.message : String(cause);
@@ -84,87 +72,35 @@ export function UsageDashboardPage() {
     }
   };
 
-  const queryErrors = [
-    dashboard.error,
-    providers.error,
-    bindings.error,
-    proxyRunning.error,
-  ]
-    .filter((error) => error != null)
-    .map(errorText);
+  const queryErrors = dashboard.error ? [errorText(dashboard.error)] : [];
 
   return (
     <div className="space-y-4 pb-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-xl font-semibold">
-            {t("usageDashboard.title", { defaultValue: "Usage dashboard" })}
-          </h2>
-          <p className="text-sm text-muted-foreground">
-            {t("usageDashboard.description", {
-              defaultValue:
-                "Provider-aware tokens, costs and subscription quota",
-            })}
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {(["today", "7d", "30d"] as const).map((preset) => (
-            <Button
-              key={preset}
-              size="sm"
-              variant={selection.preset === preset ? "default" : "outline"}
-              aria-pressed={selection.preset === preset}
-              onClick={() => setSelection({ preset })}
-            >
-              {preset === "today"
-                ? t("usageDashboard.today", { defaultValue: "Today" })
-                : preset === "7d"
-                  ? t("usageDashboard.sevenDays", {
-                      defaultValue: "7 days",
-                    })
-                  : t("usageDashboard.thirtyDays", {
-                      defaultValue: "30 days",
-                    })}
-            </Button>
-          ))}
-          <UsageDateRangePicker
-            selection={selection}
-            onApply={setSelection}
-            triggerLabel={t("usageDashboard.customRange", {
-              defaultValue: "Custom range",
-            })}
-          />
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        {(["today", "7d", "30d"] as const).map((preset) => (
           <Button
+            key={preset}
             size="sm"
-            variant="outline"
-            onClick={() => {
-              setEditing(null);
-              setDialogOpen(true);
-            }}
+            variant={selection.preset === preset ? "default" : "outline"}
+            aria-pressed={selection.preset === preset}
+            onClick={() => setSelection({ preset })}
           >
-            {t("usageDashboard.addProvider", { defaultValue: "Add Provider" })}
+            {preset === "today"
+              ? t("usageDashboard.today", { defaultValue: "Today" })
+              : preset === "7d"
+                ? t("usageDashboard.sevenDays", { defaultValue: "7 days" })
+                : t("usageDashboard.thirtyDays", {
+                    defaultValue: "30 days",
+                  })}
           </Button>
-          <Button
-            size="sm"
-            disabled={
-              proxyRunning.isLoading ||
-              Boolean(proxyRunning.error) ||
-              startProxy.isPending ||
-              stopProxy.isPending
-            }
-            onClick={() =>
-              void run(() =>
-                proxyRunning.data
-                  ? stopProxy.mutateAsync()
-                  : startProxy.mutateAsync(),
-              )
-            }
-          >
-            {proxyRunning.data
-              ? t("usageDashboard.stopProxy", { defaultValue: "Stop proxy" })
-              : t("usageDashboard.startProxy", { defaultValue: "Start proxy" })}
-          </Button>
-        </div>
+        ))}
+        <UsageDateRangePicker
+          selection={selection}
+          onApply={setSelection}
+          triggerLabel={t("usageDashboard.customRange", {
+            defaultValue: "Custom range",
+          })}
+        />
       </div>
 
       {[...(dashboard.data?.warnings ?? []), ...warnings].map((warning) => (
@@ -182,105 +118,34 @@ export function UsageDashboardPage() {
         </Alert>
       ))}
 
-      <RouteBindingsPanel
-        providers={providers.data ?? []}
-        bindings={bindings.data ?? []}
-        onSave={(protocol, providerId) =>
-          setBinding.mutateAsync({ protocol, providerId })
-        }
-        isPending={setBinding.isPending}
-      />
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">
-            {t("usageDashboard.providers", { defaultValue: "Providers" })}
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-2">
-          {(providers.data ?? []).map((provider) => (
-            <div
-              key={provider.id}
-              data-testid={`provider-config-${provider.id}`}
-              className="flex items-center justify-between gap-3 rounded-lg border p-3"
-            >
-              <div>
-                <div className="font-medium">{provider.name}</div>
-                <div className="text-xs text-muted-foreground">
-                  {provider.billingKind === "subscription"
-                    ? t("usageDashboard.subscription", {
-                        defaultValue: "Subscription",
-                      })
-                    : t("usageDashboard.metered", {
-                        defaultValue: "Metered",
-                      })}{" "}
-                  · {provider.productGroupId}
-                </div>
-              </div>
-              <div className="flex gap-2">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => {
-                    setEditing(provider);
-                    setDialogOpen(true);
-                  }}
-                >
-                  {t("common.edit", { defaultValue: "Edit" })}
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={setEnabled.isPending}
-                  onClick={() =>
-                    void run(() =>
-                      setEnabled.mutateAsync({
-                        providerId: provider.id,
-                        enabled: !provider.enabled,
-                      }),
-                    )
-                  }
-                >
-                  {provider.enabled
-                    ? t("common.disable", { defaultValue: "Disable" })
-                    : t("common.enable", { defaultValue: "Enable" })}
-                </Button>
-              </div>
-            </div>
-          ))}
-        </CardContent>
-      </Card>
-
       {dashboard.isLoading ? (
         <div>{t("common.loading", { defaultValue: "Loading" })}</div>
-      ) : null}
-      {dashboard.data?.productGroups.map((product) => (
-        <ProductUsageGroup
-          key={product.productGroupId}
-          product={product}
-          startAt={range.startDate}
-          endAt={range.endDate}
-          onRefreshQuota={(id) => run(() => refreshQuota.mutateAsync(id))}
+      ) : !selectedModule ? (
+        <div className="rounded-lg border border-dashed p-8 text-center text-muted-foreground">
+          {t("dashboardModules.selectModule", {
+            defaultValue: "Select a usage module",
+          })}
+        </div>
+      ) : projection?.kind === "subscription" ? (
+        <SubscriptionModulePage
+          module={projection.module}
+          providers={projection.providers}
+          onOpenSettings={onOpenSettings}
+          onRefreshQuota={(providerId) =>
+            run(() => refreshQuota.mutateAsync(providerId))
+          }
           onSyncSessions={sync}
           isRefreshingQuota={refreshQuota.isPending}
           isSyncingSessions={syncSession.isPending}
         />
-      ))}
-      {!dashboard.isLoading && dashboard.data?.productGroups.length === 0 ? (
-        <div className="rounded-lg border border-dashed p-8 text-center text-muted-foreground">
-          {t("usageDashboard.empty", {
-            defaultValue: "No usage providers yet",
-          })}
-        </div>
+      ) : projection?.kind === "api" ? (
+        <ApiUsagePage
+          projection={projection}
+          startAt={range.startDate}
+          endAt={range.endDate}
+          onOpenSettings={onOpenSettings}
+        />
       ) : null}
-
-      <UsageProviderDialog
-        open={dialogOpen}
-        onOpenChange={setDialogOpen}
-        provider={editing}
-        onSave={(input) => saveProvider.mutateAsync(input)}
-        isPending={saveProvider.isPending}
-      />
     </div>
   );
 }
