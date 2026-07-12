@@ -86,7 +86,7 @@ jobs:
         if: runner.os != 'Windows' || matrix.arch != 'arm64'
         uses: pnpm/action-setup@v6
         with:
-          version: 10.12.3
+          version: 11.11.0
           run_install: false
 
       - name: Setup pnpm (Windows ARM64)
@@ -95,7 +95,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           corepack enable
-          corepack prepare pnpm@10.12.3 --activate
+          corepack prepare pnpm@11.11.0 --activate
           node --version
           pnpm --version
 

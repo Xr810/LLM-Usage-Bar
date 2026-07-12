@@ -35,6 +35,36 @@ import {
 const wrapperPath = path.resolve("scripts/with-cargo-target.mjs");
 const cacheCliPath = path.resolve("scripts/cargo-cache.mjs");
 
+function readBooleanMapping(yaml, mappingName) {
+  const lines = yaml.split(/\r?\n/);
+  const start = lines.findIndex((line) => line.trim() === `${mappingName}:`);
+  assert.notEqual(start, -1, `missing ${mappingName} mapping`);
+
+  const values = new Map();
+  for (const line of lines.slice(start + 1)) {
+    if (line.trim() === "") continue;
+    if (!/^\s/.test(line)) break;
+    const entry = line.match(
+      /^\s+(?:'([^']+)'|"([^"]+)"|([^:]+)):\s*(true|false)\s*$/,
+    );
+    assert.ok(entry, `invalid ${mappingName} entry: ${line}`);
+    values.set(entry[1] ?? entry[2] ?? entry[3].trim(), entry[4] === "true");
+  }
+  return values;
+}
+
+function workflowPnpmPins(workflow) {
+  const actionPins = Array.from(
+    workflow.matchAll(/^\s*version:\s*([0-9.]+)\s*$/gm),
+    (match) => match[1],
+  );
+  const corepackPins = Array.from(
+    workflow.matchAll(/corepack prepare pnpm@([0-9.]+) --activate/g),
+    (match) => match[1],
+  );
+  return [...actionPins, ...corepackPins];
+}
+
 test("project scripts route local Cargo and Tauri through the wrapper", () => {
   const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url)));
   assert.equal(pkg.scripts.tauri, "node scripts/with-cargo-target.mjs tauri");
@@ -42,21 +72,42 @@ test("project scripts route local Cargo and Tauri through the wrapper", () => {
   assert.equal(pkg.scripts["cargo:cache"], "node scripts/cargo-cache.mjs");
 });
 
+test("package metadata pins the pnpm build-policy runtime", () => {
+  const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url)));
+  assert.equal(pkg.packageManager, "pnpm@11.11.0");
+});
+
 test("pnpm 11 build policy explicitly allows trusted native builds", () => {
   const workspace = readFileSync(
     new URL("../pnpm-workspace.yaml", import.meta.url),
     "utf8",
   );
+  const allowBuilds = readBooleanMapping(workspace, "allowBuilds");
 
-  assert.match(
-    workspace,
-    /allowBuilds:\n  '@tailwindcss\/oxide': true\n  esbuild: true\n  msw: false\n?$/,
-  );
+  assert.equal(allowBuilds.get("@tailwindcss/oxide"), true);
+  assert.equal(allowBuilds.get("esbuild"), true);
+  assert.equal(allowBuilds.get("msw"), false);
   assert.doesNotMatch(
     workspace,
     /^\s*(?:onlyBuiltDependencies|ignoredBuiltDependencies):/m,
   );
   assert.doesNotMatch(workspace, /set this to true or false/);
+});
+
+test("CI and release workflows pin the pnpm build-policy runtime", () => {
+  const ci = readFileSync(
+    new URL("../.github/workflows/ci.yml", import.meta.url),
+    "utf8",
+  );
+  const release = readFileSync(
+    new URL("../.github/workflows/release.yml", import.meta.url),
+    "utf8",
+  );
+
+  assert.doesNotMatch(ci, /10\.12\.3/);
+  assert.doesNotMatch(release, /10\.12\.3/);
+  assert.deepEqual(workflowPnpmPins(ci), ["11.11.0"]);
+  assert.deepEqual(workflowPnpmPins(release), ["11.11.0", "11.11.0"]);
 });
 
 function git(cwd, ...args) {
