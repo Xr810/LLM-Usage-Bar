@@ -6,5 +6,6 @@ pub(crate) mod migration;
 pub mod quota;
 pub mod session;
 pub(crate) mod source_roots;
+pub(crate) mod watcher_state;
 
 pub use domain::*;
