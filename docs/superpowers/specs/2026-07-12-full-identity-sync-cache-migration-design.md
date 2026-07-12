@@ -147,10 +147,17 @@ checks reject aliases that resolve into `~/.cc-switch`.
 
 ### 2.2 Backup protocol
 
-1. Acquire an exclusive per-directory migration lease and re-check both
-   filenames plus the fixed archive path. An existing archive is evidence and
-   is never overwritten.
+1. Resolve the existing application directory to a stable safe location, pin
+   its filesystem identity, acquire an exclusive per-directory migration
+   lease there, and re-check that identity plus both filenames and the fixed
+   archive path before each mutation. An existing archive is evidence and is
+   never overwritten. A missing application directory is not created by the
+   filename migration; normal fresh-database initialization owns that step.
 2. Open the source read-only with SQLite.
+   Separately acquire a zero-timeout SQLite write barrier on the old source and
+   hold it from before the first snapshot until the old filename is atomically
+   retired. A concurrent/legacy writer therefore makes migration fail closed
+   instead of committing rows after the snapshot.
 3. Use `rusqlite::backup` to create a unique temporary destination in the same
    directory. This captures committed WAL content through SQLite rather than
    copying sidecar files manually.
@@ -160,16 +167,24 @@ checks reject aliases that resolve into `~/.cc-switch`.
    may be any validated version from 13 through the application's current
    supported schema, allowing both the publication-before-schema-migration
    crash window and subsequent v14 restarts while still rejecting future data.
-5. Flush and atomically publish the destination with no-clobber semantics. If
-   another valid new file already exists, it wins and the old file is retained.
+5. Flush and atomically publish the destination with a true same-filesystem
+   no-replace rename: `renameat2(RENAME_NOREPLACE)` on Linux,
+   `renameatx_np(RENAME_EXCL)` on macOS, and `MoveFileExW` without replace on
+   Windows. Unsupported kernels/filesystems fail closed; hard-link-plus-unlink
+   fallback is forbidden because a crash can retain a full hidden database.
+   If another valid new file already exists, it wins and the old file is retained.
 6. Materialize a second, independently owned complete SQLite snapshot from the
    validated backup, validate it, and publish it with no-clobber semantics as
    `cc-switch.db.pre-llm-usage-bar-v14`. The new database and archive must not
    share an inode/file identity, because schema v14 will mutate only the new
    database. This also ensures a crash-residue WAL is represented in both
    snapshots instead of archiving an incomplete main file under a new basename.
-7. Remove the old main filename only after both complete snapshots are durable.
-   Old WAL/SHM sidecars are no longer authoritative after that point.
+7. Retire the old main filename only after both complete snapshots are durable.
+   Move it atomically with no-replace semantics to a unique same-directory
+   quarantine, verify the moved object's pinned identity, then unlink that
+   private quarantine. Rollback uses the same move-then-verify pattern so a
+   check-then-unlink race cannot delete a replacement path. Old WAL/SHM
+   sidecars are no longer authoritative after the old-main commit point.
 8. If archiving or old-source removal fails after this invocation published the new file, remove
    only that invocation's output before releasing the lease. Every error path
    restores the old-only state or preserves an independently created new file.
