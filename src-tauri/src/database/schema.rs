@@ -13,6 +13,32 @@ struct LegacySkillMigrationRow {
     app_type: String,
 }
 
+/// Schema-v14 identity boundary for app-owned discriminators.
+///
+/// The real v13 schema has no product origin/provenance column and stores the
+/// writable Skill storage discriminator in `settings.json`, not SQLite. This
+/// function therefore validates the expected tables and deliberately performs
+/// no data rewrite. Future product-owned columns must be enumerated here rather
+/// than introduced through a global text/JSON replacement.
+#[allow(dead_code)] // Wired into the outer migration savepoint when schema v14 lands.
+pub(crate) fn migrate_app_owned_identity_v14(conn: &Connection) -> Result<(), AppError> {
+    for table in ["providers", "mcp_servers", "settings", "profiles"] {
+        if !Database::table_exists(conn, table)? {
+            return Err(AppError::Database(format!(
+                "schema v14 identity boundary is missing expected v13 table: {table}"
+            )));
+        }
+    }
+    let version = Database::get_user_version(conn)?;
+    if version != crate::product_identity::DATABASE_IDENTITY_SOURCE_SCHEMA_VERSION {
+        return Err(AppError::Database(format!(
+            "schema v14 identity boundary expected v{}, found v{version}",
+            crate::product_identity::DATABASE_IDENTITY_SOURCE_SCHEMA_VERSION
+        )));
+    }
+    Ok(())
+}
+
 impl Database {
     /// 创建所有数据库表
     pub(crate) fn create_tables(&self) -> Result<(), AppError> {

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{OnceLock, RwLock};
 
 use crate::app_config::AppType;
@@ -445,7 +445,7 @@ pub struct AppSettings {
     /// Skill 同步方式：auto（默认，优先 symlink）、symlink、copy
     #[serde(default)]
     pub skill_sync_method: SyncMethod,
-    /// Skill 存储位置：cc_switch（默认）或 unified（~/.agents/skills/）
+    /// Skill 存储位置：llm_usage_bar（默认）或 unified（~/.agents/skills/）
     #[serde(default)]
     pub skill_storage_location: SkillStorageLocation,
 
@@ -611,14 +611,37 @@ impl AppSettings {
         }
     }
 
-    fn load_from_file() -> Self {
-        let Some(path) = Self::settings_path() else {
-            return Self::default();
-        };
+    fn decode_settings_json(content: &str) -> Result<(Self, bool), serde_json::Error> {
+        let value: serde_json::Value = serde_json::from_str(content)?;
+        let used_legacy_storage_alias = value
+            .get("skillStorageLocation")
+            .and_then(serde_json::Value::as_str)
+            == Some("cc_switch");
+        let mut settings: Self = serde_json::from_value(value)?;
+        settings.normalize_paths();
+        Ok((settings, used_legacy_storage_alias))
+    }
+
+    fn load_from_path(path: &Path) -> Self {
+        Self::load_from_path_with_writer(path, save_settings_file_at)
+    }
+
+    fn load_from_path_with_writer<F>(path: &Path, write_canonical: F) -> Self
+    where
+        F: FnOnce(&Path, &AppSettings) -> Result<(), AppError>,
+    {
         if let Ok(content) = fs::read_to_string(&path) {
-            match serde_json::from_str::<AppSettings>(&content) {
-                Ok(mut settings) => {
-                    settings.normalize_paths();
+            match Self::decode_settings_json(&content) {
+                Ok((settings, used_legacy_storage_alias)) => {
+                    if used_legacy_storage_alias {
+                        if let Err(error) = write_canonical(path, &settings) {
+                            log::warn!(
+                                "已读取旧 skillStorageLocation，但规范化写回失败。路径: {}, 错误: {}",
+                                path.display(),
+                                error
+                            );
+                        }
+                    }
                     settings
                 }
                 Err(err) => {
@@ -634,14 +657,17 @@ impl AppSettings {
             Self::default()
         }
     }
+
+    fn load_from_file() -> Self {
+        Self::settings_path()
+            .map(|path| Self::load_from_path(&path))
+            .unwrap_or_default()
+    }
 }
 
-fn save_settings_file(settings: &AppSettings) -> Result<(), AppError> {
+fn save_settings_file_at(path: &Path, settings: &AppSettings) -> Result<(), AppError> {
     let mut normalized = settings.clone();
     normalized.normalize_paths();
-    let Some(path) = AppSettings::settings_path() else {
-        return Err(AppError::Config("无法获取用户主目录".to_string()));
-    };
 
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
@@ -671,6 +697,13 @@ fn save_settings_file(settings: &AppSettings) -> Result<(), AppError> {
     }
 
     Ok(())
+}
+
+fn save_settings_file(settings: &AppSettings) -> Result<(), AppError> {
+    let Some(path) = AppSettings::settings_path() else {
+        return Err(AppError::Config("无法获取用户主目录".to_string()));
+    };
+    save_settings_file_at(&path, settings)
 }
 
 static SETTINGS_STORE: OnceLock<RwLock<AppSettings>> = OnceLock::new();
@@ -1111,6 +1144,67 @@ pub fn update_s3_sync_status(status: WebDavSyncStatus) -> Result<(), AppError> {
 mod tests {
     use super::*;
     use crate::app_config::AppType;
+    use tempfile::tempdir;
+
+    #[test]
+    fn identity_discriminator_settings_load_rewrites_legacy_storage_value() {
+        let temp = tempdir().expect("create settings migration tempdir");
+        let path = temp.path().join("settings.json");
+        fs::write(
+            &path,
+            r#"{
+              "showInTray": true,
+              "minimizeToTrayOnClose": true,
+              "skillStorageLocation": "cc_switch",
+              "webdavSync": {
+                "baseUrl": "https://sync.example.test",
+                "username": "fixture",
+                "remoteRoot": "cc-switch-sync"
+              }
+            }"#,
+        )
+        .expect("write legacy settings");
+
+        let settings = AppSettings::load_from_path(&path);
+        assert_eq!(
+            settings.skill_storage_location,
+            SkillStorageLocation::LlmUsageBar
+        );
+
+        let rewritten: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).expect("read canonical settings"))
+                .expect("parse canonical settings");
+        assert_eq!(rewritten["skillStorageLocation"], "llm_usage_bar");
+        assert_eq!(rewritten["webdavSync"]["remoteRoot"], "cc-switch-sync");
+    }
+
+    #[test]
+    fn identity_discriminator_settings_keeps_decoded_value_when_rewrite_fails() {
+        let temp = tempdir().expect("create settings failure tempdir");
+        let path = temp.path().join("settings.json");
+        fs::write(
+            &path,
+            r#"{"skillStorageLocation":"cc_switch","language":"zh"}"#,
+        )
+        .expect("write legacy settings");
+
+        let write_attempted = std::cell::Cell::new(false);
+        let settings = AppSettings::load_from_path_with_writer(&path, |_, _| {
+            write_attempted.set(true);
+            Err(AppError::Config(
+                "injected canonicalization failure".to_string(),
+            ))
+        });
+        assert_eq!(
+            settings.skill_storage_location,
+            SkillStorageLocation::LlmUsageBar
+        );
+        assert_eq!(settings.language.as_deref(), Some("zh"));
+        assert!(write_attempted.get());
+        assert!(fs::read_to_string(&path)
+            .expect("read unchanged settings")
+            .contains("cc_switch"));
+    }
 
     #[test]
     fn device_settings_follow_the_isolated_app_data_directory() {

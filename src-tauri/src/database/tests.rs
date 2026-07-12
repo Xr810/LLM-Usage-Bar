@@ -11,6 +11,104 @@ use serde_json::json;
 use std::collections::HashMap;
 use tempfile::NamedTempFile;
 
+#[test]
+fn identity_discriminator_v13_database_preserves_unenumerated_text_and_json() -> Result<(), AppError>
+{
+    let conn = Connection::open_in_memory().expect("create fixed v13 database");
+    conn.execute_batch(
+        r#"
+        CREATE TABLE providers (
+            id TEXT NOT NULL,
+            app_type TEXT NOT NULL,
+            name TEXT NOT NULL,
+            settings_config TEXT NOT NULL,
+            meta TEXT NOT NULL DEFAULT '{}',
+            PRIMARY KEY (id, app_type)
+        );
+        CREATE TABLE mcp_servers (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            server_config TEXT NOT NULL
+        );
+        CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT);
+        CREATE TABLE profiles (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            payload TEXT NOT NULL
+        );
+        PRAGMA user_version = 13;
+        SAVEPOINT identity_discriminator_v14_test;
+        INSERT INTO providers (id, app_type, name, settings_config, meta)
+        VALUES ('external-cc-switch-provider', 'claude', 'External',
+                '{"remoteRoot":"cc-switch-sync"}',
+                '{"affiliate":"cc_switch"}');
+        INSERT INTO mcp_servers (id, name, server_config)
+        VALUES ('external-wire', 'External MCP', '{"protocol":"cc-switch-webdav-sync"}');
+        INSERT INTO profiles (id, name, payload)
+        VALUES ('legacy-profile', 'Imported', '{"providerId":"ccswitch"}');
+        INSERT INTO settings (key, value)
+        VALUES ('external_remote_root', 'cc-switch-sync');
+        "#,
+    )
+    .expect("seed identity boundary values");
+
+    let before: Vec<String> = [
+        "SELECT settings_config || '|' || meta FROM providers WHERE id='external-cc-switch-provider'",
+        "SELECT server_config FROM mcp_servers WHERE id='external-wire'",
+        "SELECT payload FROM profiles WHERE id='legacy-profile'",
+        "SELECT value FROM settings WHERE key='external_remote_root'",
+    ]
+    .into_iter()
+    .map(|sql| conn.query_row(sql, [], |row| row.get(0)).unwrap())
+    .collect();
+
+    super::schema::migrate_app_owned_identity_v14(&conn)
+        .expect("validate explicit no-op identity boundary");
+
+    let after: Vec<String> = [
+        "SELECT settings_config || '|' || meta FROM providers WHERE id='external-cc-switch-provider'",
+        "SELECT server_config FROM mcp_servers WHERE id='external-wire'",
+        "SELECT payload FROM profiles WHERE id='legacy-profile'",
+        "SELECT value FROM settings WHERE key='external_remote_root'",
+    ]
+    .into_iter()
+    .map(|sql| conn.query_row(sql, [], |row| row.get(0)).unwrap())
+    .collect();
+
+    assert_eq!(after, before);
+    conn.execute_batch(
+        "ROLLBACK TO identity_discriminator_v14_test; RELEASE identity_discriminator_v14_test;",
+    )
+    .expect("rollback identity boundary fixture");
+    Ok(())
+}
+
+#[test]
+fn identity_discriminator_v14_boundary_rejects_missing_expected_schema() {
+    let conn = Connection::open_in_memory().expect("open empty sqlite database");
+    let error = super::schema::migrate_app_owned_identity_v14(&conn)
+        .expect_err("missing v13 tables must fail closed");
+    assert!(error.to_string().contains("providers"));
+}
+
+#[test]
+fn identity_discriminator_v14_boundary_rejects_non_v13_schema() {
+    let conn = Connection::open_in_memory().expect("open wrong-version sqlite database");
+    conn.execute_batch(
+        r#"
+        CREATE TABLE providers (id TEXT);
+        CREATE TABLE mcp_servers (id TEXT);
+        CREATE TABLE settings (key TEXT);
+        CREATE TABLE profiles (id TEXT);
+        PRAGMA user_version = 12;
+        "#,
+    )
+    .expect("create wrong-version identity boundary");
+    let error = super::schema::migrate_app_owned_identity_v14(&conn)
+        .expect_err("non-v13 boundary must fail closed");
+    assert!(error.to_string().contains("expected v13, found v12"));
+}
+
 const LEGACY_SCHEMA_SQL: &str = r#"
     CREATE TABLE providers (
         id TEXT NOT NULL,

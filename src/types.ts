@@ -232,7 +232,7 @@ export interface ProviderMeta {
 export type SkillSyncMethod = "auto" | "symlink" | "copy";
 
 // Skill 存储位置
-export type SkillStorageLocation = "cc_switch" | "unified";
+export type SkillStorageLocation = "llm_usage_bar" | "unified";
 
 // Claude API 格式类型
 // - "anthropic": 原生 Anthropic Messages API 格式，直接透传
@@ -405,7 +405,7 @@ export interface Settings {
   // ===== Skill 同步设置 =====
   // Skill 同步方式：auto（默认，优先 symlink）、symlink、copy
   skillSyncMethod?: SkillSyncMethod;
-  // Skill 存储位置：cc_switch（默认）或 unified（~/.agents/skills/）
+  // Skill 存储位置：llm_usage_bar（默认）或 unified（~/.agents/skills/）
   skillStorageLocation?: SkillStorageLocation;
 
   // ===== WebDAV v2 同步设置 =====
