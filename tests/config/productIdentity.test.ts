@@ -56,14 +56,14 @@ describe("app-owned identity discriminators", () => {
     expect(
       classifyOldIdentityOccurrence(
         "src-tauri/src/settings.rs",
-        98,
+        99,
         '    "cc-switch-sync".to_string()',
       )?.kind,
     ).toBe("externalWireStable");
     expect(
       classifyOldIdentityOccurrence(
         "src-tauri/src/product_identity.rs",
-        9,
+        11,
         'pub const LEGACY_DATA_DIR: &str = ".cc-switch";',
       )?.kind,
     ).toBe("legacyReadOnly");
@@ -85,10 +85,13 @@ describe("app-owned identity discriminators", () => {
           `${occurrence.file} still contains ${occurrence.context}`,
         ).not.toContain(occurrence.context);
       } else {
+        const actualLine = source
+          .split("\n")
+          [occurrence.lineNumber - 1]?.trim();
         expect(
-          source,
-          `${occurrence.file} lost ${occurrence.context}`,
-        ).toContain(occurrence.context);
+          actualLine,
+          `${occurrence.file}:${occurrence.lineNumber} changed`,
+        ).toBe(occurrence.context);
       }
     }
   });

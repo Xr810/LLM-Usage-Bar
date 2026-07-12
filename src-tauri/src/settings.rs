@@ -3,6 +3,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{OnceLock, RwLock};
+use tempfile::NamedTempFile;
 
 use crate::app_config::AppType;
 use crate::error::AppError;
@@ -611,30 +612,44 @@ impl AppSettings {
         }
     }
 
-    fn decode_settings_json(content: &str) -> Result<(Self, bool), serde_json::Error> {
-        let value: serde_json::Value = serde_json::from_str(content)?;
+    fn decode_settings_json(
+        content: &str,
+    ) -> Result<(Self, Option<serde_json::Value>), serde_json::Error> {
+        let mut value: serde_json::Value = serde_json::from_str(content)?;
         let used_legacy_storage_alias = value
             .get("skillStorageLocation")
             .and_then(serde_json::Value::as_str)
             == Some("cc_switch");
-        let mut settings: Self = serde_json::from_value(value)?;
+        let mut settings: Self = serde_json::from_value(value.clone())?;
         settings.normalize_paths();
-        Ok((settings, used_legacy_storage_alias))
+        let canonical_value = if used_legacy_storage_alias {
+            value
+                .as_object_mut()
+                .expect("typed AppSettings JSON must be an object")
+                .insert(
+                    "skillStorageLocation".to_string(),
+                    serde_json::Value::String("llm_usage_bar".to_string()),
+                );
+            Some(value)
+        } else {
+            None
+        };
+        Ok((settings, canonical_value))
     }
 
     fn load_from_path(path: &Path) -> Self {
-        Self::load_from_path_with_writer(path, save_settings_file_at)
+        Self::load_from_path_with_writer(path, write_canonical_settings_value)
     }
 
     fn load_from_path_with_writer<F>(path: &Path, write_canonical: F) -> Self
     where
-        F: FnOnce(&Path, &AppSettings) -> Result<(), AppError>,
+        F: FnOnce(&Path, &serde_json::Value) -> Result<(), AppError>,
     {
         if let Ok(content) = fs::read_to_string(&path) {
             match Self::decode_settings_json(&content) {
-                Ok((settings, used_legacy_storage_alias)) => {
-                    if used_legacy_storage_alias {
-                        if let Err(error) = write_canonical(path, &settings) {
+                Ok((settings, canonical_value)) => {
+                    if let Some(canonical_value) = canonical_value.as_ref() {
+                        if let Err(error) = write_canonical(path, canonical_value) {
                             log::warn!(
                                 "已读取旧 skillStorageLocation，但规范化写回失败。路径: {}, 错误: {}",
                                 path.display(),
@@ -665,38 +680,52 @@ impl AppSettings {
     }
 }
 
+fn write_settings_json_atomically(path: &Path, json: &str) -> Result<(), AppError> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| AppError::Config("无效的设置文件路径".to_string()))?;
+    fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
+
+    let mut temp = NamedTempFile::new_in(parent).map_err(|e| AppError::io(parent, e))?;
+    temp.write_all(json.as_bytes())
+        .map_err(|e| AppError::io(temp.path(), e))?;
+    temp.flush().map_err(|e| AppError::io(temp.path(), e))?;
+    temp.as_file()
+        .sync_all()
+        .map_err(|e| AppError::io(temp.path(), e))?;
+
+    #[cfg(unix)]
+    if let Ok(metadata) = fs::metadata(path) {
+        fs::set_permissions(temp.path(), metadata.permissions())
+            .map_err(|e| AppError::io(temp.path(), e))?;
+    }
+
+    temp.persist(path).map_err(|error| AppError::IoContext {
+        context: format!("原子替换设置文件失败: {}", path.display()),
+        source: error.error,
+    })?;
+
+    #[cfg(unix)]
+    fs::File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|e| AppError::io(parent, e))?;
+
+    Ok(())
+}
+
+fn write_canonical_settings_value(path: &Path, value: &serde_json::Value) -> Result<(), AppError> {
+    let json =
+        serde_json::to_string_pretty(value).map_err(|e| AppError::JsonSerialize { source: e })?;
+    write_settings_json_atomically(path, &json)
+}
+
 fn save_settings_file_at(path: &Path, settings: &AppSettings) -> Result<(), AppError> {
     let mut normalized = settings.clone();
     normalized.normalize_paths();
 
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
-    }
-
     let json = serde_json::to_string_pretty(&normalized)
         .map_err(|e| AppError::JsonSerialize { source: e })?;
-    #[cfg(unix)]
-    {
-        use std::fs::OpenOptions;
-        use std::os::unix::fs::OpenOptionsExt;
-
-        let mut file = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&path)
-            .map_err(|e| AppError::io(&path, e))?;
-        file.write_all(json.as_bytes())
-            .map_err(|e| AppError::io(&path, e))?;
-    }
-
-    #[cfg(not(unix))]
-    {
-        fs::write(&path, json).map_err(|e| AppError::io(&path, e))?;
-    }
-
-    Ok(())
+    write_settings_json_atomically(path, &json)
 }
 
 fn save_settings_file(settings: &AppSettings) -> Result<(), AppError> {
@@ -1160,6 +1189,10 @@ mod tests {
                 "baseUrl": "https://sync.example.test",
                 "username": "fixture",
                 "remoteRoot": "cc-switch-sync"
+              },
+              "futurePluginSetting": {
+                "identity": "cc-switch-plugin-wire",
+                "enabled": true
               }
             }"#,
         )
@@ -1176,6 +1209,13 @@ mod tests {
                 .expect("parse canonical settings");
         assert_eq!(rewritten["skillStorageLocation"], "llm_usage_bar");
         assert_eq!(rewritten["webdavSync"]["remoteRoot"], "cc-switch-sync");
+        assert_eq!(
+            rewritten["futurePluginSetting"],
+            serde_json::json!({
+                "identity": "cc-switch-plugin-wire",
+                "enabled": true
+            })
+        );
     }
 
     #[test]
