@@ -9,7 +9,7 @@
 //! ```
 
 use crate::config::get_claude_config_dir;
-use crate::database::{lock_conn, Database};
+use crate::database::{lock_conn, Database, UsageSyncCursor};
 use crate::error::AppError;
 use crate::proxy::usage::calculator::{CostCalculator, ModelPricing};
 use crate::proxy::usage::parser::TokenUsage;
@@ -227,7 +227,7 @@ fn sync_single_file(
     let file_modified = metadata_modified_nanos(&metadata);
 
     // 检查同步状态
-    let (last_modified, last_offset) = get_sync_state(db, &file_path_str)?;
+    let (last_modified, last_offset) = get_sync_state(db, "claude", &file_path_str)?;
 
     // 文件未变化则跳过
     if file_modified <= last_modified {
@@ -398,7 +398,7 @@ fn sync_single_file(
     }
 
     // 更新同步状态
-    update_sync_state(db, &file_path_str, file_modified, line_offset)?;
+    update_sync_state(db, "claude", &file_path_str, file_modified, line_offset)?;
 
     Ok((imported, skipped))
 }
@@ -465,23 +465,24 @@ fn current_timestamp() -> i64 {
         .unwrap_or(0)
 }
 
-/// 获取 session_log_sync 表中某条目的同步进度。
+/// 获取 v14 `usage_sync_cursors` 中某条目的同步进度。
 ///
 /// Shared by all session_usage_* parsers.
-pub(crate) fn get_sync_state(db: &Database, file_path: &str) -> Result<(i64, i64), AppError> {
-    let conn = lock_conn!(db.conn);
-    let result = conn.query_row(
-        "SELECT last_modified, last_line_offset FROM session_log_sync WHERE file_path = ?1",
-        rusqlite::params![file_path],
-        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
-    );
-    Ok(result.unwrap_or((0, 0)))
+pub(crate) fn get_sync_state(
+    db: &Database,
+    source: &str,
+    cursor_key: &str,
+) -> Result<(i64, i64), AppError> {
+    Ok(db
+        .get_usage_sync_cursor(source, cursor_key)?
+        .map(|cursor| (cursor.modified_at_ns, cursor.line_offset))
+        .unwrap_or((0, 0)))
 }
 
 /// 返回文件 mtime 的纳秒时间戳。
 ///
-/// `session_log_sync.last_modified` 旧数据是秒级时间戳；新写入纳秒值不需要
-/// schema 迁移，旧值会自然触发一次增量重扫，并继续依赖行 offset 避免重复导入。
+/// v13 `session_log_sync.last_modified` 旧数据是秒级时间戳；迁移后的新写入
+/// 使用纳秒值，旧值会自然触发一次增量重扫，并继续依赖行 offset 避免重复导入。
 pub(crate) fn metadata_modified_nanos(metadata: &fs::Metadata) -> i64 {
     metadata
         .modified()
@@ -491,12 +492,13 @@ pub(crate) fn metadata_modified_nanos(metadata: &fs::Metadata) -> i64 {
         .unwrap_or(0)
 }
 
-/// 更新 session_log_sync 表中某条目的同步进度。
+/// 更新 v14 `usage_sync_cursors` 中某条目的同步进度。
 ///
 /// Shared by all session_usage_* parsers.
 pub(crate) fn update_sync_state(
     db: &Database,
-    file_path: &str,
+    source: &str,
+    cursor_key: &str,
     last_modified: i64,
     last_offset: i64,
 ) -> Result<(), AppError> {
@@ -505,14 +507,29 @@ pub(crate) fn update_sync_state(
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
 
-    let conn = lock_conn!(db.conn);
-    conn.execute(
-        "INSERT OR REPLACE INTO session_log_sync (file_path, last_modified, last_line_offset, last_synced_at)
-         VALUES (?1, ?2, ?3, ?4)",
-        rusqlite::params![file_path, last_modified, last_offset, now],
-    )
-    .map_err(|e| AppError::Database(format!("更新同步状态失败: {e}")))?;
-    Ok(())
+    let existing = db.get_usage_sync_cursor(source, cursor_key)?;
+    db.put_usage_sync_cursor(&UsageSyncCursor {
+        source: source.to_string(),
+        cursor_key: cursor_key.to_string(),
+        resource_path: Some(cursor_key.to_string()),
+        resource_identity: existing
+            .as_ref()
+            .and_then(|cursor| cursor.resource_identity.clone()),
+        modified_at_ns: last_modified,
+        size_bytes: existing
+            .as_ref()
+            .map(|cursor| cursor.size_bytes)
+            .unwrap_or(0),
+        byte_offset: existing
+            .as_ref()
+            .map(|cursor| cursor.byte_offset)
+            .unwrap_or(0),
+        line_offset: last_offset,
+        parser_state_json: existing
+            .as_ref()
+            .and_then(|cursor| cursor.parser_state_json.clone()),
+        last_success_at: now,
+    })
 }
 
 /// 插入单条会话日志到 proxy_request_logs，返回是否成功插入 (true=新插入, false=已存在)
@@ -673,6 +690,28 @@ pub fn get_data_source_breakdown(db: &Database) -> Result<Vec<DataSourceSummary>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sync_state_round_trips_through_v14_cursor_table() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let cursor_key = "/tmp/claude-session.jsonl";
+
+        assert_eq!(get_sync_state(&db, "claude", cursor_key)?, (0, 0));
+        update_sync_state(&db, "claude", cursor_key, 42, 7)?;
+
+        assert_eq!(get_sync_state(&db, "claude", cursor_key)?, (42, 7));
+        let cursor = db
+            .get_usage_sync_cursor("claude", cursor_key)?
+            .expect("sync state must be stored in the v14 cursor table");
+        assert_eq!(cursor.resource_path.as_deref(), Some(cursor_key));
+        let conn = lock_conn!(db.conn);
+        assert!(
+            !Database::table_exists(&conn, "session_log_sync")?,
+            "v14 session sync must not recreate the retired table"
+        );
+
+        Ok(())
+    }
 
     #[test]
     fn test_parse_usage_from_jsonl_line() {
@@ -943,7 +982,7 @@ mod tests {
             )?;
         }
         assert!(sync_single_file(&db, &file, Some("claude-sub")).is_err());
-        assert_eq!(get_sync_state(&db, &file_key)?, (0, 0));
+        assert_eq!(get_sync_state(&db, "claude", &file_key)?, (0, 0));
 
         {
             let conn = lock_conn!(db.conn);
@@ -951,7 +990,7 @@ mod tests {
         }
         let (imported, skipped) = sync_single_file(&db, &file, Some("claude-sub"))?;
         assert_eq!((imported, skipped), (1, 0));
-        assert_eq!(get_sync_state(&db, &file_key)?.1, 1);
+        assert_eq!(get_sync_state(&db, "claude", &file_key)?.1, 1);
 
         fs::remove_dir_all(&tmp).ok();
         Ok(())

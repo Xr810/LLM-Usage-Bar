@@ -276,7 +276,7 @@ fn sync_single_codex_file(
     let file_modified = metadata_modified_nanos(&metadata);
 
     // 检查同步状态
-    let (last_modified, last_offset) = get_sync_state(db, &file_path_str)?;
+    let (last_modified, last_offset) = get_sync_state(db, "codex", &file_path_str)?;
 
     // 文件未变化则跳过
     if file_modified <= last_modified {
@@ -475,7 +475,7 @@ fn sync_single_codex_file(
     }
 
     // 更新同步状态
-    update_sync_state(db, &file_path_str, file_modified, line_offset)?;
+    update_sync_state(db, "codex", &file_path_str, file_modified, line_offset)?;
 
     Ok((imported, skipped))
 }
