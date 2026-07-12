@@ -1,6 +1,6 @@
 # Current Task State
 
-Last checkpoint: 2026-07-12 02:15 Asia/Singapore
+Last checkpoint: 2026-07-12 09:46 Asia/Singapore
 
 Branch: `codex/usage-dashboard-backend`
 
@@ -27,6 +27,7 @@ Complete `docs/superpowers/plans/2026-07-11-usage-dashboard-backend-implementati
 - Task 8 — legacy main-path exit, real proxy E2E/runbook, desktop shell/live refresh/tests and all whole-branch review fixes: complete and independently reviewed.
 - Final gate — Rust 1.95, all frontend tests, TypeScript, renderer build, static request-path scan, real proxy E2E and diff check: complete.
 - PR #6 CI follow-up — complete. Initial backend Clippy failures were fixed without lint suppression, independently reviewed, pushed, and verified by a fully green remediation run.
+- Dependabot PR #4/#5 follow-up — failures diagnosed but intentionally not fixed in this task. Full evidence and repair handoff: `docs/task-state/2026-07-12-dependabot-ci-failures-handoff.md`.
 
 ## Completed commits in this implementation
 
@@ -172,5 +173,6 @@ Using repository-pinned Rust 1.95 temporary toolchain environment:
 
 ## Immediate next actions
 
-1. No required implementation or CI remediation work remains for this plan.
-2. Keep optional original-data import deferred unless a future explicit read-only snapshot workflow is requested.
+1. No required implementation or PR #6 CI remediation work remains for this plan.
+2. Handle Dependabot PR #4 and #5 in a separate task using `docs/task-state/2026-07-12-dependabot-ci-failures-handoff.md`.
+3. Keep optional original-data import deferred unless a future explicit read-only snapshot workflow is requested.
