@@ -245,7 +245,7 @@ Synchronize the selected ID and local storage in effects. Never select by module
 
 - [ ] **Step 5: Implement the switcher with Radix Tabs**
 
-Use `Tabs`, `TabsList`, and `TabsTrigger` from `src/components/ui/tabs.tsx`. Give the list `aria-label={t("dashboardModules.navigation")}`, place it in an `overflow-x-auto` wrapper, keep labels readable with `whitespace-nowrap`, and call only `onSelect(value)` from `onValueChange`.
+Use `Tabs`, `TabsList`, and `TabsTrigger` from `src/components/ui/tabs.tsx`. Give the list `aria-label={t("dashboardModules.navigation")}`, place it in an `overflow-x-auto` wrapper, keep labels readable with `whitespace-nowrap`, and call only `onSelect(value)` from `onValueChange`. When more than four modules are visible, also render an accessible `More modules` dropdown that lists the same stable IDs; it supplements horizontal scrolling and never replaces keyboard-accessible Tabs.
 
 - [ ] **Step 6: Wire navigation into App**
 

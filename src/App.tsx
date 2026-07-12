@@ -2,16 +2,24 @@ import { useState } from "react";
 import { Maximize2, Minus, Settings, X } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Button } from "@/components/ui/button";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { SettingsPage } from "@/components/settings/SettingsPage";
 import { UsageDashboardPage } from "@/components/usage-dashboard/UsageDashboardPage";
+import { DashboardModuleSwitcher } from "@/components/usage-dashboard/DashboardModuleSwitcher";
+import { useDashboardModuleSelection } from "@/components/usage-dashboard/useDashboardModuleSelection";
 import { useTranslation } from "react-i18next";
 import { useSettingsQuery } from "@/lib/query";
+import { useDashboardModules } from "@/lib/query/usageDashboard";
 import { isMac } from "@/lib/platform";
 
 export default function App() {
   const { t } = useTranslation();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const { data: settings } = useSettingsQuery();
+  const modules = useDashboardModules();
+  const { selectedModule, selectModule } = useDashboardModuleSelection(
+    modules.data ?? [],
+  );
   const useAppWindowControls = settings?.useAppWindowControls ?? false;
 
   const runWindowAction = async (
@@ -35,21 +43,18 @@ export default function App() {
         />
       ) : null}
       <header
-        className="flex shrink-0 items-center justify-between border-b border-border/70 px-6 py-3"
+        className="grid shrink-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-4 border-b border-border/70 px-6 py-3"
         data-tauri-drag-region
         style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
       >
-        <div>
-          <h1 className="text-lg font-semibold">
-            {t("app.title", { defaultValue: "LLM Usage Bar" })}
-          </h1>
-          <p className="text-xs text-muted-foreground">
-            {t("usageDashboard.description", {
-              defaultValue:
-                "Provider-aware tokens, costs and subscription quota",
-            })}
-          </p>
-        </div>
+        <h1 className="text-lg font-semibold">
+          {t("app.title", { defaultValue: "LLM Usage Bar" })}
+        </h1>
+        <DashboardModuleSwitcher
+          modules={modules.data ?? []}
+          selectedModuleId={selectedModule?.id ?? ""}
+          onSelect={selectModule}
+        />
         <div
           className="flex items-center gap-1"
           style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
@@ -103,13 +108,51 @@ export default function App() {
       </header>
 
       <main className="min-h-0 flex-1 overflow-y-auto px-6 pt-5">
-        <UsageDashboardPage />
+        {modules.error ? (
+          <Alert variant="destructive">
+            <AlertDescription className="flex items-center justify-between gap-3">
+              <span>
+                {modules.error instanceof Error
+                  ? modules.error.message
+                  : String(modules.error)}
+              </span>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => void modules.refetch()}
+              >
+                {t("common.retry", { defaultValue: "Retry" })}
+              </Button>
+            </AlertDescription>
+          </Alert>
+        ) : modules.isLoading ? (
+          <div>{t("common.loading", { defaultValue: "Loading" })}</div>
+        ) : selectedModule ? (
+          <UsageDashboardPage />
+        ) : (
+          <div className="rounded-lg border border-dashed p-8 text-center">
+            <p className="text-sm text-muted-foreground">
+              {t("dashboardModules.noneVisible", {
+                defaultValue: "No visible usage modules",
+              })}
+            </p>
+            <Button
+              className="mt-3"
+              size="sm"
+              onClick={() => setSettingsOpen(true)}
+            >
+              {t("dashboardModules.manage", {
+                defaultValue: "Manage usage modules",
+              })}
+            </Button>
+          </div>
+        )}
       </main>
 
       <SettingsPage
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
-        defaultTab="usage"
+        defaultTab="modules"
       />
     </div>
   );

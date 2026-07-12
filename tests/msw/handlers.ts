@@ -40,6 +40,28 @@ const withJson = async <T>(request: Request): Promise<T> => {
 const success = <T>(payload: T) => HttpResponse.json(payload as any);
 
 export const handlers = [
+  http.post(`${TAURI_ENDPOINT}/list_dashboard_modules`, () =>
+    success([
+      {
+        id: "module-subscription",
+        name: "Personal usage",
+        kind: "subscription",
+        sortOrder: 1,
+        visible: true,
+        isSystem: false,
+        providerCount: 1,
+      },
+      {
+        id: "module-api",
+        name: "Metered usage",
+        kind: "api",
+        sortOrder: 2,
+        visible: true,
+        isSystem: true,
+        providerCount: 1,
+      },
+    ]),
+  ),
   http.post(`${TAURI_ENDPOINT}/list_usage_providers`, () =>
     success([
       {
@@ -57,6 +79,7 @@ export const handlers = [
         updatedAt: 1,
         routeBaseUrl: null,
         hasRouteCredentials: false,
+        dashboardModuleId: "module-subscription",
       },
       {
         id: "metered-api",
@@ -73,6 +96,7 @@ export const handlers = [
         updatedAt: 2,
         routeBaseUrl: "https://api.example.com",
         hasRouteCredentials: true,
+        dashboardModuleId: null,
       },
     ]),
   ),
@@ -99,6 +123,7 @@ export const handlers = [
       updatedAt: 1,
       routeBaseUrl: null,
       hasRouteCredentials: false,
+      dashboardModuleId: "module-subscription",
     };
     const metered = {
       id: "metered-api",
@@ -115,6 +140,7 @@ export const handlers = [
       updatedAt: 2,
       routeBaseUrl: "https://api.example.com",
       hasRouteCredentials: true,
+      dashboardModuleId: null,
     };
     return success({
       startAt,
