@@ -10,6 +10,11 @@ pub const LEGACY_DISPLAY_NAME: &str = "CC Switch";
 pub const LEGACY_SLUG: &str = "cc-switch";
 pub const LEGACY_DATA_DIR: &str = ".cc-switch";
 pub const LEGACY_DATABASE_FILE: &str = "cc-switch.db";
+/// Database filename migration accepts the last release schema as its source
+/// even after later application schema versions are introduced.
+pub const DATABASE_IDENTITY_SOURCE_SCHEMA_VERSION: i32 = 13;
+pub const DATABASE_IDENTITY_ARCHIVE_FILE: &str = "cc-switch.db.pre-llm-usage-bar-v14";
+pub const DATABASE_IDENTITY_LEASE_FILE: &str = ".llm-usage-bar-database-migration.lock";
 
 pub fn current_database_path(app_dir: &std::path::Path) -> PathBuf {
     app_dir.join(DATABASE_FILE)
@@ -36,6 +41,15 @@ mod tests {
         assert_eq!(LEGACY_SLUG, "cc-switch");
         assert_eq!(LEGACY_DATA_DIR, ".cc-switch");
         assert_eq!(LEGACY_DATABASE_FILE, "cc-switch.db");
+        assert_eq!(DATABASE_IDENTITY_SOURCE_SCHEMA_VERSION, 13);
+        assert_eq!(
+            DATABASE_IDENTITY_ARCHIVE_FILE,
+            "cc-switch.db.pre-llm-usage-bar-v14"
+        );
+        assert_eq!(
+            DATABASE_IDENTITY_LEASE_FILE,
+            ".llm-usage-bar-database-migration.lock"
+        );
         assert_ne!(APP_SLUG, LEGACY_SLUG);
     }
 

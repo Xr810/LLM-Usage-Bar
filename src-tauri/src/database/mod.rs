@@ -25,6 +25,7 @@
 
 pub(crate) mod backup;
 mod dao;
+mod identity_migration;
 mod migration;
 mod schema;
 
