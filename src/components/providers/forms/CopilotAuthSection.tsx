@@ -11,9 +11,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { GitHubIcon } from "@/components/BrandIcons";
 import {
   Loader2,
-  Github,
   LogOut,
   Copy,
   Check,
@@ -280,7 +280,7 @@ export const CopilotAuthSection: React.FC<CopilotAuthSectionProps> = ({
           variant="outline"
           disabled={deploymentType === "enterprise" && !enterpriseDomain.trim()}
         >
-          <Github className="mr-2 h-4 w-4" />
+          <GitHubIcon className="mr-2 h-4 w-4" />
           {t("copilot.loginWithGitHub", "使用 GitHub 登录")}
         </Button>
       )}
