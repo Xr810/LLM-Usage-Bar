@@ -107,7 +107,7 @@ test("CI and release workflows pin the pnpm build-policy runtime", () => {
   assert.doesNotMatch(ci, /10\.12\.3/);
   assert.doesNotMatch(release, /10\.12\.3/);
   assert.deepEqual(workflowPnpmPins(ci), ["11.11.0"]);
-  assert.deepEqual(workflowPnpmPins(release), ["11.11.0", "11.11.0"]);
+  assert.deepEqual(workflowPnpmPins(release), ["11.11.0"]);
 });
 
 function git(cwd, ...args) {

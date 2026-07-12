@@ -19,7 +19,7 @@ fn ensure_test_home() -> &'static Path {
         ));
         let _ = fs::remove_dir_all(&base);
         fs::create_dir_all(&base).expect("create isolated test home");
-        std::env::set_var("CC_SWITCH_TEST_HOME", &base);
+        std::env::set_var("LLM_USAGE_BAR_TEST_HOME", &base);
         std::env::set_var("HOME", &base);
         base
     })

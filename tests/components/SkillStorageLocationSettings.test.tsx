@@ -63,7 +63,9 @@ describe("SkillStorageLocationSettings", () => {
     );
 
     fireEvent.click(
-      screen.getByRole("button", { name: "settings.skillStorage.ccSwitch" }),
+      screen.getByRole("button", {
+        name: "settings.skillStorage.llmUsageBar",
+      }),
     );
 
     await waitFor(() =>
@@ -83,7 +85,9 @@ describe("SkillStorageLocationSettings", () => {
     );
 
     fireEvent.click(
-      screen.getByRole("button", { name: "settings.skillStorage.ccSwitch" }),
+      screen.getByRole("button", {
+        name: "settings.skillStorage.llmUsageBar",
+      }),
     );
     fireEvent.click(screen.getByRole("button", { name: "common.confirm" }));
 

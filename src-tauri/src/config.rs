@@ -8,22 +8,17 @@ use crate::error::AppError;
 
 /// 获取用户主目录，带回退和日志
 ///
-/// ## Windows 注意事项
-///
-/// - `dirs::home_dir()` 在 Windows 上使用 `SHGetKnownFolderPath(FOLDERID_Profile)`，
-///   返回的是真实用户目录（类似 `C:\\Users\\Alice`），与 v3.10.2 行为一致。
-/// - 不要直接使用 `HOME` 环境变量：它可能由 Git/Cygwin/MSYS 等第三方工具注入，
-///   且不一定等于用户目录，可能导致应用数据路径变化，从而“看起来像数据丢失”。
-///
 /// ## 测试隔离
 ///
-/// 为了让 Windows CI/本地测试能稳定隔离真实用户数据，可通过 `CC_SWITCH_TEST_HOME`
-/// 显式覆盖 home dir（仅用于测试/调试场景）。
+/// `LLM_USAGE_BAR_TEST_HOME` 是当前覆盖名；`CC_SWITCH_TEST_HOME` 仅作为旧测试和
+/// 调试脚本的只读兼容别名。
 pub fn get_home_dir() -> PathBuf {
-    if let Ok(home) = std::env::var("CC_SWITCH_TEST_HOME") {
-        let trimmed = home.trim();
-        if !trimmed.is_empty() {
-            return PathBuf::from(trimmed);
+    for key in ["LLM_USAGE_BAR_TEST_HOME", "CC_SWITCH_TEST_HOME"] {
+        if let Ok(home) = std::env::var(key) {
+            let trimmed = home.trim();
+            if !trimmed.is_empty() {
+                return PathBuf::from(trimmed);
+            }
         }
     }
 
@@ -380,6 +375,44 @@ pub fn atomic_write(path: &Path, data: &[u8]) -> Result<(), AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
+    use std::ffi::OsString;
+
+    struct HomeEnvRestore {
+        current: Option<OsString>,
+        legacy: Option<OsString>,
+    }
+
+    impl Drop for HomeEnvRestore {
+        fn drop(&mut self) {
+            match self.current.take() {
+                Some(value) => std::env::set_var("LLM_USAGE_BAR_TEST_HOME", value),
+                None => std::env::remove_var("LLM_USAGE_BAR_TEST_HOME"),
+            }
+            match self.legacy.take() {
+                Some(value) => std::env::set_var("CC_SWITCH_TEST_HOME", value),
+                None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+            }
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn test_home_env_prefers_current_name_and_falls_back_to_legacy_alias() {
+        let _restore = HomeEnvRestore {
+            current: std::env::var_os("LLM_USAGE_BAR_TEST_HOME"),
+            legacy: std::env::var_os("CC_SWITCH_TEST_HOME"),
+        };
+        let current = std::env::temp_dir().join("llm-usage-bar-current-test-home");
+        let legacy = std::env::temp_dir().join("llm-usage-bar-legacy-test-home");
+
+        std::env::set_var("CC_SWITCH_TEST_HOME", &legacy);
+        std::env::set_var("LLM_USAGE_BAR_TEST_HOME", &current);
+        assert_eq!(get_home_dir(), current);
+
+        std::env::remove_var("LLM_USAGE_BAR_TEST_HOME");
+        assert_eq!(get_home_dir(), legacy);
+    }
 
     #[test]
     fn app_data_directory_is_distinct_from_original_cc_switch() {

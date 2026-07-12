@@ -123,6 +123,8 @@ describe("useSettingsForm Hook", () => {
 
     const lang = result.current.readPersistedLanguage();
     expect(lang).toBe("en");
+    expect(window.localStorage.getItem("llm-usage-bar:language")).toBe("en");
+    expect(window.localStorage.getItem("language")).toBeNull();
     expect(changeLanguageSpy).not.toHaveBeenCalled();
   });
 

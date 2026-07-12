@@ -3,7 +3,7 @@
 //! Parses ccswitch:// URLs into DeepLinkImportRequest structures.
 
 use super::utils::validate_url;
-use super::DeepLinkImportRequest;
+use super::{DeepLinkImportRequest, LEGACY_DEEP_LINK_SCHEME};
 use crate::error::AppError;
 use std::collections::HashMap;
 use url::Url;
@@ -19,9 +19,9 @@ pub fn parse_deeplink_url(url_str: &str) -> Result<DeepLinkImportRequest, AppErr
 
     // Validate scheme
     let scheme = url.scheme();
-    if scheme != "ccswitch" {
+    if scheme != LEGACY_DEEP_LINK_SCHEME {
         return Err(AppError::InvalidInput(format!(
-            "Invalid scheme: expected 'ccswitch', got '{scheme}'"
+            "Invalid scheme: expected '{LEGACY_DEEP_LINK_SCHEME}', got '{scheme}'"
         )));
     }
 

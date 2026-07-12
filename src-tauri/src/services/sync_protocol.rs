@@ -21,8 +21,9 @@ pub(crate) use super::webdav_sync::archive::{
 // ─── Protocol constants ──────────────────────────────────────
 
 /// Wire-format identifier stored in remote manifests.
-/// Retains historic "webdav" naming for backward compatibility with existing remotes.
-pub(crate) const PROTOCOL_FORMAT: &str = "cc-switch-webdav-sync";
+/// Retains historic naming for backward compatibility with existing remotes.
+pub(crate) const LEGACY_SYNC_PROTOCOL_FORMAT: &str =
+    crate::product_identity::LEGACY_SYNC_PROTOCOL_FORMAT;
 pub(crate) const PROTOCOL_VERSION: u32 = 2;
 pub(crate) const DB_COMPAT_VERSION: u32 = 6;
 pub(crate) const LEGACY_DB_COMPAT_VERSION: u32 = 5;
@@ -141,7 +142,7 @@ pub(crate) fn build_local_snapshot(
 
     let snapshot_id = compute_snapshot_id(&artifacts);
     let manifest = SyncManifest {
-        format: PROTOCOL_FORMAT.to_string(),
+        format: LEGACY_SYNC_PROTOCOL_FORMAT.to_string(),
         version: PROTOCOL_VERSION,
         db_compat_version: Some(DB_COMPAT_VERSION),
         device_name: detect_system_device_name().unwrap_or_else(|| "Unknown Device".to_string()),
@@ -187,7 +188,7 @@ pub(crate) fn validate_manifest_compat(
     manifest: &SyncManifest,
     layout: RemoteLayout,
 ) -> Result<(), AppError> {
-    if manifest.format != PROTOCOL_FORMAT {
+    if manifest.format != LEGACY_SYNC_PROTOCOL_FORMAT {
         return Err(localized(
             "sync.manifest_format_incompatible",
             format!("远端 manifest 格式不兼容: {}", manifest.format),
@@ -348,10 +349,15 @@ pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 pub(crate) fn detect_system_device_name() -> Option<String> {
-    let env_name = ["CC_SWITCH_DEVICE_NAME", "COMPUTERNAME", "HOSTNAME"]
-        .iter()
-        .filter_map(|key| std::env::var(key).ok())
-        .find_map(|value| normalize_device_name(&value));
+    let env_name = [
+        "LLM_USAGE_BAR_DEVICE_NAME",
+        "CC_SWITCH_DEVICE_NAME",
+        "COMPUTERNAME",
+        "HOSTNAME",
+    ]
+    .iter()
+    .filter_map(|key| std::env::var(key).ok())
+    .find_map(|value| normalize_device_name(&value));
 
     if env_name.is_some() {
         return env_name;
@@ -418,6 +424,31 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
+    use std::ffi::OsString;
+
+    struct DeviceNameEnvRestore {
+        current: Option<OsString>,
+        legacy: Option<OsString>,
+        computer_name: Option<OsString>,
+        hostname: Option<OsString>,
+    }
+
+    impl Drop for DeviceNameEnvRestore {
+        fn drop(&mut self) {
+            for (key, value) in [
+                ("LLM_USAGE_BAR_DEVICE_NAME", self.current.take()),
+                ("CC_SWITCH_DEVICE_NAME", self.legacy.take()),
+                ("COMPUTERNAME", self.computer_name.take()),
+                ("HOSTNAME", self.hostname.take()),
+            ] {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+    }
 
     fn artifact(sha256: &str, size: u64) -> ArtifactMeta {
         ArtifactMeta {
@@ -498,7 +529,11 @@ mod tests {
 
     #[test]
     fn validate_manifest_compat_accepts_supported_manifest() {
-        let manifest = manifest_with(PROTOCOL_FORMAT, PROTOCOL_VERSION, Some(DB_COMPAT_VERSION));
+        let manifest = manifest_with(
+            LEGACY_SYNC_PROTOCOL_FORMAT,
+            PROTOCOL_VERSION,
+            Some(DB_COMPAT_VERSION),
+        );
         assert!(validate_manifest_compat(&manifest, RemoteLayout::Current).is_ok());
     }
 
@@ -511,7 +546,7 @@ mod tests {
     #[test]
     fn validate_manifest_compat_rejects_wrong_version() {
         let manifest = manifest_with(
-            PROTOCOL_FORMAT,
+            LEGACY_SYNC_PROTOCOL_FORMAT,
             PROTOCOL_VERSION + 1,
             Some(DB_COMPAT_VERSION),
         );
@@ -520,14 +555,14 @@ mod tests {
 
     #[test]
     fn validate_manifest_compat_accepts_legacy_manifest_without_db_compat() {
-        let manifest = manifest_with(PROTOCOL_FORMAT, PROTOCOL_VERSION, None);
+        let manifest = manifest_with(LEGACY_SYNC_PROTOCOL_FORMAT, PROTOCOL_VERSION, None);
         assert!(validate_manifest_compat(&manifest, RemoteLayout::Legacy).is_ok());
     }
 
     #[test]
     fn validate_manifest_compat_rejects_current_manifest_with_wrong_db_compat() {
         let manifest = manifest_with(
-            PROTOCOL_FORMAT,
+            LEGACY_SYNC_PROTOCOL_FORMAT,
             PROTOCOL_VERSION,
             Some(LEGACY_DB_COMPAT_VERSION),
         );
@@ -537,7 +572,7 @@ mod tests {
     #[test]
     fn validate_manifest_compat_rejects_legacy_manifest_from_newer_db_generation() {
         let manifest = manifest_with(
-            PROTOCOL_FORMAT,
+            LEGACY_SYNC_PROTOCOL_FORMAT,
             PROTOCOL_VERSION,
             Some(DB_COMPAT_VERSION + 1),
         );
@@ -546,7 +581,7 @@ mod tests {
 
     #[test]
     fn effective_db_compat_version_defaults_legacy_layout_to_v5() {
-        let manifest = manifest_with(PROTOCOL_FORMAT, PROTOCOL_VERSION, None);
+        let manifest = manifest_with(LEGACY_SYNC_PROTOCOL_FORMAT, PROTOCOL_VERSION, None);
         assert_eq!(
             effective_db_compat_version(&manifest, RemoteLayout::Legacy),
             Some(LEGACY_DB_COMPAT_VERSION)
@@ -577,8 +612,37 @@ mod tests {
     }
 
     #[test]
+    fn sync_manifest_format_preserves_legacy_wire_bytes() {
+        assert_eq!(LEGACY_SYNC_PROTOCOL_FORMAT, "cc-switch-webdav-sync");
+    }
+
+    #[test]
+    #[serial]
+    fn device_name_env_prefers_current_name_and_falls_back_to_legacy_alias() {
+        let _restore = DeviceNameEnvRestore {
+            current: std::env::var_os("LLM_USAGE_BAR_DEVICE_NAME"),
+            legacy: std::env::var_os("CC_SWITCH_DEVICE_NAME"),
+            computer_name: std::env::var_os("COMPUTERNAME"),
+            hostname: std::env::var_os("HOSTNAME"),
+        };
+        std::env::remove_var("COMPUTERNAME");
+        std::env::remove_var("HOSTNAME");
+        std::env::set_var("CC_SWITCH_DEVICE_NAME", "Legacy Mac");
+        std::env::set_var("LLM_USAGE_BAR_DEVICE_NAME", "Current Mac");
+
+        assert_eq!(detect_system_device_name().as_deref(), Some("Current Mac"));
+
+        std::env::remove_var("LLM_USAGE_BAR_DEVICE_NAME");
+        assert_eq!(detect_system_device_name().as_deref(), Some("Legacy Mac"));
+    }
+
+    #[test]
     fn manifest_serialization_uses_device_name_only() {
-        let manifest = manifest_with(PROTOCOL_FORMAT, PROTOCOL_VERSION, Some(DB_COMPAT_VERSION));
+        let manifest = manifest_with(
+            LEGACY_SYNC_PROTOCOL_FORMAT,
+            PROTOCOL_VERSION,
+            Some(DB_COMPAT_VERSION),
+        );
         let value = serde_json::to_value(&manifest).expect("serialize manifest");
         assert!(
             value.get("deviceName").is_some(),

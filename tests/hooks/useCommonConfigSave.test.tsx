@@ -1,6 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useCodexCommonConfig } from "@/components/providers/forms/hooks/useCodexCommonConfig";
+import { useCommonConfigSnippet } from "@/components/providers/forms/hooks/useCommonConfigSnippet";
 import { useGeminiCommonConfig } from "@/components/providers/forms/hooks/useGeminiCommonConfig";
 
 const getCommonConfigSnippetMock = vi.fn();
@@ -23,6 +24,8 @@ vi.mock("@/lib/api", () => ({
 
 describe("common config snippet saving", () => {
   beforeEach(() => {
+    window.localStorage.clear();
+    vi.restoreAllMocks();
     getCommonConfigSnippetMock.mockResolvedValue("");
     setCommonConfigSnippetMock.mockResolvedValue(undefined);
     extractCommonConfigSnippetMock.mockResolvedValue("");
@@ -31,11 +34,64 @@ describe("common config snippet saving", () => {
     );
   });
 
+  it("migrates the read-only Claude legacy localStorage input into config.json", async () => {
+    const legacyKey = "cc-switch:common-config-snippet";
+    const snippet = '{"includeCoAuthoredBy":true}';
+    window.localStorage.setItem(legacyKey, snippet);
+
+    const { result } = renderHook(() =>
+      useCommonConfigSnippet({
+        settingsConfig: "{}",
+        onConfigChange: vi.fn(),
+      }),
+    );
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(setCommonConfigSnippetMock).toHaveBeenCalledWith("claude", snippet);
+    expect(window.localStorage.getItem(legacyKey)).toBeNull();
+  });
+
+  it("migrates the read-only Codex legacy localStorage input into config.json", async () => {
+    const legacyKey = "cc-switch:codex-common-config-snippet";
+    const snippet = "[tui]\nnotifications = true\n";
+    window.localStorage.setItem(legacyKey, snippet);
+
+    const { result } = renderHook(() =>
+      useCodexCommonConfig({
+        codexConfig: "",
+        onConfigChange: vi.fn(),
+      }),
+    );
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(setCommonConfigSnippetMock).toHaveBeenCalledWith("codex", snippet);
+    expect(window.localStorage.getItem(legacyKey)).toBeNull();
+  });
+
+  it("migrates the read-only Gemini legacy localStorage input into config.json", async () => {
+    const legacyKey = "cc-switch:gemini-common-config-snippet";
+    const snippet = '{"GEMINI_MODEL":"gemini-2.5-pro"}';
+    window.localStorage.setItem(legacyKey, snippet);
+
+    const { result } = renderHook(() =>
+      useGeminiCommonConfig({
+        envValue: "",
+        onEnvChange: vi.fn(),
+        envStringToObj: () => ({}),
+        envObjToString: () => "",
+      }),
+    );
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(setCommonConfigSnippetMock).toHaveBeenCalledWith("gemini", snippet);
+    expect(window.localStorage.getItem(legacyKey)).toBeNull();
+  });
+
   it("does not persist an invalid Codex common config snippet", async () => {
     const onConfigChange = vi.fn();
     const { result } = renderHook(() =>
       useCodexCommonConfig({
-        codexConfig: "model = \"gpt-5\"",
+        codexConfig: 'model = "gpt-5"',
         onConfigChange,
       }),
     );

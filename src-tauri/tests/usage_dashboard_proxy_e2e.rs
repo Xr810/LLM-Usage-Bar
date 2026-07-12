@@ -5,7 +5,7 @@ use axum::{
     routing::post,
     Json, Router,
 };
-use cc_switch_lib::{
+use llm_usage_bar_lib::{
     usage::dashboard::UsageDashboardService, BillingKind, CostSource, Database, Provider,
     ProxyService, TokenSource, UsageEventPage, UsageProviderInput,
 };

@@ -5,6 +5,11 @@ import en from "./locales/en.json";
 import ja from "./locales/ja.json";
 import zh from "./locales/zh.json";
 import zhTW from "./locales/zh-TW.json";
+import {
+  LEGACY_LOCAL_STORAGE_KEYS,
+  LOCAL_STORAGE_KEYS,
+  readMigratedLocalStorage,
+} from "@/lib/localStorageMigration";
 
 type Language = "zh" | "zh-TW" | "en" | "ja";
 
@@ -13,15 +18,19 @@ const DEFAULT_LANGUAGE: Language = "zh";
 const getInitialLanguage = (): Language => {
   if (typeof window !== "undefined") {
     try {
-      const stored = window.localStorage.getItem("language");
-      if (
-        stored === "zh" ||
-        stored === "zh-TW" ||
-        stored === "en" ||
-        stored === "ja"
-      ) {
-        return stored;
-      }
+      const stored = readMigratedLocalStorage<Language | null>({
+        currentKey: LOCAL_STORAGE_KEYS.language,
+        legacyKeys: LEGACY_LOCAL_STORAGE_KEYS.language,
+        defaultValue: null,
+        parse: (value) =>
+          value === "zh" ||
+          value === "zh-TW" ||
+          value === "en" ||
+          value === "ja"
+            ? value
+            : null,
+      });
+      if (stored) return stored;
     } catch (error) {
       console.warn("[i18n] Failed to read stored language preference", error);
     }

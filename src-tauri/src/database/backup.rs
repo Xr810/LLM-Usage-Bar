@@ -12,7 +12,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::NamedTempFile;
 
-const CC_SWITCH_SQL_EXPORT_HEADER: &str = "-- CC Switch SQLite 导出";
+const LLM_USAGE_BAR_SQL_EXPORT_HEADER: &str = "-- LLM Usage Bar SQLite export";
+const LEGACY_CC_SWITCH_SQL_EXPORT_HEADER: &str = "-- CC Switch SQLite 导出";
 
 /// Tables whose data rows are skipped when exporting for WebDAV sync.
 const SYNC_SKIP_TABLES: &[&str] = &[
@@ -106,7 +107,7 @@ impl Database {
         preserve_tables: &[&str],
     ) -> Result<String, AppError> {
         let sql_content = sql_raw.trim_start_matches('\u{feff}');
-        Self::validate_cc_switch_sql_export(sql_content)?;
+        Self::validate_llm_usage_bar_sql_export(sql_content)?;
 
         // 导入前备份现有数据库
         let backup_path = self.backup_database_file()?;
@@ -172,16 +173,19 @@ impl Database {
         Ok(snapshot)
     }
 
-    fn validate_cc_switch_sql_export(sql: &str) -> Result<(), AppError> {
-        let trimmed = sql.trim_start();
-        if trimmed.starts_with(CC_SWITCH_SQL_EXPORT_HEADER) {
+    fn validate_llm_usage_bar_sql_export(sql: &str) -> Result<(), AppError> {
+        let first_line = sql.trim_start().lines().next().unwrap_or_default();
+        if matches!(
+            first_line,
+            LLM_USAGE_BAR_SQL_EXPORT_HEADER | LEGACY_CC_SWITCH_SQL_EXPORT_HEADER
+        ) {
             return Ok(());
         }
 
         Err(AppError::localized(
             "backup.sql.invalid_format",
-            "仅支持导入由 CC Switch 导出的 SQL 备份文件。",
-            "Only SQL backups exported by CC Switch are supported.",
+            "仅支持导入由 LLM Usage Bar 或旧版 CC Switch 导出的 SQL 备份文件。",
+            "Only SQL backups exported by LLM Usage Bar or legacy CC Switch are supported.",
         ))
     }
 
@@ -399,7 +403,7 @@ impl Database {
             .unwrap_or(0);
 
         output.push_str(&format!(
-            "-- CC Switch SQLite 导出\n-- 生成时间: {timestamp}\n-- user_version: {user_version}\n"
+            "{LLM_USAGE_BAR_SQL_EXPORT_HEADER}\n-- 生成时间: {timestamp}\n-- user_version: {user_version}\n"
         ));
         output.push_str("PRAGMA foreign_keys=OFF;\n");
         output.push_str(&format!("PRAGMA user_version={user_version};\n"));
@@ -705,7 +709,7 @@ impl Database {
 
 #[cfg(test)]
 mod tests {
-    use super::Database;
+    use super::{Database, LEGACY_CC_SWITCH_SQL_EXPORT_HEADER, LLM_USAGE_BAR_SQL_EXPORT_HEADER};
     use crate::error::AppError;
     use crate::product_identity::DATABASE_FILE;
     use crate::settings::{update_settings, AppSettings};
@@ -717,17 +721,39 @@ mod tests {
     impl Drop for TestHomeRestore {
         fn drop(&mut self) {
             match self.0.take() {
-                Some(value) => std::env::set_var("CC_SWITCH_TEST_HOME", value),
-                None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+                Some(value) => std::env::set_var("LLM_USAGE_BAR_TEST_HOME", value),
+                None => std::env::remove_var("LLM_USAGE_BAR_TEST_HOME"),
             }
         }
+    }
+
+    #[test]
+    fn sql_export_uses_llm_usage_bar_header() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let sql = db.export_sql_string()?;
+
+        assert!(sql.starts_with(&format!("{LLM_USAGE_BAR_SQL_EXPORT_HEADER}\n")));
+        assert!(!sql.starts_with(&format!("{LEGACY_CC_SWITCH_SQL_EXPORT_HEADER}\n")));
+        Ok(())
+    }
+
+    #[test]
+    fn sql_import_header_accepts_current_and_exact_legacy_bytes() {
+        let current = format!("{LLM_USAGE_BAR_SQL_EXPORT_HEADER}\nBEGIN TRANSACTION;");
+        let legacy = format!("{LEGACY_CC_SWITCH_SQL_EXPORT_HEADER}\nBEGIN TRANSACTION;");
+        let near_miss =
+            format!("{LEGACY_CC_SWITCH_SQL_EXPORT_HEADER} with suffix\nBEGIN TRANSACTION;");
+
+        assert!(Database::validate_llm_usage_bar_sql_export(&current).is_ok());
+        assert!(Database::validate_llm_usage_bar_sql_export(&legacy).is_ok());
+        assert!(Database::validate_llm_usage_bar_sql_export(&near_miss).is_err());
     }
 
     #[test]
     #[serial]
     fn backup_management_stays_on_instance_path_after_global_directory_switch(
     ) -> Result<(), AppError> {
-        let _restore = TestHomeRestore(std::env::var_os("CC_SWITCH_TEST_HOME"));
+        let _restore = TestHomeRestore(std::env::var_os("LLM_USAGE_BAR_TEST_HOME"));
         let temp = tempfile::tempdir().expect("create backup path test root");
         let home_a = temp.path().join("home-a");
         let home_b = temp.path().join("home-b");
@@ -736,12 +762,12 @@ mod tests {
         std::fs::create_dir_all(&app_dir_a).expect("create A app directory");
         std::fs::create_dir_all(app_dir_b.join("backups")).expect("create B backup directory");
 
-        std::env::set_var("CC_SWITCH_TEST_HOME", &home_a);
+        std::env::set_var("LLM_USAGE_BAR_TEST_HOME", &home_a);
         let db = Database::init_at(&app_dir_a.join(DATABASE_FILE))?;
 
         // Simulate the settings hot-switch: global path helpers now resolve B,
         // while the live Database connection remains authoritative for A.
-        std::env::set_var("CC_SWITCH_TEST_HOME", &home_b);
+        std::env::set_var("LLM_USAGE_BAR_TEST_HOME", &home_b);
         let created = db
             .backup_database_file()?
             .expect("file-backed database creates a backup");
@@ -892,12 +918,12 @@ mod tests {
     #[test]
     #[serial]
     fn periodic_maintenance_runs_even_when_auto_backup_disabled() -> Result<(), AppError> {
-        let old_test_home = std::env::var_os("CC_SWITCH_TEST_HOME");
+        let old_test_home = std::env::var_os("LLM_USAGE_BAR_TEST_HOME");
         let test_home =
-            std::env::temp_dir().join("cc-switch-periodic-maintenance-backup-disabled-test");
+            std::env::temp_dir().join("llm-usage-bar-periodic-maintenance-backup-disabled-test");
         let _ = std::fs::remove_dir_all(&test_home);
         std::fs::create_dir_all(&test_home).expect("create test home");
-        std::env::set_var("CC_SWITCH_TEST_HOME", &test_home);
+        std::env::set_var("LLM_USAGE_BAR_TEST_HOME", &test_home);
 
         let settings = AppSettings {
             backup_interval_hours: Some(0),
@@ -959,8 +985,8 @@ mod tests {
         assert_eq!(rollups, 1, "old request logs should be rolled up");
 
         match old_test_home {
-            Some(value) => std::env::set_var("CC_SWITCH_TEST_HOME", value),
-            None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+            Some(value) => std::env::set_var("LLM_USAGE_BAR_TEST_HOME", value),
+            None => std::env::remove_var("LLM_USAGE_BAR_TEST_HOME"),
         }
 
         Ok(())

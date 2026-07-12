@@ -379,7 +379,7 @@ mod tests {
         assert!(done_rx.recv_timeout(Duration::from_millis(50)).is_err());
         drop(guard);
 
-        let mut completed = vec![
+        let mut completed = [
             done_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
             done_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
         ];

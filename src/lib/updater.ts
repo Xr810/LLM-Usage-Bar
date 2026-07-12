@@ -14,6 +14,14 @@ export interface CheckOptions {
   channel?: UpdateChannel;
 }
 
+export const MANAGED_UPDATES_UNAVAILABLE_CODE =
+  "managed_updates_unavailable" as const;
+
+export type UpdateCheckResult = {
+  status: "unavailable";
+  code: typeof MANAGED_UPDATES_UNAVAILABLE_CODE;
+};
+
 export async function getCurrentVersion(): Promise<string> {
   try {
     return await getVersion();
@@ -23,26 +31,10 @@ export async function getCurrentVersion(): Promise<string> {
 }
 
 export async function checkForUpdate(
-  opts: CheckOptions = {},
-): Promise<
-  { status: "up-to-date" } | { status: "available"; info: UpdateInfo }
-> {
-  // 动态引入，避免在未安装插件时导致打包期问题
-  const { check } = await import("@tauri-apps/plugin-updater");
-
-  const currentVersion = await getCurrentVersion();
-  const update = await check({ timeout: opts.timeout ?? 30000 } as any);
-
-  if (!update) {
-    return { status: "up-to-date" };
-  }
-
-  const info: UpdateInfo = {
-    currentVersion,
-    availableVersion: (update as any).version ?? "",
-    notes: (update as any).notes,
-    pubDate: (update as any).date,
+  _opts: CheckOptions = {},
+): Promise<UpdateCheckResult> {
+  return {
+    status: "unavailable",
+    code: MANAGED_UPDATES_UNAVAILABLE_CODE,
   };
-
-  return { status: "available", info };
 }

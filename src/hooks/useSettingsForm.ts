@@ -2,6 +2,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import i18n from "i18next";
 import { useSettingsQuery } from "@/lib/query";
 import type { Settings } from "@/types";
+import {
+  LEGACY_LOCAL_STORAGE_KEYS,
+  LOCAL_STORAGE_KEYS,
+  readMigratedLocalStorage,
+} from "@/lib/localStorageMigration";
 
 type Language = "zh" | "zh-TW" | "en" | "ja";
 
@@ -80,7 +85,12 @@ export function useSettingsForm(): UseSettingsFormResult {
 
   const readPersistedLanguage = useCallback((): Language => {
     if (typeof window !== "undefined") {
-      const stored = window.localStorage.getItem("language");
+      const stored = readMigratedLocalStorage<string | null>({
+        currentKey: LOCAL_STORAGE_KEYS.language,
+        legacyKeys: LEGACY_LOCAL_STORAGE_KEYS.language,
+        defaultValue: null,
+        parse: (value) => (isSupportedLanguage(value) ? value : null),
+      });
       if (isSupportedLanguage(stored)) {
         return normalizeLanguage(stored);
       }

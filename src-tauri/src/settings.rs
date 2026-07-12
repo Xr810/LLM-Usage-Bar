@@ -96,7 +96,7 @@ pub struct WebDavSyncStatus {
 }
 
 fn default_remote_root() -> String {
-    "cc-switch-sync".to_string()
+    crate::product_identity::LEGACY_SYNC_REMOTE_ROOT.to_string()
 }
 fn default_profile() -> String {
     "default".to_string()
@@ -645,7 +645,7 @@ impl AppSettings {
     where
         F: FnOnce(&Path, &serde_json::Value) -> Result<(), AppError>,
     {
-        if let Ok(content) = fs::read_to_string(&path) {
+        if let Ok(content) = fs::read_to_string(path) {
             match Self::decode_settings_json(&content) {
                 Ok((settings, canonical_value)) => {
                     if let Some(canonical_value) = canonical_value.as_ref() {
@@ -1174,6 +1174,22 @@ mod tests {
     use super::*;
     use crate::app_config::AppType;
     use tempfile::tempdir;
+
+    #[test]
+    fn sync_defaults_preserve_existing_remote_root_bytes() {
+        assert_eq!(
+            WebDavSyncSettings::default().remote_root,
+            crate::product_identity::LEGACY_SYNC_REMOTE_ROOT
+        );
+        assert_eq!(
+            S3SyncSettings::default().remote_root,
+            crate::product_identity::LEGACY_SYNC_REMOTE_ROOT
+        );
+        assert_eq!(
+            crate::product_identity::LEGACY_SYNC_REMOTE_ROOT,
+            "cc-switch-sync"
+        );
+    }
 
     #[test]
     fn identity_discriminator_settings_load_rewrites_legacy_storage_value() {

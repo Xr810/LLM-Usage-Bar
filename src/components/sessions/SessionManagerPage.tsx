@@ -55,6 +55,12 @@ import {
 } from "@/components/ui/tooltip";
 import { extractErrorMessage } from "@/utils/errorUtils";
 import { isMac } from "@/lib/platform";
+import {
+  LEGACY_LOCAL_STORAGE_KEYS,
+  LOCAL_STORAGE_KEYS,
+  readMigratedLocalStorage,
+  writeMigratedLocalStorage,
+} from "@/lib/localStorageMigration";
 import { ProviderIcon } from "@/components/ProviderIcon";
 import { SessionItem } from "./SessionItem";
 import { SessionMessageItem } from "./SessionMessageItem";
@@ -75,11 +81,6 @@ import {
   shouldHideCodexMessageFromToc,
 } from "./utils";
 
-const SESSION_LIST_VIEW_MODE_STORAGE_KEY =
-  "cc-switch.sessionManager.listViewMode";
-const SESSION_GROUP_EXPANSION_STORAGE_KEY =
-  "cc-switch.sessionManager.groupExpansionState";
-
 type ProviderFilter =
   "all" | "codex" | "claude" | "opencode" | "openclaw" | "gemini" | "hermes";
 
@@ -99,10 +100,12 @@ type SessionGroupExpansionState = {
 
 const readInitialSessionListViewMode = (): SessionListViewMode => {
   if (typeof window === "undefined") return "flat";
-  const stored = window.localStorage.getItem(
-    SESSION_LIST_VIEW_MODE_STORAGE_KEY,
-  );
-  return stored === "grouped" || stored === "flat" ? stored : "flat";
+  return readMigratedLocalStorage<SessionListViewMode>({
+    currentKey: LOCAL_STORAGE_KEYS.sessionListViewMode,
+    legacyKeys: LEGACY_LOCAL_STORAGE_KEYS.sessionListViewMode,
+    defaultValue: "flat",
+    parse: (value) => (value === "grouped" || value === "flat" ? value : null),
+  });
 };
 
 const readInitialSessionGroupExpansionState =
@@ -114,42 +117,43 @@ const readInitialSessionGroupExpansionState =
       };
     }
 
-    try {
-      const stored = window.localStorage.getItem(
-        SESSION_GROUP_EXPANSION_STORAGE_KEY,
-      );
-      const parsed = stored ? JSON.parse(stored) : null;
-
-      if (!parsed || typeof parsed !== "object") {
-        return {
-          expandedProviderIds: new Set(),
-          expandedDirectoryKeys: new Set(),
-        };
-      }
-
-      const expandedProviderIds = Array.isArray(parsed.expandedProviderIds)
-        ? parsed.expandedProviderIds.filter(
-            (providerId: unknown): providerId is string =>
-              typeof providerId === "string",
-          )
-        : [];
-      const expandedDirectoryKeys = Array.isArray(parsed.expandedDirectoryKeys)
-        ? parsed.expandedDirectoryKeys.filter(
-            (directoryKey: unknown): directoryKey is string =>
-              typeof directoryKey === "string",
-          )
-        : [];
-
-      return {
-        expandedProviderIds: new Set(expandedProviderIds),
-        expandedDirectoryKeys: new Set(expandedDirectoryKeys),
-      };
-    } catch {
-      return {
+    return readMigratedLocalStorage<SessionGroupExpansionState>({
+      currentKey: LOCAL_STORAGE_KEYS.sessionGroupExpansion,
+      legacyKeys: LEGACY_LOCAL_STORAGE_KEYS.sessionGroupExpansion,
+      defaultValue: {
         expandedProviderIds: new Set(),
         expandedDirectoryKeys: new Set(),
-      };
-    }
+      },
+      parse: (stored) => {
+        try {
+          const parsed = JSON.parse(stored);
+
+          if (!parsed || typeof parsed !== "object") return null;
+
+          const expandedProviderIds = Array.isArray(parsed.expandedProviderIds)
+            ? parsed.expandedProviderIds.filter(
+                (providerId: unknown): providerId is string =>
+                  typeof providerId === "string",
+              )
+            : [];
+          const expandedDirectoryKeys = Array.isArray(
+            parsed.expandedDirectoryKeys,
+          )
+            ? parsed.expandedDirectoryKeys.filter(
+                (directoryKey: unknown): directoryKey is string =>
+                  typeof directoryKey === "string",
+              )
+            : [];
+
+          return {
+            expandedProviderIds: new Set(expandedProviderIds),
+            expandedDirectoryKeys: new Set(expandedDirectoryKeys),
+          };
+        } catch {
+          return null;
+        }
+      },
+    });
   };
 
 const serializeSessionGroupExpansionState = (
@@ -253,15 +257,17 @@ export function SessionManagerPage({ appId }: { appId: string }) {
   );
 
   useEffect(() => {
-    window.localStorage.setItem(
-      SESSION_LIST_VIEW_MODE_STORAGE_KEY,
+    writeMigratedLocalStorage(
+      LOCAL_STORAGE_KEYS.sessionListViewMode,
+      LEGACY_LOCAL_STORAGE_KEYS.sessionListViewMode,
       listViewMode,
     );
   }, [listViewMode]);
 
   useEffect(() => {
-    window.localStorage.setItem(
-      SESSION_GROUP_EXPANSION_STORAGE_KEY,
+    writeMigratedLocalStorage(
+      LOCAL_STORAGE_KEYS.sessionGroupExpansion,
+      LEGACY_LOCAL_STORAGE_KEYS.sessionGroupExpansion,
       serializeSessionGroupExpansionState(
         expandedProviderGroups,
         expandedDirectoryGroups,

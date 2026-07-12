@@ -1291,6 +1291,7 @@ fn backup_into_existing_destination(source: &Path, destination: &Path) -> Result
     Ok(())
 }
 
+#[cfg(test)]
 fn backup_and_validate(source: &Path, destination: &Path) -> Result<(), AppError> {
     let created = OpenOptions::new()
         .read(true)

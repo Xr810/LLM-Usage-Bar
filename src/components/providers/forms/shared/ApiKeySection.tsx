@@ -72,14 +72,17 @@ export function ApiKeySection({
             })}
           </a>
 
-          {/* 促销信息（与 isPartner 解耦：仅凭 partnerPromotionKey 即可展示，星标仍由 isPartner 控制） */}
+          {/* Inherited promotion copy is explicitly labeled and is not an LLM Usage Bar partnership. */}
           {partnerPromotionKey && (
             <div className="rounded-md bg-blue-50 dark:bg-blue-950/30 p-2.5 border border-blue-200 dark:border-blue-800">
               <p className="text-xs leading-relaxed text-blue-700 dark:text-blue-300">
-                💡{" "}
-                {t(`providerForm.partnerPromotion.${partnerPromotionKey}`, {
-                  defaultValue: "",
-                })}
+                <span className="font-medium">
+                  {t("providerForm.legacyUpstreamPromotionLabel")}:{" "}
+                </span>
+                {t(
+                  `providerForm.legacyUpstreamPromotion.${partnerPromotionKey}`,
+                  { defaultValue: "" },
+                )}
               </p>
             </div>
           )}

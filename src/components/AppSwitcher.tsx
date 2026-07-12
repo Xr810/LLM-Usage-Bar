@@ -3,6 +3,11 @@ import type { VisibleApps } from "@/types";
 import { ProviderIcon } from "@/components/ProviderIcon";
 import { cn } from "@/lib/utils";
 import { Monitor, Terminal } from "lucide-react";
+import {
+  LEGACY_LOCAL_STORAGE_KEYS,
+  LOCAL_STORAGE_KEYS,
+  writeMigratedLocalStorage,
+} from "@/lib/localStorageMigration";
 
 const APP_BADGE_ICON: Partial<
   Record<AppId, { icon: typeof Terminal; offsetY?: number }>
@@ -27,8 +32,6 @@ const ALL_APPS: AppId[] = [
   "openclaw",
   "hermes",
 ];
-const STORAGE_KEY = "cc-switch-last-app";
-
 export function AppSwitcher({
   activeApp,
   onSwitch,
@@ -37,7 +40,11 @@ export function AppSwitcher({
 }: AppSwitcherProps) {
   const handleSwitch = (app: AppId) => {
     if (app === activeApp) return;
-    localStorage.setItem(STORAGE_KEY, app);
+    writeMigratedLocalStorage(
+      LOCAL_STORAGE_KEYS.lastApp,
+      LEGACY_LOCAL_STORAGE_KEYS.lastApp,
+      app,
+    );
     onSwitch(app);
   };
   const iconSize = 20;

@@ -13,6 +13,11 @@ import {
   type ResolvedDirectories,
 } from "./useDirectorySettings";
 import { useSettingsMetadata } from "./useSettingsMetadata";
+import {
+  LEGACY_LOCAL_STORAGE_KEYS,
+  LOCAL_STORAGE_KEYS,
+  writeMigratedLocalStorage,
+} from "@/lib/localStorageMigration";
 
 interface SaveResult {
   requiresRestart: boolean;
@@ -273,7 +278,11 @@ export function useSettings(): UseSettingsResult {
         // 持久化语言偏好
         try {
           if (typeof window !== "undefined" && updates.language) {
-            window.localStorage.setItem("language", updates.language);
+            writeMigratedLocalStorage(
+              LOCAL_STORAGE_KEYS.language,
+              LEGACY_LOCAL_STORAGE_KEYS.language,
+              updates.language,
+            );
           }
         } catch (error) {
           console.warn(
@@ -407,7 +416,11 @@ export function useSettings(): UseSettingsResult {
 
         try {
           if (typeof window !== "undefined" && payload.language) {
-            window.localStorage.setItem("language", payload.language);
+            writeMigratedLocalStorage(
+              LOCAL_STORAGE_KEYS.language,
+              LEGACY_LOCAL_STORAGE_KEYS.language,
+              payload.language,
+            );
           }
         } catch (error) {
           console.warn(

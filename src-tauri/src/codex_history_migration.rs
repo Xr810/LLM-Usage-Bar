@@ -4,7 +4,7 @@
 //! 失败时不写标记，下一次启动自动重试。
 
 use crate::codex_config::{
-    get_codex_config_dir, read_codex_config_text, CC_SWITCH_CODEX_MODEL_PROVIDER_ID,
+    get_codex_config_dir, read_codex_config_text, LLM_USAGE_BAR_CODEX_MODEL_PROVIDER_ID,
 };
 use crate::codex_state_db::codex_state_db_paths;
 use crate::config::{atomic_write, copy_file, get_app_config_dir};
@@ -47,7 +47,7 @@ const OFFICIAL_OPENAI_CODEX_MODEL_PROVIDER_ID: &str = "openai";
 const LEGACY_CC_SWITCH_CODEX_MODEL_PROVIDER_ID: &str = "ccswitch";
 // If a Codex preset ever used a temporary routing key, keep that old key here
 // so local history can be bucketed under the current custom provider id.
-const CC_SWITCH_LEGACY_CODEX_MODEL_PROVIDER_IDS: &[&str] = &[
+const LEGACY_CC_SWITCH_CODEX_MODEL_PROVIDER_IDS: &[&str] = &[
     LEGACY_CC_SWITCH_CODEX_MODEL_PROVIDER_ID,
     "aicodemirror",
     "aicoding",
@@ -127,7 +127,7 @@ pub fn maybe_migrate_codex_third_party_history_provider_bucket(
         crate::settings::mark_codex_third_party_history_provider_bucket_migrated(
             CodexThirdPartyHistoryProviderBucketMigration {
                 completed_at: Utc::now().to_rfc3339(),
-                target_provider_id: CC_SWITCH_CODEX_MODEL_PROVIDER_ID.to_string(),
+                target_provider_id: LLM_USAGE_BAR_CODEX_MODEL_PROVIDER_ID.to_string(),
                 source_provider_ids: Vec::new(),
                 migrated_jsonl_files: 0,
                 migrated_state_rows: 0,
@@ -151,7 +151,7 @@ pub fn maybe_migrate_codex_third_party_history_provider_bucket(
     crate::settings::mark_codex_third_party_history_provider_bucket_migrated(
         CodexThirdPartyHistoryProviderBucketMigration {
             completed_at: Utc::now().to_rfc3339(),
-            target_provider_id: CC_SWITCH_CODEX_MODEL_PROVIDER_ID.to_string(),
+            target_provider_id: LLM_USAGE_BAR_CODEX_MODEL_PROVIDER_ID.to_string(),
             source_provider_ids: source_provider_ids_vec.clone(),
             migrated_jsonl_files,
             migrated_state_rows,
@@ -194,7 +194,7 @@ pub fn maybe_migrate_codex_provider_template_bucket(
 /// 重新开启并再次勾选即可补迁关闭期间产生的官方会话。
 /// custom 桶里官方与第三方会话无法区分，自动逻辑绝不反向搬回；
 /// 用户可在关闭开关时选择按备份账本精确还原（见 `restore_codex_official_history_from_backups`）。
-/// 迁移前 jsonl / state DB 均备份到 `~/.cc-switch/backups/codex-official-history-unify-v1/`。
+/// 迁移前 jsonl / state DB 均备份到 `~/.llm-usage-bar/backups/codex-official-history-unify-v1/`。
 pub fn maybe_migrate_codex_official_history_to_unified_bucket(
 ) -> Result<CodexHistoryProviderBucketMigrationOutcome, AppError> {
     if !crate::settings::unify_codex_session_history() {
@@ -256,7 +256,7 @@ pub fn maybe_migrate_codex_official_history_to_unified_bucket(
     let marker_written = crate::settings::mark_codex_official_history_unify_migrated_if_enabled(
         CodexOfficialHistoryUnifyMigration {
             completed_at: Utc::now().to_rfc3339(),
-            target_provider_id: CC_SWITCH_CODEX_MODEL_PROVIDER_ID.to_string(),
+            target_provider_id: LLM_USAGE_BAR_CODEX_MODEL_PROVIDER_ID.to_string(),
             migrated_jsonl_files,
             migrated_state_rows,
             codex_config_dir: Some(codex_dir_key),
@@ -281,7 +281,7 @@ fn codex_config_text_routes_custom(config_text: &str) -> bool {
         .and_then(|doc| {
             doc.get("model_provider")
                 .and_then(|item| item.as_str())
-                .map(|id| id.trim() == CC_SWITCH_CODEX_MODEL_PROVIDER_ID)
+                .map(|id| id.trim() == LLM_USAGE_BAR_CODEX_MODEL_PROVIDER_ID)
         })
         .unwrap_or(false)
 }
@@ -576,7 +576,7 @@ fn rewrite_codex_session_meta_line_for_restore(
         return None;
     }
     let payload = value.get_mut("payload")?.as_object_mut()?;
-    if payload.get("model_provider")?.as_str()? != CC_SWITCH_CODEX_MODEL_PROVIDER_ID {
+    if payload.get("model_provider")?.as_str()? != LLM_USAGE_BAR_CODEX_MODEL_PROVIDER_ID {
         return None;
     }
     let session_id = payload.get("id")?.as_str()?;
@@ -619,7 +619,7 @@ fn restore_codex_state_db_official_threads(
             "SELECT COUNT(*) FROM threads WHERE model_provider = ? AND id IN ({placeholders})"
         );
         let mut values = Vec::with_capacity(chunk.len() + 1);
-        values.push(CC_SWITCH_CODEX_MODEL_PROVIDER_ID.to_string());
+        values.push(LLM_USAGE_BAR_CODEX_MODEL_PROVIDER_ID.to_string());
         values.extend(chunk.iter().map(|id| (*id).clone()));
         let count: i64 = conn
             .query_row(&count_sql, params_from_iter(values.iter()), |row| {
@@ -645,7 +645,7 @@ fn restore_codex_state_db_official_threads(
         );
         let mut values = Vec::with_capacity(chunk.len() + 2);
         values.push(OFFICIAL_OPENAI_CODEX_MODEL_PROVIDER_ID.to_string());
-        values.push(CC_SWITCH_CODEX_MODEL_PROVIDER_ID.to_string());
+        values.push(LLM_USAGE_BAR_CODEX_MODEL_PROVIDER_ID.to_string());
         values.extend(chunk.iter().map(|id| (*id).clone()));
         changed += tx
             .execute(&update_sql, params_from_iter(values.iter()))
@@ -754,7 +754,7 @@ fn migration_backup_root(migration_name: &str) -> PathBuf {
 }
 
 fn is_known_cc_switch_legacy_codex_model_provider_id(provider_id: &str) -> bool {
-    CC_SWITCH_LEGACY_CODEX_MODEL_PROVIDER_IDS
+    LEGACY_CC_SWITCH_CODEX_MODEL_PROVIDER_IDS
         .iter()
         .any(|known| known.eq_ignore_ascii_case(provider_id))
 }
@@ -765,7 +765,7 @@ fn legacy_codex_model_provider_id_from_normalized_config(config_text: &str) -> O
         .get("model_provider")
         .and_then(|item| item.as_str())
         .map(str::trim)?;
-    if provider_id != CC_SWITCH_CODEX_MODEL_PROVIDER_ID
+    if provider_id != LLM_USAGE_BAR_CODEX_MODEL_PROVIDER_ID
         && provider_id != LEGACY_CC_SWITCH_CODEX_MODEL_PROVIDER_ID
     {
         return None;
@@ -785,7 +785,7 @@ fn legacy_codex_model_provider_id_from_normalized_config(config_text: &str) -> O
 
 fn normalized_legacy_codex_provider_name(name: &str) -> Option<&'static str> {
     if is_known_cc_switch_legacy_codex_model_provider_id(name) {
-        return CC_SWITCH_LEGACY_CODEX_MODEL_PROVIDER_IDS
+        return LEGACY_CC_SWITCH_CODEX_MODEL_PROVIDER_IDS
             .iter()
             .copied()
             .find(|known| known.eq_ignore_ascii_case(name));
@@ -874,7 +874,7 @@ fn migrate_provider_config_template_to_custom(
         .map(str::to_string);
 
     let custom_table_exists =
-        config_defines_model_provider(&doc, CC_SWITCH_CODEX_MODEL_PROVIDER_ID);
+        config_defines_model_provider(&doc, LLM_USAGE_BAR_CODEX_MODEL_PROVIDER_ID);
     let source_provider_id_to_move = active_provider_id
         .as_deref()
         .filter(|provider_id| source_provider_ids.contains(*provider_id))
@@ -900,7 +900,7 @@ fn migrate_provider_config_template_to_custom(
         let Some(provider_table) = model_providers.remove(source_provider_id.as_str()) else {
             return Ok(None);
         };
-        model_providers[CC_SWITCH_CODEX_MODEL_PROVIDER_ID] = provider_table;
+        model_providers[LLM_USAGE_BAR_CODEX_MODEL_PROVIDER_ID] = provider_table;
         changed = true;
     }
 
@@ -908,7 +908,7 @@ fn migrate_provider_config_template_to_custom(
         .as_deref()
         .is_some_and(|provider_id| source_provider_ids.contains(provider_id))
     {
-        doc["model_provider"] = toml_edit::value(CC_SWITCH_CODEX_MODEL_PROVIDER_ID);
+        doc["model_provider"] = toml_edit::value(LLM_USAGE_BAR_CODEX_MODEL_PROVIDER_ID);
         changed = true;
     }
 
@@ -950,7 +950,7 @@ fn rewrite_legacy_provider_profile_refs(doc: &mut DocumentMut, source_provider_i
         if references_legacy {
             profile_table.insert(
                 "model_provider",
-                toml_edit::value(CC_SWITCH_CODEX_MODEL_PROVIDER_ID),
+                toml_edit::value(LLM_USAGE_BAR_CODEX_MODEL_PROVIDER_ID),
             );
             changed = true;
         }
@@ -1093,7 +1093,7 @@ fn rewrite_codex_session_meta_line(
 
     payload.insert(
         "model_provider".to_string(),
-        Value::String(CC_SWITCH_CODEX_MODEL_PROVIDER_ID.to_string()),
+        Value::String(LLM_USAGE_BAR_CODEX_MODEL_PROVIDER_ID.to_string()),
     );
     serde_json::to_string(&value).ok()
 }
@@ -1156,7 +1156,7 @@ fn migrate_codex_state_db_provider_bucket(
     let update_sql =
         format!("UPDATE threads SET model_provider = ? WHERE model_provider IN ({placeholders})");
     let mut values = Vec::with_capacity(source_provider_ids.len() + 1);
-    values.push(CC_SWITCH_CODEX_MODEL_PROVIDER_ID.to_string());
+    values.push(LLM_USAGE_BAR_CODEX_MODEL_PROVIDER_ID.to_string());
     values.extend(source_provider_ids.iter().cloned());
     let tx = conn
         .transaction()
@@ -1576,15 +1576,16 @@ base_url = "https://proxy.example/v1"
             .and_then(|value| value.get("aihubmix"))
             .is_none());
 
-        let ccswitch_config: toml::Value =
-            toml::from_str(&config_provider_id("legacy-ccswitch")).expect("parse ccswitch config");
+        let legacy_ccswitch_config: toml::Value =
+            toml::from_str(&config_provider_id("legacy-ccswitch"))
+                .expect("parse legacy ccswitch config");
         assert_eq!(
-            ccswitch_config
+            legacy_ccswitch_config
                 .get("model_provider")
                 .and_then(|value| value.as_str()),
             Some("custom")
         );
-        assert!(ccswitch_config
+        assert!(legacy_ccswitch_config
             .get("model_providers")
             .and_then(|value| value.get("ccswitch"))
             .is_none());
@@ -2586,7 +2587,7 @@ model_provider = "aihubmix"
     }
 
     #[test]
-    fn skips_custom_category_unknown_provider_when_created_by_cc_switch() {
+    fn skips_custom_category_unknown_provider_when_created_by_legacy_cc_switch() {
         let db = Database::memory().expect("memory db");
         let mut provider = Provider::with_id(
             "generated-uuid".to_string(),

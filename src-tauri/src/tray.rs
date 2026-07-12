@@ -116,7 +116,7 @@ pub struct TrayAppSection {
 
 /// Auto 菜单项后缀
 pub const AUTO_SUFFIX: &str = "auto";
-pub const TRAY_ID: &str = "cc-switch";
+pub const TRAY_ID: &str = "llm-usage-bar";
 
 pub const TRAY_SECTIONS: [TrayAppSection; 3] = [
     TrayAppSection {
@@ -887,6 +887,10 @@ pub fn apply_tray_policy(app: &tauri::AppHandle, dock_visible: bool) {
 }
 
 /// 处理托盘菜单事件
+fn tray_website_url() -> &'static str {
+    crate::product_identity::RELEASES_LATEST_URL
+}
+
 pub fn handle_tray_menu_event(app: &tauri::AppHandle, event_id: &str) {
     log::info!("处理托盘菜单事件: {event_id}");
 
@@ -915,7 +919,7 @@ pub fn handle_tray_menu_event(app: &tauri::AppHandle, event_id: &str) {
             }
         }
         "open_website" => {
-            if let Err(e) = app.opener().open_url("https://ccswitch.io", None::<String>) {
+            if let Err(e) = app.opener().open_url(tray_website_url(), None::<String>) {
                 log::error!("打开官方网站失败: {e}");
             }
         }
@@ -1068,7 +1072,7 @@ pub(crate) async fn refresh_all_usage_in_tray(app: &tauri::AppHandle) {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_script_summary, format_subscription_summary, TRAY_ID};
+    use super::{format_script_summary, format_subscription_summary, tray_website_url, TRAY_ID};
     use crate::provider::{UsageData, UsageResult};
     use crate::services::subscription::{
         CredentialStatus, QuotaTier, SubscriptionQuota, TIER_FIVE_HOUR, TIER_GEMINI_FLASH,
@@ -1078,8 +1082,16 @@ mod tests {
 
     #[test]
     fn tray_id_is_unique_to_app() {
-        assert_eq!(TRAY_ID, "cc-switch");
+        assert_eq!(TRAY_ID, "llm-usage-bar");
         assert_ne!(TRAY_ID, "main");
+    }
+
+    #[test]
+    fn tray_website_uses_current_repository_release_page() {
+        assert_eq!(
+            tray_website_url(),
+            "https://github.com/Xr810/LLM-Usage-Bar/releases/latest"
+        );
     }
 
     fn make_quota(tool: &str, success: bool, tiers: Vec<QuotaTier>) -> SubscriptionQuota {

@@ -1,7 +1,8 @@
 use serde_json::json;
 use std::path::{Path, PathBuf};
 
-use cc_switch_lib::{
+use llm_usage_bar_lib::product_identity::DATABASE_FILE;
+use llm_usage_bar_lib::{
     get_codex_auth_path, get_codex_config_path, import_default_config_test_hook, read_json_file,
     switch_provider_test_hook, write_codex_live_atomic, AppError, AppType, McpApps, McpServer,
     MultiAppConfig, Provider, ProviderService,
@@ -416,7 +417,7 @@ fn switch_provider_updates_claude_live_and_state() {
     reset_test_fs();
     let _home = ensure_test_home();
 
-    let settings_path = cc_switch_lib::get_claude_settings_path();
+    let settings_path = llm_usage_bar_lib::get_claude_settings_path();
     if let Some(parent) = settings_path.parent() {
         std::fs::create_dir_all(parent).expect("create claude settings dir");
     }
@@ -522,10 +523,10 @@ fn switch_provider_updates_claude_live_and_state() {
     let home_dir = std::env::var("HOME").expect("HOME should be set by ensure_test_home");
     let db_path = std::path::Path::new(&home_dir)
         .join(".llm-usage-bar")
-        .join("cc-switch.db");
+        .join(DATABASE_FILE);
     assert!(
         db_path.exists(),
-        "switching provider should persist to cc-switch.db"
+        "switching provider should persist to {DATABASE_FILE}"
     );
 
     // 验证当前供应商已更新

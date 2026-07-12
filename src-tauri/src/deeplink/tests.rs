@@ -5,7 +5,7 @@ use super::parser::parse_deeplink_url;
 use super::prompt::import_prompt_from_deeplink;
 use super::provider::parse_and_merge_config;
 use super::utils::{infer_homepage_from_endpoint, validate_url};
-use super::DeepLinkImportRequest;
+use super::{DeepLinkImportRequest, LEGACY_DEEP_LINK_SCHEME};
 use crate::AppType;
 use crate::{store::AppState, Database};
 use base64::prelude::*;
@@ -23,11 +23,11 @@ impl TestHomeGuard {
         let dir = tempfile::tempdir().expect("create isolated test home");
         let original_home = env::var_os("HOME");
         let original_userprofile = env::var_os("USERPROFILE");
-        let original_test_home = env::var_os("CC_SWITCH_TEST_HOME");
+        let original_test_home = env::var_os("LLM_USAGE_BAR_TEST_HOME");
 
         env::set_var("HOME", dir.path());
         env::set_var("USERPROFILE", dir.path());
-        env::set_var("CC_SWITCH_TEST_HOME", dir.path());
+        env::set_var("LLM_USAGE_BAR_TEST_HOME", dir.path());
 
         Self {
             _dir: dir,
@@ -41,8 +41,8 @@ impl TestHomeGuard {
 impl Drop for TestHomeGuard {
     fn drop(&mut self) {
         match &self.original_test_home {
-            Some(value) => env::set_var("CC_SWITCH_TEST_HOME", value),
-            None => env::remove_var("CC_SWITCH_TEST_HOME"),
+            Some(value) => env::set_var("LLM_USAGE_BAR_TEST_HOME", value),
+            None => env::remove_var("LLM_USAGE_BAR_TEST_HOME"),
         }
         match &self.original_userprofile {
             Some(value) => env::set_var("USERPROFILE", value),
@@ -58,6 +58,15 @@ impl Drop for TestHomeGuard {
 // =============================================================================
 // Parser Tests
 // =============================================================================
+
+#[test]
+fn legacy_deeplink_scheme_byte_contract_is_unchanged() {
+    assert_eq!(LEGACY_DEEP_LINK_SCHEME, "ccswitch");
+    assert!(parse_deeplink_url(&format!(
+        "{LEGACY_DEEP_LINK_SCHEME}://v1/import?resource=provider&app=claude&name=Test"
+    ))
+    .is_ok());
+}
 
 #[test]
 fn test_parse_valid_claude_deeplink() {
