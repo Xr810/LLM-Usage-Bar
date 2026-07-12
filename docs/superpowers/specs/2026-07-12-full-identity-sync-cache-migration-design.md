@@ -198,17 +198,17 @@ checks reject aliases that resolve into `~/.cc-switch`.
 7. Retire the old main filename only after both complete snapshots are durable.
    Move it atomically with no-replace semantics to a unique same-directory
    quarantine, verify the moved object's pinned identity, then unlink that
-   private quarantine. Before retirement-fence commit, rollback uses the same
-   move-then-verify pattern so a check-then-unlink race cannot delete a
-   replacement path. Fence commit is the irreversible migration commit point:
-   later cleanup failure retains the valid new database and archive, plus the
-   fenced old source when it can be restored. A directory-sync failure after
-   unlink is a durability warning and must never roll back the two snapshots.
+   private quarantine. Before old-source unlink, rollback first restores the
+   fence transactionally and only then removes this invocation's snapshots; if
+   fence restoration fails, the snapshots and fenced old evidence are retained.
+   Old-source unlink is the irreversible migration commit point. A subsequent
+   directory-sync failure is a durability warning and must never roll back the
+   two snapshots.
    Old WAL/SHM sidecars are no longer authoritative after the old-main commit
    point and are retried with identity checks on a later new-wins startup.
-8. Before the fence commits, an archiving or validation failure removes only
-   this invocation's output and restores old-only state. After fence commit,
-   no error path deletes the durable new database or archive.
+8. Before old-source unlink, an archiving, validation, or retirement failure
+   removes this invocation's output only after the old fence has been restored.
+   After unlink, no error path deletes the durable new database or archive.
 
 If both filenames exist, the new filename is authoritative. The application
 never attempts a merge between two databases.
