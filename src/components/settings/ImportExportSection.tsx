@@ -141,7 +141,7 @@ function ImportStatusMessage({
   }
 
   const baseClass =
-    "flex items-start gap-3 rounded-xl border p-4 text-sm leading-relaxed backdrop-blur-sm";
+    "flex items-start gap-3 rounded-xl border p-4 text-sm leading-relaxed backdrop-blur-xs";
 
   if (status === "importing") {
     return (

@@ -3,7 +3,6 @@ import {
   Download,
   Copy,
   ExternalLink,
-  Github,
   Globe,
   Info,
   Loader2,
@@ -15,6 +14,7 @@ import {
   ChevronDown,
   Stethoscope,
 } from "lucide-react";
+import { GitHubIcon } from "@/components/BrandIcons";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -877,7 +877,7 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
               }
               className="h-8 gap-1.5 text-xs"
             >
-              <Github className="h-3.5 w-3.5" />
+              <GitHubIcon className="h-3.5 w-3.5" />
               {t("settings.github")}
             </Button>
             <Button

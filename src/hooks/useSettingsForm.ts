@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useTranslation } from "react-i18next";
+import i18n from "i18next";
 import { useSettingsQuery } from "@/lib/query";
 import type { Settings } from "@/types";
 
@@ -70,7 +70,6 @@ export interface UseSettingsFormResult {
  * - 表单重置
  */
 export function useSettingsForm(): UseSettingsFormResult {
-  const { i18n } = useTranslation();
   const { data, isLoading } = useSettingsQuery();
 
   const [settingsState, setSettingsState] = useState<SettingsFormState | null>(
