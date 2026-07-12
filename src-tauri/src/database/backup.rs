@@ -3,7 +3,6 @@
 //! 提供 SQL 导出/导入和二进制快照备份功能。
 
 use super::{lock_conn, Database};
-use crate::config::get_app_config_dir;
 use crate::error::AppError;
 use chrono::{Local, Utc};
 use rusqlite::backup::Backup;
@@ -521,8 +520,10 @@ impl Database {
     }
 
     /// List all database backup files, sorted by creation time (newest first)
-    pub fn list_backups() -> Result<Vec<BackupEntry>, AppError> {
-        let backup_dir = get_app_config_dir().join("backups");
+    pub fn list_backups(&self) -> Result<Vec<BackupEntry>, AppError> {
+        let Some(backup_dir) = self.authoritative_backup_dir()? else {
+            return Ok(vec![]);
+        };
         if !backup_dir.exists() {
             return Ok(vec![]);
         }
@@ -609,7 +610,7 @@ impl Database {
     }
 
     /// Rename a backup file. Returns the new filename.
-    pub fn rename_backup(old_filename: &str, new_name: &str) -> Result<String, AppError> {
+    pub fn rename_backup(&self, old_filename: &str, new_name: &str) -> Result<String, AppError> {
         // Validate old filename (path traversal + .db suffix)
         if old_filename.contains("..")
             || old_filename.contains('/')
@@ -650,7 +651,9 @@ impl Database {
 
         let new_filename = format!("{name_part}.db");
 
-        let backup_dir = get_app_config_dir().join("backups");
+        let backup_dir = self
+            .authoritative_backup_dir()?
+            .ok_or_else(|| AppError::Config("内存数据库没有可重命名的备份目录".to_string()))?;
         let old_path = backup_dir.join(old_filename);
         let new_path = backup_dir.join(&new_filename);
 
@@ -672,7 +675,7 @@ impl Database {
     }
 
     /// Delete a backup file permanently.
-    pub fn delete_backup(filename: &str) -> Result<(), AppError> {
+    pub fn delete_backup(&self, filename: &str) -> Result<(), AppError> {
         // Validate filename (path traversal + .db suffix)
         if filename.contains("..")
             || filename.contains('/')
@@ -684,7 +687,10 @@ impl Database {
             ));
         }
 
-        let backup_path = get_app_config_dir().join("backups").join(filename);
+        let backup_dir = self
+            .authoritative_backup_dir()?
+            .ok_or_else(|| AppError::Config("内存数据库没有可删除的备份目录".to_string()))?;
+        let backup_path = backup_dir.join(filename);
         if !backup_path.exists() {
             return Err(AppError::InvalidInput(format!(
                 "Backup file not found: {filename}"
@@ -701,8 +707,100 @@ impl Database {
 mod tests {
     use super::Database;
     use crate::error::AppError;
+    use crate::product_identity::DATABASE_FILE;
     use crate::settings::{update_settings, AppSettings};
     use serial_test::serial;
+    use std::ffi::OsString;
+
+    struct TestHomeRestore(Option<OsString>);
+
+    impl Drop for TestHomeRestore {
+        fn drop(&mut self) {
+            match self.0.take() {
+                Some(value) => std::env::set_var("CC_SWITCH_TEST_HOME", value),
+                None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+            }
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn backup_management_stays_on_instance_path_after_global_directory_switch(
+    ) -> Result<(), AppError> {
+        let _restore = TestHomeRestore(std::env::var_os("CC_SWITCH_TEST_HOME"));
+        let temp = tempfile::tempdir().expect("create backup path test root");
+        let home_a = temp.path().join("home-a");
+        let home_b = temp.path().join("home-b");
+        let app_dir_a = home_a.join(".llm-usage-bar");
+        let app_dir_b = home_b.join(".llm-usage-bar");
+        std::fs::create_dir_all(&app_dir_a).expect("create A app directory");
+        std::fs::create_dir_all(app_dir_b.join("backups")).expect("create B backup directory");
+
+        std::env::set_var("CC_SWITCH_TEST_HOME", &home_a);
+        let db = Database::init_at(&app_dir_a.join(DATABASE_FILE))?;
+
+        // Simulate the settings hot-switch: global path helpers now resolve B,
+        // while the live Database connection remains authoritative for A.
+        std::env::set_var("CC_SWITCH_TEST_HOME", &home_b);
+        let created = db
+            .backup_database_file()?
+            .expect("file-backed database creates a backup");
+        assert_eq!(created.parent(), Some(app_dir_a.join("backups").as_path()));
+        let created_name = created
+            .file_name()
+            .expect("backup filename")
+            .to_string_lossy()
+            .into_owned();
+
+        let b_same_name = app_dir_b.join("backups").join(&created_name);
+        let b_only = app_dir_b.join("backups").join("b-only.db");
+        std::fs::write(&b_same_name, b"B-same-name-sentinel").expect("seed B same-name sentinel");
+        std::fs::write(&b_only, b"B-only-sentinel").expect("seed B-only sentinel");
+
+        let listed = db.list_backups()?;
+        assert!(listed.iter().any(|entry| entry.filename == created_name));
+        assert!(!listed.iter().any(|entry| entry.filename == "b-only.db"));
+
+        let renamed = db.rename_backup(&created_name, "renamed-in-a")?;
+        assert_eq!(renamed, "renamed-in-a.db");
+        assert!(!created.exists());
+        assert!(app_dir_a.join("backups").join(&renamed).exists());
+        assert_eq!(
+            std::fs::read(&b_same_name).expect("read B same-name sentinel"),
+            b"B-same-name-sentinel"
+        );
+        assert!(!app_dir_b.join("backups").join(&renamed).exists());
+
+        db.delete_backup(&renamed)?;
+        assert!(!app_dir_a.join("backups").join(&renamed).exists());
+        assert_eq!(
+            std::fs::read(&b_same_name).expect("read B same-name sentinel after delete"),
+            b"B-same-name-sentinel"
+        );
+        assert_eq!(
+            std::fs::read(&b_only).expect("read B-only sentinel after delete"),
+            b"B-only-sentinel"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn memory_backup_management_is_empty_and_mutations_are_rejected() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        assert!(db.list_backups()?.is_empty());
+
+        let rename_error = db
+            .rename_backup("anything.db", "renamed")
+            .expect_err("memory database rename must fail");
+        assert!(rename_error.to_string().contains("内存数据库"));
+
+        let delete_error = db
+            .delete_backup("anything.db")
+            .expect_err("memory database delete must fail");
+        assert!(delete_error.to_string().contains("内存数据库"));
+        Ok(())
+    }
 
     #[test]
     fn sync_import_preserves_local_only_tables() -> Result<(), AppError> {
