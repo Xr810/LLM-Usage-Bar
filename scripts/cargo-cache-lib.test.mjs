@@ -242,6 +242,7 @@ test("dry run leaves an unreferenced bucket on disk", async (t) => {
   assert.equal(result.status, 0, result.stderr);
   assert.equal((await stat(stale)).isDirectory(), true);
   assert.match(result.stdout, /dry run/i);
+  assert.doesNotMatch(result.stdout, /current lock:|referenced lock:/);
 });
 
 test("pending leases fail closed without probing a process tree", () => {
@@ -329,6 +330,22 @@ test("status is read-only and reports the cache plan", async (t) => {
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /remove: 1/);
   assert.equal((await stat(stale)).isDirectory(), true);
+});
+
+test("status reports the current lock hash before its cache bucket exists", async (t) => {
+  const root = await makeRepo("version = 4\n[[package]]\nname = 'identity'\n");
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const { lockHash, targetDir } = resolveCargoTarget(root);
+  await assert.rejects(access(targetDir), { code: "ENOENT" });
+
+  const result = runCacheCli(root, "status");
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, new RegExp(`current lock: ${lockHash}`));
+  assert.match(result.stdout, new RegExp(`referenced lock: ${lockHash}`));
+  assert.match(result.stdout, /keep: 0/);
+  assert.match(result.stdout, /remove: 0/);
+  await assert.rejects(access(targetDir), { code: "ENOENT" });
 });
 
 test("cache CLI accepts exactly one leading pnpm separator", async (t) => {

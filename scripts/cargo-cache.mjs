@@ -5,6 +5,7 @@ import {
   createPruneSnapshot,
   planPrune,
   probeBuildProcessTree,
+  resolveCargoTarget,
 } from "./cargo-cache-lib.mjs";
 
 function usage() {
@@ -35,6 +36,12 @@ function main(argv) {
     buckets: snapshot.buckets,
     probeBuildProcessTree,
   });
+  if (command === "status") {
+    console.log(`current lock: ${resolveCargoTarget().lockHash}`);
+    for (const hash of [...snapshot.referencedHashes].sort()) {
+      console.log(`referenced lock: ${hash}`);
+    }
+  }
   printPlan(plan, command === "prune" && !apply);
   if (!apply) return;
 

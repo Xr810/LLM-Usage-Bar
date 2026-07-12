@@ -39,8 +39,10 @@ local-only and ignored by Git.
 
 The wrapper creates a lease before starting Cargo or Tauri and records the
 spawned build process tree. Cache inspection keeps every bucket that is still
-referenced by a registered worktree or has an active, pending, orphaned,
-malformed, or otherwise ambiguous lease. If Git cannot enumerate every
+referenced by a registered worktree or has an active, pending, current-boot
+orphan, malformed, or otherwise ambiguous lease. A valid previous-boot orphan
+may be removed only when its boot identity proves that the old process tree has
+ended and no worktree references the bucket. If Git cannot enumerate every
 worktree, a lockfile cannot be read safely, or process-tree state cannot be
 proved inactive, pruning stops or keeps the bucket. Uncertainty never permits
 deletion.
@@ -48,7 +50,8 @@ deletion.
 ## Inspecting and pruning
 
 `pnpm cargo:cache -- status` is read-only. It scans registered worktrees and
-reports the current keep/remove plan.
+reports the current worktree lock hash, every referenced lock hash, and the
+keep/remove plan even when the current cache bucket has not been materialized.
 
 `pnpm cargo:cache -- prune` is also read-only and prints a dry-run plan. Review
 that plan before running `pnpm cargo:cache -- prune --apply`. Apply mode deletes
