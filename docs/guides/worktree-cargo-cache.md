@@ -22,6 +22,12 @@ For example, use `pnpm rust -- check`, `pnpm rust -- test`, or
 `cargo clippy`, or `tauri` directly because those commands bypass the target
 selection and lease protections.
 
+For a focused Vitest run under pnpm 11, pass the path directly, for example
+`pnpm test:unit tests/config/productIdentity.test.ts`. Do not write
+`pnpm test:unit -- tests/config/productIdentity.test.ts`: pnpm 11 forwards that
+separator to Vitest, which can broaden the run and create an avoidable CPU
+spike from concurrent workers.
+
 ## Lock-hash isolation
 
 Each invocation hashes the current worktree's `src-tauri/Cargo.lock` and uses:

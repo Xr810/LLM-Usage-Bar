@@ -82,11 +82,11 @@ describe("product identity manifests", () => {
 Run:
 
 ```bash
-pnpm test:unit -- tests/config/productIdentity.test.ts
-pnpm rust -- test --manifest-path src-tauri/Cargo.toml product_identity -- --nocapture
+pnpm test:unit tests/config/productIdentity.test.ts
+pnpm rust -- test --manifest-path src-tauri/Cargo.toml --lib product_identity -- --nocapture
 ```
 
-Expected: frontend assertion sees `cc-switch`; Rust compilation fails because `product_identity` does not exist.
+Expected: frontend assertion sees `cc-switch`; the focused Rust library test fails because `product_identity` does not exist. The `--lib` selector is intentional: integration tests still import the legacy crate name until Task 5 completes the repository-wide product identity migration.
 
 - [ ] **Step 3: Add identity constants and rename manifests**
 
@@ -414,7 +414,7 @@ it("classifies every old identity occurrence and leaves no owned rename", () => 
 
 - [ ] **Step 2: Verify RED and capture the exact inventory**
 
-Run: `pnpm test:unit -- tests/config/productIdentity.test.ts`
+Run: `pnpm test:unit tests/config/productIdentity.test.ts`
 
 Expected: FAIL listing every remaining unapproved current-product identity occurrence.
 
@@ -427,7 +427,7 @@ Classify every failure first. Rename only `ownedRename` entries, label `legacyRe
 Run:
 
 ```bash
-pnpm test:unit -- tests/config/productIdentity.test.ts
+pnpm test:unit tests/config/productIdentity.test.ts
 pnpm typecheck
 pnpm format:check
 pnpm build:renderer
@@ -458,7 +458,7 @@ pnpm rust -- fmt --check --manifest-path src-tauri/Cargo.toml
 pnpm rust -- clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
 pnpm rust -- test --manifest-path src-tauri/Cargo.toml identity -- --nocapture
 pnpm rust -- test --manifest-path src-tauri/Cargo.toml database:: -- --nocapture
-pnpm test:unit -- tests/config/productIdentity.test.ts
+pnpm test:unit tests/config/productIdentity.test.ts
 ```
 
 Expected: all exit 0.
