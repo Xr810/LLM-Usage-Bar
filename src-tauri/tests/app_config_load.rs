@@ -6,8 +6,8 @@ use llm_usage_bar_lib::product_identity::{
     DATABASE_FILE, DATABASE_IDENTITY_ARCHIVE_FILE, LEGACY_DATABASE_FILE, LOG_BASENAME,
 };
 use llm_usage_bar_lib::{
-    prepare_database_runtime_test_hook, runtime_log_paths_test_hook, AppError, AppType, Database,
-    MultiAppConfig, Provider,
+    create_schema_v13_fixture_test_hook, prepare_database_runtime_test_hook,
+    runtime_log_paths_test_hook, AppError, AppType, MultiAppConfig,
 };
 
 fn ensure_test_home() -> &'static Path {
@@ -58,20 +58,16 @@ fn database_identity_migrates_v13_and_threads_authoritative_runtime_paths() {
     let canonical_app_dir = fs::canonicalize(&app_dir).expect("canonicalize app config dir");
     let old_path = app_dir.join(LEGACY_DATABASE_FILE);
 
-    let old_db = Database::init_at(&old_path).expect("create real v13 prior-name database");
-    assert_eq!(old_db.database_path(), Some(old_path.as_path()));
-    old_db
-        .save_provider(
-            "claude",
-            &Provider::with_id(
-                "identity-fixture".to_string(),
-                "Identity Fixture".to_string(),
-                serde_json::json!({"env": {"ANTHROPIC_AUTH_TOKEN": "fixture-only"}}),
-                None,
-            ),
+    create_schema_v13_fixture_test_hook(&old_path).expect("create fixed v13 prior-name database");
+    let legacy = rusqlite::Connection::open(&old_path).expect("open fixture for v13 pinning");
+    legacy
+        .execute(
+            "INSERT INTO providers (id, app_type, name, settings_config, meta)
+             VALUES ('identity-fixture', 'claude', 'Identity Fixture', ?1, '{}')",
+            [serde_json::json!({"env": {"ANTHROPIC_AUTH_TOKEN": "fixture-only"}}).to_string()],
         )
-        .expect("seed prior-name database");
-    drop(old_db);
+        .expect("seed fixed v13 prior-name database");
+    drop(legacy);
 
     let prepared =
         prepare_database_runtime_test_hook(&app_dir).expect("prepare and open runtime database");

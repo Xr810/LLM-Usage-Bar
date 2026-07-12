@@ -1175,6 +1175,37 @@ fn validate_required_v13_tables(conn: &Connection) -> Result<(), AppError> {
             missing.join(", ")
         )));
     }
+    validate_required_immutable_triggers(conn)
+}
+
+fn validate_required_v14_tables(conn: &Connection) -> Result<(), AppError> {
+    let mut missing = Vec::new();
+    for table in REQUIRED_V13_TABLES
+        .iter()
+        .copied()
+        .filter(|table| *table != "session_log_sync")
+        .chain(["usage_sync_cursors", "session_log_sync_v13_archive"])
+    {
+        if !Database::table_exists(conn, table)? {
+            missing.push(table);
+        }
+    }
+    if !missing.is_empty() {
+        return Err(AppError::Database(format!(
+            "database is missing required v14 tables: {}",
+            missing.join(", ")
+        )));
+    }
+    if Database::table_exists(conn, "session_log_sync")? {
+        return Err(AppError::Database(
+            "database schema v14 still has writable session_log_sync".to_string(),
+        ));
+    }
+    Database::validate_schema_v14_complete(conn)?;
+    validate_required_immutable_triggers(conn)
+}
+
+fn validate_required_immutable_triggers(conn: &Connection) -> Result<(), AppError> {
     let mut missing_triggers = Vec::new();
     for trigger in REQUIRED_V13_TRIGGERS {
         let exists: bool = conn
@@ -1199,26 +1230,30 @@ fn validate_required_v13_tables(conn: &Connection) -> Result<(), AppError> {
 
 fn validate_database(conn: &Connection, policy: SchemaValidationPolicy) -> Result<(), AppError> {
     validate_quick_check(conn)?;
-    validate_required_v13_tables(conn)?;
     let version = Database::get_user_version(conn)?;
     match policy {
-        SchemaValidationPolicy::ExactMigrationSource
-            if version != DATABASE_IDENTITY_SOURCE_SCHEMA_VERSION =>
-        {
-            Err(AppError::Database(format!(
-                "database filename migration requires schema v{}, found v{version}",
-                DATABASE_IDENTITY_SOURCE_SCHEMA_VERSION
-            )))
+        SchemaValidationPolicy::ExactMigrationSource => {
+            if version != DATABASE_IDENTITY_SOURCE_SCHEMA_VERSION {
+                return Err(AppError::Database(format!(
+                    "database filename migration requires schema v{}, found v{version}",
+                    DATABASE_IDENTITY_SOURCE_SCHEMA_VERSION
+                )));
+            }
+            validate_required_v13_tables(conn)
         }
-        SchemaValidationPolicy::CurrentAuthoritative
-            if !(DATABASE_IDENTITY_SOURCE_SCHEMA_VERSION..=SCHEMA_VERSION).contains(&version) =>
-        {
-            Err(AppError::Database(format!(
-                "authoritative database schema v{version} is outside supported range v{}..=v{}",
-                DATABASE_IDENTITY_SOURCE_SCHEMA_VERSION, SCHEMA_VERSION
-            )))
+        SchemaValidationPolicy::CurrentAuthoritative => {
+            if !(DATABASE_IDENTITY_SOURCE_SCHEMA_VERSION..=SCHEMA_VERSION).contains(&version) {
+                return Err(AppError::Database(format!(
+                    "authoritative database schema v{version} is outside supported range v{}..=v{}",
+                    DATABASE_IDENTITY_SOURCE_SCHEMA_VERSION, SCHEMA_VERSION
+                )));
+            }
+            if version == DATABASE_IDENTITY_SOURCE_SCHEMA_VERSION {
+                validate_required_v13_tables(conn)
+            } else {
+                validate_required_v14_tables(conn)
+            }
         }
-        _ => Ok(()),
     }
 }
 
@@ -1961,7 +1996,7 @@ mod tests {
         FileIdentity, MigrationFaultPoint, MigrationHooks, PinnedDirectory, PublishedFile,
         SourceWriteBarrier, RETIREMENT_FENCE_TRIGGER_PREFIX,
     };
-    use crate::database::{Database, SCHEMA_VERSION};
+    use crate::database::Database;
     use crate::product_identity::{
         DATABASE_FILE, DATABASE_IDENTITY_SOURCE_SCHEMA_VERSION, LEGACY_DATABASE_FILE,
     };
@@ -1990,16 +2025,8 @@ mod tests {
     }
 
     fn create_real_v13_fixture(path: &Path) -> Connection {
-        assert_eq!(
-            SCHEMA_VERSION, DATABASE_IDENTITY_SOURCE_SCHEMA_VERSION,
-            "when the application schema advances, this helper must construct a real fixed-v13 fixture"
-        );
+        crate::create_schema_v13_fixture_test_hook(path).expect("create fixed schema-v13 fixture");
         let conn = Connection::open(path).expect("open real v13 fixture");
-        conn.execute_batch("PRAGMA foreign_keys = ON;")
-            .expect("enable fixture foreign keys");
-        Database::create_tables_on_conn(&conn).expect("create real application tables");
-        Database::apply_schema_migrations_on_conn(&conn)
-            .expect("migrate fixture to current v13 schema");
         assert_eq!(
             Database::get_user_version(&conn).expect("read fixture user_version"),
             DATABASE_IDENTITY_SOURCE_SCHEMA_VERSION

@@ -6,6 +6,7 @@ use super::{lock_conn, Database, SCHEMA_VERSION};
 use crate::error::AppError;
 use rusqlite::{params, Connection};
 use serde::Serialize;
+use std::collections::HashMap;
 
 #[derive(Serialize)]
 struct LegacySkillMigrationRow {
@@ -20,7 +21,6 @@ struct LegacySkillMigrationRow {
 /// function therefore validates the expected tables and deliberately performs
 /// no data rewrite. Future product-owned columns must be enumerated here rather
 /// than introduced through a global text/JSON replacement.
-#[allow(dead_code)] // Wired into the outer migration savepoint when schema v14 lands.
 pub(crate) fn migrate_app_owned_identity_v14(conn: &Connection) -> Result<(), AppError> {
     for table in ["providers", "mcp_servers", "settings", "profiles"] {
         if !Database::table_exists(conn, table)? {
@@ -48,6 +48,7 @@ impl Database {
 
     /// 在指定连接上创建表（供迁移和测试使用）
     pub(crate) fn create_tables_on_conn(conn: &Connection) -> Result<(), AppError> {
+        let stored_version = Self::get_user_version(conn)?;
         // 1. Providers 表
         conn.execute(
             "CREATE TABLE IF NOT EXISTS providers (
@@ -309,17 +310,21 @@ impl Database {
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
 
-        // 18. Session Log Sync 表 (会话日志同步状态)
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS session_log_sync (
-                file_path TEXT PRIMARY KEY,
-                last_modified INTEGER NOT NULL,
-                last_line_offset INTEGER NOT NULL DEFAULT 0,
-                last_synced_at INTEGER NOT NULL
-            )",
-            [],
-        )
-        .map_err(|e| AppError::Database(e.to_string()))?;
+        // 18. v13 session line state. Fresh/pre-v14 databases need this table
+        // so the normal migration chain can archive it. A v14 database must
+        // never recreate the retired writable table on startup.
+        if stored_version < 14 && !Self::table_exists(conn, "session_log_sync_v13_archive")? {
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS session_log_sync (
+                    file_path TEXT PRIMARY KEY,
+                    last_modified INTEGER NOT NULL,
+                    last_line_offset INTEGER NOT NULL DEFAULT 0,
+                    last_synced_at INTEGER NOT NULL
+                )",
+                [],
+            )
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        }
 
         // 19. Profiles 表（全应用共享的项目实体，payload 按 app 分槽快照
         //     供应商/MCP/Skills/Prompt；各应用分组的 current 标记在 settings 表）
@@ -420,26 +425,38 @@ impl Database {
 
     /// 应用 Schema 迁移
     pub(crate) fn apply_schema_migrations(&self) -> Result<(), AppError> {
+        let roots = crate::usage::source_roots::UsageSourceRoots::resolve_runtime();
+        self.apply_schema_migrations_with_roots(&roots)
+    }
+
+    pub(crate) fn apply_schema_migrations_with_roots(
+        &self,
+        roots: &crate::usage::source_roots::UsageSourceRoots,
+    ) -> Result<(), AppError> {
         let conn = lock_conn!(self.conn);
-        Self::apply_schema_migrations_on_conn(&conn)
+        Self::apply_schema_migrations_on_conn_with_roots(&conn, roots)
     }
 
     /// 在指定连接上应用 Schema 迁移
     pub(crate) fn apply_schema_migrations_on_conn(conn: &Connection) -> Result<(), AppError> {
+        let roots = crate::usage::source_roots::UsageSourceRoots::resolve_runtime();
+        Self::apply_schema_migrations_on_conn_with_roots(conn, &roots)
+    }
+
+    pub(crate) fn apply_schema_migrations_on_conn_with_roots(
+        conn: &Connection,
+        roots: &crate::usage::source_roots::UsageSourceRoots,
+    ) -> Result<(), AppError> {
         conn.execute("SAVEPOINT schema_migration;", [])
             .map_err(|e| AppError::Database(format!("开启迁移 savepoint 失败: {e}")))?;
 
-        let mut version = Self::get_user_version(conn)?;
-
-        if version > SCHEMA_VERSION {
-            conn.execute("ROLLBACK TO schema_migration;", []).ok();
-            conn.execute("RELEASE schema_migration;", []).ok();
-            return Err(AppError::Database(format!(
-                "数据库版本过新（{version}），当前应用仅支持 {SCHEMA_VERSION}，请升级应用后再尝试。"
-            )));
-        }
-
         let result = (|| {
+            let mut version = Self::get_user_version(conn)?;
+            if version > SCHEMA_VERSION {
+                return Err(AppError::Database(format!(
+                    "数据库版本过新（{version}），当前应用仅支持 {SCHEMA_VERSION}，请升级应用后再尝试。"
+                )));
+            }
             while version < SCHEMA_VERSION {
                 match version {
                     0 => {
@@ -509,6 +526,12 @@ impl Database {
                         crate::usage::migration::migrate_v12_to_v13(conn)?;
                         Self::set_user_version(conn, 13)?;
                     }
+                    13 => {
+                        log::info!("迁移数据库从 v13 到 v14（归档行游标并建立来源感知字节游标）");
+                        crate::usage::cursor_migration::migrate_v13_to_v14(conn, roots)?;
+                        migrate_app_owned_identity_v14(conn)?;
+                        Self::set_user_version(conn, 14)?;
+                    }
                     _ => {
                         return Err(AppError::Database(format!(
                             "未知的数据库版本 {version}，无法迁移到 {SCHEMA_VERSION}"
@@ -517,21 +540,146 @@ impl Database {
                 }
                 version = Self::get_user_version(conn)?;
             }
+            if version == 14 {
+                Self::validate_schema_v14_complete(conn)?;
+            }
             Ok(())
         })();
 
         match result {
             Ok(_) => {
                 conn.execute("RELEASE schema_migration;", [])
-                    .map_err(|e| AppError::Database(format!("提交迁移 savepoint 失败: {e}")))?;
+                    .map_err(|error| {
+                        AppError::Database(format!(
+                            "提交迁移 savepoint 失败，连接状态不确定: {error}"
+                        ))
+                    })?;
                 Ok(())
             }
-            Err(e) => {
-                conn.execute("ROLLBACK TO schema_migration;", []).ok();
-                conn.execute("RELEASE schema_migration;", []).ok();
-                Err(e)
+            Err(error) => Err(Self::rollback_schema_migration_error(conn, error)),
+        }
+    }
+
+    pub(crate) fn rollback_schema_migration_error(conn: &Connection, cause: AppError) -> AppError {
+        if let Err(error) = conn.execute("ROLLBACK TO schema_migration;", []) {
+            return AppError::Database(format!(
+                "schema migration failed ({cause}); rollback failed and connection state is uncertain: rollback={error}; release=not attempted"
+            ));
+        }
+        if let Err(error) = conn.execute("RELEASE schema_migration;", []) {
+            return AppError::Database(format!(
+                "schema migration failed ({cause}); rollback succeeded but release failed and connection state is uncertain: rollback=ok; release={error}"
+            ));
+        }
+        cause
+    }
+
+    pub(crate) fn validate_schema_v14_complete(conn: &Connection) -> Result<(), AppError> {
+        let mut missing = Vec::new();
+        for table in ["usage_sync_cursors", "session_log_sync_v13_archive"] {
+            if !Self::table_exists(conn, table)? {
+                missing.push(table);
             }
         }
+        let legacy_live = Self::table_exists(conn, "session_log_sync")?;
+        if !missing.is_empty() || legacy_live {
+            let mut details = Vec::new();
+            if !missing.is_empty() {
+                details.push(format!("missing {}", missing.join(", ")));
+            }
+            if legacy_live {
+                details.push("retired session_log_sync is still writable".to_string());
+            }
+            return Err(AppError::Database(format!(
+                "incomplete schema v14: {}",
+                details.join("; ")
+            )));
+        }
+        Self::validate_v14_cursor_table_shape(conn)?;
+        Self::validate_v14_archive_table_shape(conn)?;
+        Ok(())
+    }
+
+    fn validate_v14_cursor_table_shape(conn: &Connection) -> Result<(), AppError> {
+        let columns = Self::table_column_primary_keys(conn, "usage_sync_cursors")?;
+        let required = [
+            "source",
+            "cursor_key",
+            "resource_path",
+            "resource_identity",
+            "modified_at_ns",
+            "size_bytes",
+            "byte_offset",
+            "line_offset",
+            "parser_state_json",
+            "last_success_at",
+        ];
+        let missing = required
+            .into_iter()
+            .filter(|column| !columns.contains_key(*column))
+            .collect::<Vec<_>>();
+        let primary_key_is_exact = columns.get("source") == Some(&1)
+            && columns.get("cursor_key") == Some(&2)
+            && columns.iter().all(|(column, position)| {
+                matches!(column.as_str(), "source" | "cursor_key") || *position == 0
+            });
+        if !missing.is_empty() || !primary_key_is_exact {
+            return Err(AppError::Database(format!(
+                "incomplete schema v14: malformed usage_sync_cursors (missing columns: {}; expected PRIMARY KEY(source, cursor_key))",
+                if missing.is_empty() {
+                    "none".to_string()
+                } else {
+                    missing.join(", ")
+                }
+            )));
+        }
+        Ok(())
+    }
+
+    fn validate_v14_archive_table_shape(conn: &Connection) -> Result<(), AppError> {
+        let columns = Self::table_column_primary_keys(conn, "session_log_sync_v13_archive")?;
+        let required = [
+            "file_path",
+            "last_modified",
+            "last_line_offset",
+            "last_synced_at",
+        ];
+        let missing = required
+            .into_iter()
+            .filter(|column| !columns.contains_key(*column))
+            .collect::<Vec<_>>();
+        let primary_key_is_exact = columns.get("file_path") == Some(&1)
+            && columns
+                .iter()
+                .all(|(column, position)| column == "file_path" || *position == 0);
+        if !missing.is_empty() || !primary_key_is_exact {
+            return Err(AppError::Database(format!(
+                "incomplete schema v14: malformed session_log_sync_v13_archive (missing columns: {}; expected file_path primary key)",
+                if missing.is_empty() {
+                    "none".to_string()
+                } else {
+                    missing.join(", ")
+                }
+            )));
+        }
+        Ok(())
+    }
+
+    fn table_column_primary_keys(
+        conn: &Connection,
+        table: &str,
+    ) -> Result<HashMap<String, i64>, AppError> {
+        let sql = format!("PRAGMA table_info('{table}')");
+        let mut statement = conn
+            .prepare(&sql)
+            .map_err(|error| AppError::Database(format!("inspect {table} schema: {error}")))?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(1)?, row.get::<_, i64>(5)?))
+            })
+            .map_err(|error| AppError::Database(format!("query {table} schema: {error}")))?;
+        rows.collect::<Result<HashMap<_, _>, _>>()
+            .map_err(|error| AppError::Database(format!("read {table} schema: {error}")))
     }
 
     /// v0 -> v1 迁移：补齐所有缺失列
@@ -1063,7 +1211,7 @@ impl Database {
     }
 
     /// v4 -> v5 迁移：新增计费模式配置与请求模型字段
-    fn migrate_v4_to_v5(conn: &Connection) -> Result<(), AppError> {
+    pub(crate) fn migrate_v4_to_v5(conn: &Connection) -> Result<(), AppError> {
         if Self::table_exists(conn, "proxy_config")? {
             Self::add_column_if_missing(
                 conn,
@@ -1284,7 +1432,7 @@ impl Database {
     /// 路由接管下 model（真实上游模型）≠ request_model（客户端别名），
     /// 旧 rollup 只按 model 聚合，明细 prune 后映射关系永久丢失、计费不可审计。
     /// SQLite 改主键必须重建表；历史行的 request_model 已不可知，填 ''。
-    fn migrate_v10_to_v11(conn: &Connection) -> Result<(), AppError> {
+    pub(crate) fn migrate_v10_to_v11(conn: &Connection) -> Result<(), AppError> {
         // proxy_request_logs.pricing_model：NULL = v11 前的历史行（回填走
         // model → 占位符回退 request_model 的旧逻辑），'' = 未计价的错误行
         if Self::table_exists(conn, "proxy_request_logs")? {

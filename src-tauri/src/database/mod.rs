@@ -38,6 +38,7 @@ pub(crate) use dao::proxy::{
     validate_cost_multiplier, validate_pricing_source, PRICING_SOURCE_REQUEST,
     PRICING_SOURCE_RESPONSE,
 };
+pub use dao::usage_sync_cursors::UsageSyncCursor;
 pub use dao::FailoverQueueItem;
 pub use dao::Profile;
 pub(crate) use identity_migration::{prepare_database_identity, DatabaseIdentityOutcome};
@@ -54,7 +55,7 @@ use std::sync::Mutex;
 
 /// 当前 Schema 版本号
 /// 每次修改表结构时递增，并在 schema.rs 中添加相应的迁移逻辑
-pub(crate) const SCHEMA_VERSION: i32 = 13;
+pub(crate) const SCHEMA_VERSION: i32 = 14;
 
 /// 安全地序列化 JSON，避免 unwrap panic
 pub(crate) fn to_json_string<T: Serialize>(value: &T) -> Result<String, AppError> {
@@ -108,6 +109,9 @@ impl Database {
     /// 使用调用方已经选定的权威路径初始化数据库。
     pub fn init_at(db_path: &Path) -> Result<Self, AppError> {
         let db_exists = db_path.exists();
+        // Resolve external source roots before opening or migrating SQLite so
+        // v13 cursor classification never depends on post-database state.
+        let usage_source_roots = crate::usage::source_roots::UsageSourceRoots::resolve_runtime();
 
         // 确保父目录存在
         if let Some(parent) = db_path.parent() {
@@ -149,7 +153,7 @@ impl Database {
             }
         }
 
-        db.apply_schema_migrations()?;
+        db.apply_schema_migrations_with_roots(&usage_source_roots)?;
         if let Err(e) = db.ensure_incremental_auto_vacuum() {
             log::warn!("Failed to ensure incremental auto-vacuum: {e}");
         }

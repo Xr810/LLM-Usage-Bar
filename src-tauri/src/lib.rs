@@ -223,6 +223,38 @@ pub fn prepare_database_runtime_test_hook(
 
 #[cfg(debug_assertions)]
 #[doc(hidden)]
+pub fn create_schema_v13_fixture_test_hook(path: &Path) -> Result<(), AppError> {
+    if database::SCHEMA_VERSION != 14
+        || product_identity::DATABASE_IDENTITY_SOURCE_SCHEMA_VERSION != 13
+    {
+        return Err(AppError::Database(
+            "fixed schema-v13 fixture builder must be reviewed when schema versions change"
+                .to_string(),
+        ));
+    }
+    let conn = rusqlite::Connection::open(path)
+        .map_err(|error| AppError::Database(format!("open fixed v13 fixture: {error}")))?;
+    conn.execute_batch("PRAGMA foreign_keys = ON;")
+        .map_err(|error| AppError::Database(format!("configure fixed v13 fixture: {error}")))?;
+    Database::create_tables_on_conn(&conn)?;
+    usage::migration::migrate_v12_to_v13(&conn)?;
+    Database::set_user_version(
+        &conn,
+        product_identity::DATABASE_IDENTITY_SOURCE_SCHEMA_VERSION,
+    )?;
+    if Database::table_exists(&conn, "usage_sync_cursors")?
+        || Database::table_exists(&conn, "session_log_sync_v13_archive")?
+        || !Database::table_exists(&conn, "session_log_sync")?
+    {
+        return Err(AppError::Database(
+            "fixed schema-v13 fixture unexpectedly contains v14 cursor structures".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(debug_assertions)]
+#[doc(hidden)]
 pub fn runtime_log_paths_test_hook(app_config_dir: &Path) -> (PathBuf, PathBuf) {
     (
         panic_hook::file_log_path_for(app_config_dir),

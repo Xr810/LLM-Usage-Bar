@@ -11,6 +11,371 @@ use serde_json::json;
 use std::collections::HashMap;
 use tempfile::NamedTempFile;
 
+mod usage_sync_cursor_tests {
+    use super::*;
+
+    fn cursor_fixture(source: &str, key: &str, byte_offset: i64) -> UsageSyncCursor {
+        UsageSyncCursor {
+            source: source.to_string(),
+            cursor_key: key.to_string(),
+            resource_path: Some(format!("/tmp/{source}/{key}")),
+            resource_identity: Some(format!("unix:{source}:{key}")),
+            modified_at_ns: 11,
+            size_bytes: byte_offset + 100,
+            byte_offset,
+            line_offset: 3,
+            parser_state_json: Some(r#"{"version":1,"eventIndex":2}"#.to_string()),
+            last_success_at: 33,
+        }
+    }
+
+    #[test]
+    fn v14_cursor_round_trips_every_resume_field() {
+        let db = Database::memory().unwrap();
+        let cursor = UsageSyncCursor {
+            source: "codex".into(),
+            cursor_key: "session.jsonl".into(),
+            resource_path: Some("/tmp/session.jsonl".into()),
+            resource_identity: Some("unix:1:2".into()),
+            modified_at_ns: 11,
+            size_bytes: 22,
+            byte_offset: 17,
+            line_offset: 3,
+            parser_state_json: Some(r#"{"version":1,"eventIndex":2}"#.into()),
+            last_success_at: 33,
+        };
+
+        db.put_usage_sync_cursor(&cursor).unwrap();
+
+        assert_eq!(
+            db.get_usage_sync_cursor("codex", "session.jsonl").unwrap(),
+            Some(cursor)
+        );
+    }
+
+    #[test]
+    fn cursor_update_is_atomic_and_source_scoped() {
+        let db = Database::memory().unwrap();
+        let mut claude = cursor_fixture("claude", "same.jsonl", 10);
+        let codex = cursor_fixture("codex", "same.jsonl", 20);
+        db.put_usage_sync_cursor(&claude).unwrap();
+        db.put_usage_sync_cursor(&codex).unwrap();
+
+        claude.resource_path = None;
+        claude.resource_identity = Some("unix:updated".into());
+        claude.modified_at_ns = 111;
+        claude.size_bytes = 222;
+        claude.byte_offset = 30;
+        claude.line_offset = 13;
+        claude.parser_state_json = Some(r#"{"version":2}"#.into());
+        claude.last_success_at = 333;
+        db.put_usage_sync_cursor(&claude).unwrap();
+
+        assert_eq!(
+            db.get_usage_sync_cursor("claude", "same.jsonl").unwrap(),
+            Some(claude)
+        );
+        assert_eq!(
+            db.get_usage_sync_cursor("codex", "same.jsonl").unwrap(),
+            Some(codex)
+        );
+    }
+
+    #[test]
+    fn cursor_list_returns_only_the_requested_source() {
+        let db = Database::memory().unwrap();
+        let claude_a = cursor_fixture("claude", "a.jsonl", 10);
+        let claude_b = cursor_fixture("claude", "b.jsonl", 20);
+        let codex = cursor_fixture("codex", "a.jsonl", 30);
+        db.put_usage_sync_cursor(&claude_b).unwrap();
+        db.put_usage_sync_cursor(&codex).unwrap();
+        db.put_usage_sync_cursor(&claude_a).unwrap();
+
+        assert_eq!(
+            db.list_usage_sync_cursors("claude").unwrap(),
+            vec![claude_a, claude_b]
+        );
+        assert_eq!(db.list_usage_sync_cursors("missing").unwrap(), Vec::new());
+    }
+
+    #[test]
+    fn connection_level_cursor_upsert_participates_in_the_callers_transaction(
+    ) -> Result<(), AppError> {
+        let db = Database::memory().unwrap();
+        let cursor = cursor_fixture("claude", "transaction.jsonl", 10);
+
+        {
+            let mut conn = lock_conn!(db.conn);
+            let transaction = conn.transaction().unwrap();
+            Database::put_usage_sync_cursor_on_conn(&transaction, &cursor).unwrap();
+            transaction.rollback().unwrap();
+        }
+
+        assert_eq!(
+            db.get_usage_sync_cursor("claude", "transaction.jsonl")
+                .unwrap(),
+            None
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn cursor_delete_uses_the_composite_source_key() {
+        let db = Database::memory().unwrap();
+        let claude = cursor_fixture("claude", "same.jsonl", 10);
+        let codex = cursor_fixture("codex", "same.jsonl", 20);
+        db.put_usage_sync_cursor(&claude).unwrap();
+        db.put_usage_sync_cursor(&codex).unwrap();
+
+        db.delete_usage_sync_cursor("claude", "same.jsonl").unwrap();
+
+        assert_eq!(
+            db.get_usage_sync_cursor("claude", "same.jsonl").unwrap(),
+            None
+        );
+        assert_eq!(
+            db.get_usage_sync_cursor("codex", "same.jsonl").unwrap(),
+            Some(codex)
+        );
+    }
+
+    #[test]
+    fn cursor_rejects_negative_sizes_and_offsets_before_sql() {
+        let db = Database::memory().unwrap();
+
+        for (field, cursor) in [
+            ("size_bytes", {
+                let mut cursor = cursor_fixture("codex", "negative-size", 0);
+                cursor.size_bytes = -1;
+                cursor
+            }),
+            ("byte_offset", {
+                let mut cursor = cursor_fixture("codex", "negative-byte", 0);
+                cursor.byte_offset = -1;
+                cursor
+            }),
+            ("line_offset", {
+                let mut cursor = cursor_fixture("codex", "negative-line", 0);
+                cursor.line_offset = -1;
+                cursor
+            }),
+        ] {
+            let error = db
+                .put_usage_sync_cursor(&cursor)
+                .expect_err("negative cursor field must be rejected");
+            assert!(
+                error.to_string().contains(field),
+                "error should identify {field}: {error}"
+            );
+            assert_eq!(
+                db.get_usage_sync_cursor(&cursor.source, &cursor.cursor_key)
+                    .unwrap(),
+                None,
+                "invalid cursor must not reach SQL"
+            );
+        }
+    }
+}
+
+mod schema_v14_cursor_migration_tests {
+    use super::*;
+    use crate::usage::source_roots::UsageSourceRoots;
+    use std::path::PathBuf;
+
+    fn roots() -> UsageSourceRoots {
+        UsageSourceRoots {
+            claude: PathBuf::from("/Users/test/.claude/projects"),
+            codex: PathBuf::from("/Users/test/.codex"),
+            gemini: PathBuf::from("/Users/test/.gemini/tmp"),
+            opencode: PathBuf::from("/Users/test/.local/share/opencode"),
+        }
+    }
+
+    fn v13_current_tables() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        Database::create_tables_on_conn(&conn).unwrap();
+        Database::set_user_version(&conn, 13).unwrap();
+        conn
+    }
+
+    #[test]
+    fn migration_v13_to_v14_archives_line_state_and_sets_version_once() {
+        let conn = v13_current_tables();
+        conn.execute(
+            "INSERT INTO session_log_sync
+             (file_path, last_modified, last_line_offset, last_synced_at)
+             VALUES (?1, 11, 3, 33)",
+            ["/Users/test/.claude/projects/p/session.jsonl"],
+        )
+        .unwrap();
+
+        Database::apply_schema_migrations_on_conn_with_roots(&conn, &roots()).unwrap();
+
+        assert_eq!(Database::get_user_version(&conn).unwrap(), 14);
+        assert!(!Database::table_exists(&conn, "session_log_sync").unwrap());
+        assert!(Database::table_exists(&conn, "session_log_sync_v13_archive").unwrap());
+        let cursor = conn
+            .query_row(
+                "SELECT source, byte_offset, line_offset
+                 FROM usage_sync_cursors WHERE cursor_key = ?1",
+                ["/Users/test/.claude/projects/p/session.jsonl"],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(cursor, ("claude".to_string(), 0, 3));
+
+        Database::create_tables_on_conn(&conn).unwrap();
+        assert!(
+            !Database::table_exists(&conn, "session_log_sync").unwrap(),
+            "v14 startup must not recreate the writable v13 table"
+        );
+    }
+
+    #[test]
+    fn v14_migration_failure_rolls_back_archive_cursor_and_version() {
+        let conn = v13_current_tables();
+        conn.execute("DROP TABLE IF EXISTS usage_sync_cursors", [])
+            .unwrap();
+        conn.execute_batch(
+            "CREATE TABLE usage_sync_cursors (
+                 source TEXT NOT NULL CHECK (source != 'claude'),
+                 cursor_key TEXT NOT NULL,
+                 resource_path TEXT,
+                 resource_identity TEXT,
+                 modified_at_ns INTEGER NOT NULL DEFAULT 0,
+                 size_bytes INTEGER NOT NULL DEFAULT 0,
+                 byte_offset INTEGER NOT NULL DEFAULT 0,
+                 line_offset INTEGER NOT NULL DEFAULT 0,
+                 parser_state_json TEXT,
+                 last_success_at INTEGER NOT NULL DEFAULT 0,
+                 PRIMARY KEY (source, cursor_key)
+             );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO session_log_sync
+             (file_path, last_modified, last_line_offset, last_synced_at)
+             VALUES (?1, 11, 3, 33)",
+            ["/Users/test/.claude/projects/p/session.jsonl"],
+        )
+        .unwrap();
+
+        Database::apply_schema_migrations_on_conn_with_roots(&conn, &roots())
+            .expect_err("forced cursor insert failure must roll back the outer savepoint");
+
+        assert_eq!(Database::get_user_version(&conn).unwrap(), 13);
+        assert!(Database::table_exists(&conn, "session_log_sync").unwrap());
+        assert!(!Database::table_exists(&conn, "session_log_sync_v13_archive").unwrap());
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM usage_sync_cursors", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(rows, 0);
+    }
+
+    #[test]
+    fn incomplete_v14_is_rejected_instead_of_silently_repaired() {
+        let conn = Connection::open_in_memory().unwrap();
+        Database::create_tables_on_conn(&conn).unwrap();
+        conn.execute("DROP TABLE IF EXISTS usage_sync_cursors", [])
+            .unwrap();
+        Database::set_user_version(&conn, 14).unwrap();
+
+        let error = Database::apply_schema_migrations_on_conn_with_roots(&conn, &roots())
+            .expect_err("incomplete v14 must fail closed");
+
+        assert!(error.to_string().contains("incomplete schema v14"));
+        assert!(!Database::table_exists(&conn, "usage_sync_cursors").unwrap());
+        assert!(!Database::table_exists(&conn, "session_log_sync_v13_archive").unwrap());
+    }
+
+    #[test]
+    fn malformed_v14_cursor_columns_and_primary_key_are_rejected() {
+        let conn = Connection::open_in_memory().unwrap();
+        Database::create_tables_on_conn(&conn).unwrap();
+        conn.execute(
+            "ALTER TABLE session_log_sync RENAME TO session_log_sync_v13_archive",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "CREATE TABLE usage_sync_cursors (source TEXT, cursor_key TEXT)",
+            [],
+        )
+        .unwrap();
+        Database::set_user_version(&conn, 14).unwrap();
+
+        let error = Database::apply_schema_migrations_on_conn_with_roots(&conn, &roots())
+            .expect_err("malformed cursor schema must fail closed");
+
+        assert!(error.to_string().contains("usage_sync_cursors"));
+    }
+
+    #[test]
+    fn malformed_v14_archive_columns_are_rejected() {
+        let conn = Connection::open_in_memory().unwrap();
+        Database::create_tables_on_conn(&conn).unwrap();
+        conn.execute("DROP TABLE session_log_sync", []).unwrap();
+        conn.execute(
+            "CREATE TABLE session_log_sync_v13_archive (file_path TEXT PRIMARY KEY)",
+            [],
+        )
+        .unwrap();
+        Database::create_usage_sync_cursors_table_on_conn(&conn).unwrap();
+        Database::set_user_version(&conn, 14).unwrap();
+
+        let error = Database::apply_schema_migrations_on_conn_with_roots(&conn, &roots())
+            .expect_err("malformed archive schema must fail closed");
+
+        assert!(error.to_string().contains("session_log_sync_v13_archive"));
+    }
+
+    #[test]
+    fn composite_v14_archive_primary_key_is_rejected() {
+        let conn = Connection::open_in_memory().unwrap();
+        Database::create_tables_on_conn(&conn).unwrap();
+        conn.execute("DROP TABLE session_log_sync", []).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE session_log_sync_v13_archive (
+                 file_path TEXT NOT NULL,
+                 last_modified INTEGER NOT NULL,
+                 last_line_offset INTEGER NOT NULL DEFAULT 0,
+                 last_synced_at INTEGER NOT NULL,
+                 PRIMARY KEY (file_path, last_modified)
+             );",
+        )
+        .unwrap();
+        Database::create_usage_sync_cursors_table_on_conn(&conn).unwrap();
+        Database::set_user_version(&conn, 14).unwrap();
+
+        let error = Database::apply_schema_migrations_on_conn_with_roots(&conn, &roots())
+            .expect_err("archive composite primary key must fail closed");
+
+        assert!(error.to_string().contains("expected file_path primary key"));
+    }
+
+    #[test]
+    fn rollback_failure_reports_uncertain_connection_state() {
+        let conn = Connection::open_in_memory().unwrap();
+        let error = Database::rollback_schema_migration_error(
+            &conn,
+            AppError::Database("original migration failure".to_string()),
+        );
+        let message = error.to_string();
+        assert!(message.contains("original migration failure"));
+        assert!(message.contains("state is uncertain"));
+        assert!(message.contains("rollback="));
+        assert!(message.contains("release="));
+    }
+}
+
 #[test]
 fn identity_discriminator_v13_database_preserves_unenumerated_text_and_json() -> Result<(), AppError>
 {
@@ -402,7 +767,26 @@ fn schema_migration_v4_adds_pricing_model_columns() {
             meta TEXT NOT NULL DEFAULT '{}',
             PRIMARY KEY (id, app_type)
         );
-        CREATE TABLE proxy_config (app_type TEXT PRIMARY KEY);
+        CREATE TABLE proxy_config (
+            app_type TEXT PRIMARY KEY,
+            proxy_enabled INTEGER NOT NULL DEFAULT 0,
+            listen_address TEXT NOT NULL DEFAULT '127.0.0.1',
+            listen_port INTEGER NOT NULL DEFAULT 15722,
+            enable_logging INTEGER NOT NULL DEFAULT 1,
+            enabled INTEGER NOT NULL DEFAULT 0,
+            auto_failover_enabled INTEGER NOT NULL DEFAULT 0,
+            max_retries INTEGER NOT NULL DEFAULT 3,
+            streaming_first_byte_timeout INTEGER NOT NULL DEFAULT 60,
+            streaming_idle_timeout INTEGER NOT NULL DEFAULT 120,
+            non_streaming_timeout INTEGER NOT NULL DEFAULT 600,
+            circuit_failure_threshold INTEGER NOT NULL DEFAULT 4,
+            circuit_success_threshold INTEGER NOT NULL DEFAULT 2,
+            circuit_timeout_seconds INTEGER NOT NULL DEFAULT 60,
+            circuit_error_rate_threshold REAL NOT NULL DEFAULT 0.6,
+            circuit_min_requests INTEGER NOT NULL DEFAULT 10,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
         CREATE TABLE proxy_request_logs (request_id TEXT PRIMARY KEY, model TEXT NOT NULL);
         CREATE TABLE mcp_servers (
             id TEXT PRIMARY KEY,
@@ -416,9 +800,9 @@ fn schema_migration_v4_adds_pricing_model_columns() {
         "#,
     )
     .expect("seed v4 schema");
-
     Database::set_user_version(&conn, 4).expect("set user_version=4");
-    Database::apply_schema_migrations_on_conn(&conn).expect("apply migrations");
+    Database::migrate_v4_to_v5(&conn).expect("apply v4 to v5 migration");
+    Database::set_user_version(&conn, 5).expect("set user_version=5");
 
     let multiplier = get_column_info(&conn, "proxy_config", "default_cost_multiplier");
     assert_eq!(multiplier.r#type, "TEXT");
@@ -439,7 +823,7 @@ fn schema_migration_v4_adds_pricing_model_columns() {
 
     assert_eq!(
         Database::get_user_version(&conn).expect("version after migration"),
-        SCHEMA_VERSION
+        5
     );
 }
 
@@ -478,9 +862,9 @@ fn migration_v10_to_v11_rebuilds_rollups_with_request_model_dimension() {
         "#,
     )
     .expect("seed v10 rollup table");
-
     Database::set_user_version(&conn, 10).expect("set user_version=10");
-    Database::apply_schema_migrations_on_conn(&conn).expect("apply migrations");
+    Database::migrate_v10_to_v11(&conn).expect("apply v10 to v11 migration");
+    Database::set_user_version(&conn, 11).expect("set user_version=11");
 
     // 新列存在且 NOT NULL DEFAULT ''
     let request_model = get_column_info(&conn, "usage_daily_rollups", "request_model");
@@ -520,7 +904,7 @@ fn migration_v10_to_v11_rebuilds_rollups_with_request_model_dimension() {
 
     assert_eq!(
         Database::get_user_version(&conn).expect("version after migration"),
-        SCHEMA_VERSION
+        11
     );
 }
 
@@ -1104,6 +1488,7 @@ fn true_v12_usage_fixture() -> Connection {
     let conn = Connection::open_in_memory().expect("open v12 fixture");
     conn.execute_batch(V12_USAGE_MIGRATION_FIXTURE_SQL)
         .expect("create v12 fixture schema");
+    Database::create_tables_on_conn(&conn).expect("complete real startup table set");
 
     insert_v12_provider(
         &conn,
@@ -1190,7 +1575,7 @@ fn migration_v12_to_v13_preserves_legacy_rows_and_imports_only_proxy_events() {
 
     Database::apply_schema_migrations_on_conn(&conn).expect("migrate v12 to v13");
 
-    assert_eq!(Database::get_user_version(&conn).unwrap(), 13);
+    assert_eq!(Database::get_user_version(&conn).unwrap(), SCHEMA_VERSION);
     assert_eq!(count(&conn, "providers"), legacy_provider_count);
     assert_eq!(count(&conn, "proxy_request_logs"), legacy_log_count);
     assert_eq!(count(&conn, "usage_providers"), legacy_provider_count);
