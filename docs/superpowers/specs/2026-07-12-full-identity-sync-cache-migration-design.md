@@ -1,8 +1,13 @@
 # LLM Usage Bar Full Identity, Session Watcher, and Build Cache Migration Design
 
-**Status:** Approved direction; written specification awaiting final user review
+**Status:** Approved for implementation
 **Base commit:** `66cd86a5` (`codex/integration-pr4-pr5-pr6`)
 **Implementation branch:** `codex/full-identity-sync-cache-migration`
+
+**Supported desktop platform:** macOS only. Windows and Linux application
+runtime, packaging, and migration behavior are outside the delivery and
+verification scope. Existing portable helpers may keep small defensive
+branches, but they must not drive design complexity or block macOS delivery.
 
 ## Purpose
 
@@ -167,11 +172,10 @@ checks reject aliases that resolve into `~/.cc-switch`.
    may be any validated version from 13 through the application's current
    supported schema, allowing both the publication-before-schema-migration
    crash window and subsequent v14 restarts while still rejecting future data.
-5. Flush and atomically publish the destination with a true same-filesystem
-   no-replace rename: `renameat2(RENAME_NOREPLACE)` on Linux,
-   `renameatx_np(RENAME_EXCL)` on macOS, and `MoveFileExW` without replace on
-   Windows. Unsupported kernels/filesystems fail closed; hard-link-plus-unlink
-   fallback is forbidden because a crash can retain a full hidden database.
+5. Flush and atomically publish the destination on macOS with the true
+   same-filesystem no-replace primitive `renameatx_np(RENAME_EXCL)`.
+   Unsupported filesystems fail closed; hard-link-plus-unlink fallback is
+   forbidden because a crash can retain a full hidden database.
    If another valid new file already exists, it wins and the old file is retained.
 6. Materialize a second, independently owned complete SQLite snapshot from the
    validated backup, validate it, and publish it with no-clobber semantics as
@@ -272,10 +276,10 @@ Failures in steps 1-3 leave the old cursor unchanged.
 
 ## 5. Filesystem Watcher Without Feedback Loops
 
-Use `notify` 8.2 through `recommended_watcher`, which selects the native
-backend on macOS, Windows, and Linux. The watcher is a hint source, not the
-source of truth; native watchers can miss events on some filesystems, so a
-periodic reconciliation remains required.
+Use `notify` 8.2 through `recommended_watcher`, which selects the native macOS
+backend. The watcher is a hint source, not the source of truth; native watchers
+can miss events on some filesystems, so a periodic reconciliation remains
+required.
 
 ### 5.1 Watched roots
 
