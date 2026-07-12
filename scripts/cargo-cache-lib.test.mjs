@@ -18,7 +18,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { rmSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
 import {
   applyPrunePlan,
   createPruneSnapshot,
@@ -34,6 +34,13 @@ import {
 
 const wrapperPath = path.resolve("scripts/with-cargo-target.mjs");
 const cacheCliPath = path.resolve("scripts/cargo-cache.mjs");
+
+test("project scripts route local Cargo and Tauri through the wrapper", () => {
+  const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url)));
+  assert.equal(pkg.scripts.tauri, "node scripts/with-cargo-target.mjs tauri");
+  assert.equal(pkg.scripts.rust, "node scripts/with-cargo-target.mjs cargo");
+  assert.equal(pkg.scripts["cargo:cache"], "node scripts/cargo-cache.mjs");
+});
 
 function git(cwd, ...args) {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
@@ -322,6 +329,24 @@ test("status is read-only and reports the cache plan", async (t) => {
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /remove: 1/);
   assert.equal((await stat(stale)).isDirectory(), true);
+});
+
+test("cache CLI accepts exactly one leading pnpm separator", async (t) => {
+  const root = await makeRepo("version = 4\n");
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  const separated = runCacheCli(root, "--", "status");
+  assert.equal(separated.status, 0, separated.stderr);
+  assert.match(separated.stdout, /keep: 0/);
+
+  for (const args of [
+    ["--", "--", "status"],
+    ["--", "status", "--"],
+  ]) {
+    const invalid = runCacheCli(root, ...args);
+    assert.notEqual(invalid.status, 0);
+    assert.match(invalid.stderr, /Usage:/);
+  }
 });
 
 test("apply deletes only stale hash buckets inside the shared cache", async (t) => {
@@ -899,6 +924,55 @@ test("wrapper exposes target directory and propagates child exit code", async (t
     { cwd: root },
   );
   assert.equal(result.status, 7, result.stderr?.toString());
+});
+
+test("wrapper strips exactly one pnpm separator and preserves later separators", async (t) => {
+  const root = await makeRepo("version = 4\n");
+  t.after(async () => {
+    await cleanupRepoProcesses(root);
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const separated = spawnSync(
+    process.execPath,
+    [
+      wrapperPath,
+      process.execPath,
+      "--",
+      "-e",
+      "process.stdout.write('separated')",
+    ],
+    { cwd: root, encoding: "utf8" },
+  );
+  assert.equal(separated.status, 0, separated.stderr);
+  assert.equal(separated.stdout, "separated");
+
+  const doubled = spawnSync(
+    process.execPath,
+    [
+      wrapperPath,
+      process.execPath,
+      "--",
+      "--",
+      "-e",
+      "process.exit(0)",
+    ],
+    { cwd: root, encoding: "utf8" },
+  );
+  assert.notEqual(doubled.status, 0);
+
+  const fixture = path.join(root, "argv-fixture.mjs");
+  await writeFile(
+    fixture,
+    "process.stdout.write(JSON.stringify(process.argv.slice(2)));\n",
+  );
+  const preserved = spawnSync(
+    process.execPath,
+    [wrapperPath, process.execPath, fixture, "--", "payload"],
+    { cwd: root, encoding: "utf8" },
+  );
+  assert.equal(preserved.status, 0, preserved.stderr);
+  assert.deepEqual(JSON.parse(preserved.stdout), ["--", "payload"]);
 });
 
 test("successful child exit removes a lease only when tree emptiness is provable", async (t) => {

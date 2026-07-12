@@ -12,7 +12,8 @@ import {
   writeLeaseAtomic,
 } from "./cargo-cache-lib.mjs";
 
-const [command, ...args] = process.argv.slice(2);
+const [command, ...rawArgs] = process.argv.slice(2);
+const args = rawArgs[0] === "--" ? rawArgs.slice(1) : rawArgs;
 if (!command) {
   console.error("usage: with-cargo-target <command> [args...]");
   process.exit(64);

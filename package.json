@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "pnpm tauri dev",
     "build": "pnpm tauri build",
-    "tauri": "tauri",
+    "tauri": "node scripts/with-cargo-target.mjs tauri",
+    "rust": "node scripts/with-cargo-target.mjs cargo",
+    "cargo:cache": "node scripts/cargo-cache.mjs",
     "dev:renderer": "vite",
     "build:renderer": "vite build",
     "typecheck": "tsc --noEmit",

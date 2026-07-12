@@ -20,7 +20,7 @@ function printPlan(plan, dryRun) {
 }
 
 function main(argv) {
-  const [command, ...options] = argv;
+  const [command, ...options] = argv[0] === "--" ? argv.slice(1) : argv;
   if (!new Set(["status", "prune"]).has(command)) {
     throw new Error(usage());
   }
