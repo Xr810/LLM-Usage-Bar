@@ -58,7 +58,8 @@ describe("usage dashboard main path", () => {
     expect(screen.queryByRole("button", { name: "Add Provider" })).toBeNull();
 
     await user.click(screen.getByRole("tab", { name: "Metered usage" }));
-    expect(await screen.findByText("Metered API")).toBeInTheDocument();
+    expect(await screen.findByText("Azure API")).toBeInTheDocument();
+    expect(screen.getByText("OpenRouter")).toBeInTheDocument();
     expect(screen.queryByText("Official Subscription")).toBeNull();
     for (const label of legacyLabels) {
       expect(
@@ -99,6 +100,23 @@ describe("usage dashboard main path", () => {
     expect(startProxy).not.toHaveBeenCalled();
   });
 
+  it("renders a fifth renamed module without a frontend code change", async () => {
+    const user = userEvent.setup();
+    renderApp();
+
+    const fifth = await screen.findByRole("tab", {
+      name: "Renamed research plan",
+    });
+    expect(screen.getAllByRole("tab")).toHaveLength(5);
+    await user.click(fifth);
+
+    expect(
+      await screen.findByText("Research Subscription"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Official Subscription")).toBeNull();
+    expect(screen.queryByText("Azure API")).toBeNull();
+  });
+
   it("preserves the selected dashboard module after Settings closes", async () => {
     const user = userEvent.setup();
     renderApp();
@@ -117,7 +135,7 @@ describe("usage dashboard main path", () => {
       expect(screen.queryByRole("heading", { name: "Settings" })).toBeNull(),
     );
     expect(metered).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByText("Metered API")).toBeInTheDocument();
+    expect(screen.getByText("Azure API")).toBeInTheDocument();
   });
 
   it("keeps a draggable title area and gates native window controls by settings", async () => {

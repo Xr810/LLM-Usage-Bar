@@ -12,13 +12,22 @@ interface Props {
   isSyncingSessions?: boolean;
 }
 
-function relativeReset(reset: string): string | null {
+type RelativeReset = {
+  count: number;
+  unit: "days" | "hours" | "minutes";
+};
+
+function relativeReset(reset: string): RelativeReset | null {
   const timestamp = Date.parse(reset);
   if (!Number.isFinite(timestamp)) return null;
   const minutes = Math.max(0, Math.ceil((timestamp - Date.now()) / 60_000));
-  if (minutes >= 24 * 60) return `${Math.ceil(minutes / (24 * 60))}d`;
-  if (minutes >= 60) return `${Math.ceil(minutes / 60)}h`;
-  return `${minutes}m`;
+  if (minutes >= 24 * 60) {
+    return { count: Math.ceil(minutes / (24 * 60)), unit: "days" };
+  }
+  if (minutes >= 60) {
+    return { count: Math.ceil(minutes / 60), unit: "hours" };
+  }
+  return { count: minutes, unit: "minutes" };
 }
 
 export function SubscriptionProviderCard({
@@ -54,6 +63,22 @@ export function SubscriptionProviderCard({
     reset: string | null | undefined,
   ) => {
     const relative = reset ? relativeReset(reset) : null;
+    const relativeLabel = relative
+      ? relative.unit === "days"
+        ? t("usageDashboard.durationDays", {
+            count: relative.count,
+            defaultValue: `${relative.count}d`,
+          })
+        : relative.unit === "hours"
+          ? t("usageDashboard.durationHours", {
+              count: relative.count,
+              defaultValue: `${relative.count}h`,
+            })
+          : t("usageDashboard.durationMinutes", {
+              count: relative.count,
+              defaultValue: `${relative.count}m`,
+            })
+      : null;
     const parsedReset = reset ? Date.parse(reset) : Number.NaN;
     const absoluteReset =
       reset && Number.isFinite(parsedReset)
@@ -81,10 +106,10 @@ export function SubscriptionProviderCard({
               value: absoluteReset,
               defaultValue: `Resets ${absoluteReset}`,
             })}
-            {relative
+            {relativeLabel
               ? ` · ${t("usageDashboard.resetsIn", {
-                  value: relative,
-                  defaultValue: `in ${relative}`,
+                  value: relativeLabel,
+                  defaultValue: `in ${relativeLabel}`,
                 })}`
               : ""}
           </div>

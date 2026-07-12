@@ -158,16 +158,20 @@ function ModuleRow({
           size="sm"
           variant="outline"
           disabled={isPending}
-          aria-label={t("dashboardModules.toggleVisibility", {
-            action: module.visible ? "Hide" : "Show",
-            name: module.name,
-            defaultValue: `${module.visible ? "Hide" : "Show"} ${module.name}`,
-          })}
+          aria-label={t(
+            module.visible
+              ? "dashboardModules.hideNamed"
+              : "dashboardModules.showNamed",
+            {
+              name: module.name,
+              defaultValue: `${module.visible ? "Hide" : "Show"} ${module.name}`,
+            },
+          )}
           onClick={() => void onVisibility(module)}
         >
           {module.visible
-            ? t("common.hide", { defaultValue: "Hide" })
-            : t("common.show", { defaultValue: "Show" })}
+            ? t("dashboardModules.hide", { defaultValue: "Hide" })
+            : t("dashboardModules.show", { defaultValue: "Show" })}
         </Button>
         {canDelete ? (
           <Button

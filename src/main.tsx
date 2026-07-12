@@ -14,6 +14,7 @@ import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { message } from "@tauri-apps/plugin-dialog";
 import { exit } from "@tauri-apps/plugin-process";
+import { isTauriRuntime } from "@/lib/platform";
 
 // 根据平台添加 body class，便于平台特定样式
 try {
@@ -63,17 +64,39 @@ async function handleConfigLoadError(
   await exit(1);
 }
 
-// 监听后端的配置加载错误事件：仅提醒用户并强制退出，不修改任何配置文件
-try {
-  void listen("configLoadError", async (evt) => {
-    await handleConfigLoadError(evt.payload as ConfigLoadErrorPayload | null);
-  });
-} catch (e) {
-  // 忽略事件订阅异常（例如在非 Tauri 环境下）
-  console.error("订阅 configLoadError 事件失败", e);
+function renderPreviewNotice() {
+  ReactDOM.createRoot(document.getElementById("root")!).render(
+    <React.StrictMode>
+      <main className="flex min-h-screen items-center justify-center bg-background p-6 text-foreground">
+        <div
+          role="status"
+          className="max-w-lg rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground shadow-sm"
+        >
+          {i18n.t("preview.currentUi", {
+            defaultValue:
+              "Current UI preview. Open LLM Usage Bar desktop to read local usage.",
+          })}
+        </div>
+      </main>
+    </React.StrictMode>,
+  );
 }
 
 async function bootstrap() {
+  if (!isTauriRuntime()) {
+    renderPreviewNotice();
+    return;
+  }
+
+  // 监听后端的配置加载错误事件：仅提醒用户并强制退出，不修改任何配置文件
+  try {
+    void listen("configLoadError", async (evt) => {
+      await handleConfigLoadError(evt.payload as ConfigLoadErrorPayload | null);
+    });
+  } catch (e) {
+    console.error("订阅 configLoadError 事件失败", e);
+  }
+
   // 启动早期主动查询后端初始化错误，避免事件竞态
   try {
     const initError = (await invoke(

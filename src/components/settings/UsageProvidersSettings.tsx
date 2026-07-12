@@ -137,11 +137,15 @@ export function UsageProvidersSettings() {
                   size="sm"
                   variant="outline"
                   disabled={setEnabled.isPending}
-                  aria-label={t("usageDashboard.toggleProvider", {
-                    action: provider.enabled ? "Disable" : "Enable",
-                    name: provider.name,
-                    defaultValue: `${provider.enabled ? "Disable" : "Enable"} ${provider.name}`,
-                  })}
+                  aria-label={t(
+                    provider.enabled
+                      ? "usageDashboard.disableProvider"
+                      : "usageDashboard.enableProvider",
+                    {
+                      name: provider.name,
+                      defaultValue: `${provider.enabled ? "Disable" : "Enable"} ${provider.name}`,
+                    },
+                  )}
                   onClick={() =>
                     void run(() =>
                       setEnabled.mutateAsync({

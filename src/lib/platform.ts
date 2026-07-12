@@ -1,4 +1,8 @@
 // 轻量平台检测，避免在 SSR 或无 navigator 的环境报错
+export function isTauriRuntime(): boolean {
+  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
 export const isMac = (): boolean => {
   try {
     const ua = navigator.userAgent || "";

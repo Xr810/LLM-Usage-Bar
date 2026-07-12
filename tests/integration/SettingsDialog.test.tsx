@@ -36,7 +36,8 @@ describe("SettingsPage integration", () => {
     expect(
       await screen.findByText("Official Subscription"),
     ).toBeInTheDocument();
-    expect(screen.getByText("Metered API")).toBeInTheDocument();
+    expect(screen.getByText("Azure API")).toBeInTheDocument();
+    expect(screen.getByText("OpenRouter")).toBeInTheDocument();
     expect(screen.queryByText("Proxy forwarding targets")).toBeNull();
 
     await user.click(screen.getByRole("tab", { name: "Proxy & routing" }));
