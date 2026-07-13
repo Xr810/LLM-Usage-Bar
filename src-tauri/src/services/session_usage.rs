@@ -959,7 +959,6 @@ mod tests {
             route_app_type: None,
             route_config: None,
             quota_config: None,
-            dashboard_module_id: Some("claude-code".to_string()),
             enabled: true,
         })?;
         db.set_usage_source_binding("claude", "claude-sub")?;
@@ -1015,7 +1014,6 @@ mod tests {
             route_app_type: None,
             route_config: None,
             quota_config: None,
-            dashboard_module_id: Some("claude-code".to_string()),
             enabled: true,
         })?;
         db.set_usage_source_binding("claude", "claude-sub")?;

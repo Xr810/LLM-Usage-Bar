@@ -2,7 +2,7 @@ use crate::error::AppError;
 use crate::store::AppState;
 use crate::usage::dashboard::UsageDashboardService;
 use crate::usage::domain::{
-    DashboardModuleInput, DashboardModuleView, RouteBinding, UsageDashboardView, UsageEventPage,
+    AgentModuleInput, AgentModuleView, RouteBinding, UsageDashboardView, UsageEventPage,
     UsageProviderInput, UsageProviderView,
 };
 use crate::usage::quota::QuotaRefreshResult;
@@ -12,15 +12,15 @@ use tauri::State;
 #[tauri::command]
 pub fn list_dashboard_modules(
     state: State<'_, AppState>,
-) -> Result<Vec<DashboardModuleView>, AppError> {
+) -> Result<Vec<AgentModuleView>, AppError> {
     list_dashboard_modules_test_hook(&state)
 }
 
 #[tauri::command]
 pub fn save_dashboard_module(
     state: State<'_, AppState>,
-    input: DashboardModuleInput,
-) -> Result<DashboardModuleView, AppError> {
+    input: AgentModuleInput,
+) -> Result<AgentModuleView, AppError> {
     save_dashboard_module_test_hook(&state, input)
 }
 
@@ -28,7 +28,7 @@ pub fn save_dashboard_module(
 pub fn reorder_dashboard_modules(
     state: State<'_, AppState>,
     module_ids: Vec<String>,
-) -> Result<Vec<DashboardModuleView>, AppError> {
+) -> Result<Vec<AgentModuleView>, AppError> {
     reorder_dashboard_modules_test_hook(&state, module_ids)
 }
 
@@ -37,7 +37,7 @@ pub fn set_dashboard_module_visibility(
     state: State<'_, AppState>,
     module_id: String,
     visible: bool,
-) -> Result<DashboardModuleView, AppError> {
+) -> Result<AgentModuleView, AppError> {
     set_dashboard_module_visibility_test_hook(&state, &module_id, visible)
 }
 
@@ -129,21 +129,21 @@ pub fn sync_provider_session_usage(
 
 pub fn list_dashboard_modules_test_hook(
     state: &AppState,
-) -> Result<Vec<DashboardModuleView>, AppError> {
+) -> Result<Vec<AgentModuleView>, AppError> {
     state.db.list_dashboard_modules()
 }
 
 pub fn save_dashboard_module_test_hook(
     state: &AppState,
-    input: DashboardModuleInput,
-) -> Result<DashboardModuleView, AppError> {
+    input: AgentModuleInput,
+) -> Result<AgentModuleView, AppError> {
     state.db.save_dashboard_module(&input)
 }
 
 pub fn reorder_dashboard_modules_test_hook(
     state: &AppState,
     module_ids: Vec<String>,
-) -> Result<Vec<DashboardModuleView>, AppError> {
+) -> Result<Vec<AgentModuleView>, AppError> {
     state.db.reorder_dashboard_modules(&module_ids)
 }
 
@@ -151,7 +151,7 @@ pub fn set_dashboard_module_visibility_test_hook(
     state: &AppState,
     module_id: &str,
     visible: bool,
-) -> Result<DashboardModuleView, AppError> {
+) -> Result<AgentModuleView, AppError> {
     state.db.set_dashboard_module_visibility(module_id, visible)
 }
 
@@ -256,22 +256,21 @@ fn validate_range(start_at: i64, end_at: i64) -> Result<(), AppError> {
 mod tests {
     use super::*;
     use crate::database::Database;
-    use crate::usage::domain::{DashboardModuleInput, DashboardModuleKind};
+    use crate::usage::domain::AgentModuleInput;
     use std::sync::Arc;
 
     #[test]
     fn dashboard_module_command_hooks_cover_the_full_crud_contract() {
         let state = AppState::new(Arc::new(Database::memory().unwrap()));
         let defaults = list_dashboard_modules_test_hook(&state).unwrap();
-        assert_eq!(defaults.len(), 4);
+        assert_eq!(defaults.len(), 5);
 
         let created = save_dashboard_module_test_hook(
             &state,
-            DashboardModuleInput {
+            AgentModuleInput {
                 id: None,
                 name: "Gemini".to_string(),
-                kind: DashboardModuleKind::Subscription,
-                sort_order: 4,
+                sort_order: 5,
                 visible: true,
             },
         )
@@ -281,8 +280,9 @@ mod tests {
             created.id.clone(),
             "codex".to_string(),
             "claude-code".to_string(),
-            "kimi-coding-plan".to_string(),
-            "api".to_string(),
+            "opencode".to_string(),
+            "openclaw".to_string(),
+            "hermes".to_string(),
         ];
         let reordered = reorder_dashboard_modules_test_hook(&state, ids).unwrap();
         assert_eq!(reordered[0].id, created.id);
@@ -291,6 +291,6 @@ mod tests {
         assert!(!hidden.visible);
 
         delete_dashboard_module_test_hook(&state, &created.id).unwrap();
-        assert_eq!(list_dashboard_modules_test_hook(&state).unwrap().len(), 4);
+        assert_eq!(list_dashboard_modules_test_hook(&state).unwrap().len(), 5);
     }
 }

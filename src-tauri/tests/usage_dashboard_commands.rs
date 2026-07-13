@@ -27,7 +27,6 @@ fn metered() -> UsageProviderInput {
             "apiKey": "route-secret"
         })),
         quota_config: None,
-        dashboard_module_id: None,
         enabled: true,
     }
 }
@@ -45,7 +44,6 @@ fn subscription() -> UsageProviderInput {
         route_app_type: None,
         route_config: None,
         quota_config: None,
-        dashboard_module_id: Some("claude-code".to_string()),
         enabled: true,
     }
 }
@@ -181,6 +179,25 @@ fn all_nine_public_commands_are_registered_once() {
         "get_usage_events",
         "refresh_provider_quota",
         "sync_provider_session_usage",
+    ] {
+        let registration = format!("commands::{command},");
+        assert_eq!(
+            source.matches(&registration).count(),
+            1,
+            "{command} must be registered exactly once"
+        );
+    }
+}
+
+#[test]
+fn all_five_agent_compatibility_commands_are_registered_once() {
+    let source = include_str!("../src/lib.rs");
+    for command in [
+        "list_dashboard_modules",
+        "save_dashboard_module",
+        "reorder_dashboard_modules",
+        "set_dashboard_module_visibility",
+        "delete_dashboard_module",
     ] {
         let registration = format!("commands::{command},");
         assert_eq!(

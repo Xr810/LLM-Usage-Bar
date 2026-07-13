@@ -268,7 +268,6 @@ mod tests {
             route_app_type: None,
             route_config: None,
             quota_config: None,
-            dashboard_module_id: None,
             enabled: true,
         })
         .unwrap();

@@ -2,6 +2,8 @@
 //!
 //! Database access operations for each domain
 
+pub mod agent_modules;
+pub mod agent_provider_bindings;
 pub mod dashboard_modules;
 pub mod failover;
 pub mod mcp;

@@ -67,10 +67,11 @@ pub use store::AppState;
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 pub use usage::domain::{
-    BillingKind, CostSource, CostSourceCounts, ProductUsageView, ProviderUsageView,
-    QuotaFetchState, QuotaSnapshot, QuotaStatusView, RouteBinding, TokenSource, UsageDashboardView,
-    UsageEvent, UsageEventLink, UsageEventPage, UsageProviderInput, UsageProviderView,
-    UsageSourceBinding,
+    AgentModuleInput, AgentModuleView, AgentProviderBindingInput, AgentProviderBindingView,
+    BillingKind, BindingCredentialStatus, CostSource, CostSourceCounts, ProductUsageView,
+    ProviderUsageView, QuotaFetchState, QuotaSnapshot, QuotaStatusView, RouteBinding, TokenSource,
+    UsageDashboardView, UsageEvent, UsageEventLink, UsageEventPage, UsageProviderInput,
+    UsageProviderView, UsageSourceBinding,
 };
 
 use std::path::Path;

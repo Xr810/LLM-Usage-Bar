@@ -100,7 +100,6 @@ fn metered_provider(upstream: std::net::SocketAddr) -> UsageProviderInput {
             "apiKey": "fixture-only-key"
         })),
         quota_config: None,
-        dashboard_module_id: None,
         enabled: true,
     }
 }

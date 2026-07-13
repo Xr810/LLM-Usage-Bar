@@ -19,7 +19,7 @@ worktree `.worktrees/agent-centric-usage-modules`.
 | --- | --- | --- | --- |
 | 0. Persist execution plan | completed | plan commit | two independent reviews approved; `git diff --check` passes |
 | 1. v16 schema and conservative history migration | completed | this task commit | focused 5/5; schema 5/5; integration 3/3; library 1981 passed / 2 ignored; both reviews approved |
-| 2. Agent module and binding persistence | pending | — | — |
+| 2. Agent module and binding persistence | completed | this task commit | focused 7/12/15; integration 4/4; library 1997 passed / 2 ignored; both reviews approved |
 | 3. Protected credential store and atomic key lifecycle | pending | — | — |
 | 4. Credential-routed proxy and frozen event attribution | pending | — | — |
 | 5. Trusted session attribution and Agent-safe dedup | pending | — | — |
@@ -47,3 +47,23 @@ worktree `.worktrees/agent-centric-usage-modules`.
   implementation.
 - Final library gate ran outside the sandbox with one test thread to avoid existing
   process-wide HOME races: 1981 passed, 2 ignored, 0 failed.
+
+## Task 2 Evidence
+
+- RED: the first focused compile failed only on the planned missing
+  `AgentModuleInput`, `AgentProviderBindingInput`, Agent DAO methods, and binding
+  DAO methods.
+- GREEN: Agent DAO tests pass 7/7, binding DAO tests pass 12/12, Provider DAO
+  tests pass 15/15, and domain/compatibility command tests pass.
+- The active Provider DTO and save path no longer read, project, or update the v15
+  single-membership column; `UsageProviderView.bindings` is authoritative and
+  Provider updates preserve every binding.
+- Managed-account, Codex OAuth, Gemini OAuth, and conflicting auth metadata all
+  fail closed. Private binding records containing legacy config, slots, or
+  fingerprints cannot be formatted with `Debug`.
+- Both independent reviews approved after all findings were resolved. Rust format,
+  `git diff --check`, and Clippy with the pre-existing watcher dead-code warning
+  class excluded all pass.
+- The command integration target passes 3/3 and the localhost proxy e2e passes
+  1/1. Final library verification ran outside the sandbox with one test thread:
+  1997 passed, 2 ignored, 0 failed.

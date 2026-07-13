@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{de, Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -23,33 +23,85 @@ pub enum CostSource {
     Unavailable,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DashboardModuleKind {
-    Subscription,
-    Api,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DashboardModuleInput {
+pub struct AgentModuleInput {
     pub id: Option<String>,
     pub name: String,
-    pub kind: DashboardModuleKind,
     pub sort_order: i64,
     pub visible: bool,
 }
 
+impl<'de> Deserialize<'de> for AgentModuleInput {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct WireInput {
+            id: Option<String>,
+            name: String,
+            sort_order: i64,
+            visible: bool,
+        }
+
+        let input = WireInput::deserialize(deserializer)
+            .map_err(|_| de::Error::custom("invalid_agent_module"))?;
+        if input.id.as_deref() == Some("api") {
+            return Err(de::Error::custom("invalid_agent_module"));
+        }
+        Ok(Self {
+            id: input.id,
+            name: input.name,
+            sort_order: input.sort_order,
+            visible: input.visible,
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DashboardModuleView {
+pub struct AgentModuleView {
     pub id: String,
     pub name: String,
-    pub kind: DashboardModuleKind,
     pub sort_order: i64,
     pub visible: bool,
-    pub is_system: bool,
+    pub is_fixed: bool,
+    pub archived_at: Option<i64>,
     pub provider_count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentProviderBindingInput {
+    pub id: Option<String>,
+    pub agent_module_id: String,
+    pub provider_id: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BindingCredentialStatus {
+    NotRequired,
+    Missing,
+    Configured,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentProviderBindingView {
+    pub id: String,
+    pub agent_module_id: String,
+    pub provider_id: String,
+    pub enabled: bool,
+    pub effective_enabled: bool,
+    pub credential_status: BindingCredentialStatus,
+    pub credential_version: u64,
+    pub created_at: i64,
+    pub updated_at: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -67,8 +119,6 @@ pub struct UsageProviderInput {
     pub route_app_type: Option<String>,
     pub route_config: Option<Value>,
     pub quota_config: Option<Value>,
-    #[serde(default)]
-    pub dashboard_module_id: Option<String>,
     pub enabled: bool,
 }
 
@@ -97,7 +147,6 @@ pub struct UsageProviderStored {
     pub name: String,
     pub billing_kind: BillingKind,
     pub product_group_id: String,
-    pub dashboard_module_id: Option<String>,
     pub token_sources: Vec<TokenSource>,
     pub quota_source: Option<String>,
     pub quota_interval_seconds: Option<u64>,
@@ -119,9 +168,9 @@ pub struct UsageProviderView {
     pub name: String,
     pub billing_kind: BillingKind,
     pub product_group_id: String,
-    pub dashboard_module_id: Option<String>,
     pub token_sources: Vec<TokenSource>,
     pub session_source_bindings: Vec<String>,
+    pub bindings: Vec<AgentProviderBindingView>,
     pub quota_source: Option<String>,
     pub quota_interval_seconds: Option<u64>,
     pub route_app_type: Option<String>,
@@ -336,7 +385,6 @@ mod tests {
             route_app_type: Some("claude".to_string()),
             route_config: Some(json!({"baseUrl": "https://example.com"})),
             quota_config: None,
-            dashboard_module_id: None,
             enabled: true,
         }
     }
@@ -375,35 +423,56 @@ mod tests {
     }
 
     #[test]
-    fn dashboard_module_contract_and_provider_membership_use_camel_case() {
-        let input: DashboardModuleInput = serde_json::from_value(json!({
+    fn agent_module_contract_is_strict_and_uses_camel_case() {
+        let input: AgentModuleInput = serde_json::from_value(json!({
             "id": null,
             "name": "Gemini",
-            "kind": "subscription",
             "sortOrder": 4,
             "visible": true
         }))
         .expect("deserialize module input");
-        assert_eq!(input.kind, DashboardModuleKind::Subscription);
         assert_eq!(input.sort_order, 4);
 
-        let view = DashboardModuleView {
-            id: "api".to_string(),
-            name: "API".to_string(),
-            kind: DashboardModuleKind::Api,
+        for legacy in [
+            json!({
+                "id": null,
+                "name": "Legacy",
+                "kind": "subscription",
+                "sortOrder": 4,
+                "visible": true
+            }),
+            json!({
+                "id": "api",
+                "name": "API",
+                "sortOrder": 4,
+                "visible": true
+            }),
+        ] {
+            let error = serde_json::from_value::<AgentModuleInput>(legacy).unwrap_err();
+            assert!(error.to_string().contains("invalid_agent_module"));
+        }
+
+        let view = AgentModuleView {
+            id: "codex".to_string(),
+            name: "Codex".to_string(),
             sort_order: 3,
             visible: true,
-            is_system: true,
+            is_fixed: true,
+            archived_at: None,
             provider_count: 2,
         };
         let value = serde_json::to_value(view).expect("serialize module view");
         assert_eq!(value["sortOrder"], json!(3));
-        assert_eq!(value["isSystem"], json!(true));
+        assert_eq!(value["isFixed"], json!(true));
+        assert_eq!(value["archivedAt"], Value::Null);
         assert_eq!(value["providerCount"], json!(2));
+        assert!(value.get("kind").is_none());
+        assert!(value.get("isSystem").is_none());
+    }
 
-        let mut provider = valid_provider_input();
-        provider.dashboard_module_id = Some("api".to_string());
-        let value = serde_json::to_value(provider).expect("serialize provider membership");
-        assert_eq!(value["dashboardModuleId"], json!("api"));
+    #[test]
+    fn provider_input_has_no_legacy_dashboard_membership() {
+        let value = serde_json::to_value(valid_provider_input()).unwrap();
+        assert!(value.get("dashboardModuleId").is_none());
     }
 }
