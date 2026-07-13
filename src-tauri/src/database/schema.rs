@@ -532,6 +532,11 @@ impl Database {
                         migrate_app_owned_identity_v14(conn)?;
                         Self::set_user_version(conn, 14)?;
                     }
+                    14 => {
+                        log::info!("迁移数据库从 v14 到 v15（添加动态用量模块和 Provider 归属）");
+                        crate::usage::module_migration::migrate_v14_to_v15(conn)?;
+                        Self::set_user_version(conn, 15)?;
+                    }
                     _ => {
                         return Err(AppError::Database(format!(
                             "未知的数据库版本 {version}，无法迁移到 {SCHEMA_VERSION}"
@@ -540,8 +545,8 @@ impl Database {
                 }
                 version = Self::get_user_version(conn)?;
             }
-            if version == 14 {
-                Self::validate_schema_v14_complete(conn)?;
+            if version == 15 {
+                Self::validate_schema_v15_complete(conn)?;
             }
             Ok(())
         })();
@@ -597,6 +602,31 @@ impl Database {
         }
         Self::validate_v14_cursor_table_shape(conn)?;
         Self::validate_v14_archive_table_shape(conn)?;
+        Ok(())
+    }
+
+    pub(crate) fn validate_schema_v15_complete(conn: &Connection) -> Result<(), AppError> {
+        Self::validate_schema_v14_complete(conn)?;
+        if !Self::table_exists(conn, "dashboard_modules")? {
+            return Err(AppError::Database(
+                "incomplete schema v15: missing dashboard_modules".to_string(),
+            ));
+        }
+        if !Self::has_column(conn, "usage_providers", "dashboard_module_id")? {
+            return Err(AppError::Database(
+                "incomplete schema v15: usage_providers.dashboard_module_id is missing".to_string(),
+            ));
+        }
+        let api_modules: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM dashboard_modules WHERE kind = 'api' AND is_system = 1",
+            [],
+            |row| row.get(0),
+        )?;
+        if api_modules != 1 {
+            return Err(AppError::Database(format!(
+                "incomplete schema v15: expected one system API module, found {api_modules}"
+            )));
+        }
         Ok(())
     }
 

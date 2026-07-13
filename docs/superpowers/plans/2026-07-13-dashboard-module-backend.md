@@ -34,7 +34,7 @@
 - Produces: `usage::module_migration::migrate_v14_to_v15(conn: &Connection) -> Result<(), AppError>`.
 - Produces: SQLite table `dashboard_modules` and column `usage_providers.dashboard_module_id`.
 
-- [ ] **Step 1: Write failing migration tests**
+- [x] **Step 1: Write failing migration tests**
 
 Add tests that build a v14 fixture and assert migration to v15 creates exactly these ordered rows:
 
@@ -49,13 +49,13 @@ Add tests that build a v14 fixture and assert migration to v15 creates exactly t
 
 Also assert known subscription product groups backfill to their matching IDs, unknown subscription product groups backfill to an on-demand `other-subscriptions` row with `needs_review = 1`, metered Providers retain `NULL`, and a deliberately failing trigger rolls back table, column, rows, and `user_version`.
 
-- [ ] **Step 2: Verify the migration tests fail for the missing v15 migration**
+- [x] **Step 2: Verify the migration tests fail for the missing v15 migration**
 
 Run: `pnpm rust -- test --manifest-path src-tauri/Cargo.toml database::tests::migration_v14_to_v15 --lib -- --nocapture`
 
 Expected: FAIL because schema version remains 14 and `dashboard_modules` does not exist.
 
-- [ ] **Step 3: Implement the minimal transactional migration**
+- [x] **Step 3: Implement the minimal transactional migration**
 
 Create the module table with `CHECK` constraints, a partial unique index for the single API module, and a protected system API row. Add the Provider column only when absent, seed defaults with `ON CONFLICT(id) DO NOTHING`, and backfill by normalized `product_group_id`:
 
@@ -70,7 +70,7 @@ match product_group_id.trim().to_ascii_lowercase().as_str() {
 
 Wire schema version `14 -> 15`, run v15 completeness validation, and update the fixed v13 fixture guard to expect current schema 15 while preserving identity source schema 13.
 
-- [ ] **Step 4: Verify migration tests and existing schema tests pass**
+- [x] **Step 4: Verify migration tests and existing schema tests pass**
 
 Run: `pnpm rust -- test --manifest-path src-tauri/Cargo.toml database::tests::migration_v14_to_v15 --lib -- --nocapture`
 
@@ -78,7 +78,7 @@ Run: `pnpm rust -- test --manifest-path src-tauri/Cargo.toml database::tests::sc
 
 Expected: PASS, with rollback assertions proving no partial migration survives.
 
-- [ ] **Step 5: Commit the migration**
+- [x] **Step 5: Commit the migration**
 
 ```bash
 git add src-tauri/src/usage/module_migration.rs src-tauri/src/usage/mod.rs src-tauri/src/database/mod.rs src-tauri/src/database/schema.rs src-tauri/src/database/tests.rs src-tauri/src/lib.rs

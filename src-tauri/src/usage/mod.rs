@@ -3,6 +3,7 @@ pub mod dashboard;
 pub mod domain;
 pub mod ingestion;
 pub(crate) mod migration;
+pub(crate) mod module_migration;
 pub mod quota;
 pub mod session;
 pub(crate) mod source_roots;

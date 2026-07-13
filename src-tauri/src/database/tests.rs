@@ -376,6 +376,185 @@ mod schema_v14_cursor_migration_tests {
     }
 }
 
+mod schema_v15_dashboard_module_migration_tests {
+    use super::*;
+    use crate::usage::source_roots::UsageSourceRoots;
+    use std::path::PathBuf;
+
+    fn roots() -> UsageSourceRoots {
+        UsageSourceRoots {
+            claude: PathBuf::from("/Users/test/.claude/projects"),
+            codex: PathBuf::from("/Users/test/.codex"),
+            gemini: PathBuf::from("/Users/test/.gemini/tmp"),
+            opencode: PathBuf::from("/Users/test/.local/share/opencode"),
+        }
+    }
+
+    fn v14_usage_fixture() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        Database::create_tables_on_conn(&conn).unwrap();
+        crate::usage::migration::migrate_v12_to_v13(&conn).unwrap();
+        crate::usage::cursor_migration::migrate_v13_to_v14(&conn, &roots()).unwrap();
+        Database::set_user_version(&conn, 14).unwrap();
+        conn
+    }
+
+    fn insert_provider(conn: &Connection, id: &str, billing_kind: &str, product_group_id: &str) {
+        conn.execute(
+            "INSERT INTO usage_providers (
+                 id, name, billing_kind, product_group_id, token_sources,
+                 enabled, needs_review, created_at, updated_at
+             ) VALUES (?1, ?1, ?2, ?3, '[]', 1, 0, 10, 10)",
+            params![id, billing_kind, product_group_id],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn migration_v14_to_v15_seeds_modules_and_backfills_known_providers() {
+        let conn = v14_usage_fixture();
+        insert_provider(&conn, "codex-plan", "subscription", "codex");
+        insert_provider(&conn, "claude-plan", "subscription", "anthropic");
+        insert_provider(&conn, "kimi-plan", "subscription", "moonshot");
+        insert_provider(&conn, "openrouter", "metered", "openrouter");
+
+        Database::apply_schema_migrations_on_conn_with_roots(&conn, &roots()).unwrap();
+
+        assert_eq!(Database::get_user_version(&conn).unwrap(), 15);
+        let modules = conn
+            .prepare(
+                "SELECT id, name, kind, sort_order, visible, is_system
+                 FROM dashboard_modules ORDER BY sort_order, id",
+            )
+            .unwrap()
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
+                ))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(
+            modules,
+            vec![
+                (
+                    "codex".into(),
+                    "Codex".into(),
+                    "subscription".into(),
+                    0,
+                    1,
+                    0
+                ),
+                (
+                    "claude-code".into(),
+                    "Claude Code".into(),
+                    "subscription".into(),
+                    1,
+                    1,
+                    0,
+                ),
+                (
+                    "kimi-coding-plan".into(),
+                    "Kimi Coding Plan".into(),
+                    "subscription".into(),
+                    2,
+                    1,
+                    0,
+                ),
+                ("api".into(), "API".into(), "api".into(), 3, 1, 1),
+            ]
+        );
+
+        let memberships = conn
+            .prepare("SELECT id, dashboard_module_id FROM usage_providers ORDER BY id")
+            .unwrap()
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(
+            memberships,
+            vec![
+                ("claude-plan".into(), Some("claude-code".into())),
+                ("codex-plan".into(), Some("codex".into())),
+                ("kimi-plan".into(), Some("kimi-coding-plan".into())),
+                ("openrouter".into(), None),
+            ]
+        );
+    }
+
+    #[test]
+    fn migration_v14_to_v15_routes_unknown_subscription_to_review_module() {
+        let conn = v14_usage_fixture();
+        insert_provider(&conn, "unknown-plan", "subscription", "gemini");
+
+        Database::apply_schema_migrations_on_conn_with_roots(&conn, &roots()).unwrap();
+
+        let module = conn
+            .query_row(
+                "SELECT name, kind, is_system FROM dashboard_modules
+                 WHERE id = 'other-subscriptions'",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(module, ("其他订阅".into(), "subscription".into(), 0));
+        let provider = conn
+            .query_row(
+                "SELECT dashboard_module_id, needs_review FROM usage_providers
+                 WHERE id = 'unknown-plan'",
+                [],
+                |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .unwrap();
+        assert_eq!(provider, (Some("other-subscriptions".into()), 1));
+    }
+
+    #[test]
+    fn migration_v14_to_v15_rolls_back_column_rows_and_version_on_seed_failure() {
+        let conn = v14_usage_fixture();
+        conn.execute_batch(
+            "CREATE TABLE dashboard_modules (
+                 id TEXT PRIMARY KEY,
+                 name TEXT NOT NULL CHECK (name = 'forced failure'),
+                 kind TEXT NOT NULL,
+                 sort_order INTEGER NOT NULL,
+                 visible INTEGER NOT NULL,
+                 is_system INTEGER NOT NULL,
+                 created_at INTEGER NOT NULL,
+                 updated_at INTEGER NOT NULL
+             );",
+        )
+        .unwrap();
+
+        Database::apply_schema_migrations_on_conn_with_roots(&conn, &roots())
+            .expect_err("default module seed must fail and roll back the outer savepoint");
+
+        assert_eq!(Database::get_user_version(&conn).unwrap(), 14);
+        assert!(!Database::has_column(&conn, "usage_providers", "dashboard_module_id").unwrap());
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM dashboard_modules", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(rows, 0);
+    }
+}
+
 #[test]
 fn identity_discriminator_v13_database_preserves_unenumerated_text_and_json() -> Result<(), AppError>
 {
