@@ -51,7 +51,7 @@ Also assert known subscription product groups backfill to their matching IDs, un
 
 - [ ] **Step 2: Verify the migration tests fail for the missing v15 migration**
 
-Run: `pnpm rust -- test database::tests::migration_v14_to_v15 --lib -- --nocapture`
+Run: `pnpm rust -- test --manifest-path src-tauri/Cargo.toml database::tests::migration_v14_to_v15 --lib -- --nocapture`
 
 Expected: FAIL because schema version remains 14 and `dashboard_modules` does not exist.
 
@@ -72,9 +72,9 @@ Wire schema version `14 -> 15`, run v15 completeness validation, and update the 
 
 - [ ] **Step 4: Verify migration tests and existing schema tests pass**
 
-Run: `pnpm rust -- test database::tests::migration_v14_to_v15 --lib -- --nocapture`
+Run: `pnpm rust -- test --manifest-path src-tauri/Cargo.toml database::tests::migration_v14_to_v15 --lib -- --nocapture`
 
-Run: `pnpm rust -- test database::tests::schema_migration --lib -- --nocapture`
+Run: `pnpm rust -- test --manifest-path src-tauri/Cargo.toml database::tests::schema_migration --lib -- --nocapture`
 
 Expected: PASS, with rollback assertions proving no partial migration survives.
 
@@ -118,9 +118,9 @@ Add Provider tests proving enabled subscription saves reject missing/API members
 
 - [ ] **Step 2: Verify the DAO tests fail for missing types and methods**
 
-Run: `pnpm rust -- test database::dao::dashboard_modules::tests --lib -- --nocapture`
+Run: `pnpm rust -- test --manifest-path src-tauri/Cargo.toml database::dao::dashboard_modules::tests --lib -- --nocapture`
 
-Run: `pnpm rust -- test database::dao::usage_providers::tests --lib -- --nocapture`
+Run: `pnpm rust -- test --manifest-path src-tauri/Cargo.toml database::dao::usage_providers::tests --lib -- --nocapture`
 
 Expected: compile/test failure naming the missing dashboard module API.
 
@@ -132,11 +132,11 @@ In `save_usage_provider`, validate membership inside the existing Provider/sessi
 
 - [ ] **Step 4: Run focused DAO tests until green, then run all Rust library tests**
 
-Run: `pnpm rust -- test database::dao::dashboard_modules::tests --lib -- --nocapture`
+Run: `pnpm rust -- test --manifest-path src-tauri/Cargo.toml database::dao::dashboard_modules::tests --lib -- --nocapture`
 
-Run: `pnpm rust -- test database::dao::usage_providers::tests --lib -- --nocapture`
+Run: `pnpm rust -- test --manifest-path src-tauri/Cargo.toml database::dao::usage_providers::tests --lib -- --nocapture`
 
-Run: `pnpm rust -- test --lib`
+Run: `pnpm rust -- test --manifest-path src-tauri/Cargo.toml --lib`
 
 Expected: PASS with zero failed tests.
 
@@ -161,7 +161,7 @@ git commit -m "feat(usage): persist dashboard module membership"
 
 Inside `commands/usage_dashboard.rs`, construct `AppState::new(Arc::new(Database::memory()?))` and call all five wished-for test hooks. Assert the list hook returns four defaults, save returns the new module, reorder returns the requested first ID, visibility returns `visible = false`, and delete removes an empty custom module. Keep `tauri::generate_handler!` compilation as the registration check.
 
-Run: `pnpm rust -- test commands::usage_dashboard::tests::dashboard_module_command_hooks --lib -- --nocapture`
+Run: `pnpm rust -- test --manifest-path src-tauri/Cargo.toml commands::usage_dashboard::tests::dashboard_module_command_hooks --lib -- --nocapture`
 
 Expected: compile failure because the five test hooks do not exist.
 
@@ -177,7 +177,7 @@ Each handler accepts camelCase-compatible Tauri arguments and delegates directly
 
 - [ ] **Step 4: Run full automated gates**
 
-Run: `pnpm rust -- test --lib`
+Run: `pnpm rust -- test --manifest-path src-tauri/Cargo.toml --lib`
 
 Run: `pnpm test:unit`
 
