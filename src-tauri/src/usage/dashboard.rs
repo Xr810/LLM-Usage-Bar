@@ -323,6 +323,8 @@ mod tests {
             route_app_type: None,
             route_config: None,
             quota_config: None,
+            dashboard_module_id: (billing_kind == BillingKind::Subscription)
+                .then(|| "claude-code".to_string()),
             enabled: true,
         }
     }

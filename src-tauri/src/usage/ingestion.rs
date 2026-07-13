@@ -535,6 +535,7 @@ mod tests {
             route_app_type: Some("claude".to_string()),
             route_config: None,
             quota_config: None,
+            dashboard_module_id: None,
             enabled: true,
         })
         .unwrap();

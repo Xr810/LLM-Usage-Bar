@@ -47,6 +47,7 @@ fn provider_from_row(row: &Row<'_>) -> rusqlite::Result<UsageProviderStored> {
         name: row.get(1)?,
         billing_kind,
         product_group_id: row.get(3)?,
+        dashboard_module_id: row.get(16)?,
         token_sources,
         quota_source: row.get(5)?,
         quota_interval_seconds: row.get::<_, Option<i64>>(6)?.map(|value| value as u64),
@@ -64,7 +65,8 @@ fn provider_from_row(row: &Row<'_>) -> rusqlite::Result<UsageProviderStored> {
 
 const PROVIDER_COLUMNS: &str = "id, name, billing_kind, product_group_id, token_sources,
     quota_source, quota_interval_seconds, route_app_type, route_config, quota_config,
-    enabled, needs_review, legacy_app_type, legacy_provider_id, created_at, updated_at";
+    enabled, needs_review, legacy_app_type, legacy_provider_id, created_at, updated_at,
+    dashboard_module_id";
 
 fn has_non_empty_value(value: &Value) -> bool {
     match value {
@@ -163,6 +165,10 @@ fn provider_view(
         name: provider.name.clone(),
         billing_kind: provider.billing_kind,
         product_group_id: provider.product_group_id.clone(),
+        dashboard_module_id: match provider.billing_kind {
+            BillingKind::Subscription => provider.dashboard_module_id.clone(),
+            BillingKind::Metered => Some("api".to_string()),
+        },
         token_sources: provider.token_sources.clone(),
         session_source_bindings,
         quota_source: provider.quota_source.clone(),
@@ -202,6 +208,37 @@ fn validate_session_source_bindings(
             .map(|source| (*source).to_string())
             .collect(),
     ))
+}
+
+fn dashboard_module_for_provider(
+    conn: &rusqlite::Connection,
+    input: &UsageProviderInput,
+) -> Result<Option<String>, AppError> {
+    if input.billing_kind == BillingKind::Metered {
+        return Ok(None);
+    }
+    let Some(module_id) = input.dashboard_module_id.as_deref() else {
+        if input.enabled {
+            return Err(AppError::Message(
+                "enabled subscription provider requires a dashboard module".to_string(),
+            ));
+        }
+        return Ok(None);
+    };
+    let kind = conn
+        .query_row(
+            "SELECT kind FROM dashboard_modules WHERE id = ?1",
+            [module_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .ok_or_else(|| AppError::Message("dashboard module not found".to_string()))?;
+    if kind != "subscription" {
+        return Err(AppError::Message(
+            "subscription provider requires a subscription dashboard module".to_string(),
+        ));
+    }
+    Ok(Some(module_id.to_string()))
 }
 
 fn source_bindings_for_provider(
@@ -277,6 +314,7 @@ impl Database {
         let _operation_guard = lock_conn!(self.usage_source_binding_operation);
         let mut conn = lock_conn!(self.conn);
         let transaction = conn.transaction()?;
+        let dashboard_module_id = dashboard_module_for_provider(&transaction, input)?;
         if requested_session_sources.is_none()
             && !input.token_sources.contains(&TokenSource::SessionLog)
             && transaction.query_row(
@@ -295,8 +333,8 @@ impl Database {
             "INSERT INTO usage_providers (
                 id, name, billing_kind, product_group_id, token_sources, quota_source,
                 quota_interval_seconds, route_app_type, route_config, quota_config,
-                enabled, needs_review, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, ?12, ?12)
+                dashboard_module_id, enabled, needs_review, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 0, ?13, ?13)
              ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
                 billing_kind = excluded.billing_kind,
@@ -307,6 +345,7 @@ impl Database {
                 route_app_type = excluded.route_app_type,
                 route_config = COALESCE(excluded.route_config, usage_providers.route_config),
                 quota_config = COALESCE(excluded.quota_config, usage_providers.quota_config),
+                dashboard_module_id = excluded.dashboard_module_id,
                 enabled = excluded.enabled,
                 updated_at = excluded.updated_at",
             params![
@@ -320,6 +359,7 @@ impl Database {
                 input.route_app_type,
                 route_config,
                 quota_config,
+                dashboard_module_id,
                 input.enabled,
                 now,
             ],
@@ -357,14 +397,43 @@ impl Database {
     }
 
     pub fn set_usage_provider_enabled(&self, id: &str, enabled: bool) -> Result<(), AppError> {
-        let conn = lock_conn!(self.conn);
-        let updated = conn.execute(
+        let mut conn = lock_conn!(self.conn);
+        let transaction = conn.transaction()?;
+        let stored = transaction
+            .query_row(
+                "SELECT billing_kind, dashboard_module_id FROM usage_providers WHERE id = ?1",
+                [id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+            )
+            .optional()?
+            .ok_or_else(|| AppError::Message("usage provider not found".to_string()))?;
+        if enabled && stored.0 == "subscription" {
+            let Some(module_id) = stored.1 else {
+                return Err(AppError::Message(
+                    "enabled subscription provider requires a dashboard module".to_string(),
+                ));
+            };
+            let valid: bool = transaction.query_row(
+                "SELECT EXISTS(
+                     SELECT 1 FROM dashboard_modules WHERE id = ?1 AND kind = 'subscription'
+                 )",
+                [module_id],
+                |row| row.get(0),
+            )?;
+            if !valid {
+                return Err(AppError::Message(
+                    "subscription provider requires a subscription dashboard module".to_string(),
+                ));
+            }
+        }
+        let updated = transaction.execute(
             "UPDATE usage_providers SET enabled = ?2, updated_at = ?3 WHERE id = ?1",
             params![id, enabled, now_timestamp()?],
         )?;
         if updated == 0 {
             return Err(AppError::Message("usage provider not found".to_string()));
         }
+        transaction.commit()?;
         Ok(())
     }
 
@@ -530,7 +599,9 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use crate::database::Database;
-    use crate::usage::domain::{BillingKind, TokenSource, UsageProviderInput};
+    use crate::usage::domain::{
+        BillingKind, DashboardModuleInput, DashboardModuleKind, TokenSource, UsageProviderInput,
+    };
     use serde_json::json;
     use std::sync::{mpsc, Arc};
     use std::time::Duration;
@@ -555,8 +626,131 @@ mod tests {
                 "apiKey": "secret-value"
             })),
             quota_config: Some(json!({"access_token": "quota-secret"})),
+            dashboard_module_id: (billing_kind == BillingKind::Subscription)
+                .then(|| "claude-code".to_string()),
             enabled: true,
         }
+    }
+
+    #[test]
+    fn enabled_subscription_requires_an_existing_subscription_module() {
+        let db = Database::memory().unwrap();
+        let mut input = provider(
+            "subscription",
+            BillingKind::Subscription,
+            vec![TokenSource::SessionLog],
+        );
+        input.dashboard_module_id = None;
+        let error = db.save_usage_provider(&input).unwrap_err();
+        assert!(error.to_string().contains("dashboard module"));
+
+        input.dashboard_module_id = Some("api".to_string());
+        let error = db.save_usage_provider(&input).unwrap_err();
+        assert!(error.to_string().contains("subscription"));
+
+        input.dashboard_module_id = Some("missing".to_string());
+        let error = db.save_usage_provider(&input).unwrap_err();
+        assert!(error.to_string().contains("not found"));
+        assert!(db.get_usage_provider("subscription").unwrap().is_none());
+    }
+
+    #[test]
+    fn subscription_membership_round_trips_and_move_preserves_event_identity() {
+        let db = Database::memory().unwrap();
+        let mut input = provider(
+            "subscription",
+            BillingKind::Subscription,
+            vec![TokenSource::SessionLog],
+        );
+        let saved = db.save_usage_provider(&input).unwrap();
+        assert_eq!(saved.dashboard_module_id.as_deref(), Some("claude-code"));
+
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "INSERT INTO usage_events (
+                     event_id, source, provider_id, product_group_id, occurred_at, model,
+                     input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
+                     cost_source, created_at
+                 ) VALUES ('event-1', 'session_log', 'subscription', 'claude', 10, 'model',
+                           1, 2, 0, 0, 'unavailable', 10)",
+                [],
+            )
+            .unwrap();
+        }
+        let custom = db
+            .save_dashboard_module(&DashboardModuleInput {
+                id: None,
+                name: "Team Plan".to_string(),
+                kind: DashboardModuleKind::Subscription,
+                sort_order: 4,
+                visible: true,
+            })
+            .unwrap();
+        input.dashboard_module_id = Some(custom.id.clone());
+        let moved = db.save_usage_provider(&input).unwrap();
+        assert_eq!(
+            moved.dashboard_module_id.as_deref(),
+            Some(custom.id.as_str())
+        );
+        assert_eq!(
+            db.get_usage_provider("subscription")
+                .unwrap()
+                .unwrap()
+                .dashboard_module_id
+                .as_deref(),
+            Some(custom.id.as_str())
+        );
+        let conn = db.conn.lock().unwrap();
+        let event_identity: (String, String) = conn
+            .query_row(
+                "SELECT provider_id, product_group_id FROM usage_events WHERE event_id = 'event-1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(event_identity, ("subscription".into(), "claude".into()));
+    }
+
+    #[test]
+    fn disabled_subscription_may_be_unassigned_but_cannot_be_enabled() {
+        let db = Database::memory().unwrap();
+        let mut input = provider(
+            "disabled",
+            BillingKind::Subscription,
+            vec![TokenSource::SessionLog],
+        );
+        input.dashboard_module_id = None;
+        input.enabled = false;
+        let saved = db.save_usage_provider(&input).unwrap();
+        assert_eq!(saved.dashboard_module_id, None);
+
+        let error = db.set_usage_provider_enabled("disabled", true).unwrap_err();
+        assert!(error.to_string().contains("dashboard module"));
+        assert!(!db.get_usage_provider("disabled").unwrap().unwrap().enabled);
+    }
+
+    #[test]
+    fn metered_provider_clears_membership_and_projects_to_api() {
+        let db = Database::memory().unwrap();
+        let mut input = provider("metered", BillingKind::Metered, vec![TokenSource::Proxy]);
+        input.dashboard_module_id = Some("codex".to_string());
+
+        let saved = db.save_usage_provider(&input).unwrap();
+        assert_eq!(saved.dashboard_module_id.as_deref(), Some("api"));
+        assert_eq!(
+            db.get_usage_provider("metered")
+                .unwrap()
+                .unwrap()
+                .dashboard_module_id,
+            None
+        );
+        assert_eq!(
+            db.list_usage_providers().unwrap()[0]
+                .dashboard_module_id
+                .as_deref(),
+            Some("api")
+        );
     }
 
     #[test]

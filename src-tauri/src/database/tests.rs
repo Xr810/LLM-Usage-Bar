@@ -194,12 +194,13 @@ mod schema_v14_cursor_migration_tests {
     fn v13_current_tables() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         Database::create_tables_on_conn(&conn).unwrap();
+        crate::usage::migration::migrate_v12_to_v13(&conn).unwrap();
         Database::set_user_version(&conn, 13).unwrap();
         conn
     }
 
     #[test]
-    fn migration_v13_to_v14_archives_line_state_and_sets_version_once() {
+    fn migration_v13_to_current_archives_line_state_and_sets_version_once() {
         let conn = v13_current_tables();
         conn.execute(
             "INSERT INTO session_log_sync
@@ -211,7 +212,10 @@ mod schema_v14_cursor_migration_tests {
 
         Database::apply_schema_migrations_on_conn_with_roots(&conn, &roots()).unwrap();
 
-        assert_eq!(Database::get_user_version(&conn).unwrap(), 14);
+        assert_eq!(
+            Database::get_user_version(&conn).unwrap(),
+            SCHEMA_VERSION
+        );
         assert!(!Database::table_exists(&conn, "session_log_sync").unwrap());
         assert!(Database::table_exists(&conn, "session_log_sync_v13_archive").unwrap());
         let cursor = conn

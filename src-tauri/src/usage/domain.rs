@@ -23,6 +23,35 @@ pub enum CostSource {
     Unavailable,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DashboardModuleKind {
+    Subscription,
+    Api,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DashboardModuleInput {
+    pub id: Option<String>,
+    pub name: String,
+    pub kind: DashboardModuleKind,
+    pub sort_order: i64,
+    pub visible: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DashboardModuleView {
+    pub id: String,
+    pub name: String,
+    pub kind: DashboardModuleKind,
+    pub sort_order: i64,
+    pub visible: bool,
+    pub is_system: bool,
+    pub provider_count: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageProviderInput {
@@ -38,6 +67,8 @@ pub struct UsageProviderInput {
     pub route_app_type: Option<String>,
     pub route_config: Option<Value>,
     pub quota_config: Option<Value>,
+    #[serde(default)]
+    pub dashboard_module_id: Option<String>,
     pub enabled: bool,
 }
 
@@ -66,6 +97,7 @@ pub struct UsageProviderStored {
     pub name: String,
     pub billing_kind: BillingKind,
     pub product_group_id: String,
+    pub dashboard_module_id: Option<String>,
     pub token_sources: Vec<TokenSource>,
     pub quota_source: Option<String>,
     pub quota_interval_seconds: Option<u64>,
@@ -87,6 +119,7 @@ pub struct UsageProviderView {
     pub name: String,
     pub billing_kind: BillingKind,
     pub product_group_id: String,
+    pub dashboard_module_id: Option<String>,
     pub token_sources: Vec<TokenSource>,
     pub session_source_bindings: Vec<String>,
     pub quota_source: Option<String>,
@@ -303,6 +336,7 @@ mod tests {
             route_app_type: Some("claude".to_string()),
             route_config: Some(json!({"baseUrl": "https://example.com"})),
             quota_config: None,
+            dashboard_module_id: None,
             enabled: true,
         }
     }
@@ -338,5 +372,38 @@ mod tests {
         assert_eq!(value["tokenSources"], json!(["proxy"]));
         assert_eq!(value["quotaIntervalSeconds"], json!(60));
         assert!(value.get("billing_kind").is_none());
+    }
+
+    #[test]
+    fn dashboard_module_contract_and_provider_membership_use_camel_case() {
+        let input: DashboardModuleInput = serde_json::from_value(json!({
+            "id": null,
+            "name": "Gemini",
+            "kind": "subscription",
+            "sortOrder": 4,
+            "visible": true
+        }))
+        .expect("deserialize module input");
+        assert_eq!(input.kind, DashboardModuleKind::Subscription);
+        assert_eq!(input.sort_order, 4);
+
+        let view = DashboardModuleView {
+            id: "api".to_string(),
+            name: "API".to_string(),
+            kind: DashboardModuleKind::Api,
+            sort_order: 3,
+            visible: true,
+            is_system: true,
+            provider_count: 2,
+        };
+        let value = serde_json::to_value(view).expect("serialize module view");
+        assert_eq!(value["sortOrder"], json!(3));
+        assert_eq!(value["isSystem"], json!(true));
+        assert_eq!(value["providerCount"], json!(2));
+
+        let mut provider = valid_provider_input();
+        provider.dashboard_module_id = Some("api".to_string());
+        let value = serde_json::to_value(provider).expect("serialize provider membership");
+        assert_eq!(value["dashboardModuleId"], json!("api"));
     }
 }

@@ -413,6 +413,7 @@ mod tests {
             route_app_type: Some("claude".to_string()),
             route_config,
             quota_config: None,
+            dashboard_module_id: None,
             enabled: true,
         }
     }
@@ -506,6 +507,7 @@ mod tests {
         assert!(router.select_bound_provider("claude").await.is_ok());
 
         input.billing_kind = BillingKind::Subscription;
+        input.dashboard_module_id = Some("claude-code".to_string());
         db.save_usage_provider(&input).unwrap();
         let error = router.select_bound_provider("claude").await.unwrap_err();
         assert_eq!(error.to_string(), "route provider is not metered: bound");

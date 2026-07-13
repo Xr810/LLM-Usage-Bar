@@ -101,7 +101,7 @@ git commit -m "feat(usage): migrate dashboard modules"
 - Produces: `Database::{list_dashboard_modules, save_dashboard_module, reorder_dashboard_modules, set_dashboard_module_visibility, delete_dashboard_module}`.
 - Extends: `UsageProviderInput.dashboard_module_id: Option<String>` and `UsageProviderView.dashboard_module_id: Option<String>`.
 
-- [ ] **Step 1: Write failing DAO contract tests**
+- [x] **Step 1: Write failing DAO contract tests**
 
 Cover one behavior per test:
 
@@ -116,7 +116,7 @@ assert!(db.delete_dashboard_module("codex").unwrap_err().to_string().contains("p
 
 Add Provider tests proving enabled subscription saves reject missing/API membership, disabled subscription saves may remain unassigned, metered saves clear supplied membership and return `api`, reassignment changes only the Provider row, and enabling an unassigned subscription is rejected.
 
-- [ ] **Step 2: Verify the DAO tests fail for missing types and methods**
+- [x] **Step 2: Verify the DAO tests fail for missing types and methods**
 
 Run: `pnpm rust -- test --manifest-path src-tauri/Cargo.toml database::dao::dashboard_modules::tests --lib -- --nocapture`
 
@@ -124,13 +124,13 @@ Run: `pnpm rust -- test --manifest-path src-tauri/Cargo.toml database::dao::usag
 
 Expected: compile/test failure naming the missing dashboard module API.
 
-- [ ] **Step 3: Implement the minimal domain and DAO behavior**
+- [x] **Step 3: Implement the minimal domain and DAO behavior**
 
 Use `uuid::Uuid::new_v4().to_string()` for new custom IDs. In module updates, load the stored row first and preserve `kind`/`is_system` for system modules. Reordering must reject duplicates, unknown IDs, or an incomplete ID set and update all rows in one transaction. Delete only empty non-system subscription modules. Count subscription membership by foreign key and count all metered Providers for `api`.
 
 In `save_usage_provider`, validate membership inside the existing Provider/session-binding transaction before upsert. Persist `NULL` for metered Providers and project their returned/listed `dashboardModuleId` to `api`; keep `NULL` for disabled unassigned subscriptions.
 
-- [ ] **Step 4: Run focused DAO tests until green, then run all Rust library tests**
+- [x] **Step 4: Run focused DAO tests until green, then run all Rust library tests**
 
 Run: `pnpm rust -- test --manifest-path src-tauri/Cargo.toml database::dao::dashboard_modules::tests --lib -- --nocapture`
 
@@ -140,7 +140,7 @@ Run: `pnpm rust -- test --manifest-path src-tauri/Cargo.toml --lib`
 
 Expected: PASS with zero failed tests.
 
-- [ ] **Step 5: Commit the DAO and domain contract**
+- [x] **Step 5: Commit the DAO and domain contract**
 
 ```bash
 git add src-tauri/src/database/dao src-tauri/src/usage/domain.rs src-tauri/src/usage src-tauri/src/services src-tauri/src/proxy

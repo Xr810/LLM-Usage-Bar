@@ -534,6 +534,7 @@ impl Database {
                     }
                     14 => {
                         log::info!("迁移数据库从 v14 到 v15（添加动态用量模块和 Provider 归属）");
+                        Self::validate_schema_v14_complete(conn)?;
                         crate::usage::module_migration::migrate_v14_to_v15(conn)?;
                         Self::set_user_version(conn, 15)?;
                     }
