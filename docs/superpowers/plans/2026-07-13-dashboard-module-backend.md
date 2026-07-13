@@ -191,9 +191,9 @@ Run: `pnpm tauri build --debug`
 
 Expected: every command exits 0; known Vite chunk-size and pre-existing Rust dead-code warnings may remain, but no errors or test failures.
 
-- [ ] **Step 5: Launch with isolated data and perform UI acceptance**
+- [x] **Step 5: Launch with isolated data and perform UI acceptance**
 
-Acceptance status (2026-07-13): items 1-3 and 5-8 passed against a fresh temporary home. Item 4 passed for create, rename, reorder, hide, and show; the final empty-module delete confirmation remains pending because macOS locked before Computer Use could open the confirmation dialog.
+Acceptance status (2026-07-13): all eight items passed against a fresh temporary home, including create, rename, reorder, hide/show, confirmed deletion of an empty module, Provider membership validation, deletion protections, and relaunch persistence.
 
 Create a fresh temporary home, set both `HOME` and `LLM_USAGE_BAR_TEST_HOME` to it, and launch the debug `.app` binary. Verify:
 
@@ -206,7 +206,7 @@ Create a fresh temporary home, set both `HOME` and `LLM_USAGE_BAR_TEST_HOME` to 
 7. Relaunching against the same temporary home preserves module changes.
 8. No real user data path appears in logs or UI.
 
-- [ ] **Step 6: Review diff and commit command integration**
+- [x] **Step 6: Review diff and commit command integration**
 
 ```bash
 git diff --check
