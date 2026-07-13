@@ -538,6 +538,14 @@ impl Database {
                         crate::usage::module_migration::migrate_v14_to_v15(conn)?;
                         Self::set_user_version(conn, 15)?;
                     }
+                    15 => {
+                        log::info!(
+                            "迁移数据库从 v15 到 v16（添加 Agent 模块、Provider 绑定和历史归属）"
+                        );
+                        Self::validate_schema_v15_complete(conn)?;
+                        crate::usage::agent_module_migration::migrate_v15_to_v16(conn)?;
+                        Self::set_user_version(conn, 16)?;
+                    }
                     _ => {
                         return Err(AppError::Database(format!(
                             "未知的数据库版本 {version}，无法迁移到 {SCHEMA_VERSION}"
@@ -546,8 +554,9 @@ impl Database {
                 }
                 version = Self::get_user_version(conn)?;
             }
-            if version == 15 {
+            if version == 16 {
                 Self::validate_schema_v15_complete(conn)?;
+                crate::usage::agent_module_migration::validate_schema_v16_complete(conn)?;
             }
             Ok(())
         })();

@@ -421,7 +421,7 @@ mod schema_v15_dashboard_module_migration_tests {
 
         Database::apply_schema_migrations_on_conn_with_roots(&conn, &roots()).unwrap();
 
-        assert_eq!(Database::get_user_version(&conn).unwrap(), 15);
+        assert_eq!(Database::get_user_version(&conn).unwrap(), SCHEMA_VERSION);
         let modules = conn
             .prepare(
                 "SELECT id, name, kind, sort_order, visible, is_system
@@ -553,6 +553,903 @@ mod schema_v15_dashboard_module_migration_tests {
             })
             .unwrap();
         assert_eq!(rows, 0);
+    }
+}
+
+mod migration_v15_to_v16 {
+    use super::*;
+    use crate::usage::agent_module_migration::{
+        migrate_v15_to_v16_with_failure, MigrationFailurePoint,
+    };
+    use crate::usage::source_roots::UsageSourceRoots;
+    use std::collections::{HashMap, HashSet};
+    use std::path::PathBuf;
+
+    fn roots() -> UsageSourceRoots {
+        UsageSourceRoots {
+            claude: PathBuf::from("/Users/test/.claude/projects"),
+            codex: PathBuf::from("/Users/test/.codex"),
+            gemini: PathBuf::from("/Users/test/.gemini/tmp"),
+            opencode: PathBuf::from("/Users/test/.local/share/opencode"),
+        }
+    }
+
+    fn v15_usage_fixture() -> Connection {
+        let conn = Connection::open_in_memory().expect("open v15 fixture");
+        conn.execute_batch("PRAGMA foreign_keys = ON;")
+            .expect("enable foreign keys");
+        Database::create_tables_on_conn(&conn).expect("create application tables");
+        crate::usage::migration::migrate_v12_to_v13(&conn).expect("create v13 usage schema");
+        crate::usage::cursor_migration::migrate_v13_to_v14(&conn, &roots())
+            .expect("create v14 cursor schema");
+        Database::set_user_version(&conn, 14).expect("set v14 version");
+        crate::usage::module_migration::migrate_v14_to_v15(&conn)
+            .expect("create v15 module schema");
+        Database::set_user_version(&conn, 15).expect("set v15 version");
+        conn
+    }
+
+    fn insert_provider(
+        conn: &Connection,
+        id: &str,
+        billing_kind: &str,
+        dashboard_module_id: Option<&str>,
+    ) {
+        conn.execute(
+            "INSERT INTO usage_providers (
+                 id, name, billing_kind, product_group_id, token_sources,
+                 dashboard_module_id, enabled, needs_review, created_at, updated_at
+             ) VALUES (?1, ?1, ?2, ?1, '[\"session_log\"]', ?3, 1, 0, 10, 10)",
+            params![id, billing_kind, dashboard_module_id],
+        )
+        .expect("insert usage provider");
+    }
+
+    fn insert_event(
+        conn: &Connection,
+        event_id: &str,
+        source: &str,
+        legacy_request_id: Option<&str>,
+    ) {
+        conn.execute(
+            "INSERT INTO usage_events (
+                 event_id, source, provider_id, product_group_id, occurred_at,
+                 model, cost_source, legacy_request_id, created_at
+             ) VALUES (?1, ?2, 'history-provider', 'history', 100,
+                       'model', 'unavailable', ?3, 100)",
+            params![event_id, source, legacy_request_id],
+        )
+        .expect("insert usage event");
+    }
+
+    fn insert_legacy_log(
+        conn: &Connection,
+        request_id: &str,
+        app_type: &str,
+        provider_type: Option<&str>,
+        data_source: &str,
+    ) {
+        conn.execute(
+            "INSERT INTO proxy_request_logs (
+                 request_id, provider_id, app_type, model, latency_ms,
+                 status_code, provider_type, created_at, data_source
+             ) VALUES (?1, 'legacy-provider', ?2, 'model', 1, 200, ?3, 100, ?4)",
+            params![request_id, app_type, provider_type, data_source],
+        )
+        .expect("insert legacy request log");
+    }
+
+    fn agent_for(conn: &Connection, event_id: &str) -> Option<String> {
+        conn.query_row(
+            "SELECT agent_module_id FROM usage_events WHERE event_id = ?1",
+            [event_id],
+            |row| row.get(0),
+        )
+        .expect("query migrated agent identity")
+    }
+
+    fn trigger_sql(conn: &Connection, trigger: &str) -> String {
+        conn.query_row(
+            "SELECT sql FROM sqlite_schema WHERE type = 'trigger' AND name = ?1",
+            [trigger],
+            |row| row.get(0),
+        )
+        .expect("query trigger SQL")
+    }
+
+    fn table_columns(conn: &Connection, table: &str) -> HashSet<String> {
+        let mut statement = conn
+            .prepare(&format!("PRAGMA table_info('{table}')"))
+            .expect("inspect table columns");
+        statement
+            .query_map([], |row| row.get(1))
+            .expect("query table columns")
+            .collect::<Result<_, _>>()
+            .expect("collect table columns")
+    }
+
+    #[test]
+    fn migration_v15_to_v16_seeds_agents_preserves_custom_modules_and_backfills_only_proven_bindings(
+    ) {
+        let conn = v15_usage_fixture();
+        conn.execute(
+            "INSERT INTO dashboard_modules (
+                 id, name, kind, sort_order, visible, is_system, created_at, updated_at
+             ) VALUES ('custom-workbench', 'Custom Workbench', 'subscription', 7, 0, 0, 10, 10)",
+            [],
+        )
+        .expect("insert custom v15 module");
+        insert_provider(&conn, "codex-source", "subscription", Some("api"));
+        insert_provider(&conn, "claude-source", "subscription", Some("claude-code"));
+        insert_provider(
+            &conn,
+            "custom-provider",
+            "subscription",
+            Some("custom-workbench"),
+        );
+        insert_provider(
+            &conn,
+            "kimi-provider",
+            "subscription",
+            Some("kimi-coding-plan"),
+        );
+        insert_provider(&conn, "codex-default-only", "subscription", Some("codex"));
+        insert_provider(
+            &conn,
+            "claude-default-only",
+            "subscription",
+            Some("claude-code"),
+        );
+        conn.execute_batch(
+            "UPDATE dashboard_modules SET sort_order = 9, visible = 0 WHERE id = 'codex';
+             INSERT INTO usage_source_bindings (source, provider_id, updated_at)
+             VALUES ('codex', 'codex-source', 10), ('claude', 'claude-source', 10);",
+        )
+        .expect("seed exact source binding evidence");
+
+        let provider_count = super::count(&conn, "usage_providers");
+        Database::apply_schema_migrations_on_conn_with_roots(&conn, &roots())
+            .expect("migrate v15 to v16");
+
+        assert_eq!(Database::get_user_version(&conn).unwrap(), 16);
+        assert_eq!(super::count(&conn, "usage_providers"), provider_count);
+        assert_eq!(super::count(&conn, "dashboard_modules"), 5);
+        assert_eq!(
+            super::scalar_i64(
+                &conn,
+                "SELECT COUNT(*) FROM dashboard_modules WHERE id = 'api' AND kind = 'api'"
+            ),
+            1,
+            "v15 display data remains frozen for compatibility"
+        );
+
+        let fixed = conn
+            .prepare(
+                "SELECT id, name, sort_order, visible
+                 FROM agent_modules WHERE is_fixed = 1 ORDER BY id",
+            )
+            .unwrap()
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(
+            fixed,
+            vec![
+                ("claude-code".into(), "Claude Code".into(), 1, 1),
+                ("codex".into(), "Codex".into(), 9, 0),
+                ("hermes".into(), "Hermes".into(), 4, 1),
+                ("openclaw".into(), "OpenClaw".into(), 3, 1),
+                ("opencode".into(), "OpenCode".into(), 2, 1),
+            ]
+        );
+        assert_eq!(
+            super::scalar_i64(
+                &conn,
+                "SELECT COUNT(*) FROM agent_modules WHERE id IN ('api', 'other-subscriptions')"
+            ),
+            0
+        );
+
+        let custom_rows = conn
+            .prepare(
+                "SELECT id, name, sort_order, visible, is_fixed
+                 FROM agent_modules WHERE is_fixed = 0 ORDER BY id",
+            )
+            .unwrap()
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
+                ))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(
+            custom_rows,
+            vec![
+                (
+                    "custom-workbench".into(),
+                    "Custom Workbench".into(),
+                    7,
+                    0,
+                    0,
+                ),
+                (
+                    "kimi-coding-plan".into(),
+                    "Kimi Coding Plan".into(),
+                    2,
+                    1,
+                    0,
+                ),
+            ]
+        );
+
+        let bindings = conn
+            .prepare(
+                "SELECT id, agent_module_id, provider_id, enabled,
+                        api_key_fingerprint, credential_slot, credential_version
+                 FROM agent_provider_bindings ORDER BY agent_module_id, provider_id",
+            )
+            .unwrap()
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, Option<Vec<u8>>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, i64>(6)?,
+                ))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(bindings.len(), 3);
+        assert_eq!(
+            bindings
+                .iter()
+                .map(|row| (row.1.as_str(), row.2.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("claude-code", "claude-source"),
+                ("codex", "codex-source"),
+                ("custom-workbench", "custom-provider"),
+            ]
+        );
+        for (id, _, _, enabled, fingerprint, slot, version) in &bindings {
+            uuid::Uuid::parse_str(id).expect("migration binding id is a UUID");
+            assert_eq!(*enabled, 0);
+            assert_eq!(fingerprint, &None);
+            assert_eq!(slot, &None);
+            assert_eq!(*version, 0);
+        }
+        assert_eq!(
+            super::scalar_i64(
+                &conn,
+                "SELECT COUNT(*) FROM agent_provider_bindings
+                 WHERE provider_id IN (
+                     'kimi-provider', 'codex-default-only', 'claude-default-only'
+                 )"
+            ),
+            0,
+            "legacy default membership is not independent Agent evidence"
+        );
+
+        assert!(conn
+            .execute(
+                "UPDATE agent_provider_bindings
+                 SET api_key_fingerprint = ?1,
+                     credential_slot = 'text-fingerprint',
+                     credential_version = 1
+                 WHERE id = ?2",
+                params!["x".repeat(32), &bindings[0].0],
+            )
+            .is_err());
+        assert!(conn
+            .execute(
+                "UPDATE agent_provider_bindings
+                 SET api_key_fingerprint = NULL,
+                     credential_slot = 'orphan-slot',
+                     credential_version = 1
+                 WHERE id = ?1",
+                [&bindings[0].0],
+            )
+            .is_err());
+        assert!(conn
+            .execute(
+                "UPDATE agent_provider_bindings
+                 SET api_key_fingerprint = ?1,
+                     credential_slot = NULL,
+                     credential_version = 1
+                 WHERE id = ?2",
+                params![vec![7_u8; 32], &bindings[0].0],
+            )
+            .is_err());
+        assert!(conn
+            .execute(
+                "UPDATE agent_provider_bindings
+                 SET credential_version = -1
+                 WHERE id = ?1",
+                [&bindings[0].0],
+            )
+            .is_err());
+
+        let binding_columns = table_columns(&conn, "agent_provider_bindings");
+        for required in [
+            "id",
+            "agent_module_id",
+            "provider_id",
+            "enabled",
+            "api_key_fingerprint",
+            "credential_slot",
+            "credential_version",
+            "created_at",
+            "updated_at",
+        ] {
+            assert!(binding_columns.contains(required), "missing {required}");
+        }
+        assert!(Database::table_exists(&conn, "agent_credential_operations").unwrap());
+
+        let agent_event_column = conn
+            .query_row(
+                "SELECT \"notnull\", dflt_value
+                 FROM pragma_table_info('usage_events')
+                 WHERE name = 'agent_module_id'",
+                [],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?)),
+            )
+            .expect("inspect nullable event Agent column");
+        assert_eq!(agent_event_column, (0, None));
+        for table in [
+            "agent_modules",
+            "agent_provider_bindings",
+            "agent_credential_operations",
+        ] {
+            assert_eq!(
+                super::scalar_i64(
+                    &conn,
+                    &format!("SELECT \"notnull\" FROM pragma_table_info('{table}') WHERE pk = 1")
+                ),
+                1,
+                "{table} stable identity must be explicitly NOT NULL"
+            );
+        }
+
+        assert!(conn
+            .execute(
+                "INSERT INTO agent_modules (
+                     id, name, sort_order, visible, is_fixed, archived_at,
+                     created_at, updated_at
+                 ) VALUES (NULL, 'Null Agent', 10, 1, 0, NULL, 10, 10)",
+                [],
+            )
+            .is_err());
+        assert!(conn
+            .execute(
+                "INSERT INTO agent_provider_bindings (
+                     id, agent_module_id, provider_id, enabled,
+                     api_key_fingerprint, credential_slot, credential_version,
+                     created_at, updated_at
+                 ) VALUES (
+                     NULL, 'codex', 'codex-source', 0,
+                     NULL, NULL, 0, 10, 10
+                 )",
+                [],
+            )
+            .is_err());
+        assert!(conn
+            .execute(
+                "INSERT INTO agent_credential_operations (
+                     operation_id, binding_id, generation, operation_kind,
+                     status, staging_slot, previous_slot, created_at, updated_at
+                 ) VALUES (NULL, ?1, 1, 'set', 'pending', 'slot', NULL, 10, 10)",
+                [&bindings[0].0],
+            )
+            .is_err());
+        assert!(conn
+            .execute(
+                "INSERT INTO agent_credential_operations (
+                     operation_id, binding_id, generation, operation_kind,
+                     status, staging_slot, previous_slot, created_at, updated_at
+                 ) VALUES ('zero-generation', ?1, 0, 'set', 'pending', 'slot', NULL, 10, 10)",
+                [&bindings[0].0],
+            )
+            .is_err());
+        assert!(conn
+            .execute(
+                "INSERT INTO agent_credential_operations (
+                     operation_id, binding_id, generation, operation_kind,
+                     status, staging_slot, previous_slot, created_at, updated_at
+                 ) VALUES ('missing-staging', ?1, 1, 'set', 'pending', NULL, NULL, 10, 10)",
+                [&bindings[0].0],
+            )
+            .is_err());
+
+        conn.execute(
+            "UPDATE agent_modules SET sort_order = 0, visible = 1 WHERE id = 'codex'",
+            [],
+        )
+        .expect("fixed Agent can be reordered and shown");
+        assert!(conn
+            .execute(
+                "UPDATE agent_modules SET name = 'Renamed' WHERE id = 'codex'",
+                []
+            )
+            .is_err());
+        assert!(conn
+            .execute(
+                "UPDATE agent_modules SET archived_at = 20 WHERE id = 'codex'",
+                []
+            )
+            .is_err());
+        assert!(conn
+            .execute(
+                "UPDATE agent_modules SET created_at = 20 WHERE id = 'codex'",
+                []
+            )
+            .is_err());
+        assert!(conn
+            .execute(
+                "INSERT INTO agent_modules (
+                     id, name, sort_order, visible, is_fixed,
+                     archived_at, created_at, updated_at
+                 ) VALUES ('custom-fixed', 'Custom Fixed', 20, 1, 1, NULL, 20, 20)",
+                [],
+            )
+            .is_err());
+        assert!(conn
+            .execute(
+                "INSERT INTO agent_modules (
+                     id, name, sort_order, visible, is_fixed,
+                     archived_at, created_at, updated_at
+                 ) VALUES ('api', 'API', 20, 1, 0, NULL, 20, 20)",
+                [],
+            )
+            .is_err());
+        assert!(conn
+            .execute("DELETE FROM agent_modules WHERE id = 'codex'", [])
+            .is_err());
+
+        let unused = v15_usage_fixture();
+        Database::apply_schema_migrations_on_conn_with_roots(&unused, &roots())
+            .expect("migrate unused Kimi default");
+        assert_eq!(super::count(&unused, "usage_providers"), 0);
+        assert_eq!(super::count(&unused, "usage_events"), 0);
+        assert_eq!(
+            super::scalar_i64(
+                &unused,
+                "SELECT COUNT(*) FROM agent_modules WHERE id = 'kimi-coding-plan'"
+            ),
+            0,
+            "an untouched, unused Kimi default is omitted"
+        );
+    }
+
+    #[test]
+    fn migration_v15_to_v16_attributes_only_exact_history_and_nulls_uncertain_link_components() {
+        let conn = v15_usage_fixture();
+        insert_provider(&conn, "history-provider", "metered", None);
+
+        insert_event(
+            &conn,
+            "exact-claude-session",
+            "session_log",
+            Some("log-claude-session"),
+        );
+        insert_legacy_log(
+            &conn,
+            "log-claude-session",
+            "claude",
+            Some("session_log"),
+            "session",
+        );
+        insert_event(
+            &conn,
+            "exact-codex-session",
+            "session_log",
+            Some("log-codex-session"),
+        );
+        insert_legacy_log(
+            &conn,
+            "log-codex-session",
+            "codex",
+            Some("codex_session"),
+            "codex_session",
+        );
+        insert_event(
+            &conn,
+            "compat-claude-session",
+            "session_log",
+            Some("log-compat-claude-session"),
+        );
+        insert_legacy_log(
+            &conn,
+            "log-compat-claude-session",
+            "claude",
+            Some("session_log"),
+            "session_log",
+        );
+        insert_event(
+            &conn,
+            "canonical-codex-session",
+            "session_log",
+            Some("log-canonical-codex-session"),
+        );
+        insert_legacy_log(
+            &conn,
+            "log-canonical-codex-session",
+            "codex",
+            Some("codex_session"),
+            "session",
+        );
+        insert_event(&conn, "claude-session:prefix", "session_log", None);
+        insert_event(&conn, "codex-session:prefix", "session_log", None);
+        insert_event(&conn, "Claude-session:wrong-case", "session_log", None);
+        insert_event(&conn, "claude-session:", "session_log", None);
+        insert_event(&conn, "bare-session", "session_log", None);
+
+        for (event_id, app_type, provider_type, data_source) in [
+            (
+                "wrong-claude-compat-pair",
+                "claude",
+                "session_log",
+                "codex_session",
+            ),
+            (
+                "wrong-codex-compat-pair",
+                "codex",
+                "codex_session",
+                "session_log",
+            ),
+            ("wrong-session-app-case", "Claude", "session_log", "session"),
+        ] {
+            let request_id = format!("log-{event_id}");
+            insert_event(&conn, event_id, "session_log", Some(&request_id));
+            insert_legacy_log(
+                &conn,
+                &request_id,
+                app_type,
+                Some(provider_type),
+                data_source,
+            );
+        }
+
+        insert_provider(&conn, "anthropic", "metered", None);
+        conn.execute(
+            "INSERT INTO usage_events (
+                 event_id, source, provider_id, product_group_id, occurred_at,
+                 model, cost_source, created_at
+             ) VALUES (
+                 'vendor-product-only', 'session_log', 'anthropic', 'anthropic',
+                 100, 'model', 'unavailable', 100
+             )",
+            [],
+        )
+        .expect("insert vendor/product-only history");
+
+        insert_event(
+            &conn,
+            "claude-session:direct-conflict",
+            "session_log",
+            Some("log-direct-conflict"),
+        );
+        insert_legacy_log(
+            &conn,
+            "log-direct-conflict",
+            "codex",
+            Some("codex_session"),
+            "session",
+        );
+
+        for (event_id, app_type) in [
+            ("proxy-codex", "codex"),
+            ("proxy-claude", "claude"),
+            ("proxy-opencode", " OpenCode "),
+            ("proxy-openclaw", "openclaw"),
+            ("proxy-hermes", "HERMES"),
+        ] {
+            let request_id = format!("log-{event_id}");
+            insert_event(&conn, event_id, "proxy", Some(&request_id));
+            insert_legacy_log(&conn, &request_id, app_type, None, "proxy");
+        }
+        for app_type in ["openai", "anthropic", "moonshot", "kimi", "api"] {
+            let event_id = format!("unproven-{app_type}");
+            let request_id = format!("log-{event_id}");
+            insert_event(&conn, &event_id, "proxy", Some(&request_id));
+            insert_legacy_log(&conn, &request_id, app_type, None, "proxy");
+        }
+        insert_event(
+            &conn,
+            "wrong-session-label",
+            "session_log",
+            Some("log-wrong-session"),
+        );
+        insert_legacy_log(
+            &conn,
+            "log-wrong-session",
+            "anthropic",
+            Some("session_log"),
+            "session_log",
+        );
+
+        for event_id in [
+            "claude-session:conflict-a",
+            "claude-session:conflict-b",
+            "codex-session:conflict-c",
+            "claude-session:one-sided",
+            "one-sided-unknown",
+            "reverse-unknown-canonical",
+            "claude-session:reverse-proven-duplicate",
+            "claude-session:agree-a",
+            "claude-session:agree-b",
+        ] {
+            insert_event(&conn, event_id, "session_log", None);
+        }
+        conn.execute_batch(
+            "INSERT INTO usage_event_links (
+                 canonical_event_id, duplicate_event_id, link_kind, link_value, created_at
+             ) VALUES
+             ('claude-session:conflict-a', 'claude-session:conflict-b', 'session_id', 'conflict-1', 100),
+             ('claude-session:conflict-b', 'codex-session:conflict-c', 'session_id', 'conflict-2', 100),
+             ('codex-session:conflict-c', 'claude-session:conflict-a', 'request_id', 'conflict-cycle', 100),
+             ('claude-session:conflict-a', 'claude-session:conflict-b', 'request_id', 'conflict-multi-edge', 100),
+             ('claude-session:one-sided', 'one-sided-unknown', 'session_id', 'one-sided', 100),
+             ('reverse-unknown-canonical', 'claude-session:reverse-proven-duplicate', 'session_id', 'reverse', 100),
+             ('claude-session:agree-a', 'claude-session:agree-b', 'session_id', 'agree', 100);
+             INSERT INTO quota_snapshots (
+                 snapshot_id, provider_id, fetched_at, raw_payload, created_at
+             ) VALUES ('quota-history', 'history-provider', 100, '{}', 100);
+             INSERT INTO quota_fetch_state (provider_id, stale)
+             VALUES ('history-provider', 0);",
+        )
+        .expect("seed linked history and quota rows");
+
+        let before = HashMap::from([
+            ("providers", super::count(&conn, "usage_providers")),
+            ("events", super::count(&conn, "usage_events")),
+            ("links", super::count(&conn, "usage_event_links")),
+            ("quota", super::count(&conn, "quota_snapshots")),
+            ("quota_state", super::count(&conn, "quota_fetch_state")),
+        ]);
+        let delete_trigger_before = trigger_sql(&conn, "usage_events_immutable_delete");
+
+        Database::apply_schema_migrations_on_conn_with_roots(&conn, &roots())
+            .expect("migrate historical Agent ownership");
+
+        assert_eq!(
+            agent_for(&conn, "exact-claude-session").as_deref(),
+            Some("claude-code")
+        );
+        assert_eq!(
+            agent_for(&conn, "exact-codex-session").as_deref(),
+            Some("codex")
+        );
+        assert_eq!(
+            agent_for(&conn, "compat-claude-session").as_deref(),
+            Some("claude-code")
+        );
+        assert_eq!(
+            agent_for(&conn, "canonical-codex-session").as_deref(),
+            Some("codex")
+        );
+        assert_eq!(
+            agent_for(&conn, "claude-session:prefix").as_deref(),
+            Some("claude-code")
+        );
+        assert_eq!(
+            agent_for(&conn, "codex-session:prefix").as_deref(),
+            Some("codex")
+        );
+        assert_eq!(agent_for(&conn, "proxy-codex").as_deref(), Some("codex"));
+        assert_eq!(
+            agent_for(&conn, "proxy-claude").as_deref(),
+            Some("claude-code")
+        );
+        assert_eq!(
+            agent_for(&conn, "proxy-opencode").as_deref(),
+            Some("opencode")
+        );
+        assert_eq!(
+            agent_for(&conn, "proxy-openclaw").as_deref(),
+            Some("openclaw")
+        );
+        assert_eq!(agent_for(&conn, "proxy-hermes").as_deref(), Some("hermes"));
+
+        for event_id in [
+            "bare-session",
+            "Claude-session:wrong-case",
+            "claude-session:",
+            "wrong-claude-compat-pair",
+            "wrong-codex-compat-pair",
+            "wrong-session-app-case",
+            "vendor-product-only",
+            "claude-session:direct-conflict",
+            "wrong-session-label",
+            "unproven-openai",
+            "unproven-anthropic",
+            "unproven-moonshot",
+            "unproven-kimi",
+            "unproven-api",
+            "claude-session:conflict-a",
+            "claude-session:conflict-b",
+            "codex-session:conflict-c",
+            "one-sided-unknown",
+            "reverse-unknown-canonical",
+        ] {
+            assert_eq!(
+                agent_for(&conn, event_id),
+                None,
+                "{event_id} must stay unassigned"
+            );
+        }
+        assert_eq!(
+            agent_for(&conn, "claude-session:one-sided").as_deref(),
+            Some("claude-code"),
+            "links never propagate identity to an unproven neighbor"
+        );
+        assert_eq!(
+            agent_for(&conn, "claude-session:agree-a").as_deref(),
+            Some("claude-code")
+        );
+        assert_eq!(
+            agent_for(&conn, "claude-session:agree-b").as_deref(),
+            Some("claude-code")
+        );
+        assert_eq!(
+            agent_for(&conn, "claude-session:reverse-proven-duplicate").as_deref(),
+            Some("claude-code"),
+            "reverse traversal audits the component without propagating identity"
+        );
+
+        assert_eq!(super::count(&conn, "usage_providers"), before["providers"]);
+        assert_eq!(super::count(&conn, "usage_events"), before["events"]);
+        assert_eq!(super::count(&conn, "usage_event_links"), before["links"]);
+        assert_eq!(super::count(&conn, "quota_snapshots"), before["quota"]);
+        assert_eq!(
+            super::count(&conn, "quota_fetch_state"),
+            before["quota_state"]
+        );
+        assert_eq!(
+            trigger_sql(&conn, "usage_events_immutable_delete"),
+            delete_trigger_before,
+            "the append-only DELETE trigger is preserved byte-for-byte"
+        );
+        assert!(conn
+            .execute(
+                "UPDATE usage_events SET agent_module_id = NULL WHERE event_id = 'proxy-codex'",
+                []
+            )
+            .is_err());
+        assert!(conn
+            .execute(
+                "DELETE FROM usage_events WHERE event_id = 'proxy-codex'",
+                []
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn migration_v15_to_v16_continues_v12_chain_and_validates_complete_schema() {
+        let conn = super::true_v12_usage_fixture();
+        Database::apply_schema_migrations_on_conn_with_roots(&conn, &roots())
+            .expect("migrate v12 continuously through v16");
+        assert_eq!(Database::get_user_version(&conn).unwrap(), 16);
+        assert!(Database::table_exists(&conn, "agent_modules").unwrap());
+        assert!(Database::table_exists(&conn, "agent_provider_bindings").unwrap());
+        assert!(Database::has_column(&conn, "usage_events", "agent_module_id").unwrap());
+
+        let incomplete = v15_usage_fixture();
+        Database::set_user_version(&incomplete, 16).expect("pretend incomplete v16");
+        let error = Database::apply_schema_migrations_on_conn_with_roots(&incomplete, &roots())
+            .expect_err("v16 completeness validation must fail closed");
+        assert!(error.to_string().contains("incomplete schema v16"));
+    }
+
+    #[test]
+    fn current_v16_validator_rejects_same_named_but_malformed_objects() {
+        for corruption in [
+            "DROP INDEX idx_agent_provider_bindings_fingerprint;
+             CREATE INDEX idx_agent_provider_bindings_fingerprint
+             ON agent_provider_bindings(provider_id);",
+            "DROP TRIGGER usage_events_immutable_update;
+             CREATE TRIGGER usage_events_immutable_update
+             AFTER INSERT ON usage_events
+             BEGIN
+                 SELECT 1;
+             END;",
+            "DROP TRIGGER usage_events_immutable_update;
+             CREATE TRIGGER usage_events_immutable_update
+             BEFORE UPDATE ON usage_events
+             WHEN 0
+             BEGIN
+                 SELECT RAISE(ABORT, 'usage_events are immutable');
+             END;",
+            "DROP TRIGGER agent_modules_fixed_delete;
+             CREATE TRIGGER agent_modules_fixed_delete
+             BEFORE DELETE ON agent_modules
+             WHEN OLD.is_fixed = 1
+             BEGIN
+                 SELECT 1;
+             END;",
+            "DROP INDEX idx_agent_credential_operations_pending_binding;
+             CREATE UNIQUE INDEX idx_agent_credential_operations_pending_binding
+             ON agent_credential_operations(binding_id)
+             WHERE status = 'pending' AND 0;",
+            "DROP TRIGGER agent_modules_identity_immutable;
+             CREATE TRIGGER agent_modules_identity_immutable
+             BEFORE UPDATE OF id ON agent_modules
+             WHEN NEW.id IS NOT OLD.id AND 0
+             BEGIN
+                 SELECT RAISE(ABORT, 'agent module identity cannot be changed');
+             END;",
+        ] {
+            let conn = v15_usage_fixture();
+            Database::apply_schema_migrations_on_conn_with_roots(&conn, &roots())
+                .expect("create complete v16 schema");
+            conn.execute_batch(corruption)
+                .expect("replace required object with malformed namesake");
+
+            let error = Database::apply_schema_migrations_on_conn_with_roots(&conn, &roots())
+                .expect_err("v16 validator must reject a malformed namesake");
+            assert!(error.to_string().contains("incomplete schema v16"));
+        }
+    }
+
+    #[test]
+    fn migration_v15_to_v16_rolls_back_column_rows_tables_and_triggers_at_every_failure_point() {
+        for failure_point in [
+            MigrationFailurePoint::AfterTriggerDrop,
+            MigrationFailurePoint::DuringHistoryBackfill,
+            MigrationFailurePoint::BeforeTriggerRecreation,
+        ] {
+            let conn = v15_usage_fixture();
+            insert_provider(&conn, "history-provider", "metered", None);
+            insert_event(&conn, "claude-session:rollback", "session_log", None);
+            let update_trigger_before = trigger_sql(&conn, "usage_events_immutable_update");
+            let delete_trigger_before = trigger_sql(&conn, "usage_events_immutable_delete");
+            let event_count = super::count(&conn, "usage_events");
+
+            conn.execute("SAVEPOINT schema_migration", [])
+                .expect("start migration savepoint");
+            let cause = migrate_v15_to_v16_with_failure(&conn, failure_point)
+                .expect_err("injected v16 failure must abort migration");
+            let error = Database::rollback_schema_migration_error(&conn, cause);
+            assert!(error.to_string().contains("injected v16 migration failure"));
+
+            assert_eq!(Database::get_user_version(&conn).unwrap(), 15);
+            assert!(!Database::has_column(&conn, "usage_events", "agent_module_id").unwrap());
+            assert!(!Database::table_exists(&conn, "agent_modules").unwrap());
+            assert!(!Database::table_exists(&conn, "agent_provider_bindings").unwrap());
+            assert!(!Database::table_exists(&conn, "agent_credential_operations").unwrap());
+            assert_eq!(super::count(&conn, "usage_events"), event_count);
+            assert_eq!(
+                trigger_sql(&conn, "usage_events_immutable_update"),
+                update_trigger_before
+            );
+            assert_eq!(
+                trigger_sql(&conn, "usage_events_immutable_delete"),
+                delete_trigger_before
+            );
+            assert!(conn
+                .execute(
+                    "UPDATE usage_events SET model = 'changed' WHERE event_id = 'claude-session:rollback'",
+                    []
+                )
+                .is_err());
+        }
     }
 }
 

@@ -224,7 +224,7 @@ pub fn prepare_database_runtime_test_hook(
 #[cfg(debug_assertions)]
 #[doc(hidden)]
 pub fn create_schema_v13_fixture_test_hook(path: &Path) -> Result<(), AppError> {
-    if database::SCHEMA_VERSION != 15
+    if database::SCHEMA_VERSION != 16
         || product_identity::DATABASE_IDENTITY_SOURCE_SCHEMA_VERSION != 13
     {
         return Err(AppError::Database(

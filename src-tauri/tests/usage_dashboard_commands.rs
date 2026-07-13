@@ -27,6 +27,7 @@ fn metered() -> UsageProviderInput {
             "apiKey": "route-secret"
         })),
         quota_config: None,
+        dashboard_module_id: None,
         enabled: true,
     }
 }
@@ -44,6 +45,7 @@ fn subscription() -> UsageProviderInput {
         route_app_type: None,
         route_config: None,
         quota_config: None,
+        dashboard_module_id: Some("claude-code".to_string()),
         enabled: true,
     }
 }
