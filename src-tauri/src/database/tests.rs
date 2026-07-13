@@ -212,10 +212,7 @@ mod schema_v14_cursor_migration_tests {
 
         Database::apply_schema_migrations_on_conn_with_roots(&conn, &roots()).unwrap();
 
-        assert_eq!(
-            Database::get_user_version(&conn).unwrap(),
-            SCHEMA_VERSION
-        );
+        assert_eq!(Database::get_user_version(&conn).unwrap(), SCHEMA_VERSION);
         assert!(!Database::table_exists(&conn, "session_log_sync").unwrap());
         assert!(Database::table_exists(&conn, "session_log_sync_v13_archive").unwrap());
         let cursor = conn

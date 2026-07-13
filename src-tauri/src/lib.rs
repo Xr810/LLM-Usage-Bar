@@ -1415,6 +1415,11 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::list_dashboard_modules,
+            commands::save_dashboard_module,
+            commands::reorder_dashboard_modules,
+            commands::set_dashboard_module_visibility,
+            commands::delete_dashboard_module,
             commands::list_usage_providers,
             commands::save_usage_provider,
             commands::set_usage_provider_enabled,

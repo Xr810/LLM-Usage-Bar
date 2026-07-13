@@ -157,7 +157,7 @@ git commit -m "feat(usage): persist dashboard module membership"
 **Interfaces:**
 - Produces Tauri commands: `list_dashboard_modules`, `save_dashboard_module`, `reorder_dashboard_modules`, `set_dashboard_module_visibility`, `delete_dashboard_module`.
 
-- [ ] **Step 1: Add failing command-hook tests before handlers**
+- [x] **Step 1: Add failing command-hook tests before handlers**
 
 Inside `commands/usage_dashboard.rs`, construct `AppState::new(Arc::new(Database::memory()?))` and call all five wished-for test hooks. Assert the list hook returns four defaults, save returns the new module, reorder returns the requested first ID, visibility returns `visible = false`, and delete removes an empty custom module. Keep `tauri::generate_handler!` compilation as the registration check.
 
@@ -165,17 +165,17 @@ Run: `pnpm rust -- test --manifest-path src-tauri/Cargo.toml commands::usage_das
 
 Expected: compile failure because the five test hooks do not exist.
 
-- [ ] **Step 2: Verify registration is absent**
+- [x] **Step 2: Verify registration is absent**
 
 Run: `rg -n "commands::list_dashboard_modules" src-tauri/src/lib.rs`
 
 Expected: no match before implementation.
 
-- [ ] **Step 3: Add thin command handlers and register all five names**
+- [x] **Step 3: Add thin command handlers and register all five names**
 
 Each handler accepts camelCase-compatible Tauri arguments and delegates directly to the same-named database method. No command duplicates validation or starts a second transaction.
 
-- [ ] **Step 4: Run full automated gates**
+- [x] **Step 4: Run full automated gates**
 
 Run: `pnpm rust -- test --manifest-path src-tauri/Cargo.toml --lib`
 
@@ -183,7 +183,7 @@ Run: `pnpm test:unit`
 
 Run: `pnpm typecheck`
 
-Run: `pnpm prettier:check`
+Run: `pnpm format:check`
 
 Run: `pnpm build`
 
@@ -192,6 +192,8 @@ Run: `pnpm tauri build --debug`
 Expected: every command exits 0; known Vite chunk-size and pre-existing Rust dead-code warnings may remain, but no errors or test failures.
 
 - [ ] **Step 5: Launch with isolated data and perform UI acceptance**
+
+Acceptance status (2026-07-13): items 1-3 and 5-8 passed against a fresh temporary home. Item 4 passed for create, rename, reorder, hide, and show; the final empty-module delete confirmation remains pending because macOS locked before Computer Use could open the confirmation dialog.
 
 Create a fresh temporary home, set both `HOME` and `LLM_USAGE_BAR_TEST_HOME` to it, and launch the debug `.app` binary. Verify:
 

@@ -1297,7 +1297,7 @@
   },
   {
     "file": "src-tauri/src/database/tests.rs",
-    "lineNumber": 407,
+    "lineNumber": 587,
     "columnNumber": 19,
     "matchedText": "cc-switch",
     "context": "VALUES ('external-cc-switch-provider', 'claude', 'External',",
@@ -1306,7 +1306,7 @@
   },
   {
     "file": "src-tauri/src/database/tests.rs",
-    "lineNumber": 408,
+    "lineNumber": 588,
     "columnNumber": 17,
     "matchedText": "cc-switch",
     "context": "'{\"remoteRoot\":\"cc-switch-sync\"}',",
@@ -1315,7 +1315,7 @@
   },
   {
     "file": "src-tauri/src/database/tests.rs",
-    "lineNumber": 409,
+    "lineNumber": 589,
     "columnNumber": 16,
     "matchedText": "cc_switch",
     "context": "'{\"affiliate\":\"cc_switch\"}');",
@@ -1324,7 +1324,7 @@
   },
   {
     "file": "src-tauri/src/database/tests.rs",
-    "lineNumber": 411,
+    "lineNumber": 591,
     "columnNumber": 56,
     "matchedText": "cc-switch",
     "context": "VALUES ('external-wire', 'External MCP', '{\"protocol\":\"cc-switch-webdav-sync\"}');",
@@ -1333,7 +1333,7 @@
   },
   {
     "file": "src-tauri/src/database/tests.rs",
-    "lineNumber": 413,
+    "lineNumber": 593,
     "columnNumber": 55,
     "matchedText": "ccswitch",
     "context": "VALUES ('legacy-profile', 'Imported', '{\"providerId\":\"ccswitch\"}');",
@@ -1342,7 +1342,7 @@
   },
   {
     "file": "src-tauri/src/database/tests.rs",
-    "lineNumber": 415,
+    "lineNumber": 595,
     "columnNumber": 34,
     "matchedText": "cc-switch",
     "context": "VALUES ('external_remote_root', 'cc-switch-sync');",
@@ -1351,7 +1351,7 @@
   },
   {
     "file": "src-tauri/src/database/tests.rs",
-    "lineNumber": 421,
+    "lineNumber": 601,
     "columnNumber": 74,
     "matchedText": "cc-switch",
     "context": "\"SELECT settings_config || '|' || meta FROM providers WHERE id='external-cc-switch-provider'\",",
@@ -1360,7 +1360,7 @@
   },
   {
     "file": "src-tauri/src/database/tests.rs",
-    "lineNumber": 434,
+    "lineNumber": 614,
     "columnNumber": 74,
     "matchedText": "cc-switch",
     "context": "\"SELECT settings_config || '|' || meta FROM providers WHERE id='external-cc-switch-provider'\",",
