@@ -4,6 +4,8 @@
 
 **Goal:** Replace the mixed monitoring/configuration home page with database-driven dashboard-module navigation, separate subscription and API usage views, and a three-section settings surface while keeping the work frontend-only.
 
+**Status:** Complete on `main`: Task 1 (`efa01503`), Task 2 (`42099f57`), Task 3 (`7aefa078`), Task 4 (`af5ea79c`), and Task 5 (`04d1107d`) are implemented and covered by the accompanying frontend tests. The dashboard-module backend commands subsequently landed in `87b19ebe`, `bde56533`, and `4d6c899f`.
+
 **Architecture:** Add a typed React Query boundary for the future dashboard-module Tauri commands and the Provider-to-module field. The app shell owns module selection; pure projection helpers flatten the existing Provider-aware dashboard by stable Provider ID, then module-specific pages render either one subscription account at a time or all metered Providers. Configuration mutations live only under Settings, and a browser-only Vite run renders one explicit preview notice without invoking desktop APIs.
 
 **Tech Stack:** React 18, TypeScript, TanStack React Query, Radix Tabs through `src/components/ui/tabs.tsx`, Tailwind CSS, i18next, Tauri `invoke`, Vitest, Testing Library, MSW.
@@ -56,7 +58,7 @@
 - Consumes: existing `UsageProviderInput`, `UsageProviderView`, `usageDashboardApi`, and `usageDashboardKeys`.
 - Produces: `DashboardModuleKind`, `DashboardModuleView`, `DashboardModuleInput`, `useDashboardModules`, and five mutation hooks used by Tasks 2 and 4.
 
-- [ ] **Step 1: Write failing command and cache-invalidation tests**
+- [x] **Step 1: Write failing command and cache-invalidation tests**
 
 Add tests that mock Tauri `invoke` and assert these exact calls:
 
@@ -100,7 +102,7 @@ expect(invoke).toHaveBeenCalledWith("delete_dashboard_module", {
 
 Render the mutation hooks in a `QueryClientProvider`, complete each mutation, and assert invalidation of `usageDashboardKeys.modules()`, `providers()`, and `dashboards()` where membership or visibility can change.
 
-- [ ] **Step 2: Run the focused test and observe the missing-contract failure**
+- [x] **Step 2: Run the focused test and observe the missing-contract failure**
 
 Run:
 
@@ -110,7 +112,7 @@ pnpm test:unit src/lib/query/usageDashboard.test.tsx
 
 Expected: FAIL because the five API methods, module query key, and hooks do not exist.
 
-- [ ] **Step 3: Add the exact TypeScript contracts**
+- [x] **Step 3: Add the exact TypeScript contracts**
 
 Add:
 
@@ -138,7 +140,7 @@ export interface DashboardModuleInput {
 
 Add `dashboardModuleId?: string | null` to `UsageProviderInput` and `dashboardModuleId: string | null` to `UsageProviderView`. The field is required on the returned view so missing backend serialization is visible at the contract boundary.
 
-- [ ] **Step 4: Implement API methods and React Query hooks**
+- [x] **Step 4: Implement API methods and React Query hooks**
 
 Add the five API methods using the exact command names and camelCase payloads from Step 1. Add these keys and hooks:
 
@@ -155,7 +157,7 @@ export function useDashboardModules() {
 
 The save/reorder/visibility/delete mutation hooks must invalidate modules, providers, and dashboards after success. Extend Provider-save invalidation to include modules because `providerCount` and membership can change.
 
-- [ ] **Step 5: Verify Task 1**
+- [x] **Step 5: Verify Task 1**
 
 Run:
 
@@ -167,7 +169,7 @@ pnpm format:check
 
 Expected: all commands exit 0.
 
-- [ ] **Step 6: Commit Task 1**
+- [x] **Step 6: Commit Task 1**
 
 ```bash
 git add src/types/usageDashboard.ts src/lib/api/usageDashboard.ts src/lib/query/usageDashboard.ts src/lib/query/usageDashboard.test.tsx
@@ -188,7 +190,7 @@ git commit -m "feat(ui): add dashboard module contract"
 - Consumes: `DashboardModuleView` and `useDashboardModules()` from Task 1.
 - Produces: `selectedModule: DashboardModuleView | null`, `selectModule(id)`, and `DashboardModuleSwitcher` for Task 3.
 
-- [ ] **Step 1: Write failing selection tests**
+- [x] **Step 1: Write failing selection tests**
 
 Cover all selection rules with data whose names are deliberately arbitrary:
 
@@ -202,7 +204,7 @@ const modules = [
 
 Assert that modules render in `sortOrder`, a persisted visible ID remains selected, a hidden/deleted ID falls back to the first visible module, only the API module remains selectable when all subscriptions are hidden, and no visible modules produce `null`. Assert the chosen ID is stored under `llm-usage-bar:last-dashboard-module-id`.
 
-- [ ] **Step 2: Write failing interaction and App-shell tests**
+- [x] **Step 2: Write failing interaction and App-shell tests**
 
 Render `DashboardModuleSwitcher` with five modules and assert:
 
@@ -215,7 +217,7 @@ expect(onSelect).toHaveBeenCalledWith("second-id");
 
 In `App.usage-dashboard.test.tsx`, mock only module and dashboard queries, then assert the module Tabs sit in the header before Settings. Clicking a module must not call Provider, RouteBinding, proxy, or live configuration mutations.
 
-- [ ] **Step 3: Run focused tests and observe missing components**
+- [x] **Step 3: Run focused tests and observe missing components**
 
 Run:
 
@@ -227,7 +229,7 @@ pnpm test:unit src/App.usage-dashboard.test.tsx
 
 Expected: FAIL because the hook, switcher, and App wiring are absent.
 
-- [ ] **Step 4: Implement persisted selection**
+- [x] **Step 4: Implement persisted selection**
 
 Implement the hook with these invariants:
 
@@ -243,17 +245,17 @@ const selectedModule =
 
 Synchronize the selected ID and local storage in effects. Never select by module name. If the current module disappears, replace the stored value with the fallback ID.
 
-- [ ] **Step 5: Implement the switcher with Radix Tabs**
+- [x] **Step 5: Implement the switcher with Radix Tabs**
 
 Use `Tabs`, `TabsList`, and `TabsTrigger` from `src/components/ui/tabs.tsx`. Give the list `aria-label={t("dashboardModules.navigation")}`, place it in an `overflow-x-auto` wrapper, keep labels readable with `whitespace-nowrap`, and call only `onSelect(value)` from `onValueChange`. When more than four modules are visible, also render an accessible `More modules` dropdown that lists the same stable IDs; it supplements horizontal scrolling and never replaces keyboard-accessible Tabs.
 
-- [ ] **Step 6: Wire navigation into App**
+- [x] **Step 6: Wire navigation into App**
 
 `App` owns `useDashboardModules`, selection, and the Settings dialog. Remove the duplicate subtitle from the header. Render module errors once with a Retry button. Pass `selectedModule` and `onOpenSettings={() => setSettingsOpen(true)}` to `UsageDashboardPage`.
 
 If the query succeeds with zero visible modules, render a module-management empty state whose action opens Settings; do not render an empty dashboard.
 
-- [ ] **Step 7: Verify Task 2**
+- [x] **Step 7: Verify Task 2**
 
 Run the three focused tests from Step 3, then:
 
@@ -264,7 +266,7 @@ pnpm format:check
 
 Expected: all commands exit 0.
 
-- [ ] **Step 8: Commit Task 2**
+- [x] **Step 8: Commit Task 2**
 
 ```bash
 git add src/App.tsx src/App.usage-dashboard.test.tsx src/components/usage-dashboard/DashboardModuleSwitcher.tsx src/components/usage-dashboard/DashboardModuleSwitcher.test.tsx src/components/usage-dashboard/useDashboardModuleSelection.ts src/components/usage-dashboard/useDashboardModuleSelection.test.tsx
@@ -289,7 +291,7 @@ git commit -m "feat(ui): add dynamic dashboard navigation"
 - Consumes: selected `DashboardModuleView`, `UsageDashboardView`, stable `UsageProviderView.dashboardModuleId`, current quota/session mutations, range helpers, and event bridge.
 - Produces: `projectDashboardModule()` returning one discriminated subscription/API projection.
 
-- [ ] **Step 1: Write failing pure projection tests**
+- [x] **Step 1: Write failing pure projection tests**
 
 Create fixtures where the same Provider ID appears under two different historical `productGroupId` rows. Assert it is merged once, all four Token counts and event counts are summed, and the newest quota/fetch-state is retained. Assert subscription membership uses `dashboardModuleId` and API membership uses `billingKind === "metered"`, independent of names.
 
@@ -303,7 +305,7 @@ expect(projected.costStatus).toBe("partial");
 
 Use one metered Provider with cost `"1.25"` and one with `null`/unavailable. Also test exact string addition such as `"0.1" + "0.2" === "0.3"` without floating-point conversion. Explicit `"0"` must remain known zero.
 
-- [ ] **Step 2: Write failing page behavior tests**
+- [x] **Step 2: Write failing page behavior tests**
 
 Subscription page assertions:
 
@@ -324,7 +326,7 @@ API page assertions:
 
 Home-page assertion: Provider config, RouteBinding, Add Provider, enable/disable, and proxy buttons are absent.
 
-- [ ] **Step 3: Run focused tests and observe the missing projection/pages**
+- [x] **Step 3: Run focused tests and observe the missing projection/pages**
 
 Run:
 
@@ -337,7 +339,7 @@ pnpm test:unit src/components/usage-dashboard/UsageDashboardPage.test.tsx
 
 Expected: FAIL because the new units do not exist and the current page still renders configuration controls.
 
-- [ ] **Step 4: Implement exact stable-ID projection**
+- [x] **Step 4: Implement exact stable-ID projection**
 
 Implement `projectDashboardModule(module, dashboard)` by flattening each product group's subscription and metered arrays, merging rows by `usage.provider.id`, and selecting:
 
@@ -353,21 +355,21 @@ module.kind === "subscription"
 
 Implement decimal-string addition using `BigInt` plus a common decimal scale. Return `costStatus: "complete" | "estimated" | "partial" | "unavailable"`; any unavailable metered event/provider makes the result at least partial, and no known values yields unavailable.
 
-- [ ] **Step 5: Implement the subscription page**
+- [x] **Step 5: Implement the subscription page**
 
 Use a second Radix Tabs list with an accessible label distinct from the top-level list. Maintain selected Provider by stable ID and fall back when membership changes. Reuse `SubscriptionProviderCard`, but extend it to display input, output, cache read, cache creation, total Token, data source, last successful refresh, two separate quota-window cards, reset absolute time/countdown, and manual reset count.
 
 Do not render USD for subscription Providers. The dashboard range controls affect Token/events only; quota values come unchanged from the latest snapshot.
 
-- [ ] **Step 6: Implement the API page**
+- [x] **Step 6: Implement the API page**
 
 Render an API summary card for total Token, request count, known USD cost, and cost status. Render every projected metered Provider with `MeteredProviderCard`. Preserve per-Provider source badges and recent-request errors. Because the current backend lacks a cross-Provider model-distribution and recent-request aggregate, render one localized `aggregateUnavailable` note instead of inventing totals from truncated Provider event pages.
 
-- [ ] **Step 7: Reduce UsageDashboardPage to monitoring orchestration**
+- [x] **Step 7: Reduce UsageDashboardPage to monitoring orchestration**
 
 Keep range state, 30-second advancement, `useUsageEventBridge`, quota refresh, Session sync, warning/error handling, and `useUsageDashboard`. Remove Provider-save/enable, bindings, proxy state/mutations, `RouteBindingsPanel`, Provider list, and `UsageProviderDialog`. Dispatch to `SubscriptionModulePage` or `ApiUsagePage` using `selectedModule.kind`.
 
-- [ ] **Step 8: Verify Task 3**
+- [x] **Step 8: Verify Task 3**
 
 Run the four focused tests from Step 3, then:
 
@@ -379,7 +381,7 @@ pnpm format:check
 
 Expected: all commands exit 0.
 
-- [ ] **Step 9: Commit Task 3**
+- [x] **Step 9: Commit Task 3**
 
 ```bash
 git add src/components/usage-dashboard
@@ -405,11 +407,11 @@ git commit -m "feat(ui): split subscription and api usage pages"
 - Consumes: Task 1 module/query mutations and existing Provider, RouteBinding, and proxy hooks.
 - Produces: settings-only configuration surfaces; home-page code imports none of them.
 
-- [ ] **Step 1: Write failing module-management tests**
+- [x] **Step 1: Write failing module-management tests**
 
 Assert ordered module rows, Provider counts, create/rename, Move Up/Move Down payload order, visibility mutation, and delete restrictions. The API system module must have no delete control and no kind editor. A custom module with `providerCount > 0` must explain that Providers need moving or disabling and must not call delete.
 
-- [ ] **Step 2: Write failing Provider form tests**
+- [x] **Step 2: Write failing Provider form tests**
 
 Update fixtures with `dashboardModuleId`. Assert:
 
@@ -419,11 +421,11 @@ Update fixtures with `dashboardModuleId`. Assert:
 - editing can move the Provider by changing only `dashboardModuleId` while retaining Provider ID;
 - metered billing hides the selector and saves `dashboardModuleId: null`.
 
-- [ ] **Step 3: Write failing settings integration tests**
+- [x] **Step 3: Write failing settings integration tests**
 
 Open Settings and assert three Tabs named Usage modules, Provider, and Proxy & routing. Provider controls appear only under Provider. Proxy start/stop and RouteBinding controls appear only under Proxy & routing. Closing Settings returns to the same selected dashboard module.
 
-- [ ] **Step 4: Run focused tests and observe the old single-page dialog failure**
+- [x] **Step 4: Run focused tests and observe the old single-page dialog failure**
 
 Run:
 
@@ -438,23 +440,23 @@ pnpm test:unit tests/integration/SettingsDialog.test.tsx
 
 Expected: FAIL because the three settings sections and module-aware Provider form do not exist.
 
-- [ ] **Step 5: Implement DashboardModulesSettings**
+- [x] **Step 5: Implement DashboardModulesSettings**
 
 Render module name, type, Provider count, visibility, and order controls. Save edits through `useSaveDashboardModule`; reorder by sending the complete ordered stable-ID list; visibility through its dedicated mutation; delete only after `ConfirmDialog` confirmation and only when the client-side preconditions allow it. Always surface backend rejection text because the backend remains authoritative.
 
-- [ ] **Step 6: Implement UsageProvidersSettings and the module-aware dialog**
+- [x] **Step 6: Implement UsageProvidersSettings and the module-aware dialog**
 
 Move the existing Provider list and Add/Edit/Enable actions into this settings section. Pass subscription modules and an async quick-create callback into `UsageProviderDialog`. Validate a non-empty stable module ID for enabled subscriptions before `onSave`. Keep existing quota credentials, Session bindings, route config, and secret-preservation behavior unchanged.
 
-- [ ] **Step 7: Implement ProxyRoutingSettings**
+- [x] **Step 7: Implement ProxyRoutingSettings**
 
 Move `useIsProxyRunning`, start/stop mutations, and `RouteBindingsPanel` here. Change visible copy from `Static routes` to `Proxy forwarding targets`, with explanatory text that this determines where requests are sent and is not a dashboard filter.
 
-- [ ] **Step 8: Implement the three-section SettingsPage**
+- [x] **Step 8: Implement the three-section SettingsPage**
 
 Use Radix Tabs and preserve the dialog shell. Default to `modules`, honor `defaultTab` when it is one of `modules | providers | proxy`, and map historical/unknown values to `modules` rather than mounting the dashboard inside Settings.
 
-- [ ] **Step 9: Verify Task 4**
+- [x] **Step 9: Verify Task 4**
 
 Run all six focused commands from Step 4, then:
 
@@ -466,7 +468,7 @@ pnpm format:check
 
 Expected: all commands exit 0.
 
-- [ ] **Step 10: Commit Task 4**
+- [x] **Step 10: Commit Task 4**
 
 ```bash
 git add src/components/settings src/components/usage-dashboard/UsageProviderDialog.tsx src/components/usage-dashboard/UsageProviderDialog.test.tsx tests/components/SettingsDialog.test.tsx tests/integration/SettingsDialog.test.tsx
@@ -491,7 +493,7 @@ git commit -m "feat(ui): move usage configuration into settings"
 - Consumes: completed App/Settings render tree and module API contract.
 - Produces: a non-Tauri startup guard and complete localized integration fixtures.
 
-- [ ] **Step 1: Write a failing browser-preview test**
+- [x] **Step 1: Write a failing browser-preview test**
 
 Remove `window.__TAURI_INTERNALS__`, render the startup boundary, and assert exactly one instance of:
 
@@ -501,11 +503,11 @@ Current UI preview. Open LLM Usage Bar desktop to read local usage.
 
 Assert no raw `window.__TAURI_INTERNALS__` text, no Tauri invoke error, and no Provider/module query call.
 
-- [ ] **Step 2: Extend MSW/Tauri fixtures and App integration tests**
+- [x] **Step 2: Extend MSW/Tauri fixtures and App integration tests**
 
 Return five modules from `list_dashboard_modules`, including a renamed subscription module, and Providers with stable `dashboardModuleId` fields. Assert the fifth module appears without component changes, clicking it renders only its Provider, the API module shows Azure and OpenRouter, and Settings contains all configuration controls that are absent from home.
 
-- [ ] **Step 3: Run focused tests and observe missing preview/fixture behavior**
+- [x] **Step 3: Run focused tests and observe missing preview/fixture behavior**
 
 Run:
 
@@ -516,7 +518,7 @@ pnpm test:unit src/App.usage-dashboard.test.tsx
 
 Expected: FAIL until runtime detection, fixtures, and App behavior are implemented.
 
-- [ ] **Step 4: Add the startup boundary**
+- [x] **Step 4: Add the startup boundary**
 
 Export:
 
@@ -528,11 +530,11 @@ export function isTauriRuntime(): boolean {
 
 In `main.tsx`, render the normal providers/App only when this returns true. Otherwise render one localized, styled preview notice without constructing QueryClient consumers or theme/settings hooks that invoke Tauri.
 
-- [ ] **Step 5: Add aligned locale keys**
+- [x] **Step 5: Add aligned locale keys**
 
 Add keys for module navigation, module/provider Tabs, settings sections, empty states, missing quota windows, absolute reset/countdown, partial/estimated/unavailable cost, aggregate-unavailable explanation, proxy-forwarding copy, retry, and preview notice. Use natural translations in all four locale files; do not rely on `defaultValue` for newly introduced production copy.
 
-- [ ] **Step 6: Run the complete frontend gate**
+- [x] **Step 6: Run the complete frontend gate**
 
 Run:
 
@@ -546,7 +548,7 @@ git diff --check
 
 Expected: all commands exit 0. Record total Vitest file/test counts in the task handoff.
 
-- [ ] **Step 7: Commit Task 5**
+- [x] **Step 7: Commit Task 5**
 
 ```bash
 git add src/lib/platform.ts src/main.tsx src/i18n/locales tests src/App.usage-dashboard.test.tsx
