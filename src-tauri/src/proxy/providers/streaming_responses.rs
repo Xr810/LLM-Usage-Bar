@@ -118,6 +118,7 @@ pub fn create_anthropic_sse_stream_from_responses<E: std::error::Error + Send + 
         let mut tool_name_by_index: HashMap<u32, String> = HashMap::new();
         let mut tool_args_by_index: HashMap<u32, String> = HashMap::new();
         let mut last_tool_index: Option<u32> = None;
+        let mut stream_failed = false;
 
         tokio::pin!(stream);
 
@@ -136,7 +137,7 @@ pub fn create_anthropic_sse_stream_from_responses<E: std::error::Error + Send + 
                         let mut event_type: Option<String> = None;
                         let mut data_parts: Vec<String> = Vec::new();
 
-                        for line in block.lines() {
+                        for line in block.split(['\r', '\n']) {
                             if let Some(evt) = strip_sse_field(line, "event") {
                                 event_type = Some(evt.trim().to_string());
                             } else if let Some(d) = strip_sse_field(line, "data") {
@@ -157,7 +158,7 @@ pub fn create_anthropic_sse_stream_from_responses<E: std::error::Error + Send + 
                             Err(_) => continue,
                         };
 
-                        log::debug!("[Claude/Responses] <<< SSE event: {event_name}");
+                        log::debug!("{}", sse_event_diagnostic(event_name));
 
                         match event_name {
                             // ================================================
@@ -746,6 +747,23 @@ pub fn create_anthropic_sse_stream_from_responses<E: std::error::Error + Send + 
                                 yield Ok(Bytes::from(stop_sse));
                             }
 
+                            "response.failed" => {
+                                let error_event = json!({
+                                    "type": "error",
+                                    "error": {
+                                        "type": "upstream_error",
+                                        "message": "upstream response failed"
+                                    }
+                                });
+                                let sse = format!(
+                                    "event: error\ndata: {}\n\n",
+                                    serde_json::to_string(&error_event).unwrap_or_default()
+                                );
+                                yield Ok(Bytes::from(sse));
+                                stream_failed = true;
+                                break;
+                            }
+
                             // Lifecycle events that don't need Anthropic counterparts.
                             // Listed explicitly so new events trigger a match-completeness review.
                             "response.output_text.done" => {
@@ -771,14 +789,17 @@ pub fn create_anthropic_sse_stream_from_responses<E: std::error::Error + Send + 
                             _ => {}
                         }
                     }
+                    if stream_failed {
+                        break;
+                    }
                 }
-                Err(e) => {
-                    log::error!("Responses stream error: {e}");
+                Err(_) => {
+                    log::error!("Responses stream error; details omitted");
                     let error_event = json!({
                         "type": "error",
                         "error": {
                             "type": "stream_error",
-                            "message": format!("Stream error: {e}")
+                            "message": "upstream stream failed"
                         }
                     });
                     let sse = format!("event: error\ndata: {}\n\n",
@@ -791,12 +812,46 @@ pub fn create_anthropic_sse_stream_from_responses<E: std::error::Error + Send + 
     }
 }
 
+fn sse_event_diagnostic(_event_name: &str) -> &'static str {
+    "[Claude/Responses] <<< upstream SSE event received"
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use futures::stream;
     use futures::StreamExt;
     use std::collections::HashMap;
+
+    #[test]
+    fn sse_event_diagnostic_never_contains_the_upstream_event_name() {
+        const BINDING_KEY: &str = "sse-event-binding-key-sentinel";
+        let message = sse_event_diagnostic(BINDING_KEY);
+
+        assert!(!message.contains(BINDING_KEY));
+    }
+
+    #[tokio::test]
+    async fn converts_cr_only_event_and_data_fields() {
+        let input = concat!(
+            "event: response.created\r",
+            "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_cr\",\"model\":\"gpt-5\"}}\r\r",
+            "event: response.output_text.delta\r",
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"CR works\"}\r\r",
+            "event: response.completed\r",
+            "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":2,\"output_tokens\":2}}}\r\r"
+        );
+        let upstream = stream::iter(vec![Ok::<_, std::io::Error>(Bytes::from_static(
+            input.as_bytes(),
+        ))]);
+        let merged = create_anthropic_sse_stream_from_responses(upstream)
+            .map(|chunk| String::from_utf8_lossy(chunk.unwrap().as_ref()).to_string())
+            .collect::<String>()
+            .await;
+
+        assert!(merged.contains("\"text\":\"CR works\""));
+        assert!(merged.contains("event: message_stop"));
+    }
 
     #[test]
     fn test_map_responses_stop_reason_tool_use() {
@@ -868,6 +923,24 @@ mod tests {
         assert!(merged.contains("\"input_tokens\":12"));
         assert!(merged.contains("\"output_tokens\":3"));
         assert!(merged.contains("\"type\":\"message_stop\""));
+    }
+
+    #[tokio::test]
+    async fn response_failed_event_emits_payload_free_error() {
+        const SECRET: &str = "protected-streaming-response-sentinel";
+        let input = format!(
+            "event: response.failed\ndata: {{\"type\":\"response.failed\",\"response\":{{\"error\":{{\"message\":\"invalid {SECRET}\"}}}}}}\n\n"
+        );
+        let upstream = stream::iter(vec![Ok::<_, std::io::Error>(Bytes::from(input))]);
+
+        let merged = create_anthropic_sse_stream_from_responses(upstream)
+            .map(|chunk| String::from_utf8_lossy(chunk.unwrap().as_ref()).to_string())
+            .collect::<String>()
+            .await;
+
+        assert!(merged.contains("event: error"));
+        assert!(merged.contains("upstream response failed"));
+        assert!(!merged.contains(SECRET));
     }
 
     #[tokio::test]
@@ -970,7 +1043,7 @@ mod tests {
             .split("\n\n")
             .filter_map(|block| {
                 let data = block
-                    .lines()
+                    .split(['\r', '\n'])
                     .find_map(|line| strip_sse_field(line, "data"))?;
                 serde_json::from_str::<Value>(data).ok()
             })
@@ -1098,7 +1171,7 @@ mod tests {
                 let text = String::from_utf8_lossy(bytes.as_ref()).to_string();
                 text.split("\n\n")
                     .filter_map(|block| {
-                        block.lines().find_map(|line| {
+                        block.split(['\r', '\n']).find_map(|line| {
                             strip_sse_field(line, "data")
                                 .and_then(|payload| serde_json::from_str::<Value>(payload).ok())
                         })

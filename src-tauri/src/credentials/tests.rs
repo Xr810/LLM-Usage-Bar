@@ -1,9 +1,12 @@
 use super::{BindingCredentialService, CredentialStore, CredentialStoreError, SecretString};
 use crate::database::{CredentialMutationKind, Database};
 use crate::error::AppError;
+use crate::provider::{Provider, ProviderMeta};
+use crate::proxy::provider_router::BindingPricingOverride;
 use crate::usage::domain::{
     AgentModuleInput, AgentProviderBindingInput, AgentProviderBindingView, BindingCredentialStatus,
 };
+use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -129,7 +132,189 @@ impl MemoryCredentialStore {
 }
 
 fn secret(value: &str) -> SecretString {
-    SecretString::new(value.to_string())
+    let value = if value.len() < 16 {
+        format!("{value}-test-credential")
+    } else {
+        value.to_string()
+    };
+    SecretString::new(value)
+}
+
+#[test]
+fn exposure_guard_detects_raw_and_url_encoded_credentials() {
+    let guard = super::CredentialExposureGuard::from_secret(b"sk/test key+tail");
+
+    assert!(guard.contains("prefix-sk/test key+tail-suffix"));
+    assert!(guard.contains("trace=sk%2Ftest%20key%2Btail"));
+    assert!(guard.contains("trace=sk%2Ftest+key%2Btail"));
+    assert!(guard.contains("trace=sk%2525252Ftest%25252520key%2525252Btail"));
+    assert!(guard.contains(r#"trace=sk\u002ftest\u0020key\u002btail"#));
+    assert!(guard.contains_bytes(b"prefix-sk/test key+tail-suffix"));
+    assert!(guard.contains_bytes(b"\x80trace=sk%2Ftest%20key%2Btail"));
+    let mut suspicious_depth = "unrelated%2Fvalue".to_string();
+    for _ in 0..17 {
+        suspicious_depth = suspicious_depth.replace('%', "%25");
+    }
+    assert!(guard.contains(&suspicious_depth));
+    assert!(!guard.contains("trace=unrelated"));
+}
+
+#[test]
+fn exposure_stream_scanner_detects_chunk_split_raw_and_encoded_credentials() {
+    let guard = super::CredentialExposureGuard::from_secret(b"stream/key+sentinel");
+
+    let mut raw = guard.stream_scanner();
+    assert!(!raw.push(b"prefix-stream/key"));
+    assert!(raw.push(b"+sentinel-suffix"));
+
+    let mut encoded = guard.stream_scanner();
+    assert!(!encoded.push(b"trace=stream%252Fkey%252"));
+    assert!(encoded.push(b"Bsentinel"));
+
+    let mut json_escaped = guard.stream_scanner();
+    assert!(!json_escaped.push(br#"data: {"id":"stream\u002fkey\u002bse"#));
+    assert!(json_escaped.push(br#"ntinel"}"#));
+
+    let mut safe = guard.stream_scanner();
+    assert!(!safe.push(b"trace=stream%252Fother"));
+
+    let json_escaped = b"stream/key+sentinel"
+        .iter()
+        .map(|byte| format!(r"\u{:04x}", byte))
+        .collect::<String>();
+    let percent_encoded_json = json_escaped
+        .bytes()
+        .map(|byte| format!("%{byte:02X}"))
+        .collect::<String>();
+    let mut composed = guard.stream_scanner();
+    assert!(composed.push(percent_encoded_json.as_bytes()));
+
+    // Exercise an alternating normalization chain rather than only a one-way
+    // percent -> JSON composition: percent(JSON(percent(secret))).
+    let percent_encoded_secret = b"stream/key+sentinel"
+        .iter()
+        .map(|byte| format!("%{byte:02X}"))
+        .collect::<String>();
+    let json_escaped_percent = percent_encoded_secret
+        .bytes()
+        .map(|byte| format!(r"\u{byte:04x}"))
+        .collect::<String>();
+    let alternating = json_escaped_percent
+        .bytes()
+        .map(|byte| format!("%{byte:02X}"))
+        .collect::<String>();
+    assert!(guard.contains_bytes(alternating.as_bytes()));
+
+    let encode_all = |value: &str| {
+        value
+            .bytes()
+            .map(|byte| format!("%{byte:02X}"))
+            .collect::<String>()
+    };
+    let mut sixteen_layers = encode_all("unrelated-depth-value");
+    for _ in 1..16 {
+        sixteen_layers = sixteen_layers.replace('%', "%25");
+    }
+    let mut bounded = guard.stream_scanner();
+    assert!(!bounded.push(sixteen_layers.as_bytes()));
+
+    let seventeen_layers = sixteen_layers.replace('%', "%25");
+    let mut excessive = guard.stream_scanner();
+    assert!(excessive.push(seventeen_layers.as_bytes()));
+}
+
+#[test]
+fn exposure_semantic_scanner_joins_only_matching_json_fields() {
+    let guard = super::CredentialExposureGuard::from_secret(b"semantic/stream-key");
+    let mut scanner = guard.semantic_stream_scanner();
+
+    assert!(!scanner.push_json_value(&json!({
+        "type": "content_block_delta",
+        "delta": { "type": "text_delta", "text": "semantic/" }
+    })));
+    assert!(scanner.push_json_value(&json!({
+        "type": "content_block_delta",
+        "delta": { "type": "text_delta", "text": "stream-key" }
+    })));
+
+    let split_blocks = json!({
+        "content": [
+            { "type": "text", "text": "semantic/" },
+            { "type": "text", "text": "stream-key" }
+        ]
+    });
+    assert!(guard.contains_json_value(&split_blocks));
+
+    let unrelated_fields = json!({
+        "text": "semantic/",
+        "model": "stream-key"
+    });
+    assert!(!guard.contains_json_value(&unrelated_fields));
+
+    let mut partial = guard.semantic_stream_scanner();
+    assert!(!partial.push_json_value(&json!({ "delta": "semantic/" })));
+    assert!(partial.has_partial_match());
+    assert!(!partial.push_json_value(&json!({ "delta": "definitely-safe" })));
+    assert!(!partial.has_partial_match());
+
+    let mut interleaved = guard.semantic_stream_scanner();
+    assert!(!interleaved.push_json_value(&json!({
+        "index": 0,
+        "delta": { "text": "semantic/" }
+    })));
+    assert!(!interleaved.push_json_value(&json!({
+        "index": 1,
+        "delta": { "text": "safe" }
+    })));
+    assert!(interleaved.push_json_value(&json!({
+        "index": 0,
+        "delta": { "text": "stream-key" }
+    })));
+
+    let mut thinking = guard.semantic_stream_scanner();
+    assert!(!thinking.push_json_value(&json!({ "delta": { "thinking": "semantic/" } })));
+    assert!(thinking.push_json_value(&json!({ "delta": { "thinking": "stream-key" } })));
+
+    let mut reasoning = guard.semantic_stream_scanner();
+    assert!(!reasoning.push_json_value(&json!({
+        "choices": [{ "index": 0, "delta": {
+            "role": "assistant", "reasoning": "semantic/"
+        }}]
+    })));
+    assert!(reasoning.push_json_value(&json!({
+        "choices": [{ "index": 0, "delta": {
+            "role": "assistant", "reasoning": "stream-key"
+        }}]
+    })));
+
+    let percent_encoded = b"semantic/stream-key"
+        .iter()
+        .map(|byte| format!("%{byte:02X}"))
+        .collect::<String>();
+    assert!(guard.contains_json_value(&json!({
+        "content": [
+            { "text": "%" },
+            { "text": &percent_encoded[1..] }
+        ]
+    })));
+
+    let json_escaped = b"semantic/stream-key"
+        .iter()
+        .map(|byte| format!(r"\u{byte:04x}"))
+        .collect::<String>();
+    assert!(guard.contains_json_value(&json!({
+        "content": [
+            { "text": "\\" },
+            { "text": &json_escaped[1..] }
+        ]
+    })));
+
+    assert!(!guard.contains_json_value(&json!({
+        "content": [{ "text": "x".repeat(300 * 1024) }]
+    })));
+    assert!(!guard.contains_json_value(&json!({
+        "content": [{ "text": format!("{}s", "x".repeat(300 * 1024)) }]
+    })));
 }
 
 fn direct_binding(db: &Database, provider_id: &str) -> AgentProviderBindingView {
@@ -267,6 +452,21 @@ async fn set_is_not_replace_and_a_second_set_conflicts() {
 }
 
 #[tokio::test]
+async fn short_or_low_diversity_binding_credentials_are_rejected() {
+    let db = Arc::new(Database::memory().unwrap());
+    let binding = direct_binding(&db, "credential-strength-direct");
+    let service = BindingCredentialService::new(db, Arc::new(MemoryCredentialStore::default()));
+
+    for rejected in ["200", "aaaaaaaaaaaaaaaa", "contains whitespace"] {
+        let error = service
+            .set_binding_api_key(&binding.id, 0, SecretString::new(rejected.to_string()))
+            .await
+            .unwrap_err();
+        assert_eq!(error.to_string(), "credential_required");
+    }
+}
+
+#[tokio::test]
 async fn protected_store_io_never_runs_under_the_sqlite_mutex() {
     let db = Arc::new(Database::memory().unwrap());
     let binding = direct_binding(&db, "lock-probe-direct");
@@ -330,6 +530,168 @@ async fn replace_uses_a_new_slot_and_only_the_new_key_resolves() {
     assert_eq!(
         format!("{resolved:?}"),
         "ResolvedBindingCredential([REDACTED])"
+    );
+}
+
+#[tokio::test]
+async fn unlinked_v13_provider_does_not_inherit_pricing_from_a_same_id_v12_provider() {
+    const PROVIDER_ID: &str = "same-id-provider";
+    const BINDING_KEY: &str = "same-id-binding-key";
+
+    let db = Arc::new(Database::memory().unwrap());
+    let binding = direct_binding(&db, PROVIDER_ID);
+    let mut legacy = Provider::with_id(
+        PROVIDER_ID.to_string(),
+        "Unlinked v12 provider".to_string(),
+        serde_json::json!({"baseUrl": "https://legacy.example"}),
+        None,
+    );
+    legacy.meta = Some(ProviderMeta {
+        cost_multiplier: Some("9.25".to_string()),
+        pricing_model_source: Some("request".to_string()),
+        ..ProviderMeta::default()
+    });
+    db.save_provider("claude", &legacy).unwrap();
+
+    let store = Arc::new(MemoryCredentialStore::default());
+    let service = BindingCredentialService::new(db.clone(), store);
+    let configured = service
+        .set_binding_api_key(&binding.id, 0, secret(BINDING_KEY))
+        .await
+        .unwrap();
+    requested_enabled(&db, &configured);
+
+    let resolved = service
+        .resolve_binding_api_key(secret(BINDING_KEY))
+        .await
+        .unwrap();
+
+    assert_eq!(resolved.provider_id(), PROVIDER_ID);
+    assert_eq!(resolved.product_group_id(), "test");
+    assert_eq!(resolved.legacy_pricing_provider_id(), None);
+    assert_eq!(
+        resolved.pricing_override(),
+        &BindingPricingOverride::default()
+    );
+}
+
+#[tokio::test]
+async fn orphaned_legacy_link_keeps_pricing_snapshot_and_legacy_log_identity() {
+    const PROVIDER_ID: &str = "migrated-v13-provider";
+    const MISSING_LEGACY_ID: &str = "deleted-v12-provider";
+    const BINDING_KEY: &str = "orphaned-link-binding-key";
+
+    let db = Arc::new(Database::memory().unwrap());
+    let binding = direct_binding(&db, PROVIDER_ID);
+    db.conn
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE usage_providers
+             SET quota_config = ?1,
+                 legacy_app_type = 'claude',
+                 legacy_provider_id = ?2
+             WHERE id = ?3",
+            rusqlite::params![
+                serde_json::json!({
+                    "costMultiplier": "2.75",
+                    "pricingModelSource": "request"
+                })
+                .to_string(),
+                MISSING_LEGACY_ID,
+                PROVIDER_ID,
+            ],
+        )
+        .unwrap();
+    assert!(db
+        .get_provider_by_id(MISSING_LEGACY_ID, "claude")
+        .unwrap()
+        .is_none());
+
+    let store = Arc::new(MemoryCredentialStore::default());
+    let service = BindingCredentialService::new(db.clone(), store);
+    let configured = service
+        .set_binding_api_key(&binding.id, 0, secret(BINDING_KEY))
+        .await
+        .unwrap();
+    requested_enabled(&db, &configured);
+
+    let resolved = service
+        .resolve_binding_api_key(secret(BINDING_KEY))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        resolved.legacy_pricing_provider_id(),
+        Some(MISSING_LEGACY_ID)
+    );
+    assert_eq!(
+        resolved.pricing_override(),
+        &BindingPricingOverride {
+            cost_multiplier: Some("2.75".to_string()),
+            pricing_model_source: Some("request".to_string()),
+        }
+    );
+}
+
+#[tokio::test]
+async fn runtime_route_cannot_repeat_the_binding_key_in_non_auth_metadata() {
+    const BINDING_KEY: &str = "runtime-route-recontamination-key";
+
+    let db = Arc::new(Database::memory().unwrap());
+    let binding = direct_binding(&db, "route-recontamination-direct");
+    let store = Arc::new(MemoryCredentialStore::default());
+    let service = BindingCredentialService::new(db.clone(), store);
+    let configured = service
+        .set_binding_api_key(&binding.id, 0, secret(BINDING_KEY))
+        .await
+        .unwrap();
+    requested_enabled(&db, &configured);
+    db.conn
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE usage_providers
+             SET route_config = ?1
+             WHERE id = 'route-recontamination-direct'",
+            [serde_json::json!({
+                "baseUrl": "https://api.example",
+                "model": BINDING_KEY
+            })
+            .to_string()],
+        )
+        .unwrap();
+
+    assert_eq!(
+        service
+            .resolve_binding_api_key(secret(BINDING_KEY))
+            .await
+            .unwrap_err()
+            .to_string(),
+        "invalid_binding"
+    );
+}
+
+#[tokio::test]
+async fn frozen_ownership_cannot_repeat_the_binding_key() {
+    let db = Arc::new(Database::memory().unwrap());
+    let binding = direct_binding(&db, "ownership-recontamination-direct");
+    let binding_key = binding.id.clone();
+    let store = Arc::new(MemoryCredentialStore::default());
+    let service = BindingCredentialService::new(db.clone(), store);
+    let configured = service
+        .set_binding_api_key(&binding.id, 0, secret(&binding_key))
+        .await
+        .unwrap();
+    requested_enabled(&db, &configured);
+
+    assert_eq!(
+        service
+            .resolve_binding_api_key(secret(&binding_key))
+            .await
+            .unwrap_err()
+            .to_string(),
+        "invalid_binding"
     );
 }
 

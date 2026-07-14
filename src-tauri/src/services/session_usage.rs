@@ -427,6 +427,8 @@ fn insert_bound_session_entry(
         event_id: format!("claude-session:{}", msg.message_id),
         source: TokenSource::SessionLog,
         provider_id: provider_id.to_string(),
+        agent_module_id: None,
+        frozen_provider_context: None,
         occurred_at,
         model: msg.model.clone(),
         usage,
@@ -1022,6 +1024,8 @@ mod tests {
             event_id: "proxy-event".to_string(),
             source: TokenSource::Proxy,
             provider_id: "claude-sub".to_string(),
+            agent_module_id: None,
+            frozen_provider_context: None,
             occurred_at: 1_000,
             model: "claude-sonnet-4-5".to_string(),
             usage: TokenUsage {

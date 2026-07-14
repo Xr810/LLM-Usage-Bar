@@ -29,7 +29,7 @@ pub fn map_proxy_error_to_status(error: &ProxyError) -> u16 {
         ProxyError::Timeout(_) | ProxyError::StreamIdleTimeout(_) => 504,
 
         // 转发失败/连接失败：502 Bad Gateway
-        ProxyError::ForwardFailed(_) => 502,
+        ProxyError::ForwardFailed(_) | ProxyError::UpstreamResponseRejected => 502,
 
         // 无可用/静态路由无效：503 Service Unavailable
         ProxyError::NoAvailableProvider
@@ -54,7 +54,7 @@ pub fn map_proxy_error_to_status(error: &ProxyError) -> u16 {
         ProxyError::ConfigError(_) | ProxyError::InvalidRequest(_) => 400,
 
         // 认证错误：401 Unauthorized
-        ProxyError::AuthError(_) => 401,
+        ProxyError::AuthError(_) | ProxyError::BindingAuthorizationFailed => 401,
 
         // 数据库错误：500 Internal Server Error
         ProxyError::DatabaseError(_) => 500,
@@ -70,13 +70,7 @@ pub fn map_proxy_error_to_status(error: &ProxyError) -> u16 {
 /// 将 ProxyError 转换为用户友好的错误消息
 pub fn get_error_message(error: &ProxyError) -> String {
     match error {
-        ProxyError::UpstreamError { status, body } => {
-            if let Some(body) = body {
-                format!("上游错误 ({status}): {body}")
-            } else {
-                format!("上游错误 ({status})")
-            }
-        }
+        ProxyError::UpstreamError { status, .. } => format!("上游错误 ({status})"),
         ProxyError::Timeout(msg) => format!("请求超时: {msg}"),
         ProxyError::ForwardFailed(msg) => format!("转发失败: {msg}"),
         ProxyError::NoAvailableProvider => "无可用 Provider".to_string(),
@@ -147,6 +141,14 @@ mod tests {
             401
         );
         assert_eq!(
+            map_proxy_error_to_status(&ProxyError::BindingAuthorizationFailed),
+            401
+        );
+        assert_eq!(
+            get_error_message(&ProxyError::BindingAuthorizationFailed),
+            "binding authorization failed"
+        );
+        assert_eq!(
             map_proxy_error_to_status(&ProxyError::ConfigError("bad config".to_string())),
             400
         );
@@ -173,6 +175,6 @@ mod tests {
         let msg = get_error_message(&error);
         assert!(msg.contains("上游错误"));
         assert!(msg.contains("500"));
-        assert!(msg.contains("Internal Server Error"));
+        assert!(!msg.contains("Internal Server Error"));
     }
 }

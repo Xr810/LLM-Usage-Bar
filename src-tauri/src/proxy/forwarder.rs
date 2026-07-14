@@ -4,14 +4,16 @@
 
 use super::hyper_client::ProxyResponse;
 use super::{
+    binding_auth::is_credential_header_name,
     body_filter::filter_private_params_with_whitelist,
     content_encoding::{decompress_body, get_content_encoding},
     error::*,
     json_canonical::{canonicalize_value, short_value_hash},
     log_codes::fwd as log_fwd,
+    provider_router::UpstreamCredentialPlacement,
     providers::{
         codex_chat_history::CodexChatHistoryStore, gemini_shadow::GeminiShadowStore, get_adapter,
-        AuthInfo, AuthStrategy, ProviderAdapter, ProviderType,
+        ProviderAdapter, ProviderType,
     },
     thinking_budget_rectifier::{rectify_thinking_budget, should_rectify_thinking_budget},
     thinking_rectifier::{
@@ -20,9 +22,8 @@ use super::{
     types::{CopilotOptimizerConfig, OptimizerConfig, ProxyStatus, RectifierConfig},
     ProxyError,
 };
-use crate::commands::{CodexOAuthState, CopilotAuthState};
-use crate::proxy::providers::codex_oauth_auth::CodexOAuthManager;
-use crate::proxy::providers::copilot_auth::CopilotAuthManager;
+use crate::commands::CopilotAuthState;
+use crate::credentials::{CredentialExposureGuard, ResolvedBindingCredential};
 use crate::{
     app_config::AppType,
     provider::{LocalProxyRequestOverrides, Provider},
@@ -33,8 +34,41 @@ use serde_json::Value;
 use std::sync::Arc;
 use tauri::Manager;
 use tokio::sync::RwLock;
+use zeroize::Zeroizing;
 
 const PROXY_AUTH_PLACEHOLDER: &str = "PROXY_MANAGED";
+
+fn binding_auth_headers(
+    placement: UpstreamCredentialPlacement,
+    protected_secret: &[u8],
+) -> Result<Vec<(http::HeaderName, http::HeaderValue)>, ProxyError> {
+    if protected_secret.is_empty() {
+        return Err(ProxyError::BindingAuthorizationFailed);
+    }
+
+    let (name, value) = match placement {
+        UpstreamCredentialPlacement::AuthorizationBearer => {
+            let mut bearer = Zeroizing::new(Vec::with_capacity(7 + protected_secret.len()));
+            bearer.extend_from_slice(b"Bearer ");
+            bearer.extend_from_slice(protected_secret);
+            let value = http::HeaderValue::from_bytes(bearer.as_slice())
+                .map_err(|_| ProxyError::BindingAuthorizationFailed)?;
+            (http::header::AUTHORIZATION, value)
+        }
+        UpstreamCredentialPlacement::XApiKey => {
+            let value = http::HeaderValue::from_bytes(protected_secret)
+                .map_err(|_| ProxyError::BindingAuthorizationFailed)?;
+            (http::HeaderName::from_static("x-api-key"), value)
+        }
+        UpstreamCredentialPlacement::XGoogApiKey => {
+            let value = http::HeaderValue::from_bytes(protected_secret)
+                .map_err(|_| ProxyError::BindingAuthorizationFailed)?;
+            (http::HeaderName::from_static("x-goog-api-key"), value)
+        }
+    };
+
+    Ok(vec![(name, value)])
+}
 
 pub struct ForwardResult {
     pub response: ProxyResponse,
@@ -98,6 +132,8 @@ pub struct RequestForwarder {
     current_providers: Arc<RwLock<std::collections::HashMap<String, (String, String)>>>,
     gemini_shadow: Arc<GeminiShadowStore>,
     codex_chat_history: Arc<CodexChatHistoryStore>,
+    /// Frozen binding scope for all cross-request transformation caches.
+    binding_id: String,
     /// AppHandle is retained for managed OAuth/Copilot authentication state.
     app_handle: Option<tauri::AppHandle>,
     /// 代理会话 ID（用于 Gemini Native shadow replay）
@@ -118,6 +154,10 @@ pub struct RequestForwarder {
     non_streaming_timeout: std::time::Duration,
     /// 流式请求响应头等待超时（秒）
     streaming_first_byte_timeout: std::time::Duration,
+    /// Fingerprint-only detector retained for the complete forwarding path so
+    /// transform/network/upstream errors are sanitized before any diagnostic
+    /// or public boundary observes them.
+    credential_exposure_guard: CredentialExposureGuard,
 }
 
 impl RequestForwarder {
@@ -173,6 +213,7 @@ impl RequestForwarder {
         current_providers: Arc<RwLock<std::collections::HashMap<String, (String, String)>>>,
         gemini_shadow: Arc<GeminiShadowStore>,
         codex_chat_history: Arc<CodexChatHistoryStore>,
+        binding_id: String,
         app_handle: Option<tauri::AppHandle>,
         session_id: String,
         session_client_provided: bool,
@@ -181,12 +222,14 @@ impl RequestForwarder {
         rectifier_config: RectifierConfig,
         optimizer_config: OptimizerConfig,
         copilot_optimizer_config: CopilotOptimizerConfig,
+        credential_exposure_guard: CredentialExposureGuard,
     ) -> Self {
         Self {
             status,
             current_providers,
             gemini_shadow,
             codex_chat_history,
+            binding_id,
             app_handle,
             session_id,
             session_client_provided,
@@ -198,12 +241,17 @@ impl RequestForwarder {
             streaming_first_byte_timeout: std::time::Duration::from_secs(
                 streaming_first_byte_timeout,
             ),
+            credential_exposure_guard,
         }
     }
 
     pub(crate) fn without_reactive_retries(mut self) -> Self {
         self.reactive_retries_enabled = false;
         self
+    }
+
+    fn redact_credential_error(&self, error: ProxyError) -> ProxyError {
+        error.redact_credential(&self.credential_exposure_guard)
     }
 
     /// 整流（thinking signature 或 budget）重试失败后的统一收尾。
@@ -222,6 +270,7 @@ impl RequestForwarder {
         last_error: &mut Option<ProxyError>,
         last_provider: &mut Option<Provider>,
     ) -> Option<ForwardError> {
+        let retry_err = self.redact_credential_error(retry_err);
         // Provider errors terminate the sole bound-provider attempt after
         // preserving the original error for the caller. Client errors return immediately.
         let is_provider_error = match &retry_err {
@@ -269,10 +318,28 @@ impl RequestForwarder {
         method: http::Method,
         endpoint: &str,
         body: Value,
-        headers: axum::http::HeaderMap,
+        mut headers: axum::http::HeaderMap,
         extensions: Extensions,
         providers: Vec<Provider>,
+        binding_credential: ResolvedBindingCredential,
     ) -> Result<ForwardResult, ForwardError> {
+        if request_content_contains_credential(&self.credential_exposure_guard, endpoint, &body)
+            || providers.iter().any(|provider| {
+                serde_json::to_value(provider)
+                    .map(|value| value_contains_credential(&self.credential_exposure_guard, &value))
+                    .unwrap_or(true)
+            })
+        {
+            return Err(ForwardError {
+                error: ProxyError::BindingAuthorizationFailed,
+                provider: None,
+            });
+        }
+        // The extraction layer removes all protocol credential locations. Also
+        // remove copies placed in unrelated headers (for example x-session-id)
+        // before any adapter, cache identity, or transport code can observe them.
+        strip_credential_bearing_headers(&mut headers, &self.credential_exposure_guard);
+
         let guard = ActiveConnectionGuard::acquire(self.status.clone()).await;
         {
             let mut s = self.status.write().await;
@@ -281,16 +348,34 @@ impl RequestForwarder {
         }
         let result = self
             .forward_with_retry_inner(
-                app_type, method, endpoint, body, headers, extensions, providers,
+                app_type,
+                method,
+                endpoint,
+                body,
+                headers,
+                extensions,
+                providers,
+                &binding_credential,
             )
             .await;
         // 把 guard 注入到 Ok 结果，让它随响应一起流转到 response_processor，
         // 在流式 body 的 future 内才真正 drop。
         // Err 路径：guard 在函数 scope 内随返回值落地时自动 drop。
-        result.map(|mut fr| {
-            fr.connection_guard = Some(guard);
-            fr
-        })
+        match result {
+            Ok(mut forward_result) => {
+                forward_result.connection_guard = Some(guard);
+                Ok(forward_result)
+            }
+            Err(mut forward_error) => {
+                forward_error.error = self.redact_credential_error(forward_error.error);
+                // Upstream bodies are useful only for the internal rectifier and
+                // retry classifiers above. Drop them before handlers can emit an
+                // HTTP response or persist an error log; upstreams may echo the
+                // protected binding key in arbitrary fields.
+                forward_error.error.discard_upstream_body();
+                Err(forward_error)
+            }
+        }
     }
 
     /// 实际转发逻辑（不包含客户端维度的入口/出口计数）
@@ -312,6 +397,7 @@ impl RequestForwarder {
         headers: axum::http::HeaderMap,
         extensions: Extensions,
         providers: Vec<Provider>,
+        binding_credential: &ResolvedBindingCredential,
     ) -> Result<ForwardResult, ForwardError> {
         // 获取适配器
         let adapter = get_adapter(app_type);
@@ -373,6 +459,8 @@ impl RequestForwarder {
                     &headers,
                     &extensions,
                     adapter.as_ref(),
+                    binding_credential.credential_placement(),
+                    binding_credential.expose_secret(),
                 )
                 .await
             {
@@ -408,6 +496,7 @@ impl RequestForwarder {
                     });
                 }
                 Err(e) => {
+                    let e = self.redact_credential_error(e);
                     // 检测是否需要触发整流器（仅 Claude/ClaudeAuth 供应商）
                     let provider_type = ProviderType::from_app_type_and_config(app_type, provider);
                     let is_anthropic_provider = matches!(
@@ -453,6 +542,8 @@ impl RequestForwarder {
                                     &headers,
                                     &extensions,
                                     adapter.as_ref(),
+                                    binding_credential.credential_placement(),
+                                    binding_credential.expose_secret(),
                                 )
                                 .await
                             {
@@ -489,6 +580,7 @@ impl RequestForwarder {
                                     });
                                 }
                                 Err(retry_err) => {
+                                    let retry_err = self.redact_credential_error(retry_err);
                                     log::warn!(
                                         "[{app_type_str}] [Media] Unsupported-image retry still failed: {retry_err}"
                                     );
@@ -568,6 +660,8 @@ impl RequestForwarder {
                                         &headers,
                                         &extensions,
                                         adapter.as_ref(),
+                                        binding_credential.credential_placement(),
+                                        binding_credential.expose_secret(),
                                     )
                                     .await
                                 {
@@ -605,6 +699,7 @@ impl RequestForwarder {
                                         });
                                     }
                                     Err(retry_err) => {
+                                        let retry_err = self.redact_credential_error(retry_err);
                                         log::warn!(
                                             "[{app_type_str}] [RECT-003] 整流重试仍失败: {retry_err}"
                                         );
@@ -695,6 +790,8 @@ impl RequestForwarder {
                                     &headers,
                                     &extensions,
                                     adapter.as_ref(),
+                                    binding_credential.credential_placement(),
+                                    binding_credential.expose_secret(),
                                 )
                                 .await
                             {
@@ -729,6 +826,7 @@ impl RequestForwarder {
                                     });
                                 }
                                 Err(retry_err) => {
+                                    let retry_err = self.redact_credential_error(retry_err);
                                     log::warn!(
                                         "[{app_type_str}] [RECT-012] budget 整流重试仍失败: {retry_err}"
                                     );
@@ -867,9 +965,17 @@ impl RequestForwarder {
         headers: &axum::http::HeaderMap,
         extensions: &Extensions,
         adapter: &dyn ProviderAdapter,
+        credential_placement: UpstreamCredentialPlacement,
+        protected_secret: &[u8],
     ) -> Result<(ProxyResponse, Option<String>, Option<String>), ProxyError> {
         // 使用适配器提取 base_url
         let mut base_url = adapter.extract_base_url(provider)?;
+
+        if self.credential_exposure_guard.contains(&base_url)
+            || request_content_contains_credential(&self.credential_exposure_guard, endpoint, body)
+        {
+            return Err(ProxyError::BindingAuthorizationFailed);
+        }
 
         let is_full_url = provider
             .meta
@@ -1032,6 +1138,9 @@ impl RequestForwarder {
 
                 // 只在动态 endpoint 与当前 base_url 不同时替换
                 if dynamic_endpoint != base_url {
+                    if self.credential_exposure_guard.contains(&dynamic_endpoint) {
+                        return Err(ProxyError::BindingAuthorizationFailed);
+                    }
                     log::debug!(
                         "[Copilot] 使用动态 API endpoint: {} (原: {})",
                         dynamic_endpoint,
@@ -1081,6 +1190,14 @@ impl RequestForwarder {
             )
         };
 
+        if request_content_contains_credential(
+            &self.credential_exposure_guard,
+            &effective_endpoint,
+            &mapped_body,
+        ) {
+            return Err(ProxyError::BindingAuthorizationFailed);
+        }
+
         let codex_chat_base_is_full_endpoint = codex_responses_to_chat
             && base_url
                 .trim_end_matches('/')
@@ -1098,6 +1215,9 @@ impl RequestForwarder {
         } else {
             adapter.build_url(&base_url, &effective_endpoint)
         };
+        if self.credential_exposure_guard.contains(&url) {
+            return Err(ProxyError::BindingAuthorizationFailed);
+        }
 
         // 记录映射后的出站模型名（此时 mapped_body 已完成接管映射 / [1m] 剥离 /
         // Copilot 归一化）。格式转换后若 body 仍带 model 字段会在下方刷新覆盖；
@@ -1113,7 +1233,7 @@ impl RequestForwarder {
             let mut mapped_body = mapped_body;
             let restored = self
                 .codex_chat_history
-                .enrich_request(&mut mapped_body)
+                .enrich_request_scoped(&self.binding_id, &mut mapped_body)
                 .await;
             if restored > 0 {
                 log::debug!(
@@ -1132,9 +1252,11 @@ impl RequestForwarder {
                 let api_format = resolved_claude_api_format
                     .as_deref()
                     .unwrap_or_else(|| super::providers::get_claude_api_format(provider));
+                let mut shadow_scoped_provider = provider.clone();
+                shadow_scoped_provider.id = self.binding_id.clone();
                 super::providers::transform_claude_request_for_api_format(
                     mapped_body,
-                    provider,
+                    &shadow_scoped_provider,
                     api_format,
                     self.session_client_provided
                         .then_some(self.session_id.as_str()),
@@ -1173,6 +1295,13 @@ impl RequestForwarder {
         {
             outbound_model = Some(m.to_string());
         }
+        if request_content_contains_credential(
+            &self.credential_exposure_guard,
+            &effective_endpoint,
+            &filtered_body,
+        ) {
+            return Err(ProxyError::BindingAuthorizationFailed);
+        }
         log_prompt_cache_trace(
             app_type,
             provider,
@@ -1186,134 +1315,10 @@ impl RequestForwarder {
         let force_identity_encoding =
             needs_transform || codex_responses_to_chat || request_is_streaming;
 
-        // Codex OAuth 需要注入的 ChatGPT-Account-Id（在动态 token 获取期间填充）
-        let mut codex_oauth_account_id: Option<String> = None;
-        let mut should_send_codex_oauth_session_headers = false;
-
-        // 获取认证头（提前准备，用于内联替换）
-        let mut auth_headers = if let Some(mut auth) = adapter.extract_auth(provider) {
-            // GitHub Copilot 特殊处理：从 CopilotAuthManager 获取真实 token
-            if auth.strategy == AuthStrategy::GitHubCopilot {
-                if let Some(app_handle) = &self.app_handle {
-                    let copilot_state = app_handle.state::<CopilotAuthState>();
-                    let copilot_auth: tokio::sync::RwLockReadGuard<'_, CopilotAuthManager> =
-                        copilot_state.0.read().await;
-
-                    // 从 provider.meta 获取关联的 GitHub 账号 ID（多账号支持）
-                    let account_id = provider
-                        .meta
-                        .as_ref()
-                        .and_then(|m| m.managed_account_id_for("github_copilot"));
-
-                    // 根据账号 ID 获取对应 token（向后兼容：无账号 ID 时使用第一个账号）
-                    let token_result = match &account_id {
-                        Some(id) => {
-                            log::debug!("[Copilot] 使用指定账号 {id} 获取 token");
-                            copilot_auth.get_valid_token_for_account(id).await
-                        }
-                        None => {
-                            log::debug!("[Copilot] 使用默认账号获取 token");
-                            copilot_auth.get_valid_token().await
-                        }
-                    };
-
-                    match token_result {
-                        Ok(token) => {
-                            auth = AuthInfo::new(token, AuthStrategy::GitHubCopilot);
-                            log::debug!(
-                                "[Copilot] 成功获取 Copilot token (account={})",
-                                account_id.as_deref().unwrap_or("default")
-                            );
-                        }
-                        Err(e) => {
-                            log::error!(
-                                "[Copilot] 获取 Copilot token 失败 (account={}): {e}",
-                                account_id.as_deref().unwrap_or("default")
-                            );
-                            return Err(ProxyError::AuthError(format!(
-                                "GitHub Copilot 认证失败: {e}"
-                            )));
-                        }
-                    }
-                } else {
-                    log::error!("[Copilot] AppHandle 不可用");
-                    return Err(ProxyError::AuthError(
-                        "GitHub Copilot 认证不可用（无 AppHandle）".to_string(),
-                    ));
-                }
-            }
-
-            // Codex OAuth 特殊处理：从 CodexOAuthManager 获取真实 access_token
-            if auth.strategy == AuthStrategy::CodexOAuth {
-                if let Some(app_handle) = &self.app_handle {
-                    let codex_state = app_handle.state::<CodexOAuthState>();
-                    let codex_auth: tokio::sync::RwLockReadGuard<'_, CodexOAuthManager> =
-                        codex_state.0.read().await;
-
-                    // 从 provider.meta 获取关联的 ChatGPT 账号 ID
-                    let account_id = provider
-                        .meta
-                        .as_ref()
-                        .and_then(|m| m.managed_account_id_for("codex_oauth"));
-
-                    let token_result = match &account_id {
-                        Some(id) => {
-                            log::debug!("[CodexOAuth] 使用指定账号 {id} 获取 token");
-                            codex_auth.get_valid_token_for_account(id).await
-                        }
-                        None => {
-                            log::debug!("[CodexOAuth] 使用默认账号获取 token");
-                            codex_auth.get_valid_token().await
-                        }
-                    };
-
-                    match token_result {
-                        Ok(token) => {
-                            auth = AuthInfo::new(token, AuthStrategy::CodexOAuth);
-                            should_send_codex_oauth_session_headers = true;
-                            // 解析使用的 account_id（用于注入 ChatGPT-Account-Id header）
-                            codex_oauth_account_id = match account_id {
-                                Some(id) => Some(id),
-                                None => codex_auth.default_account_id().await,
-                            };
-                            log::debug!(
-                                "[CodexOAuth] 成功获取 access_token (account={})",
-                                codex_oauth_account_id.as_deref().unwrap_or("default")
-                            );
-                        }
-                        Err(e) => {
-                            log::error!("[CodexOAuth] 获取 access_token 失败: {e}");
-                            return Err(ProxyError::AuthError(format!(
-                                "Codex OAuth 认证失败: {e}"
-                            )));
-                        }
-                    }
-                } else {
-                    log::error!("[CodexOAuth] AppHandle 不可用");
-                    return Err(ProxyError::AuthError(
-                        "Codex OAuth 认证不可用（无 AppHandle）".to_string(),
-                    ));
-                }
-            }
-
-            adapter.get_auth_headers(&auth)?
-        } else {
-            Vec::new()
-        };
-
-        // 注入 Codex OAuth 的 ChatGPT-Account-Id header（如果有 account_id）
-        if let Some(ref account_id) = codex_oauth_account_id {
-            if let Ok(hv) = http::HeaderValue::from_str(account_id) {
-                auth_headers.push((http::HeaderName::from_static("chatgpt-account-id"), hv));
-            }
-        }
-
-        let codex_oauth_session_headers =
-            if should_send_codex_oauth_session_headers && self.session_client_provided {
-                build_codex_oauth_session_headers(&self.session_id)
-            } else {
-                Vec::new()
-            };
+        // The runtime Provider projection is credential-free. Inject only the
+        // protected binding key resolved for this request, without ever
+        // constructing Provider/AuthInfo state from it.
+        let mut auth_headers = binding_auth_headers(credential_placement, protected_secret)?;
 
         // 自定义 User-Agent：与 stream_check / model_fetch 共用 parse_custom_user_agent，
         // 运行时静默忽略非法值（前端在输入处给非阻断提示，不在保存时阻断）。
@@ -1486,6 +1491,12 @@ impl RequestForwarder {
                 continue;
             }
 
+            // Defense in depth for callers that bypass the extraction layer:
+            // only the protected binding credential may authenticate upstream.
+            if is_credential_header_name(key_str) {
+                continue;
+            }
+
             // --- accept-encoding — transform / SSE 路径强制 identity，其余保留原值 ---
             if key_str.eq_ignore_ascii_case("accept-encoding") {
                 if !saw_accept_encoding {
@@ -1587,12 +1598,6 @@ impl RequestForwarder {
             );
         }
 
-        // Codex OAuth 反代尽量对齐官方 Codex CLI 的会话路由信号。
-        // 只发送客户端提供的 session_id；生成的 UUID 每次不同，反而会破坏前缀缓存。
-        for (name, value) in codex_oauth_session_headers {
-            ordered_headers.insert(name, value);
-        }
-
         // 序列化请求体。GET/HEAD 是 idempotent/safe 方法，按 HTTP 语义不应携带 body；
         // 强行附带 JSON body 会让某些上游（如 Google Gemini 的 models.list）拒绝请求。
         let body_bytes = if matches!(method, &http::Method::GET | &http::Method::HEAD) {
@@ -1620,24 +1625,23 @@ impl RequestForwarder {
             is_copilot,
         );
 
+        if ordered_headers.iter().any(|(name, value)| {
+            (self.credential_exposure_guard.contains(name.as_str())
+                || header_value_contains_credential(&self.credential_exposure_guard, value))
+                && !auth_headers.iter().any(|(allowed_name, allowed_value)| {
+                    allowed_name == name && allowed_value == value
+                })
+        }) {
+            return Err(ProxyError::BindingAuthorizationFailed);
+        }
+
         reject_proxy_placeholder_for_managed_account_upstream(&url, &ordered_headers)?;
 
         // 输出请求信息日志
         let tag = adapter.name();
-        let request_model = filtered_body
-            .get("model")
-            .and_then(|v| v.as_str())
-            .unwrap_or("<none>");
-        log::info!("[{tag}] >>> 请求 URL: {url} (model={request_model})");
-        if log::log_enabled!(log::Level::Debug) {
-            if let Ok(body_str) = serde_json::to_string(&filtered_body) {
-                log::debug!(
-                    "[{tag}] >>> 请求体内容 ({}字节): {}",
-                    body_str.len(),
-                    body_str
-                );
-            }
-        }
+        let diagnostic_url = url.split('?').next().unwrap_or(url.as_str());
+        log::info!("[{tag}] >>> 请求 URL: {diagnostic_url}");
+        log::debug!("[{tag}] >>> 请求体内容已省略");
 
         // 确定超时
         let timeout = if self.non_streaming_timeout.is_zero() {
@@ -1669,7 +1673,7 @@ impl RequestForwarder {
             log::debug!(
                 "[Forwarder] Using pooled reqwest client (preserve_exact_header_case={preserve_exact_header_case}, socks_proxy={is_socks_proxy})"
             );
-            let client = super::http_client::get();
+            let client = super::http_client::get_no_redirect();
             let mut request = client.request(method.clone(), &url);
             if request_is_streaming {
                 // reqwest 的 timeout 是整请求超时；流式请求交给 response_processor
@@ -2023,17 +2027,7 @@ fn build_terminal_failure_log(
 
 fn summarize_proxy_error(error: &ProxyError) -> String {
     match error {
-        ProxyError::UpstreamError { status, body } => {
-            let body_summary = body
-                .as_deref()
-                .map(summarize_upstream_body)
-                .filter(|summary| !summary.is_empty());
-
-            match body_summary {
-                Some(summary) => format!("上游 HTTP {status}: {summary}"),
-                None => format!("上游 HTTP {status}"),
-            }
-        }
+        ProxyError::UpstreamError { status, .. } => format!("上游 HTTP {status}"),
         ProxyError::Timeout(message) => {
             format!("请求超时: {}", summarize_text_for_log(message, 180))
         }
@@ -2051,34 +2045,6 @@ fn summarize_proxy_error(error: &ProxyError) -> String {
         }
         _ => summarize_text_for_log(&error.to_string(), 180),
     }
-}
-
-fn summarize_upstream_body(body: &str) -> String {
-    if let Ok(json_body) = serde_json::from_str::<Value>(body) {
-        if let Some(message) = extract_json_error_message(&json_body) {
-            return summarize_text_for_log(&message, 180);
-        }
-
-        if let Ok(compact_json) = serde_json::to_string(&json_body) {
-            return summarize_text_for_log(&compact_json, 180);
-        }
-    }
-
-    summarize_text_for_log(body, 180)
-}
-
-fn extract_json_error_message(body: &Value) -> Option<String> {
-    let candidates = [
-        body.pointer("/error/message"),
-        body.pointer("/message"),
-        body.pointer("/detail"),
-        body.pointer("/error"),
-    ];
-
-    candidates
-        .into_iter()
-        .flatten()
-        .find_map(|value| value.as_str().map(ToString::to_string))
 }
 
 fn split_endpoint_and_query(endpoint: &str) -> (&str, Option<&str>) {
@@ -2216,6 +2182,7 @@ fn append_query_to_full_url(base_url: &str, query: Option<&str>) -> String {
     }
 }
 
+#[cfg(test)]
 fn build_codex_oauth_session_headers(
     session_id: &str,
 ) -> Vec<(http::HeaderName, http::HeaderValue)> {
@@ -2496,6 +2463,44 @@ fn prepare_upstream_request_body(request_body: Value) -> Value {
     canonicalize_value(filter_private_params_with_whitelist(request_body, &[]))
 }
 
+fn request_content_contains_credential(
+    guard: &CredentialExposureGuard,
+    endpoint: &str,
+    body: &Value,
+) -> bool {
+    guard.contains(endpoint) || value_contains_credential(guard, body)
+}
+
+fn value_contains_credential(guard: &CredentialExposureGuard, value: &Value) -> bool {
+    guard.contains_json_value(value)
+}
+
+fn header_value_contains_credential(
+    guard: &CredentialExposureGuard,
+    value: &http::HeaderValue,
+) -> bool {
+    value
+        .to_str()
+        .map(|value| guard.contains(value))
+        .unwrap_or_else(|_| guard.contains_bytes(value.as_bytes()))
+}
+
+fn strip_credential_bearing_headers(
+    headers: &mut http::HeaderMap,
+    guard: &CredentialExposureGuard,
+) {
+    let names = headers
+        .iter()
+        .filter(|(name, value)| {
+            guard.contains(name.as_str()) || header_value_contains_credential(guard, value)
+        })
+        .map(|(name, _)| name.clone())
+        .collect::<Vec<_>>();
+    for name in names {
+        headers.remove(name);
+    }
+}
+
 fn log_prompt_cache_trace(
     app_type: &AppType,
     provider: &Provider,
@@ -2583,6 +2588,44 @@ mod tests {
         }
     }
 
+    #[test]
+    fn protected_binding_key_is_injected_in_the_resolved_protocol_header() {
+        let cases = [
+            (
+                UpstreamCredentialPlacement::AuthorizationBearer,
+                "authorization",
+                "Bearer protected-key",
+            ),
+            (
+                UpstreamCredentialPlacement::XApiKey,
+                "x-api-key",
+                "protected-key",
+            ),
+            (
+                UpstreamCredentialPlacement::XGoogApiKey,
+                "x-goog-api-key",
+                "protected-key",
+            ),
+        ];
+
+        for (placement, expected_name, expected_value) in cases {
+            let headers = binding_auth_headers(placement, b"protected-key").unwrap();
+            assert_eq!(headers.len(), 1);
+            assert_eq!(headers[0].0.as_str(), expected_name);
+            assert_eq!(headers[0].1.to_str().unwrap(), expected_value);
+        }
+    }
+
+    #[test]
+    fn invalid_protected_binding_key_fails_without_rendering_the_payload() {
+        let secret = b"secret-with-newline\nSENTINEL";
+        let error = binding_auth_headers(UpstreamCredentialPlacement::AuthorizationBearer, secret)
+            .unwrap_err();
+
+        assert!(matches!(error, ProxyError::BindingAuthorizationFailed));
+        assert!(!error.to_string().contains("SENTINEL"));
+    }
+
     fn test_forwarder(
         non_streaming_timeout: Duration,
         streaming_first_byte_timeout: Duration,
@@ -2592,6 +2635,7 @@ mod tests {
             current_providers: Arc::new(RwLock::new(HashMap::new())),
             gemini_shadow: Arc::new(GeminiShadowStore::new()),
             codex_chat_history: Arc::new(CodexChatHistoryStore::default()),
+            binding_id: "test-binding-scope".to_string(),
             app_handle: None,
             session_id: String::new(),
             session_client_provided: false,
@@ -2601,7 +2645,65 @@ mod tests {
             copilot_optimizer_config: CopilotOptimizerConfig::default(),
             non_streaming_timeout,
             streaming_first_byte_timeout,
+            credential_exposure_guard: CredentialExposureGuard::from_secret(
+                b"nonmatching-test-binding-key",
+            ),
         }
+    }
+
+    #[test]
+    fn request_content_guard_rejects_query_and_body_recontamination() {
+        let guard = CredentialExposureGuard::from_secret(b"binding/key with space");
+
+        assert!(request_content_contains_credential(
+            &guard,
+            "/v1/messages?trace=binding%2Fkey+with+space",
+            &json!({"model": "safe-model"}),
+        ));
+        assert!(request_content_contains_credential(
+            &guard,
+            "/v1/messages",
+            &json!({"model": "binding/key with space"}),
+        ));
+        assert!(!request_content_contains_credential(
+            &guard,
+            "/v1/messages?trace=safe",
+            &json!({"model": "safe-model"}),
+        ));
+
+        let numeric_guard = CredentialExposureGuard::from_secret(b"927451");
+        assert!(request_content_contains_credential(
+            &numeric_guard,
+            "/v1/messages",
+            &json!({"metadata": {"trace": 927451}}),
+        ));
+    }
+
+    #[test]
+    fn credential_bearing_non_auth_headers_are_removed() {
+        let guard = CredentialExposureGuard::from_secret(b"binding/key with space");
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-session-id",
+            HeaderValue::from_static("binding%2Fkey+with+space"),
+        );
+        headers.insert("x-safe", HeaderValue::from_static("safe"));
+
+        strip_credential_bearing_headers(&mut headers, &guard);
+
+        assert!(!headers.contains_key("x-session-id"));
+        assert_eq!(
+            headers.get("x-safe"),
+            Some(&HeaderValue::from_static("safe"))
+        );
+
+        let name_guard = CredentialExposureGuard::from_secret(b"x-binding-key-sentinel");
+        headers.insert(
+            "x-binding-key-sentinel",
+            HeaderValue::from_static("otherwise-safe"),
+        );
+        strip_credential_bearing_headers(&mut headers, &name_guard);
+        assert!(!headers.contains_key("x-binding-key-sentinel"));
     }
 
     #[test]
@@ -2616,7 +2718,7 @@ mod tests {
         assert_eq!(code, log_fwd::SINGLE_PROVIDER_FAILED);
         assert!(message.contains("Provider PackyCode-response 请求失败"));
         assert!(message.contains("上游 HTTP 429"));
-        assert!(message.contains("rate limit exceeded"));
+        assert!(!message.contains("rate limit exceeded"));
         assert!(!message.contains("切换下一个"));
     }
 
@@ -2646,20 +2748,6 @@ mod tests {
         assert_eq!(code, log_fwd::ALL_PROVIDERS_FAILED);
         assert!(message.contains("已尝试 2/2 个 Provider，均失败"));
         assert!(message.contains("connection reset by peer"));
-    }
-
-    #[test]
-    fn summarize_upstream_body_prefers_json_message() {
-        let body = json!({
-            "error": {
-                "message": "invalid_request_error: unsupported field"
-            },
-            "request_id": "req_123"
-        });
-
-        let summary = summarize_upstream_body(&body.to_string());
-
-        assert_eq!(summary, "invalid_request_error: unsupported field");
     }
 
     #[test]

@@ -177,6 +177,17 @@ impl Database {
             .map_err(AppError::from)
     }
 
+    fn ever_bound_agent_ids(conn: &Connection) -> Result<BTreeSet<String>, AppError> {
+        if !Self::table_exists(conn, "agent_modules")? {
+            return Ok(BTreeSet::new());
+        }
+        let mut statement =
+            conn.prepare("SELECT id FROM agent_modules WHERE ever_bound = 1 ORDER BY id")?;
+        let rows = statement.query_map([], |row| row.get(0))?;
+        rows.collect::<Result<BTreeSet<_>, _>>()
+            .map_err(AppError::from)
+    }
+
     fn schema_object_identities(
         conn: &Connection,
     ) -> Result<BTreeSet<SchemaObjectIdentity>, AppError> {
@@ -258,6 +269,15 @@ impl Database {
             return Err(Self::credential_conflict());
         }
 
+        // `ever_bound` is a one-way tombstone: once a local Agent has owned a
+        // binding, importing an older snapshot must not make it hard-deletable
+        // again after that binding is removed.
+        let current_ever_bound = Self::ever_bound_agent_ids(current)?;
+        let incoming_ever_bound = Self::ever_bound_agent_ids(incoming)?;
+        if !current_ever_bound.is_subset(&incoming_ever_bound) {
+            return Err(Self::credential_conflict());
+        }
+
         Ok(())
     }
 
@@ -289,6 +309,15 @@ impl Database {
                 ],
             );
             match updated {
+                Ok(1) => {}
+                Ok(_) | Err(_) => return Err(Self::credential_conflict()),
+            }
+        }
+        for agent_id in Self::ever_bound_agent_ids(local)? {
+            match incoming.execute(
+                "UPDATE agent_modules SET ever_bound = 1 WHERE id = ?1",
+                [&agent_id],
+            ) {
                 Ok(1) => {}
                 Ok(_) | Err(_) => return Err(Self::credential_conflict()),
             }
@@ -1065,6 +1094,37 @@ mod tests {
         .map_err(AppError::from)
     }
 
+    fn insert_custom_agent(
+        db: &Database,
+        agent_id: &str,
+        ever_bound: bool,
+    ) -> Result<(), AppError> {
+        let conn = crate::database::lock_conn!(db.conn);
+        conn.execute(
+            "INSERT OR IGNORE INTO providers (id, app_type, name, settings_config, meta)
+             VALUES ('ever-bound-import-provider', 'claude', 'Import Sentinel', '{}', '{}')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO agent_modules (
+                 id, name, is_fixed, visible, sort_order, archived_at,
+                 ever_bound, created_at, updated_at
+             ) VALUES (?1, 'Backup Custom Agent', 0, 1, 90, NULL, ?2, 10, 10)",
+            params![agent_id, ever_bound],
+        )?;
+        Ok(())
+    }
+
+    fn agent_ever_bound(db: &Database, agent_id: &str) -> Result<bool, AppError> {
+        let conn = crate::database::lock_conn!(db.conn);
+        conn.query_row(
+            "SELECT ever_bound FROM agent_modules WHERE id = ?1",
+            [agent_id],
+            |row| row.get(0),
+        )
+        .map_err(AppError::from)
+    }
+
     fn install_delayed_route_retarget_trigger(db: &Database) -> Result<(), AppError> {
         db.conn.lock().unwrap().execute_batch(
             "CREATE TRIGGER delayed_protected_route_retarget
@@ -1399,6 +1459,35 @@ mod tests {
 
         assert!(!sync_sql.contains("INSERT INTO \"agent_credential_operations\""));
         assert!(!sync_sql.contains("backup-cleanup-operation"));
+        Ok(())
+    }
+
+    #[test]
+    fn ordinary_import_rejects_downgrading_ever_bound_tombstone() -> Result<(), AppError> {
+        let local = Database::memory()?;
+        insert_custom_agent(&local, "formerly-bound-agent", true)?;
+        let incoming = Database::memory()?;
+        insert_custom_agent(&incoming, "formerly-bound-agent", false)?;
+
+        let error = local
+            .import_sql_string(&incoming.export_sql_string()?)
+            .expect_err("ordinary import must not make a formerly bound Agent hard-deletable");
+
+        assert_eq!(error.to_string(), "credential_conflict");
+        assert!(agent_ever_bound(&local, "formerly-bound-agent")?);
+        Ok(())
+    }
+
+    #[test]
+    fn sync_import_preserves_local_ever_bound_tombstone() -> Result<(), AppError> {
+        let local = Database::memory()?;
+        insert_custom_agent(&local, "formerly-bound-agent", true)?;
+        let incoming = Database::memory()?;
+        insert_custom_agent(&incoming, "formerly-bound-agent", false)?;
+
+        local.import_sql_string_for_sync(&incoming.export_sql_string_for_sync()?)?;
+
+        assert!(agent_ever_bound(&local, "formerly-bound-agent")?);
         Ok(())
     }
 

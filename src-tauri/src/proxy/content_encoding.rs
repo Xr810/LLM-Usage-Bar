@@ -82,7 +82,7 @@ pub(crate) fn decompress_body(
     }
     // 任一 coding 不支持就整体放弃解压、保头透传，避免半解码的脏数据。
     if !codings.iter().all(|c| is_single_supported(c)) {
-        log::warn!("不支持的 content-encoding: {content_encoding}，跳过解压");
+        log::warn!("不支持的 content-encoding；具体值已省略，跳过解压");
         return Ok(None);
     }
 

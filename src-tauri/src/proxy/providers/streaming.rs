@@ -181,7 +181,7 @@ pub fn create_anthropic_sse_stream<E: std::error::Error + Send + 'static>(
                             continue;
                         }
 
-                        for l in line.lines() {
+                        for l in line.split(['\r', '\n']) {
                             if let Some(data) = strip_sse_field(l, "data") {
                                 if data.trim() == "[DONE]" {
                                     log::debug!("[Claude/OpenRouter] <<< OpenAI SSE: [DONE]");
@@ -437,8 +437,7 @@ pub fn create_anthropic_sse_stream<E: std::error::Error + Send + 'static>(
                                                             }
                                                             if state.consecutive_whitespace >= INFINITE_WHITESPACE_THRESHOLD {
                                                                 log::warn!(
-                                                                    "[Copilot] 检测到无限空白 bug (tool: {}), 中止此 tool call 流",
-                                                                    state.name
+                                                                    "[Copilot] 检测到无限空白 bug，中止此 tool call 流；tool 名称已省略"
                                                                 );
                                                                 state.aborted = true;
                                                                 None
@@ -624,14 +623,14 @@ pub fn create_anthropic_sse_stream<E: std::error::Error + Send + 'static>(
                         }
                     }
                 }
-                Err(e) => {
-                    log::error!("Stream error: {e}");
+                Err(_) => {
+                    log::error!("Stream error; details omitted");
                     stream_ended_with_error = true;
                     let error_event = json!({
                         "type": "error",
                         "error": {
                             "type": "stream_error",
-                            "message": format!("Stream error: {e}")
+                            "message": "upstream stream failed"
                         }
                     });
                     let sse_data = format!("event: error\ndata: {}\n\n",
@@ -692,12 +691,16 @@ fn map_stop_reason(finish_reason: Option<&str>) -> Option<String> {
             "length" => "max_tokens",
             "content_filter" => "end_turn",
             other => {
-                log::warn!("[Claude/OpenRouter] Unknown finish_reason in streaming: {other}");
+                log::warn!("{}", unknown_finish_reason_diagnostic(other));
                 "end_turn"
             }
         }
         .to_string()
     })
+}
+
+fn unknown_finish_reason_diagnostic(_finish_reason: &str) -> &'static str {
+    "[Claude/OpenRouter] Unknown finish_reason in streaming; value omitted"
 }
 
 #[cfg(test)]
@@ -723,7 +726,7 @@ mod tests {
             .split("\n\n")
             .filter_map(|block| {
                 let data = block
-                    .lines()
+                    .split(['\r', '\n'])
                     .find_map(|line| strip_sse_field(line, "data"))?;
                 serde_json::from_str::<Value>(data).ok()
             })
@@ -744,6 +747,31 @@ mod tests {
             map_stop_reason(Some("content_filter")),
             Some("end_turn".to_string())
         );
+    }
+
+    #[test]
+    fn unknown_finish_reason_diagnostic_never_contains_the_upstream_value() {
+        const BINDING_KEY: &str = "finish-reason-binding-key-sentinel";
+        let message = unknown_finish_reason_diagnostic(BINDING_KEY);
+
+        assert!(!message.contains(BINDING_KEY));
+    }
+
+    #[tokio::test]
+    async fn converts_cr_only_event_and_data_fields() {
+        let input = concat!(
+            "event: message\r",
+            "data: {\"id\":\"chatcmpl_cr\",\"model\":\"gpt-4o\",\"choices\":[{\"delta\":{\"content\":\"CR works\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":2}}\r\r",
+            "data: [DONE]\r\r"
+        );
+
+        let events = collect_anthropic_events(input).await;
+        assert!(events.iter().any(|event| {
+            event.pointer("/delta/text").and_then(Value::as_str) == Some("CR works")
+        }));
+        assert!(events
+            .iter()
+            .any(|event| event_type(event) == Some("message_stop")));
     }
 
     #[tokio::test]
@@ -772,7 +800,7 @@ mod tests {
             .split("\n\n")
             .filter_map(|block| {
                 let data = block
-                    .lines()
+                    .split(['\r', '\n'])
                     .find_map(|line| strip_sse_field(line, "data"))?;
                 serde_json::from_str::<Value>(data).ok()
             })
@@ -861,7 +889,7 @@ mod tests {
             .split("\n\n")
             .filter_map(|block| {
                 let data = block
-                    .lines()
+                    .split(['\r', '\n'])
                     .find_map(|line| strip_sse_field(line, "data"))?;
                 serde_json::from_str::<Value>(data).ok()
             })
@@ -976,7 +1004,7 @@ mod tests {
             .split("\n\n")
             .filter_map(|block| {
                 let data = block
-                    .lines()
+                    .split(['\r', '\n'])
                     .find_map(|line| strip_sse_field(line, "data"))?;
                 serde_json::from_str::<Value>(data).ok()
             })
@@ -1215,7 +1243,7 @@ mod tests {
             .split("\n\n")
             .filter_map(|block| {
                 let data = block
-                    .lines()
+                    .split(['\r', '\n'])
                     .find_map(|line| strip_sse_field(line, "data"))?;
                 serde_json::from_str::<Value>(data).ok()
             })

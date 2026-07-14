@@ -320,7 +320,7 @@ pub(crate) fn build_anthropic_usage_from_responses(usage: Option<&Value>) -> Val
     // Log if only one field present (partial object). Streaming chunks legitimately
     // arrive with partial usage, so this stays at debug level to avoid noise.
     if (input == 0 && output > 0) || (input > 0 && output == 0) {
-        log::debug!("[Responses] Partial usage object: {:?}", u);
+        log::debug!("[Responses] Partial usage object received; values omitted");
     }
 
     let mut result = json!({

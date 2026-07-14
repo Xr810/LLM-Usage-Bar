@@ -8,6 +8,7 @@ use super::transform_gemini::{
     build_anthropic_usage, is_synthesized_tool_call_id, rectify_tool_call_parts,
     synthesize_tool_call_id, AnthropicToolSchemaHints,
 };
+use crate::credentials::CredentialExposureGuard;
 use crate::proxy::sse::{append_utf8_safe, strip_sse_field, take_sse_block};
 use bytes::Bytes;
 use futures::stream::{Stream, StreamExt};
@@ -234,12 +235,58 @@ fn encode_sse(event_name: &str, payload: &Value) -> Bytes {
     ))
 }
 
+fn contains_guarded_value(
+    credential_guard: Option<&CredentialExposureGuard>,
+    value: &Value,
+) -> bool {
+    credential_guard.is_some_and(|guard| guard.contains_json_value(value))
+}
+
+#[cfg(test)]
 pub fn create_anthropic_sse_stream_from_gemini<E: std::error::Error + Send + 'static>(
     stream: impl Stream<Item = Result<Bytes, E>> + Send + 'static,
     shadow_store: Option<Arc<GeminiShadowStore>>,
     provider_id: Option<String>,
     session_id: Option<String>,
     tool_schema_hints: Option<AnthropicToolSchemaHints>,
+) -> impl Stream<Item = Result<Bytes, std::io::Error>> + Send {
+    create_anthropic_sse_stream_from_gemini_inner(
+        stream,
+        shadow_store,
+        provider_id,
+        session_id,
+        tool_schema_hints,
+        None,
+    )
+}
+
+pub(crate) fn create_anthropic_sse_stream_from_gemini_guarded<
+    E: std::error::Error + Send + 'static,
+>(
+    stream: impl Stream<Item = Result<Bytes, E>> + Send + 'static,
+    shadow_store: Option<Arc<GeminiShadowStore>>,
+    provider_id: Option<String>,
+    session_id: Option<String>,
+    tool_schema_hints: Option<AnthropicToolSchemaHints>,
+    credential_guard: CredentialExposureGuard,
+) -> impl Stream<Item = Result<Bytes, std::io::Error>> + Send {
+    create_anthropic_sse_stream_from_gemini_inner(
+        stream,
+        shadow_store,
+        provider_id,
+        session_id,
+        tool_schema_hints,
+        Some(credential_guard),
+    )
+}
+
+fn create_anthropic_sse_stream_from_gemini_inner<E: std::error::Error + Send + 'static>(
+    stream: impl Stream<Item = Result<Bytes, E>> + Send + 'static,
+    shadow_store: Option<Arc<GeminiShadowStore>>,
+    provider_id: Option<String>,
+    session_id: Option<String>,
+    tool_schema_hints: Option<AnthropicToolSchemaHints>,
+    credential_guard: Option<CredentialExposureGuard>,
 ) -> impl Stream<Item = Result<Bytes, std::io::Error>> + Send {
     async_stream::stream! {
         let mut buffer = String::new();
@@ -248,6 +295,10 @@ pub fn create_anthropic_sse_stream_from_gemini<E: std::error::Error + Send + 'st
         let mut current_model: Option<String> = None;
         let mut has_sent_message_start = false;
         let mut accumulated_text = String::new();
+        let mut pending_text = String::new();
+        let mut semantic_text_scanner = credential_guard
+            .as_ref()
+            .map(CredentialExposureGuard::stream_scanner);
         let mut text_block_index: Option<u32> = None;
         let mut next_content_index: u32 = 0;
         let mut open_indices: HashSet<u32> = HashSet::new();
@@ -269,7 +320,7 @@ pub fn create_anthropic_sse_stream_from_gemini<E: std::error::Error + Send + 'st
                         }
 
                         let mut data_lines: Vec<String> = Vec::new();
-                        for line in block.lines() {
+                        for line in block.split(['\r', '\n']) {
                             if let Some(data) = strip_sse_field(line, "data") {
                                 data_lines.push(data.to_string());
                             }
@@ -288,6 +339,10 @@ pub fn create_anthropic_sse_stream_from_gemini<E: std::error::Error + Send + 'st
                             Ok(value) => value,
                             Err(_) => continue,
                         };
+                        if contains_guarded_value(credential_guard.as_ref(), &chunk_json) {
+                            yield Err(std::io::Error::other("upstream response rejected"));
+                            return;
+                        }
 
                         if message_id.is_none() {
                             message_id = chunk_json
@@ -316,6 +371,10 @@ pub fn create_anthropic_sse_stream_from_gemini<E: std::error::Error + Send + 'st
                                     "usage": build_anthropic_usage(chunk_json.get("usageMetadata"))
                                 }
                             });
+                            if contains_guarded_value(credential_guard.as_ref(), &event) {
+                                yield Err(std::io::Error::other("upstream response rejected"));
+                                return;
+                            }
                             yield Ok(encode_sse("message_start", &event));
                             has_sent_message_start = true;
                         }
@@ -363,38 +422,74 @@ pub fn create_anthropic_sse_stream_from_gemini<E: std::error::Error + Send + 'st
                                     };
 
                                     if !delta.is_empty() {
-                                        let index = *text_block_index.get_or_insert_with(|| {
-                                            let assigned = next_content_index;
-                                            next_content_index += 1;
-                                            assigned
-                                        });
-
-                                        if !open_indices.contains(&index) {
-                                            let start_event = json!({
-                                                "type": "content_block_start",
-                                                "index": index,
-                                                "content_block": {
-                                                    "type": "text",
-                                                    "text": ""
-                                                }
-                                            });
-                                            yield Ok(encode_sse("content_block_start", &start_event));
-                                            open_indices.insert(index);
+                                        let mut next_accumulated = accumulated_text.clone();
+                                        if is_cumulative {
+                                            next_accumulated = visible_text;
+                                        } else {
+                                            next_accumulated.push_str(&delta);
+                                        }
+                                        let semantic_match = semantic_text_scanner
+                                            .as_mut()
+                                            .is_some_and(|scanner| scanner.push(delta.as_bytes()));
+                                        if semantic_match
+                                            || credential_guard.as_ref().is_some_and(|guard| {
+                                                guard.contains(&next_accumulated)
+                                            })
+                                        {
+                                            pending_text.clear();
+                                            yield Err(std::io::Error::other("upstream response rejected"));
+                                            return;
                                         }
 
-                                        let delta_event = json!({
-                                            "type": "content_block_delta",
-                                            "index": index,
-                                            "delta": {
-                                                "type": "text_delta",
-                                                "text": delta
+                                        accumulated_text = next_accumulated;
+                                        pending_text.push_str(&delta);
+                                        let semantic_prefix_pending = semantic_text_scanner
+                                            .as_ref()
+                                            .is_some_and(|scanner| scanner.has_partial_match());
+                                        if !semantic_prefix_pending && !pending_text.is_empty() {
+                                            let safe_text = std::mem::take(&mut pending_text);
+                                            let index = *text_block_index.get_or_insert_with(|| {
+                                                let assigned = next_content_index;
+                                                next_content_index += 1;
+                                                assigned
+                                            });
+
+                                            if !open_indices.contains(&index) {
+                                                let start_event = json!({
+                                                    "type": "content_block_start",
+                                                    "index": index,
+                                                    "content_block": {
+                                                        "type": "text",
+                                                        "text": ""
+                                                    }
+                                                });
+                                                if contains_guarded_value(
+                                                    credential_guard.as_ref(),
+                                                    &start_event,
+                                                ) {
+                                                    yield Err(std::io::Error::other("upstream response rejected"));
+                                                    return;
+                                                }
+                                                yield Ok(encode_sse("content_block_start", &start_event));
+                                                open_indices.insert(index);
                                             }
-                                        });
-                                        yield Ok(encode_sse("content_block_delta", &delta_event));
-                                        if is_cumulative {
-                                            accumulated_text = visible_text;
-                                        } else {
-                                            accumulated_text.push_str(&delta);
+
+                                            let delta_event = json!({
+                                                "type": "content_block_delta",
+                                                "index": index,
+                                                "delta": {
+                                                    "type": "text_delta",
+                                                    "text": safe_text
+                                                }
+                                            });
+                                            if contains_guarded_value(
+                                                credential_guard.as_ref(),
+                                                &delta_event,
+                                            ) {
+                                                yield Err(std::io::Error::other("upstream response rejected"));
+                                                return;
+                                            }
+                                            yield Ok(encode_sse("content_block_delta", &delta_event));
                                         }
                                     }
                                 }
@@ -420,40 +515,69 @@ pub fn create_anthropic_sse_stream_from_gemini<E: std::error::Error + Send + 'st
                     "usage": build_anthropic_usage(latest_usage.as_ref())
                 }
             });
+            if contains_guarded_value(credential_guard.as_ref(), &event) {
+                yield Err(std::io::Error::other("upstream response rejected"));
+                return;
+            }
             yield Ok(encode_sse("message_start", &event));
         }
 
         if accumulated_text.is_empty() {
-            if let Some(blocked_text) = blocked_text.clone() {
-                let index = *text_block_index.get_or_insert_with(|| {
-                    let assigned = next_content_index;
-                    next_content_index += 1;
-                    assigned
-                });
-
-                if !open_indices.contains(&index) {
-                    let start_event = json!({
-                        "type": "content_block_start",
-                        "index": index,
-                        "content_block": {
-                            "type": "text",
-                            "text": ""
-                        }
-                    });
-                    yield Ok(encode_sse("content_block_start", &start_event));
-                    open_indices.insert(index);
+            if let Some(blocked_text) = blocked_text.as_deref() {
+                let semantic_match = semantic_text_scanner
+                    .as_mut()
+                    .is_some_and(|scanner| scanner.push(blocked_text.as_bytes()));
+                if semantic_match
+                    || credential_guard
+                    .as_ref()
+                    .is_some_and(|guard| guard.contains(blocked_text))
+                {
+                    yield Err(std::io::Error::other("upstream response rejected"));
+                    return;
                 }
+                pending_text.push_str(blocked_text);
+            }
+        }
 
-                let delta_event = json!({
-                    "type": "content_block_delta",
+        // A protected-key prefix that remains only at EOF cannot be completed;
+        // emit it after every full-match check has passed.
+        if !pending_text.is_empty() {
+            let index = *text_block_index.get_or_insert_with(|| {
+                let assigned = next_content_index;
+                next_content_index += 1;
+                assigned
+            });
+
+            if !open_indices.contains(&index) {
+                let start_event = json!({
+                    "type": "content_block_start",
                     "index": index,
-                    "delta": {
-                        "type": "text_delta",
-                        "text": blocked_text
+                    "content_block": {
+                        "type": "text",
+                        "text": ""
                     }
                 });
-                yield Ok(encode_sse("content_block_delta", &delta_event));
+                if contains_guarded_value(credential_guard.as_ref(), &start_event) {
+                    yield Err(std::io::Error::other("upstream response rejected"));
+                    return;
+                }
+                yield Ok(encode_sse("content_block_start", &start_event));
+                open_indices.insert(index);
             }
+
+            let delta_event = json!({
+                "type": "content_block_delta",
+                "index": index,
+                "delta": {
+                    "type": "text_delta",
+                    "text": std::mem::take(&mut pending_text)
+                }
+            });
+            if contains_guarded_value(credential_guard.as_ref(), &delta_event) {
+                yield Err(std::io::Error::other("upstream response rejected"));
+                return;
+            }
+            yield Ok(encode_sse("content_block_delta", &delta_event));
         }
 
         if let Some(index) = text_block_index {
@@ -462,6 +586,10 @@ pub fn create_anthropic_sse_stream_from_gemini<E: std::error::Error + Send + 'st
                     "type": "content_block_stop",
                     "index": index
                 });
+                if contains_guarded_value(credential_guard.as_ref(), &stop_event) {
+                    yield Err(std::io::Error::other("upstream response rejected"));
+                    return;
+                }
                 yield Ok(encode_sse("content_block_stop", &stop_event));
             }
         }
@@ -483,10 +611,15 @@ pub fn create_anthropic_sse_stream_from_gemini<E: std::error::Error + Send + 'st
                 &tool_calls,
             );
             if !shadow_parts.is_empty() {
+                let shadow_content = json!({ "parts": shadow_parts });
+                if contains_guarded_value(credential_guard.as_ref(), &shadow_content) {
+                    yield Err(std::io::Error::other("upstream response rejected"));
+                    return;
+                }
                 store.record_assistant_turn(
                     provider_id,
                     session_id,
-                    json!({ "parts": shadow_parts }),
+                    shadow_content,
                     tool_calls.clone(),
                 );
             }
@@ -533,6 +666,10 @@ pub fn create_anthropic_sse_stream_from_gemini<E: std::error::Error + Send + 'st
                     "name": tool_call.name
                 }
             });
+            if contains_guarded_value(credential_guard.as_ref(), &start_event) {
+                yield Err(std::io::Error::other("upstream response rejected"));
+                return;
+            }
             yield Ok(encode_sse("content_block_start", &start_event));
 
             let delta_event = json!({
@@ -543,12 +680,20 @@ pub fn create_anthropic_sse_stream_from_gemini<E: std::error::Error + Send + 'st
                     "partial_json": serde_json::to_string(&tool_call.args).unwrap_or_else(|_| "{}".to_string())
                 }
             });
+            if contains_guarded_value(credential_guard.as_ref(), &delta_event) {
+                yield Err(std::io::Error::other("upstream response rejected"));
+                return;
+            }
             yield Ok(encode_sse("content_block_delta", &delta_event));
 
             let stop_event = json!({
                 "type": "content_block_stop",
                 "index": index
             });
+            if contains_guarded_value(credential_guard.as_ref(), &stop_event) {
+                yield Err(std::io::Error::other("upstream response rejected"));
+                return;
+            }
             yield Ok(encode_sse("content_block_stop", &stop_event));
         }
 
@@ -566,9 +711,17 @@ pub fn create_anthropic_sse_stream_from_gemini<E: std::error::Error + Send + 'st
             },
             "usage": usage
         });
+        if contains_guarded_value(credential_guard.as_ref(), &message_delta) {
+            yield Err(std::io::Error::other("upstream response rejected"));
+            return;
+        }
         yield Ok(encode_sse("message_delta", &message_delta));
 
         let message_stop = json!({ "type": "message_stop" });
+        if contains_guarded_value(credential_guard.as_ref(), &message_stop) {
+            yield Err(std::io::Error::other("upstream response rejected"));
+            return;
+        }
         yield Ok(encode_sse("message_stop", &message_stop));
     }
 }
@@ -671,6 +824,18 @@ mod tests {
     }
 
     #[test]
+    fn converts_cr_only_event_and_data_fields_to_anthropic_sse() {
+        let output = collect_stream_output(vec![
+            "event: message\rdata: {\"responseId\":\"resp_cr\",\"modelVersion\":\"gemini-2.5-pro\",\"candidates\":[{\"finishReason\":\"STOP\",\"content\":{\"parts\":[{\"text\":\"CR works\"}]}}],\"usageMetadata\":{\"promptTokenCount\":4,\"totalTokenCount\":6}}\r\r",
+        ]);
+
+        assert!(output.contains("event: message_start"));
+        assert!(output.contains("\"type\":\"text_delta\""));
+        assert!(output.contains("\"text\":\"CR works\""));
+        assert!(output.contains("event: message_stop"));
+    }
+
+    #[test]
     fn preserves_utf8_boundaries_when_json_payload_spans_chunks() {
         let payload = json!({
             "responseId": "resp_utf8",
@@ -750,6 +915,62 @@ mod tests {
             second_turn["contents"][1]["parts"][0]["thoughtSignature"],
             "sig-1"
         );
+    }
+
+    #[test]
+    fn guarded_stream_rejects_key_split_across_noncumulative_text_events() {
+        const SECRET: &str = "protected-gemini-stream-key";
+        const PREFIX: &str = "protected-gemini-";
+        let store = Arc::new(GeminiShadowStore::with_limits(8, 4));
+        let chunks = vec![
+            format!(
+                "data: {}\n\n",
+                json!({
+                    "responseId": "response-safe",
+                    "modelVersion": "gemini-2.5-pro",
+                    "candidates": [{ "content": { "parts": [{ "text": PREFIX }] } }]
+                })
+            ),
+            format!(
+                "data: {}\n\n",
+                json!({
+                    "responseId": "response-safe",
+                    "modelVersion": "gemini-2.5-pro",
+                    "candidates": [{
+                        "finishReason": "STOP",
+                        "content": { "parts": [{ "text": "stream-key" }] }
+                    }]
+                })
+            ),
+        ];
+        let stream = futures::stream::iter(
+            chunks
+                .into_iter()
+                .map(|chunk| Ok::<Bytes, std::io::Error>(Bytes::from(chunk))),
+        );
+        let converted = create_anthropic_sse_stream_from_gemini_guarded(
+            stream,
+            Some(store.clone()),
+            Some("binding-a".to_string()),
+            Some("session-a".to_string()),
+            None,
+            CredentialExposureGuard::from_secret(SECRET.as_bytes()),
+        );
+        let output =
+            futures::executor::block_on(async move { converted.collect::<Vec<_>>().await });
+        let visible = output
+            .iter()
+            .filter_map(|item| item.as_ref().ok())
+            .flat_map(|bytes| bytes.iter().copied())
+            .collect::<Vec<_>>();
+        let visible = String::from_utf8(visible).unwrap();
+
+        assert!(output.iter().any(Result::is_err));
+        assert!(!visible.contains(SECRET));
+        assert!(!visible.contains(PREFIX));
+        assert!(store
+            .latest_assistant_content("binding-a", "session-a")
+            .is_none());
     }
 
     #[test]

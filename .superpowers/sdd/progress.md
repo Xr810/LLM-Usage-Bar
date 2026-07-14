@@ -21,7 +21,7 @@ worktree `.worktrees/agent-centric-usage-modules`.
 | 1. v16 schema and conservative history migration | completed | this task commit | focused 5/5; schema 5/5; integration 3/3; library 1981 passed / 2 ignored; both reviews approved |
 | 2. Agent module and binding persistence | completed | this task commit | focused 7/12/15; integration 4/4; library 1997 passed / 2 ignored; both reviews approved |
 | 3. Protected credential store and atomic key lifecycle | completed | this task commit | credentials 72/72; backup 30/30; library 2057 passed / 2 ignored; release check and Clippy pass; reviews approved |
-| 4. Credential-routed proxy and frozen event attribution | pending | — | — |
+| 4. Credential-routed proxy and frozen event attribution | completed | this task commit | credentials 84/84; response guard 35/35; proxy E2E 16/16; library 2160 passed / 2 ignored; Clippy and both reviews approved |
 | 5. Trusted session attribution and Agent-safe dedup | pending | — | — |
 | 6. Agent dashboard, events, diagnostics, commands | pending | — | — |
 | 7. Agent-centric frontend and Settings | pending | — | — |
@@ -93,3 +93,35 @@ worktree `.worktrees/agent-centric-usage-modules`.
   verification ran outside the sandbox: 2057 passed, 2 ignored, 0 failed.
 - Independent spec-compliance, code-quality, and final adversarial security reviews
   approved the completed Task 3 implementation.
+
+## Task 4 Evidence
+
+- RED: the static-route baseline allowed an unknown request credential to select a
+  configured upstream and could not attach immutable Agent ownership. The first
+  strengthened proxy E2E failed on the upstream hit count/ownership assertions.
+- Every supported endpoint now extracts one protocol-specific binding credential,
+  rejects missing, ambiguous, unknown, disabled, archived, store-missing, or
+  protocol-mismatched bindings locally, and strips all local credential locations
+  before constructing the upstream request.
+- The second binding lookup after protected-store verification is the pre-send
+  linearization point. Route projection, Agent/Provider/binding IDs, product group,
+  route protocol, pricing override, and protected upstream key are frozen together;
+  asynchronous ingestion receives that frozen context and cannot observe later
+  binding or Provider edits.
+- Runtime routes are rebuilt from an allowlisted credential-free projection. Legacy
+  auth fields, nested config/env/TOML secrets, URL userinfo/query credentials,
+  redirects, reflected credential headers, and uninspectable compressed streams
+  cannot reintroduce a binding key.
+- Response guards quarantine semantic SSE channels by stable protocol identity,
+  cover raw/percent/form/JSON normalization across chunk and event boundaries, and
+  reject a completed credential before transformers, caches, usage parsing, logs,
+  or client egress. State, depth, normalization fan-out, and pending bytes are
+  bounded; UTF-8 BOM, CR-only SSE, EOF prefixes, parallel choices, reasoning, and
+  thinking paths have regression coverage.
+- Focused verification passes 84 credential tests, 35 response-processor tests,
+  16 Gemini streaming tests, 14/12/16 protocol conversion tests, 14 ingestion
+  tests, 16 binding extraction tests, and 21 route projection tests. Rust format,
+  `git diff --check`, and Clippy pass. Final listener-capable verification ran
+  outside the sandbox: proxy E2E 16/16 and library 2160 passed, 2 ignored.
+- Independent spec-compliance and route/ownership reviews approved the final tree
+  with no P0-P2 findings after the code-quality and Clippy findings were resolved.

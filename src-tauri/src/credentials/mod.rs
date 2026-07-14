@@ -11,6 +11,7 @@ use std::sync::Arc;
 use zeroize::Zeroizing;
 
 pub use service::{BindingCredentialService, ResolvedBindingCredential};
+pub(crate) use service::{CredentialExposureGuard, CredentialSemanticStreamScanner};
 
 pub(super) const KEYCHAIN_SERVICE: &str = "com.xr810.llm-usage-bar.agent-provider-binding.v1";
 

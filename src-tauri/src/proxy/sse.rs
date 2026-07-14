@@ -8,7 +8,16 @@ pub(crate) fn strip_sse_field<'a>(line: &'a str, field: &str) -> Option<&'a str>
 pub(crate) fn take_sse_block(buffer: &mut String) -> Option<String> {
     let mut best: Option<(usize, usize)> = None;
 
-    for (delimiter, len) in [("\r\n\r\n", 4usize), ("\n\n", 2usize)] {
+    for (delimiter, len) in [
+        ("\r\n\r\n", 4usize),
+        ("\r\n\n", 3usize),
+        ("\r\n\r", 3usize),
+        ("\n\r\n", 3usize),
+        ("\r\r\n", 3usize),
+        ("\n\n", 2usize),
+        ("\n\r", 2usize),
+        ("\r\r", 2usize),
+    ] {
         if let Some(pos) = buffer.find(delimiter) {
             if best.is_none_or(|(best_pos, _)| pos < best_pos) {
                 best = Some((pos, len));
@@ -130,6 +139,19 @@ mod tests {
             Some("data: {\"ok\":true}".to_string())
         );
         assert_eq!(buffer, "rest");
+    }
+
+    #[test]
+    fn take_sse_block_supports_cr_and_mixed_delimiters() {
+        for input in [
+            "data: one\r\rrest",
+            "data: one\r\n\nrest",
+            "data: one\n\rrest",
+        ] {
+            let mut buffer = input.to_string();
+            assert_eq!(take_sse_block(&mut buffer), Some("data: one".to_string()));
+            assert_eq!(buffer, "rest");
+        }
     }
 
     // ------------------------------------------------------------------

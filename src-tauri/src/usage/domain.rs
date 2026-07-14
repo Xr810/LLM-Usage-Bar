@@ -204,6 +204,9 @@ pub struct UsageEvent {
     pub event_id: String,
     pub source: TokenSource,
     pub provider_id: String,
+    /// Immutable Agent ownership captured at ingestion time. Legacy events
+    /// that cannot be attributed safely keep this value null.
+    pub agent_module_id: Option<String>,
     pub product_group_id: String,
     pub occurred_at: i64,
     pub model: String,

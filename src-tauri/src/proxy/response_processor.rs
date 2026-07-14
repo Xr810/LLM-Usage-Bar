@@ -8,8 +8,9 @@ use super::{
     handler_config::{StreamUsageEventFilter, UsageParserConfig},
     handler_context::{RequestContext, StreamingTimeoutConfig},
     hyper_client::ProxyResponse,
+    provider_router::BindingPricingOverride,
     server::ProxyState,
-    sse::{strip_sse_field, take_sse_block},
+    sse::{append_utf8_safe, strip_sse_field, take_sse_block},
     usage::{
         cost_parser::{extract_upstream_cost, extract_upstream_cost_from_events, UpstreamCost},
         logger::UsageLogger,
@@ -17,12 +18,13 @@ use super::{
     },
     ProxyError,
 };
+use crate::credentials::CredentialExposureGuard;
 use crate::database::PRICING_SOURCE_REQUEST;
 use crate::usage::domain::TokenSource;
-use crate::usage::ingestion::{LegacyLogInput, UsageIngestionInput};
+use crate::usage::ingestion::{FrozenUsageProviderContext, LegacyLogInput, UsageIngestionInput};
 use axum::http::{header::HeaderMap, HeaderName};
 use axum::response::{IntoResponse, Response};
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use futures::stream::{Stream, StreamExt};
 use serde_json::Value;
 use std::{
@@ -73,6 +75,29 @@ pub(crate) fn strip_hop_by_hop_response_headers(headers: &mut HeaderMap) {
     }
 }
 
+/// Remove upstream-reflected copies of the protected binding key before any
+/// response header reaches the local client. Header names are checked too;
+/// clients and upstreams may use arbitrary extension fields.
+pub(crate) fn strip_credential_bearing_response_headers(
+    headers: &mut HeaderMap,
+    credential_guard: &CredentialExposureGuard,
+) {
+    let names = headers
+        .iter()
+        .filter(|(name, value)| {
+            credential_guard.contains(name.as_str())
+                || value
+                    .to_str()
+                    .map(|value| credential_guard.contains(value))
+                    .unwrap_or_else(|_| credential_guard.contains_bytes(value.as_bytes()))
+        })
+        .map(|(name, _)| name.clone())
+        .collect::<Vec<_>>();
+    for name in names {
+        headers.remove(name);
+    }
+}
+
 /// 移除在重建响应体后会失真的实体头。
 pub(crate) fn strip_entity_headers_for_rebuilt_body(headers: &mut HeaderMap) {
     headers.remove(axum::http::header::CONTENT_ENCODING);
@@ -116,17 +141,19 @@ pub(crate) async fn read_decoded_body(
     let mut decoded = false;
 
     if let Some(encoding) = get_content_encoding(&headers) {
-        log::debug!("[{tag}] 解压非流式响应: content-encoding={encoding}");
+        log::debug!("[{tag}] 尝试解压非流式响应；编码值已省略");
         match decompress_body(&encoding, &raw_bytes) {
             Ok(Some(decompressed)) => {
                 body_bytes = Bytes::from(decompressed);
                 decoded = true;
             }
-            // 不支持的编码：原样透传且保留 content-encoding 头，
-            // 让下游诊断/客户端知道这仍是压缩字节
-            Ok(None) => {}
-            Err(e) => {
-                log::warn!("[{tag}] 解压失败 ({encoding}): {e}，使用原始数据");
+            Ok(None) => {
+                log::warn!("[{tag}] opaque upstream response encoding rejected");
+                return Err(ProxyError::UpstreamResponseRejected);
+            }
+            Err(_) => {
+                log::warn!("[{tag}] upstream response decompression failed; details omitted");
+                return Err(ProxyError::UpstreamResponseRejected);
             }
         }
     }
@@ -148,6 +175,152 @@ pub fn is_sse_response(response: &ProxyResponse) -> bool {
     response.is_sse()
 }
 
+pub(crate) fn reject_credential_bearing_response_body(
+    body: &[u8],
+    guard: &CredentialExposureGuard,
+) -> Result<(), ProxyError> {
+    let semantic_match = serde_json::from_slice::<Value>(body)
+        .ok()
+        .is_some_and(|value| guard.contains_json_value(&value));
+    if guard.contains_bytes(body) || semantic_match {
+        log::warn!("Upstream response omitted because it repeated protected credential material");
+        Err(ProxyError::UpstreamResponseRejected)
+    } else {
+        Ok(())
+    }
+}
+
+const MAX_CREDENTIAL_GUARD_PENDING_BYTES: usize = 8 * 1024 * 1024;
+
+fn credential_in_semantic_sse_block(
+    block: &str,
+    is_first_block: bool,
+    guard: &CredentialExposureGuard,
+    semantic_scanner: &mut crate::credentials::CredentialSemanticStreamScanner,
+) -> bool {
+    // The SSE stream grammar permits one UTF-8 BOM at the beginning of the
+    // stream. Keep it in the quarantined raw bytes, but ignore it for parsing
+    // the first field so a protected prefix cannot hide in that first event.
+    let block = if is_first_block {
+        block.strip_prefix('\u{feff}').unwrap_or(block)
+    } else {
+        block
+    };
+    if guard.contains_bytes(block.as_bytes()) {
+        return true;
+    }
+    let data = block
+        .split(['\r', '\n'])
+        .filter_map(|line| strip_sse_field(line, "data"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if data.trim().is_empty() || data.trim() == "[DONE]" {
+        return false;
+    }
+    serde_json::from_str::<Value>(&data)
+        .ok()
+        .is_some_and(|value| semantic_scanner.push_json_value(&value))
+}
+
+/// Inspect an upstream byte stream before transformers, caches, usage parsers,
+/// or the local client can observe each chunk. The stateful scanner retains
+/// chunk-boundary context for raw and nested URL/form-encoded credentials.
+pub(crate) fn guard_credential_response_stream(
+    stream: impl Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static,
+    guard: CredentialExposureGuard,
+) -> impl Stream<Item = Result<Bytes, std::io::Error>> + Send {
+    async_stream::stream! {
+        let mut scanner = guard.stream_scanner();
+        let mut semantic_scanner = guard.semantic_stream_scanner();
+        let mut semantic_buffer = String::new();
+        let mut semantic_utf8_remainder = Vec::new();
+        let mut is_first_semantic_block = true;
+        let mut pending = BytesMut::new();
+        tokio::pin!(stream);
+        while let Some(chunk) = stream.next().await {
+            match chunk {
+                Ok(bytes) => {
+                    if pending.len().saturating_add(bytes.len())
+                        > MAX_CREDENTIAL_GUARD_PENDING_BYTES
+                    {
+                        pending.clear();
+                        log::warn!("Upstream stream stopped because its credential-inspection window exceeded the limit");
+                        yield Err(std::io::Error::other("upstream response rejected"));
+                        return;
+                    }
+                    pending.extend_from_slice(&bytes);
+                    append_utf8_safe(
+                        &mut semantic_buffer,
+                        &mut semantic_utf8_remainder,
+                        &bytes,
+                    );
+                    let mut semantic_match = false;
+                    while let Some(block) = take_sse_block(&mut semantic_buffer) {
+                        let is_first_block = std::mem::replace(
+                            &mut is_first_semantic_block,
+                            false,
+                        );
+                        if credential_in_semantic_sse_block(
+                            &block,
+                            is_first_block,
+                            &guard,
+                            &mut semantic_scanner,
+                        ) {
+                            semantic_match = true;
+                            break;
+                        }
+                    }
+                    if scanner.push(&bytes) || semantic_match {
+                        pending.clear();
+                        log::warn!("Upstream stream stopped because it repeated protected credential material");
+                        yield Err(std::io::Error::other("upstream response rejected"));
+                        return;
+                    }
+                    // Release only at a complete SSE event boundary where no
+                    // normalized semantic channel ends in a protected-key
+                    // prefix. This preserves streaming while quarantining the
+                    // exact fragments that could combine with a future event.
+                    if semantic_buffer.is_empty()
+                        && semantic_utf8_remainder.is_empty()
+                        && !semantic_scanner.has_partial_match()
+                        && !pending.is_empty()
+                    {
+                        yield Ok(pending.split().freeze());
+                    }
+                }
+                Err(_) => {
+                    pending.clear();
+                    yield Err(std::io::Error::other("upstream stream failed"));
+                    return;
+                }
+            }
+        }
+        if !semantic_utf8_remainder.is_empty() {
+            pending.clear();
+            yield Err(std::io::Error::other("upstream response rejected"));
+            return;
+        }
+        if !semantic_buffer.is_empty()
+            && credential_in_semantic_sse_block(
+                &semantic_buffer,
+                is_first_semantic_block,
+                &guard,
+                &mut semantic_scanner,
+            )
+        {
+            pending.clear();
+            yield Err(std::io::Error::other("upstream response rejected"));
+            return;
+        }
+        // A suffix that is only a key prefix or incomplete escape is safe at
+        // EOF: no future event can complete it. Release the quarantined bytes
+        // after the final full-match checks above.
+        if !pending.is_empty() {
+            yield Ok(pending.freeze());
+        }
+    }
+}
+
 /// 处理流式响应
 pub async fn handle_streaming(
     response: ProxyResponse,
@@ -163,17 +336,19 @@ pub async fn handle_streaming(
         status.as_u16(),
         format_headers(response.headers())
     );
-    // 检查流式响应是否被压缩（SSE 通常不压缩，如果压缩则 SSE 解析会失败）
-    if let Some(encoding) = get_content_encoding(response.headers()) {
-        log::warn!(
-            "[{}] 流式响应含 content-encoding={encoding}，SSE 解析可能失败。\
-             上游在 accept-encoding 透传后压缩了 SSE 流。",
-            ctx.tag
-        );
+    // A compressed stream cannot be inspected before egress. Reject it rather
+    // than letting a protected credential bypass the stateful scanner.
+    if get_content_encoding(response.headers()).is_some() {
+        log::warn!("[{}] compressed upstream stream rejected", ctx.tag);
+        return ProxyError::UpstreamResponseRejected.into_response();
     }
 
     let mut response_headers = response.headers().clone();
     strip_hop_by_hop_response_headers(&mut response_headers);
+    strip_credential_bearing_response_headers(
+        &mut response_headers,
+        ctx.credential_exposure_guard(),
+    );
 
     let mut builder = axum::response::Response::builder().status(status);
 
@@ -183,7 +358,10 @@ pub async fn handle_streaming(
     }
 
     // 创建字节流
-    let stream = response.bytes_stream();
+    let stream = guard_credential_response_stream(
+        response.bytes_stream(),
+        ctx.credential_exposure_guard().clone(),
+    );
 
     // 创建使用量收集器；关闭 usage logging 时不要在流式热路径上解析每个 SSE event。
     let usage_collector = create_usage_collector(ctx, state, status.as_u16(), parser_config);
@@ -228,18 +406,19 @@ pub async fn handle_non_streaming(
         };
     let (mut response_headers, status, body_bytes) =
         read_decoded_body(response, ctx.tag, body_timeout).await?;
+    reject_credential_bearing_response_body(&body_bytes, ctx.credential_exposure_guard())?;
     strip_hop_by_hop_response_headers(&mut response_headers);
-
-    log::debug!(
-        "[{}] 上游响应体内容: {}",
-        ctx.tag,
-        String::from_utf8_lossy(&body_bytes)
+    strip_credential_bearing_response_headers(
+        &mut response_headers,
+        ctx.credential_exposure_guard(),
     );
 
     // 解析并记录使用量。关闭 usage logging 时直接跳过，避免非流式响应整包 JSON parse。
     if usage_logging_enabled(state) {
         if let Ok(json_value) = serde_json::from_slice::<Value>(&body_bytes) {
-            let upstream_correlation_id = upstream_correlation_id_from_body(&json_value);
+            let upstream_correlation_id = ctx
+                .credential_exposure_guard()
+                .redact_option(upstream_correlation_id_from_body(&json_value));
             let upstream_cost = validated_upstream_cost(
                 extract_upstream_cost(&json_value),
                 &ctx.usage_provider_id,
@@ -356,7 +535,9 @@ pub async fn process_response(
     if is_sse_response(&response) {
         Ok(handle_streaming(response, ctx, state, parser_config, connection_guard).await)
     } else {
-        handle_non_streaming(response, ctx, state, parser_config, connection_guard).await
+        handle_non_streaming(response, ctx, state, parser_config, connection_guard)
+            .await
+            .map_err(|error| error.redact_credential(ctx.credential_exposure_guard()))
     }
 }
 
@@ -554,7 +735,7 @@ where
                     bytes,
                 );
                 while let Some(block) = take_sse_block(&mut buffer) {
-                    for line in block.lines() {
+                    for line in block.split(['\r', '\n']) {
                         let Some(data) = strip_sse_field(line, "data") else {
                             continue;
                         };
@@ -576,11 +757,7 @@ where
                             Ok(None) => {}
                             Err(error) => {
                                 if !guard.invalid_explicit_cost {
-                                    report_ingestion_failure(
-                                        &usage_provider_id,
-                                        guard.upstream_correlation_id.as_deref().unwrap_or("unknown"),
-                                        &error,
-                                    );
+                                    report_ingestion_failure(&usage_provider_id, "upstream", &error);
                                 }
                                 guard.invalid_explicit_cost = true;
                             }
@@ -628,8 +805,11 @@ fn create_usage_collector(
     }
 
     let state = state.clone();
-    let provider_id = ctx.provider.id.clone();
+    let agent_module_id = ctx.agent_module_id.clone();
+    let legacy_provider_id = ctx.legacy_log_provider_id.clone();
+    let pricing_override = ctx.pricing_override.clone();
     let usage_provider_id = ctx.usage_provider_id.clone();
+    let frozen_provider_context = ctx.frozen_usage_provider_context.clone();
     let request_model = ctx.request_model.clone();
     // 流式事件缺失模型名时的归因兜底：映射后的出站模型（路由接管真值）优先，
     // 其次才是客户端请求别名
@@ -647,12 +827,14 @@ fn create_usage_collector(
     let model_extractor = parser_config.model_extractor;
     let session_id = ctx.session_id.clone();
     let session_client_provided = ctx.session_client_provided;
+    let credential_guard = ctx.credential_exposure_guard().clone();
 
     Some(SseUsageCollector::new(
         start_time,
         parser_config.stream_event_filter,
         move |events, first_token_ms| {
-            let upstream_correlation_id = upstream_correlation_id_from_events(&events);
+            let upstream_correlation_id =
+                credential_guard.redact_option(upstream_correlation_id_from_events(&events));
             let Some(upstream_cost) = validated_upstream_cost(
                 extract_upstream_cost_from_events(&events),
                 &usage_provider_id,
@@ -665,17 +847,24 @@ fn create_usage_collector(
                 let latency_ms = start_time.elapsed().as_millis() as u64;
 
                 let state = state.clone();
-                let provider_id = provider_id.clone();
+                let agent_module_id = agent_module_id.clone();
+                let legacy_provider_id = legacy_provider_id.clone();
+                let pricing_override = pricing_override.clone();
                 let usage_provider_id = usage_provider_id.clone();
+                let frozen_provider_context = frozen_provider_context.clone();
                 let session_id = session_id.clone();
                 let request_model = request_model.clone();
                 let outbound_model = fallback_model.clone();
+                let credential_guard = credential_guard.clone();
 
                 tokio::spawn(async move {
                     ingest_usage_internal(
                         &state,
+                        &agent_module_id,
                         &usage_provider_id,
-                        &provider_id,
+                        frozen_provider_context,
+                        &legacy_provider_id,
+                        pricing_override,
                         app_type_str,
                         &model,
                         &request_model,
@@ -689,6 +878,7 @@ fn create_usage_collector(
                         Some(session_id),
                         upstream_cost,
                         upstream_correlation_id,
+                        credential_guard,
                     )
                     .await;
                 });
@@ -696,17 +886,24 @@ fn create_usage_collector(
                 let model = model_extractor(&events, &fallback_model);
                 let latency_ms = start_time.elapsed().as_millis() as u64;
                 let state = state.clone();
-                let provider_id = provider_id.clone();
+                let agent_module_id = agent_module_id.clone();
+                let legacy_provider_id = legacy_provider_id.clone();
+                let pricing_override = pricing_override.clone();
                 let usage_provider_id = usage_provider_id.clone();
+                let frozen_provider_context = frozen_provider_context.clone();
                 let session_id = session_id.clone();
                 let request_model = request_model.clone();
                 let outbound_model = fallback_model.clone();
+                let credential_guard = credential_guard.clone();
 
                 tokio::spawn(async move {
                     ingest_usage_internal(
                         &state,
+                        &agent_module_id,
                         &usage_provider_id,
-                        &provider_id,
+                        frozen_provider_context,
+                        &legacy_provider_id,
+                        pricing_override,
                         app_type_str,
                         &model,
                         &request_model,
@@ -720,6 +917,7 @@ fn create_usage_collector(
                         Some(session_id),
                         upstream_cost,
                         upstream_correlation_id,
+                        credential_guard,
                     )
                     .await;
                 });
@@ -757,8 +955,11 @@ fn spawn_log_usage(state: &ProxyState, ctx: &RequestContext, params: UsageLogPar
     }
 
     let state = state.clone();
-    let provider_id = ctx.provider.id.clone();
+    let agent_module_id = ctx.agent_module_id.clone();
+    let legacy_provider_id = ctx.legacy_log_provider_id.clone();
+    let pricing_override = ctx.pricing_override.clone();
     let usage_provider_id = ctx.usage_provider_id.clone();
+    let frozen_provider_context = ctx.frozen_usage_provider_context.clone();
     let app_type_str = ctx.app_type_str.to_string();
     let request_model = ctx.request_model.clone();
     // 「按请求计价」模式的锚点：映射后的出站模型，无映射时等于 request_model
@@ -769,12 +970,16 @@ fn spawn_log_usage(state: &ProxyState, ctx: &RequestContext, params: UsageLogPar
     let latency_ms = ctx.latency_ms();
     let session_id = ctx.session_id.clone();
     let stable_session_id = stable_session_id(&session_id, ctx.session_client_provided);
+    let credential_guard = ctx.credential_exposure_guard().clone();
 
     tokio::spawn(async move {
         ingest_usage_internal(
             &state,
+            &agent_module_id,
             &usage_provider_id,
-            &provider_id,
+            frozen_provider_context,
+            &legacy_provider_id,
+            pricing_override,
             &app_type_str,
             &model,
             &request_model,
@@ -788,6 +993,7 @@ fn spawn_log_usage(state: &ProxyState, ctx: &RequestContext, params: UsageLogPar
             Some(session_id),
             upstream_cost,
             upstream_correlation_id,
+            credential_guard,
         )
         .await;
     });
@@ -810,8 +1016,11 @@ pub(crate) fn usage_logging_enabled(state: &ProxyState) -> bool {
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn ingest_usage_internal(
     state: &ProxyState,
+    agent_module_id: &str,
     usage_provider_id: &str,
+    frozen_provider_context: FrozenUsageProviderContext,
     legacy_provider_id: &str,
+    pricing_override: BindingPricingOverride,
     app_type: &str,
     model: &str,
     request_model: &str,
@@ -825,15 +1034,37 @@ pub(crate) async fn ingest_usage_internal(
     legacy_session_id: Option<String>,
     upstream_cost: Option<UpstreamCost>,
     upstream_correlation_id: Option<String>,
+    credential_guard: CredentialExposureGuard,
 ) {
+    let mut usage = usage;
+    if response_numeric_material_contains_credential(
+        &credential_guard,
+        &usage,
+        upstream_cost.as_ref(),
+    ) {
+        log::warn!("Usage event omitted because response repeated protected credential material");
+        return;
+    }
+    usage.message_id = credential_guard.redact_option(usage.message_id);
+    let model = credential_guard.redact_or(model, "unknown").to_string();
+    let request_model = credential_guard
+        .redact_or(request_model, "unknown")
+        .to_string();
+    let outbound_model = credential_guard
+        .redact_or(outbound_model, "unknown")
+        .to_string();
+    let stable_session_id = credential_guard.redact_option(stable_session_id);
+    let legacy_session_id = credential_guard.redact_option(legacy_session_id);
+    let upstream_correlation_id = credential_guard.redact_option(upstream_correlation_id);
     let logger = UsageLogger::new(&state.db);
     let (multiplier, pricing_model_source) = logger
-        .resolve_pricing_config(legacy_provider_id, app_type)
+        .resolve_binding_pricing_config(&pricing_override, app_type)
         .await;
+    let multiplier = credential_safe_cost_multiplier(&credential_guard, multiplier);
     let pricing_model = if pricing_model_source == PRICING_SOURCE_REQUEST {
-        outbound_model
+        outbound_model.clone()
     } else {
-        model
+        model.clone()
     };
     let event_id = usage.dedup_request_id();
     let upstream_correlation_id = upstream_correlation_id.or_else(|| usage.message_id.clone());
@@ -841,8 +1072,10 @@ pub(crate) async fn ingest_usage_internal(
         event_id: event_id.clone(),
         source: TokenSource::Proxy,
         provider_id: usage_provider_id.to_string(),
+        agent_module_id: Some(agent_module_id.to_string()),
+        frozen_provider_context: Some(frozen_provider_context),
         occurred_at: chrono::Utc::now().timestamp(),
-        model: model.to_string(),
+        model,
         usage,
         upstream_cost,
         request_id: None,
@@ -852,8 +1085,8 @@ pub(crate) async fn ingest_usage_internal(
             request_id: event_id.clone(),
             provider_id: legacy_provider_id.to_string(),
             app_type: app_type.to_string(),
-            request_model: request_model.to_string(),
-            pricing_model: pricing_model.to_string(),
+            request_model,
+            pricing_model,
             latency_ms,
             first_token_ms,
             status_code,
@@ -865,9 +1098,59 @@ pub(crate) async fn ingest_usage_internal(
         }),
     };
 
-    if let Err(error) = logger.ingest(&input) {
+    if let Err(error) = logger.ingest_with_credential_guard(&input, &credential_guard) {
         report_ingestion_failure(usage_provider_id, &event_id, &error);
     }
+}
+
+fn response_numeric_material_contains_credential(
+    credential_guard: &CredentialExposureGuard,
+    usage: &TokenUsage,
+    upstream_cost: Option<&UpstreamCost>,
+) -> bool {
+    [
+        usage.input_tokens,
+        usage.output_tokens,
+        usage.cache_read_tokens,
+        usage.cache_creation_tokens,
+    ]
+    .into_iter()
+    .any(|value| credential_guard.contains(&value.to_string()))
+        || upstream_cost.is_some_and(|cost| {
+            [
+                cost.input_cost.as_ref(),
+                cost.output_cost.as_ref(),
+                cost.cache_read_cost.as_ref(),
+                cost.cache_creation_cost.as_ref(),
+                cost.total_cost.as_ref(),
+            ]
+            .into_iter()
+            .flatten()
+            .any(|value| credential_guard.contains(&value.to_string()))
+        })
+}
+
+fn credential_safe_cost_multiplier(
+    credential_guard: &CredentialExposureGuard,
+    multiplier: rust_decimal::Decimal,
+) -> rust_decimal::Decimal {
+    if !credential_guard.contains(&multiplier.to_string()) {
+        return multiplier;
+    }
+
+    // A low-entropy numeric key can collide with otherwise legitimate pricing
+    // metadata. Pick a deterministic neutral fallback whose serialized value
+    // does not reproduce that key; never persist the colliding value merely
+    // because it parsed as a Decimal.
+    [
+        rust_decimal::Decimal::ONE,
+        rust_decimal::Decimal::ZERO,
+        rust_decimal::Decimal::from(2_u32),
+        rust_decimal::Decimal::NEGATIVE_ONE,
+    ]
+    .into_iter()
+    .find(|candidate| !credential_guard.contains(&candidate.to_string()))
+    .unwrap_or(rust_decimal::Decimal::ZERO)
 }
 
 pub(crate) fn report_ingestion_failure(
@@ -1008,7 +1291,7 @@ pub fn create_logged_passthrough_stream(
                         while let Some(event_text) = take_sse_block(&mut buffer) {
                             if !event_text.trim().is_empty() {
                                 // 提取 data 部分；只有 usage collector 存在时才解析 JSON。
-                                for line in event_text.lines() {
+                                for line in event_text.split(['\r', '\n']) {
                                     if let Some(data) = strip_sse_field(line, "data") {
                                         if data.trim() != "[DONE]" {
                                             let collected = match &collector {
@@ -1024,9 +1307,9 @@ pub fn create_logged_passthrough_stream(
                                                 _ => false,
                                             };
                                             if collected {
-                                                log::debug!("[{tag}] <<< SSE 事件: {data}");
+                                                log::debug!("[{tag}] <<< SSE usage 事件已收集");
                                             } else {
-                                                log::debug!("[{tag}] <<< SSE 数据: {data}");
+                                                log::debug!("[{tag}] <<< SSE 数据事件");
                                             }
                                         } else {
                                             log::debug!("[{tag}] <<< SSE: [DONE]");
@@ -1039,9 +1322,9 @@ pub fn create_logged_passthrough_stream(
 
                     yield Ok(bytes);
                 }
-                Some(Err(e)) => {
-                    log::error!("[{tag}] 流错误: {e}");
-                    yield Err(std::io::Error::other(e.to_string()));
+                Some(Err(_)) => {
+                    log::error!("[{tag}] 流错误；细节已省略");
+                    yield Err(std::io::Error::other("upstream stream failed"));
                     break;
                 }
                 None => {
@@ -1061,19 +1344,16 @@ pub fn create_logged_passthrough_stream(
 }
 
 fn format_headers(headers: &HeaderMap) -> String {
-    headers
-        .iter()
-        .map(|(key, value)| {
-            let value_str = value.to_str().unwrap_or("<non-utf8>");
-            format!("{key}={value_str}")
-        })
-        .collect::<Vec<_>>()
-        .join(", ")
+    format!("<{} headers>", headers.len())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::credentials::{
+        unavailable_credential_store, BindingCredentialService, CredentialStore,
+        CredentialStoreError, SecretString,
+    };
     use crate::database::Database;
     use crate::error::AppError;
     use crate::provider::Provider;
@@ -1084,13 +1364,462 @@ mod tests {
         codex_chat_history::CodexChatHistoryStore, gemini_shadow::GeminiShadowStore,
     };
     use crate::proxy::types::{ProxyConfig, ProxyStatus};
-    use crate::usage::domain::{BillingKind, TokenSource, UsageProviderInput};
+    use crate::usage::domain::{
+        AgentProviderBindingInput, BillingKind, TokenSource, UsageProviderInput,
+    };
     use axum::http::StatusCode;
     use rust_decimal::Decimal;
+    use serde_json::json;
     use std::collections::HashMap;
     use std::str::FromStr;
     use std::sync::Arc;
     use tokio::sync::RwLock;
+
+    fn frozen_provider_context(product_group_id: &str) -> FrozenUsageProviderContext {
+        FrozenUsageProviderContext {
+            product_group_id: product_group_id.to_string(),
+            route_app_type: product_group_id.to_string(),
+        }
+    }
+
+    #[test]
+    fn credential_bearing_success_body_is_rejected_before_parsing_or_egress() {
+        const SECRET: &str = "protected-response-echo-key";
+        let guard = CredentialExposureGuard::from_secret(SECRET.as_bytes());
+        let body = format!(r#"{{"id":"msg-{SECRET}","model":"safe"}}"#);
+
+        assert!(matches!(
+            reject_credential_bearing_response_body(body.as_bytes(), &guard),
+            Err(ProxyError::UpstreamResponseRejected)
+        ));
+    }
+
+    #[tokio::test]
+    async fn credential_bearing_stream_stops_before_chunk_completing_the_key() {
+        use futures::StreamExt;
+
+        const SECRET: &str = "protected-stream-echo-key";
+        let stream = futures::stream::iter(vec![
+            Ok::<_, std::io::Error>(Bytes::from_static(b"data: prefix-protected-stream")),
+            Ok(Bytes::from_static(b"-echo-key-suffix\n\n")),
+        ]);
+        let output = guard_credential_response_stream(
+            stream,
+            CredentialExposureGuard::from_secret(SECRET.as_bytes()),
+        )
+        .collect::<Vec<_>>()
+        .await;
+
+        assert_eq!(output.len(), 1);
+        assert!(output[0].is_err());
+        let visible = output
+            .into_iter()
+            .filter_map(Result::ok)
+            .flat_map(|bytes| bytes.to_vec())
+            .collect::<Vec<_>>();
+        assert!(visible.is_empty());
+    }
+
+    #[tokio::test]
+    async fn semantic_sse_guard_rejects_native_claude_text_deltas() {
+        use futures::StreamExt;
+
+        const SECRET: &str = "protected-native-claude-key";
+        let stream = futures::stream::iter(vec![
+            Ok::<_, std::io::Error>(Bytes::from_static(
+                b"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"protected-native-\"}}\n\n",
+            )),
+            Ok(Bytes::from_static(
+                b"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"claude-key\"}}\n\n",
+            )),
+        ]);
+        let output = guard_credential_response_stream(
+            stream,
+            CredentialExposureGuard::from_secret(SECRET.as_bytes()),
+        )
+        .collect::<Vec<_>>()
+        .await;
+        let visible = output
+            .iter()
+            .filter_map(|item| item.as_ref().ok())
+            .flat_map(|bytes| bytes.iter().copied())
+            .collect::<Vec<_>>();
+
+        assert!(output.iter().any(Result::is_err));
+        assert!(visible.is_empty());
+    }
+
+    #[tokio::test]
+    async fn semantic_sse_guard_rejects_native_codex_output_deltas() {
+        use futures::StreamExt;
+
+        const SECRET: &str = "protected-native-codex-key";
+        let stream = futures::stream::iter(vec![
+            Ok::<_, std::io::Error>(Bytes::from_static(
+                b"event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"protected-native-\"}\n\n",
+            )),
+            Ok(Bytes::from_static(
+                b"event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"codex-key\"}\n\n",
+            )),
+        ]);
+        let output = guard_credential_response_stream(
+            stream,
+            CredentialExposureGuard::from_secret(SECRET.as_bytes()),
+        )
+        .collect::<Vec<_>>()
+        .await;
+        let visible = output
+            .iter()
+            .filter_map(|item| item.as_ref().ok())
+            .flat_map(|bytes| bytes.iter().copied())
+            .collect::<Vec<_>>();
+
+        assert!(output.iter().any(Result::is_err));
+        assert!(visible.is_empty());
+    }
+
+    #[tokio::test]
+    async fn semantic_sse_guard_supports_cr_only_event_boundaries() {
+        use futures::StreamExt;
+
+        const SECRET: &str = "protected-cr-boundary-key";
+        let stream = futures::stream::iter(vec![Ok::<_, std::io::Error>(Bytes::from_static(
+            b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"protected-cr-\"}\r\rdata: {\"type\":\"response.output_text.delta\",\"delta\":\"boundary-key\"}\r\r",
+        ))]);
+        let output = guard_credential_response_stream(
+            stream,
+            CredentialExposureGuard::from_secret(SECRET.as_bytes()),
+        )
+        .collect::<Vec<_>>()
+        .await;
+        let visible = output
+            .iter()
+            .filter_map(|item| item.as_ref().ok())
+            .flat_map(|bytes| bytes.iter().copied())
+            .collect::<Vec<_>>();
+
+        assert!(output.iter().any(Result::is_err));
+        assert!(visible.is_empty());
+    }
+
+    #[tokio::test]
+    async fn semantic_sse_guard_isolates_interleaved_content_indices() {
+        use futures::StreamExt;
+
+        const SECRET: &str = "protected-interleave-key";
+        let stream = futures::stream::iter(vec![
+            Ok::<_, std::io::Error>(Bytes::from_static(
+                b"data: {\"index\":0,\"delta\":{\"text\":\"protected-interleave-\"}}\n\n",
+            )),
+            Ok(Bytes::from_static(
+                b"data: {\"index\":1,\"delta\":{\"text\":\"safe\"}}\n\n",
+            )),
+            Ok(Bytes::from_static(
+                b"data: {\"index\":0,\"delta\":{\"text\":\"key\"}}\n\n",
+            )),
+        ]);
+        let output = guard_credential_response_stream(
+            stream,
+            CredentialExposureGuard::from_secret(SECRET.as_bytes()),
+        )
+        .collect::<Vec<_>>()
+        .await;
+        let visible = output
+            .iter()
+            .filter_map(|item| item.as_ref().ok())
+            .flat_map(|bytes| bytes.iter().copied())
+            .collect::<Vec<_>>();
+
+        assert!(output.iter().any(Result::is_err));
+        assert!(visible.is_empty());
+    }
+
+    #[tokio::test]
+    async fn semantic_sse_guard_tracks_reasoning_despite_sibling_delta_scalars() {
+        use futures::StreamExt;
+
+        const SECRET: &str = "protected-reasoning-key";
+        let stream = futures::stream::iter(vec![
+            Ok::<_, std::io::Error>(Bytes::from_static(
+                b"data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning\":\"protected-reasoning-\"}}]}\n\n",
+            )),
+            Ok(Bytes::from_static(
+                b"data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning\":\"key\"}}]}\n\n",
+            )),
+        ]);
+        let output = guard_credential_response_stream(
+            stream,
+            CredentialExposureGuard::from_secret(SECRET.as_bytes()),
+        )
+        .collect::<Vec<_>>()
+        .await;
+        let visible = output
+            .iter()
+            .filter_map(|item| item.as_ref().ok())
+            .flat_map(|bytes| bytes.iter().copied())
+            .collect::<Vec<_>>();
+
+        assert!(output.iter().any(Result::is_err));
+        assert!(visible.is_empty());
+    }
+
+    #[tokio::test]
+    async fn semantic_sse_guard_retains_split_encoding_introducers() {
+        use futures::StreamExt;
+
+        const SECRET: &str = "secret-encoded-boundary";
+        let encoded = SECRET
+            .bytes()
+            .map(|byte| format!("%{byte:02X}"))
+            .collect::<String>();
+        let percent_stream = futures::stream::iter(vec![
+            Ok::<_, std::io::Error>(Bytes::from_static(b"data: {\"delta\":\"%\"}\n\n")),
+            Ok(Bytes::from(format!(
+                "data: {{\"delta\":\"{}\"}}\n\n",
+                &encoded[1..]
+            ))),
+        ]);
+        let percent_output = guard_credential_response_stream(
+            percent_stream,
+            CredentialExposureGuard::from_secret(SECRET.as_bytes()),
+        )
+        .collect::<Vec<_>>()
+        .await;
+        assert!(percent_output.iter().any(Result::is_err));
+        assert!(percent_output.iter().all(|item| item.is_err()));
+
+        let escaped = SECRET
+            .bytes()
+            .map(|byte| format!(r"\u{byte:04x}"))
+            .collect::<String>();
+        let json_stream = futures::stream::iter(vec![
+            Ok::<_, std::io::Error>(Bytes::from_static(b"data: {\"delta\":\"\\\\\"}\n\n")),
+            Ok(Bytes::from(format!(
+                "data: {{\"delta\":{}}}\n\n",
+                serde_json::to_string(&escaped[1..]).unwrap()
+            ))),
+        ]);
+        let json_output = guard_credential_response_stream(
+            json_stream,
+            CredentialExposureGuard::from_secret(SECRET.as_bytes()),
+        )
+        .collect::<Vec<_>>()
+        .await;
+        assert!(json_output.iter().any(Result::is_err));
+        assert!(json_output.iter().all(|item| item.is_err()));
+    }
+
+    #[tokio::test]
+    async fn safe_final_single_byte_prefix_is_released_at_eof() {
+        use futures::StreamExt;
+
+        let event = Bytes::from_static(b"data: {\"delta\":\"s\"}\n\n");
+        let output = guard_credential_response_stream(
+            futures::stream::iter(vec![Ok::<_, std::io::Error>(event.clone())]),
+            CredentialExposureGuard::from_secret(b"sk-safe-final-prefix-key"),
+        )
+        .collect::<Vec<_>>()
+        .await;
+
+        assert_eq!(output.len(), 1);
+        assert_eq!(output[0].as_ref().unwrap(), &event);
+    }
+
+    #[tokio::test]
+    async fn large_safe_semantic_value_ending_in_a_prefix_is_released_at_eof() {
+        use futures::StreamExt;
+
+        let event = Bytes::from(format!(
+            "data: {{\"delta\":{}}}\n\n",
+            serde_json::to_string(&format!("{}s", "x".repeat(300 * 1024))).unwrap()
+        ));
+        let output = guard_credential_response_stream(
+            futures::stream::iter(vec![Ok::<_, std::io::Error>(event.clone())]),
+            CredentialExposureGuard::from_secret(b"sk-safe-large-final-prefix-key"),
+        )
+        .collect::<Vec<_>>()
+        .await;
+
+        assert_eq!(output.len(), 1);
+        assert_eq!(output[0].as_ref().unwrap(), &event);
+    }
+
+    #[tokio::test]
+    async fn semantic_sse_guard_scans_the_bom_prefixed_first_event() {
+        use futures::StreamExt;
+
+        const SECRET: &str = "protected-bom-key";
+        let stream = futures::stream::iter(vec![
+            Ok::<_, std::io::Error>(Bytes::from_static(
+                b"\xEF\xBB\xBFdata: {\"index\":0,\"delta\":{\"text\":\"protected-bom-\"}}\n\n",
+            )),
+            Ok(Bytes::from_static(
+                b"data: {\"index\":0,\"delta\":{\"text\":\"key\"}}\n\n",
+            )),
+        ]);
+        let output = guard_credential_response_stream(
+            stream,
+            CredentialExposureGuard::from_secret(SECRET.as_bytes()),
+        )
+        .collect::<Vec<_>>()
+        .await;
+        let visible = output
+            .iter()
+            .filter_map(|item| item.as_ref().ok())
+            .flat_map(|bytes| bytes.iter().copied())
+            .collect::<Vec<_>>();
+
+        assert!(output.iter().any(Result::is_err));
+        assert!(visible.is_empty());
+    }
+
+    #[tokio::test]
+    async fn semantic_sse_guard_never_releases_a_prefix_across_large_safe_padding() {
+        use futures::StreamExt;
+
+        const SECRET: &str = "protected-padded-semantic-key";
+        let prefix = Bytes::from_static(
+            b"event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"protected-padded-\"}\n\n",
+        );
+        let padding = Bytes::from(format!(
+            "event: ping\ndata: {{\"type\":\"ping\",\"padding\":\"{}\"}}\n\n",
+            "x".repeat(16 * 1024)
+        ));
+        let suffix = Bytes::from_static(
+            b"event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"semantic-key\"}\n\n",
+        );
+        let output = guard_credential_response_stream(
+            futures::stream::iter(vec![
+                Ok::<_, std::io::Error>(prefix),
+                Ok(padding),
+                Ok(suffix),
+            ]),
+            CredentialExposureGuard::from_secret(SECRET.as_bytes()),
+        )
+        .collect::<Vec<_>>()
+        .await;
+        let visible = output
+            .iter()
+            .filter_map(|item| item.as_ref().ok())
+            .flat_map(|bytes| bytes.iter().copied())
+            .collect::<Vec<_>>();
+
+        assert!(output.iter().any(Result::is_err));
+        assert!(visible.is_empty());
+    }
+
+    #[tokio::test]
+    async fn deeply_percent_encoded_sse_is_rejected_before_any_prefix_is_released() {
+        use futures::StreamExt;
+
+        const SECRET: &str = "protected-five-layer-key";
+        let mut encoded = SECRET.as_bytes().to_vec();
+        for _ in 0..5 {
+            encoded = encoded
+                .iter()
+                .flat_map(|byte| format!("%{byte:02X}").into_bytes())
+                .collect();
+        }
+        let mut first = b"data: {\"delta\":\"".to_vec();
+        first.extend_from_slice(&encoded[..encoded.len() - 1]);
+        let mut second = vec![*encoded.last().unwrap()];
+        second.extend_from_slice(b"\"}\n\n");
+        let output = guard_credential_response_stream(
+            futures::stream::iter(vec![
+                Ok::<_, std::io::Error>(Bytes::from(first)),
+                Ok(Bytes::from(second)),
+            ]),
+            CredentialExposureGuard::from_secret(SECRET.as_bytes()),
+        )
+        .collect::<Vec<_>>()
+        .await;
+        let visible = output
+            .iter()
+            .filter_map(|item| item.as_ref().ok())
+            .flat_map(|bytes| bytes.iter().copied())
+            .collect::<Vec<_>>();
+
+        assert!(output.iter().any(Result::is_err));
+        assert!(visible.is_empty());
+    }
+
+    #[tokio::test]
+    async fn alternating_encoded_sse_is_rejected_before_egress() {
+        use futures::StreamExt;
+
+        const SECRET: &str = "protected-alternating-key";
+        let inner_percent = SECRET
+            .bytes()
+            .flat_map(|byte| format!("%{byte:02X}").into_bytes())
+            .collect::<Vec<_>>();
+        let json_escaped = inner_percent
+            .iter()
+            .flat_map(|byte| format!(r"\u{byte:04x}").into_bytes())
+            .collect::<Vec<_>>();
+        let outer_percent = json_escaped
+            .iter()
+            .flat_map(|byte| format!("%{byte:02X}").into_bytes())
+            .collect::<Vec<_>>();
+        let mut event = b"data: {\"delta\":\"".to_vec();
+        event.extend_from_slice(&outer_percent);
+        event.extend_from_slice(b"\"}\n\n");
+        let split = event.len() / 2;
+        let output = guard_credential_response_stream(
+            futures::stream::iter(vec![
+                Ok::<_, std::io::Error>(Bytes::copy_from_slice(&event[..split])),
+                Ok(Bytes::copy_from_slice(&event[split..])),
+            ]),
+            CredentialExposureGuard::from_secret(SECRET.as_bytes()),
+        )
+        .collect::<Vec<_>>()
+        .await;
+        let visible = output
+            .iter()
+            .filter_map(|item| item.as_ref().ok())
+            .flat_map(|bytes| bytes.iter().copied())
+            .collect::<Vec<_>>();
+
+        assert!(output.iter().any(Result::is_err));
+        assert!(visible.is_empty());
+    }
+
+    #[tokio::test]
+    async fn unterminated_sse_event_is_bounded_and_fails_closed() {
+        use futures::StreamExt;
+
+        let mut oversized = b"data: {\"delta\":\"".to_vec();
+        oversized.resize(MAX_CREDENTIAL_GUARD_PENDING_BYTES + 1, b'x');
+        let output = guard_credential_response_stream(
+            futures::stream::iter(vec![Ok::<_, std::io::Error>(Bytes::from(oversized))]),
+            CredentialExposureGuard::from_secret(b"protected-bounded-event-key"),
+        )
+        .collect::<Vec<_>>()
+        .await;
+
+        assert_eq!(output.len(), 1);
+        assert!(output[0].is_err());
+    }
+
+    #[test]
+    fn semantic_non_stream_guard_rejects_split_content_blocks() {
+        const SECRET: &str = "protected-content-block-key";
+        let body = serde_json::to_vec(&json!({
+            "id": "safe-response",
+            "content": [
+                { "type": "text", "text": "protected-content-" },
+                { "type": "text", "text": "block-key" }
+            ]
+        }))
+        .unwrap();
+
+        assert!(matches!(
+            reject_credential_bearing_response_body(
+                &body,
+                &CredentialExposureGuard::from_secret(SECRET.as_bytes()),
+            ),
+            Err(ProxyError::UpstreamResponseRejected)
+        ));
+    }
 
     #[tokio::test]
     async fn ingestion_failure_does_not_change_successful_upstream_response() -> Result<(), AppError>
@@ -1137,17 +1866,45 @@ mod tests {
             )?;
         }
         db.set_route_binding("claude", "global-provider")?;
-        let state = build_state(db.clone());
+        let binding = db.save_agent_provider_binding(&AgentProviderBindingInput {
+            id: None,
+            agent_module_id: "claude-code".to_string(),
+            provider_id: "global-provider".to_string(),
+            enabled: false,
+        })?;
+        let expected_binding_id = binding.id.clone();
+        let credential_service = Arc::new(BindingCredentialService::new(
+            db.clone(),
+            Arc::new(TestCredentialStore::default()),
+        ));
+        let binding = credential_service
+            .set_binding_api_key(
+                &binding.id,
+                binding.credential_version,
+                SecretString::new("local-binding-key".to_string()),
+            )
+            .await?;
+        db.save_agent_provider_binding(&AgentProviderBindingInput {
+            id: Some(binding.id),
+            agent_module_id: binding.agent_module_id,
+            provider_id: binding.provider_id,
+            enabled: true,
+        })?;
+        let state = build_state_with_credential_service(db.clone(), credential_service);
         let ctx = RequestContext::new(
             &state,
             &serde_json::json!({"model": "claude-sonnet"}),
             &HeaderMap::new(),
+            SecretString::new("local-binding-key".to_string()),
             crate::app_config::AppType::Claude,
             "Claude",
             "claude",
         )
         .await
         .map_err(|error| AppError::Message(error.to_string()))?;
+        assert_eq!(ctx.binding_id, expected_binding_id);
+        assert_eq!(ctx.agent_module_id, "claude-code");
+        assert_eq!(ctx.usage_provider_id, "global-provider");
         {
             let conn = db.conn.lock().unwrap();
             conn.execute_batch(
@@ -1302,6 +2059,59 @@ mod tests {
     }
 
     #[test]
+    fn formatted_response_headers_log_names_only() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            axum::http::HeaderValue::from_static("Bearer response-secret"),
+        );
+        headers.insert(
+            "x-api-key",
+            axum::http::HeaderValue::from_static("response-secret"),
+        );
+        headers.insert(
+            axum::http::header::CONTENT_TYPE,
+            axum::http::HeaderValue::from_static("application/json"),
+        );
+        headers.insert(
+            "x-debug",
+            axum::http::HeaderValue::from_static("upstream-reflected-secret"),
+        );
+
+        let formatted = format_headers(&headers);
+        assert!(!formatted.contains("response-secret"));
+        assert!(!formatted.contains("upstream-reflected-secret"));
+        assert!(!formatted.contains("application/json"));
+        assert!(!formatted.contains("authorization"));
+        assert!(!formatted.contains("x-api-key"));
+        assert!(!formatted.contains("content-type"));
+        assert!(!formatted.contains("x-debug"));
+        assert_eq!(formatted, "<4 headers>");
+    }
+
+    #[test]
+    fn protected_binding_key_is_removed_from_upstream_response_headers() {
+        let guard = CredentialExposureGuard::from_secret(b"response-binding/key");
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-upstream-debug",
+            axum::http::HeaderValue::from_static("response-binding%2Fkey"),
+        );
+        headers.insert(
+            "x-safe",
+            axum::http::HeaderValue::from_static("safe-response-value"),
+        );
+
+        strip_credential_bearing_response_headers(&mut headers, &guard);
+
+        assert!(!headers.contains_key("x-upstream-debug"));
+        assert_eq!(
+            headers.get("x-safe"),
+            Some(&axum::http::HeaderValue::from_static("safe-response-value"))
+        );
+    }
+
+    #[test]
     fn test_strip_hop_by_hop_response_headers_removes_standard_headers() {
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -1385,7 +2195,50 @@ mod tests {
         );
     }
 
+    #[derive(Default)]
+    struct TestCredentialStore {
+        items: StdMutex<HashMap<String, Vec<u8>>>,
+    }
+
+    impl CredentialStore for TestCredentialStore {
+        fn put(&self, slot: &str, secret: &[u8]) -> Result<(), CredentialStoreError> {
+            self.items
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .insert(slot.to_string(), secret.to_vec());
+            Ok(())
+        }
+
+        fn get(&self, slot: &str) -> Result<Option<Vec<u8>>, CredentialStoreError> {
+            Ok(self
+                .items
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .get(slot)
+                .cloned())
+        }
+
+        fn delete(&self, slot: &str) -> Result<(), CredentialStoreError> {
+            self.items
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .remove(slot);
+            Ok(())
+        }
+    }
+
     fn build_state(db: Arc<Database>) -> ProxyState {
+        let credential_service = Arc::new(BindingCredentialService::new(
+            db.clone(),
+            unavailable_credential_store(),
+        ));
+        build_state_with_credential_service(db, credential_service)
+    }
+
+    fn build_state_with_credential_service(
+        db: Arc<Database>,
+        binding_credential_service: Arc<BindingCredentialService>,
+    ) -> ProxyState {
         ProxyState {
             db: db.clone(),
             config: Arc::new(RwLock::new(ProxyConfig::default())),
@@ -1393,6 +2246,7 @@ mod tests {
             start_time: Arc::new(RwLock::new(None)),
             current_providers: Arc::new(RwLock::new(HashMap::new())),
             provider_router: Arc::new(ProviderRouter::new(db.clone())),
+            binding_credential_service,
             gemini_shadow: Arc::new(GeminiShadowStore::default()),
             codex_chat_history: Arc::new(CodexChatHistoryStore::default()),
             app_handle: None,
@@ -1414,6 +2268,392 @@ mod tests {
             rusqlite::params!["req-model", "Req Model", "2.0", "0"],
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn proxy_ingestion_persists_frozen_binding_and_provider_context() -> Result<(), AppError>
+    {
+        let db = Arc::new(Database::memory()?);
+        db.save_usage_provider(&UsageProviderInput {
+            id: "global-provider".to_string(),
+            name: "Global Provider".to_string(),
+            billing_kind: BillingKind::Metered,
+            product_group_id: "codex".to_string(),
+            token_sources: vec![TokenSource::Proxy],
+            session_source_bindings: None,
+            quota_source: None,
+            quota_interval_seconds: None,
+            route_app_type: Some("codex".to_string()),
+            route_config: None,
+            quota_config: None,
+            enabled: true,
+        })?;
+        crate::database::lock_conn!(db.conn).execute(
+            "UPDATE usage_providers
+             SET product_group_id = 'mutated-group', route_app_type = 'claude'
+             WHERE id = 'global-provider'",
+            [],
+        )?;
+        let state = build_state(db.clone());
+        let usage = TokenUsage {
+            input_tokens: 3,
+            output_tokens: 5,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+            model: None,
+            message_id: Some("response-owned".to_string()),
+        };
+
+        ingest_usage_internal(
+            &state,
+            "codex",
+            "global-provider",
+            frozen_provider_context("codex"),
+            "legacy-provider",
+            BindingPricingOverride::default(),
+            "codex",
+            "gpt-5",
+            "gpt-5",
+            "gpt-5",
+            usage,
+            10,
+            None,
+            false,
+            200,
+            None,
+            None,
+            None,
+            Some("response-owned".to_string()),
+            CredentialExposureGuard::from_secret(b"nonmatching-binding-key"),
+        )
+        .await;
+
+        let conn = crate::database::lock_conn!(db.conn);
+        let (agent_module_id, provider_id, product_group_id): (Option<String>, String, String) =
+            conn.query_row(
+                "SELECT agent_module_id, provider_id, product_group_id
+                 FROM usage_events WHERE event_id = 'session:response-owned'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .map_err(|error| AppError::Database(error.to_string()))?;
+        assert_eq!(agent_module_id.as_deref(), Some("codex"));
+        assert_eq!(provider_id, "global-provider");
+        assert_eq!(product_group_id, "codex");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn protected_binding_key_is_removed_from_success_persistence() -> Result<(), AppError> {
+        const PROTECTED_KEY: &str = "protected-binding-key-sentinel";
+
+        let db = Arc::new(Database::memory()?);
+        db.save_usage_provider(&UsageProviderInput {
+            id: "global-provider".to_string(),
+            name: "Global Provider".to_string(),
+            billing_kind: BillingKind::Metered,
+            product_group_id: "codex".to_string(),
+            token_sources: vec![TokenSource::Proxy],
+            session_source_bindings: None,
+            quota_source: None,
+            quota_interval_seconds: None,
+            route_app_type: Some("codex".to_string()),
+            route_config: None,
+            quota_config: None,
+            enabled: true,
+        })?;
+        let state = build_state(db.clone());
+        let echoed = format!("upstream-echo-{PROTECTED_KEY}-tail");
+        let usage = TokenUsage {
+            input_tokens: 3,
+            output_tokens: 5,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+            model: Some(echoed.clone()),
+            message_id: Some(echoed.clone()),
+        };
+
+        ingest_usage_internal(
+            &state,
+            "codex",
+            "global-provider",
+            frozen_provider_context("codex"),
+            "legacy-provider",
+            BindingPricingOverride::default(),
+            "codex",
+            &echoed,
+            &echoed,
+            &echoed,
+            usage,
+            10,
+            None,
+            false,
+            200,
+            Some(echoed.clone()),
+            Some(echoed.clone()),
+            None,
+            Some(echoed.clone()),
+            CredentialExposureGuard::from_secret(PROTECTED_KEY.as_bytes()),
+        )
+        .await;
+
+        let conn = crate::database::lock_conn!(db.conn);
+        let canonical: (String, String, String, String, String) = conn
+            .query_row(
+                "SELECT event_id, model, COALESCE(session_id, ''),
+                        COALESCE(upstream_correlation_id, ''),
+                        COALESCE(legacy_request_id, '')
+                 FROM usage_events",
+                [],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .map_err(|error| AppError::Database(error.to_string()))?;
+        let legacy: (String, String, String, String, String) = conn
+            .query_row(
+                "SELECT request_id, model, COALESCE(request_model, ''),
+                        COALESCE(pricing_model, ''), COALESCE(session_id, '')
+                 FROM proxy_request_logs",
+                [],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .map_err(|error| AppError::Database(error.to_string()))?;
+
+        let persisted = format!("{canonical:?}{legacy:?}");
+        assert!(!persisted.contains(PROTECTED_KEY));
+        assert_eq!(canonical.1, "unknown");
+        assert_eq!(canonical.2, "");
+        assert_eq!(canonical.3, "");
+        assert_eq!(legacy.1, "unknown");
+        assert_eq!(legacy.2, "unknown");
+        assert_eq!(legacy.3, "unknown");
+        assert_eq!(legacy.4, "");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn numeric_binding_key_cannot_reenter_logs_as_legacy_cost_multiplier(
+    ) -> Result<(), AppError> {
+        const PROTECTED_KEY: &str = "927451.3819";
+
+        let db = Arc::new(Database::memory()?);
+        db.save_usage_provider(&UsageProviderInput {
+            id: "global-provider".to_string(),
+            name: "Global Provider".to_string(),
+            billing_kind: BillingKind::Metered,
+            product_group_id: "codex".to_string(),
+            token_sources: vec![TokenSource::Proxy],
+            session_source_bindings: None,
+            quota_source: None,
+            quota_interval_seconds: None,
+            route_app_type: Some("codex".to_string()),
+            route_config: None,
+            quota_config: None,
+            enabled: true,
+        })?;
+        insert_provider(
+            &db,
+            "legacy-provider",
+            "codex",
+            ProviderMeta {
+                cost_multiplier: Some(PROTECTED_KEY.to_string()),
+                ..ProviderMeta::default()
+            },
+        )?;
+        let occurrences_before = db.export_sql_string()?.matches(PROTECTED_KEY).count();
+        let state = build_state(db.clone());
+
+        ingest_usage_internal(
+            &state,
+            "codex",
+            "global-provider",
+            frozen_provider_context("codex"),
+            "legacy-provider",
+            BindingPricingOverride::default(),
+            "codex",
+            "gpt-5",
+            "gpt-5",
+            "gpt-5",
+            TokenUsage {
+                input_tokens: 3,
+                output_tokens: 5,
+                cache_read_tokens: 0,
+                cache_creation_tokens: 0,
+                model: None,
+                message_id: Some("numeric-multiplier-event".to_string()),
+            },
+            10,
+            None,
+            false,
+            200,
+            None,
+            None,
+            None,
+            None,
+            CredentialExposureGuard::from_secret(PROTECTED_KEY.as_bytes()),
+        )
+        .await;
+
+        let cost_multiplier: String = crate::database::lock_conn!(db.conn)
+            .query_row(
+                "SELECT cost_multiplier FROM proxy_request_logs",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| AppError::Database(error.to_string()))?;
+        assert_ne!(cost_multiplier, PROTECTED_KEY);
+        assert_eq!(
+            db.export_sql_string()?.matches(PROTECTED_KEY).count(),
+            occurrences_before,
+            "success ingestion duplicated the protected key into request logs"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn numeric_binding_key_cannot_reenter_usage_or_upstream_cost_columns(
+    ) -> Result<(), AppError> {
+        let db = Arc::new(Database::memory()?);
+        db.save_usage_provider(&UsageProviderInput {
+            id: "global-provider".to_string(),
+            name: "Global Provider".to_string(),
+            billing_kind: BillingKind::Metered,
+            product_group_id: "codex".to_string(),
+            token_sources: vec![TokenSource::Proxy],
+            session_source_bindings: None,
+            quota_source: None,
+            quota_interval_seconds: None,
+            route_app_type: Some("codex".to_string()),
+            route_config: None,
+            quota_config: None,
+            enabled: true,
+        })?;
+        let state = build_state(db.clone());
+
+        ingest_usage_internal(
+            &state,
+            "codex",
+            "global-provider",
+            frozen_provider_context("codex"),
+            "legacy-provider",
+            BindingPricingOverride::default(),
+            "codex",
+            "gpt-5",
+            "gpt-5",
+            "gpt-5",
+            TokenUsage {
+                input_tokens: 927_451,
+                output_tokens: 5,
+                cache_read_tokens: 0,
+                cache_creation_tokens: 0,
+                model: None,
+                message_id: Some("numeric-token-event".to_string()),
+            },
+            10,
+            None,
+            false,
+            200,
+            None,
+            None,
+            None,
+            None,
+            CredentialExposureGuard::from_secret(b"927451"),
+        )
+        .await;
+
+        ingest_usage_internal(
+            &state,
+            "codex",
+            "global-provider",
+            frozen_provider_context("codex"),
+            "legacy-provider",
+            BindingPricingOverride::default(),
+            "codex",
+            "gpt-5",
+            "gpt-5",
+            "gpt-5",
+            TokenUsage {
+                input_tokens: 3,
+                output_tokens: 5,
+                cache_read_tokens: 0,
+                cache_creation_tokens: 0,
+                model: None,
+                message_id: Some("numeric-cost-event".to_string()),
+            },
+            10,
+            None,
+            false,
+            200,
+            None,
+            None,
+            Some(UpstreamCost {
+                input_cost: None,
+                output_cost: None,
+                cache_read_cost: None,
+                cache_creation_cost: None,
+                total_cost: Some(Decimal::from_str("927451.3819").unwrap()),
+            }),
+            None,
+            CredentialExposureGuard::from_secret(b"927451.3819"),
+        )
+        .await;
+
+        ingest_usage_internal(
+            &state,
+            "codex",
+            "global-provider",
+            frozen_provider_context("codex"),
+            "legacy-provider",
+            BindingPricingOverride::default(),
+            "codex",
+            "gpt-5",
+            "gpt-5",
+            "gpt-5",
+            TokenUsage {
+                input_tokens: 3,
+                output_tokens: 5,
+                cache_read_tokens: 0,
+                cache_creation_tokens: 0,
+                model: None,
+                message_id: Some("numeric-status-event".to_string()),
+            },
+            10,
+            None,
+            false,
+            200,
+            None,
+            None,
+            None,
+            None,
+            CredentialExposureGuard::from_secret(b"200"),
+        )
+        .await;
+
+        let conn = crate::database::lock_conn!(db.conn);
+        let canonical_count: i64 =
+            conn.query_row("SELECT COUNT(*) FROM usage_events", [], |row| row.get(0))?;
+        let legacy_count: i64 =
+            conn.query_row("SELECT COUNT(*) FROM proxy_request_logs", [], |row| {
+                row.get(0)
+            })?;
+        assert_eq!(canonical_count, 0);
+        assert_eq!(legacy_count, 0);
         Ok(())
     }
 

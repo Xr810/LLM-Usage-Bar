@@ -1,3 +1,4 @@
+use crate::credentials::CredentialExposureGuard;
 use crate::database::{lock_conn, Database, UsageSyncCursor};
 use crate::error::AppError;
 use crate::proxy::usage::calculator::{CostBreakdown, CostCalculator, ModelPricing};
@@ -36,6 +37,13 @@ pub struct UsageIngestionInput {
     /// Global `usage_providers.id`. Never put a transitional v12 provider ID
     /// here; the compatibility identity belongs in `legacy.provider_id`.
     pub provider_id: String,
+    /// Frozen Agent ownership supplied by the trusted source boundary. Legacy
+    /// inputs that cannot be attributed safely leave this null.
+    pub agent_module_id: Option<String>,
+    /// Provider grouping and route protocol frozen at the same trusted proxy
+    /// binding lookup as `provider_id`. Non-proxy importers leave this absent
+    /// and resolve their provider context transactionally during ingestion.
+    pub frozen_provider_context: Option<FrozenUsageProviderContext>,
     pub occurred_at: i64,
     pub model: String,
     pub usage: TokenUsage,
@@ -44,6 +52,12 @@ pub struct UsageIngestionInput {
     pub session_id: Option<String>,
     pub upstream_correlation_id: Option<String>,
     pub legacy: Option<LegacyLogInput>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrozenUsageProviderContext {
+    pub product_group_id: String,
+    pub route_app_type: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,11 +127,28 @@ impl<'a> UsageIngestionService<'a> {
     }
 
     pub fn ingest(&self, input: &UsageIngestionInput) -> Result<UsageIngestionOutcome, AppError> {
+        self.ingest_internal(input, None)
+    }
+
+    pub(crate) fn ingest_with_credential_guard(
+        &self,
+        input: &UsageIngestionInput,
+        credential_guard: &CredentialExposureGuard,
+    ) -> Result<UsageIngestionOutcome, AppError> {
+        self.ingest_internal(input, Some(credential_guard))
+    }
+
+    fn ingest_internal(
+        &self,
+        input: &UsageIngestionInput,
+        credential_guard: Option<&CredentialExposureGuard>,
+    ) -> Result<UsageIngestionOutcome, AppError> {
         validate_input(input)?;
         let mut conn = lock_conn!(self.db.conn);
         let transaction = conn.transaction()?;
         let created_at = now_timestamp()?;
-        let outcome = ingest_on_transaction(&transaction, input, created_at)?;
+        let outcome =
+            ingest_on_transaction_with_guard(&transaction, input, created_at, credential_guard)?;
 
         transaction.commit()?;
         if outcome.inserted {
@@ -163,10 +194,36 @@ fn ingest_on_transaction(
     input: &UsageIngestionInput,
     created_at: i64,
 ) -> Result<UsageIngestionOutcome, AppError> {
+    ingest_on_transaction_with_guard(transaction, input, created_at, None)
+}
+
+fn ingest_on_transaction_with_guard(
+    transaction: &Transaction<'_>,
+    input: &UsageIngestionInput,
+    created_at: i64,
+    credential_guard: Option<&CredentialExposureGuard>,
+) -> Result<UsageIngestionOutcome, AppError> {
     let provider = load_and_validate_provider(transaction, input)?;
     let trusted_cost = decide_cost(transaction, input, &provider)?;
     let stable_match = find_stable_cross_source_match(transaction, input)?;
     let event = build_event(input, &provider, &trusted_cost, created_at);
+    if credential_guard.is_some_and(|credential_guard| {
+        persisted_values_contain_credential(
+            credential_guard,
+            input,
+            &event,
+            &trusted_cost,
+            stable_match.as_ref(),
+        )
+    }) {
+        log::warn!(
+            "Usage event omitted because persistence would repeat protected credential material"
+        );
+        return Ok(UsageIngestionOutcome {
+            inserted: false,
+            link_created: false,
+        });
+    }
     let inserted = insert_event(transaction, &event)?;
 
     if !inserted {
@@ -215,6 +272,29 @@ fn validate_input(input: &UsageIngestionInput) -> Result<(), AppError> {
             "usage provider id must not be empty".to_string(),
         ));
     }
+    if input
+        .agent_module_id
+        .as_deref()
+        .is_some_and(|agent_module_id| agent_module_id.trim().is_empty())
+    {
+        return Err(AppError::Message(
+            "usage agent module id must not be empty".to_string(),
+        ));
+    }
+    let resolved_proxy_ownership =
+        input.source == TokenSource::Proxy && input.agent_module_id.is_some();
+    if resolved_proxy_ownership != input.frozen_provider_context.is_some() {
+        return Err(AppError::Message(
+            "invalid frozen usage provider context".to_string(),
+        ));
+    }
+    if let Some(context) = &input.frozen_provider_context {
+        if context.product_group_id.trim().is_empty() || context.route_app_type.trim().is_empty() {
+            return Err(AppError::Message(
+                "invalid frozen usage provider context".to_string(),
+            ));
+        }
+    }
     if input.model.trim().is_empty() {
         return Err(AppError::Message(
             "usage model must not be empty".to_string(),
@@ -260,11 +340,21 @@ fn load_and_validate_provider(
     };
     let token_sources: Vec<TokenSource> = serde_json::from_str(&token_sources)
         .map_err(|error| AppError::Database(format!("invalid provider token_sources: {error}")))?;
-    if !token_sources.contains(&input.source) {
+    let resolved_proxy_ownership =
+        input.source == TokenSource::Proxy && input.agent_module_id.is_some();
+    if !resolved_proxy_ownership && !token_sources.contains(&input.source) {
         return Err(AppError::Message(format!(
             "usage provider does not accept {}",
             token_source_value(input.source)
         )));
+    }
+    if resolved_proxy_ownership {
+        if let Some(context) = &input.frozen_provider_context {
+            return Ok(StoredProviderContext {
+                product_group_id: context.product_group_id.clone(),
+                route_app_type: Some(context.route_app_type.clone()),
+            });
+        }
     }
     Ok(StoredProviderContext {
         product_group_id,
@@ -361,6 +451,7 @@ fn build_event(
         event_id: input.event_id.clone(),
         source: input.source,
         provider_id: input.provider_id.clone(),
+        agent_module_id: input.agent_module_id.clone(),
         product_group_id: provider.product_group_id.clone(),
         occurred_at: input.occurred_at,
         model: input.model.clone(),
@@ -385,6 +476,114 @@ fn build_event(
     }
 }
 
+fn persisted_values_contain_credential(
+    credential_guard: &CredentialExposureGuard,
+    input: &UsageIngestionInput,
+    event: &UsageEvent,
+    cost: &TrustedCost,
+    stable_match: Option<&(String, &'static str, String)>,
+) -> bool {
+    let text_values = [
+        event.event_id.as_str(),
+        token_source_value(event.source),
+        event.provider_id.as_str(),
+        event.product_group_id.as_str(),
+        event.model.as_str(),
+        cost_source_value(event.cost_source),
+    ];
+    if text_values
+        .into_iter()
+        .any(|value| credential_guard.contains(value))
+    {
+        return true;
+    }
+
+    let optional_text_values = [
+        event.agent_module_id.as_deref(),
+        event.request_id.as_deref(),
+        event.session_id.as_deref(),
+        event.upstream_correlation_id.as_deref(),
+        event.input_cost_usd.as_deref(),
+        event.output_cost_usd.as_deref(),
+        event.cache_read_cost_usd.as_deref(),
+        event.cache_creation_cost_usd.as_deref(),
+        event.total_cost_usd.as_deref(),
+        event.legacy_request_id.as_deref(),
+    ];
+    if optional_text_values
+        .into_iter()
+        .flatten()
+        .any(|value| credential_guard.contains(value))
+    {
+        return true;
+    }
+
+    let numeric_values = [
+        event.occurred_at.to_string(),
+        event.input_tokens.to_string(),
+        event.output_tokens.to_string(),
+        event.cache_read_tokens.to_string(),
+        event.cache_creation_tokens.to_string(),
+        event.created_at.to_string(),
+    ];
+    if numeric_values
+        .into_iter()
+        .any(|value| credential_guard.contains(&value))
+    {
+        return true;
+    }
+
+    if stable_match.is_some_and(|(canonical_event_id, link_kind, link_value)| {
+        [canonical_event_id.as_str(), *link_kind, link_value.as_str()]
+            .into_iter()
+            .any(|value| credential_guard.contains(value))
+    }) {
+        return true;
+    }
+
+    input.legacy.as_ref().is_some_and(|legacy| {
+        let text_values = [
+            legacy.request_id.as_str(),
+            legacy.provider_id.as_str(),
+            legacy.app_type.as_str(),
+            input.model.as_str(),
+            legacy.request_model.as_str(),
+            legacy.pricing_model.as_str(),
+            cost.input.as_deref().unwrap_or("0"),
+            cost.output.as_deref().unwrap_or("0"),
+            cost.cache_read.as_deref().unwrap_or("0"),
+            cost.cache_creation.as_deref().unwrap_or("0"),
+            cost.total.as_deref().unwrap_or("0"),
+            token_source_value(input.source),
+        ];
+        text_values
+            .into_iter()
+            .any(|value| credential_guard.contains(value))
+            || [
+                legacy.error_message.as_deref(),
+                legacy.session_id.as_deref(),
+                legacy.provider_type.as_deref(),
+            ]
+            .into_iter()
+            .flatten()
+            .any(|value| credential_guard.contains(value))
+            || [
+                legacy.latency_ms.to_string(),
+                legacy
+                    .first_token_ms
+                    .map(|value| value.to_string())
+                    .unwrap_or_default(),
+                legacy.status_code.to_string(),
+                i64::from(legacy.is_streaming).to_string(),
+                legacy.cost_multiplier.to_string(),
+                event.created_at.to_string(),
+            ]
+            .into_iter()
+            .filter(|value| !value.is_empty())
+            .any(|value| credential_guard.contains(&value))
+    })
+}
+
 fn insert_event(transaction: &Transaction<'_>, event: &UsageEvent) -> Result<bool, AppError> {
     let inserted = transaction.execute(
         "INSERT INTO usage_events (
@@ -392,10 +591,11 @@ fn insert_event(transaction: &Transaction<'_>, event: &UsageEvent) -> Result<boo
             input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
             request_id, session_id, upstream_correlation_id, input_cost_usd,
             output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd,
-            total_cost_usd, cost_source, legacy_request_id, created_at
+            total_cost_usd, cost_source, legacy_request_id, created_at,
+            agent_module_id
          ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-            ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21
+            ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22
          ) ON CONFLICT(event_id) DO NOTHING",
         params![
             event.event_id,
@@ -425,8 +625,26 @@ fn insert_event(transaction: &Transaction<'_>, event: &UsageEvent) -> Result<boo
             cost_source_value(event.cost_source),
             event.legacy_request_id,
             event.created_at,
+            event.agent_module_id,
         ],
     )?;
+    if inserted == 0 {
+        let existing_ownership = transaction
+            .query_row(
+                "SELECT provider_id, agent_module_id
+                 FROM usage_events WHERE event_id = ?1",
+                [&event.event_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+            )
+            .optional()?;
+        if !existing_ownership.is_some_and(|(provider_id, agent_module_id)| {
+            provider_id == event.provider_id && agent_module_id == event.agent_module_id
+        }) {
+            return Err(AppError::Message(
+                "usage_event_ownership_conflict".to_string(),
+            ));
+        }
+    }
     Ok(inserted == 1)
 }
 
@@ -513,12 +731,16 @@ fn now_timestamp() -> Result<i64, AppError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        LegacyLogInput, UsageIngestionInput, UsageIngestionOutcome, UsageIngestionService,
+        FrozenUsageProviderContext, LegacyLogInput, UsageIngestionInput, UsageIngestionOutcome,
+        UsageIngestionService,
     };
     use crate::database::{Database, UsageSyncCursor};
     use crate::proxy::usage::cost_parser::UpstreamCost;
     use crate::proxy::usage::parser::TokenUsage;
-    use crate::usage::domain::{BillingKind, CostSource, TokenSource, UsageProviderInput};
+    use crate::usage::domain::{
+        AgentModuleInput, AgentProviderBindingInput, BillingKind, CostSource, TokenSource,
+        UsageProviderInput,
+    };
     use rust_decimal::Decimal;
     use std::str::FromStr;
 
@@ -569,6 +791,8 @@ mod tests {
             event_id: event_id.to_string(),
             source,
             provider_id: "global-provider".to_string(),
+            agent_module_id: None,
+            frozen_provider_context: None,
             occurred_at: 100,
             model: "priced-model".to_string(),
             usage: TokenUsage {
@@ -585,6 +809,63 @@ mod tests {
             upstream_correlation_id: None,
             legacy: None,
         }
+    }
+
+    fn frozen_provider_context() -> FrozenUsageProviderContext {
+        FrozenUsageProviderContext {
+            product_group_id: "claude-product".to_string(),
+            route_app_type: "claude".to_string(),
+        }
+    }
+
+    #[test]
+    fn resolved_proxy_event_survives_later_agent_delete_and_source_mutation() {
+        let db = Database::memory().unwrap();
+        save_provider(&db, "global-provider", None);
+        let agent = db
+            .save_agent_module(&AgentModuleInput {
+                id: None,
+                name: "In-flight Agent".to_string(),
+                sort_order: 50,
+                visible: true,
+            })
+            .unwrap();
+        db.save_agent_provider_binding(&AgentProviderBindingInput {
+            id: None,
+            agent_module_id: agent.id.clone(),
+            provider_id: "global-provider".to_string(),
+            enabled: false,
+        })
+        .unwrap();
+
+        let _delete_outcome = db.delete_agent_module(&agent.id).unwrap();
+        let archived = db
+            .get_agent_module_including_archived(&agent.id)
+            .unwrap()
+            .expect("resolved Agent identity must remain as a tombstone");
+        assert!(archived.archived_at.is_some());
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE usage_providers SET token_sources = '[\"session_log\"]'
+                 WHERE id = 'global-provider'",
+                [],
+            )
+            .unwrap();
+        }
+
+        let mut event = input("resolved-before-mutation", TokenSource::Proxy);
+        event.agent_module_id = Some(agent.id.clone());
+        event.frozen_provider_context = Some(frozen_provider_context());
+        let outcome = UsageIngestionService::new(&db).ingest(&event).unwrap();
+        assert!(outcome.inserted);
+        let stored = db
+            .list_usage_events("global-provider", 0, 200, 1, 10)
+            .unwrap()
+            .items
+            .pop()
+            .unwrap();
+        assert_eq!(stored.agent_module_id.as_deref(), Some(agent.id.as_str()));
     }
 
     fn legacy(request_id: &str) -> LegacyLogInput {
@@ -815,6 +1096,70 @@ mod tests {
             .unwrap();
         assert_eq!(stored.model, "priced-model");
         assert_eq!(stored.input_tokens, 1_000_000);
+    }
+
+    #[test]
+    fn duplicate_event_id_rejects_conflicting_provider_ownership() {
+        let db = Database::memory().unwrap();
+        save_provider(&db, "global-provider", None);
+        save_provider(&db, "other-provider", None);
+        let service = UsageIngestionService::new(&db);
+        let original = input("same-event-owner", TokenSource::Proxy);
+        assert!(service.ingest(&original).unwrap().inserted);
+
+        let mut conflicting = original;
+        conflicting.provider_id = "other-provider".to_string();
+        let error = service.ingest(&conflicting).unwrap_err();
+
+        assert_eq!(error.to_string(), "usage_event_ownership_conflict");
+    }
+
+    #[test]
+    fn proxy_ingestion_persists_frozen_agent_ownership() {
+        let db = Database::memory().unwrap();
+        save_provider(&db, "global-provider", None);
+        let service = UsageIngestionService::new(&db);
+        let mut owned = input("agent-owned-proxy", TokenSource::Proxy);
+        owned.agent_module_id = Some("codex".to_string());
+        owned.frozen_provider_context = Some(frozen_provider_context());
+
+        assert!(service.ingest(&owned).unwrap().inserted);
+        let stored = db
+            .list_usage_events("global-provider", 0, 200, 1, 10)
+            .unwrap()
+            .items
+            .pop()
+            .unwrap();
+
+        assert_eq!(stored.agent_module_id.as_deref(), Some("codex"));
+    }
+
+    #[test]
+    fn proxy_agent_ownership_requires_a_frozen_provider_context() {
+        let db = Database::memory().unwrap();
+        save_provider(&db, "global-provider", None);
+        let mut owned = input("missing-frozen-context", TokenSource::Proxy);
+        owned.agent_module_id = Some("codex".to_string());
+
+        let error = UsageIngestionService::new(&db).ingest(&owned).unwrap_err();
+        assert_eq!(error.to_string(), "invalid frozen usage provider context");
+    }
+
+    #[test]
+    fn duplicate_event_id_rejects_conflicting_agent_ownership() {
+        let db = Database::memory().unwrap();
+        save_provider(&db, "global-provider", None);
+        let service = UsageIngestionService::new(&db);
+        let mut original = input("same-agent-event-owner", TokenSource::Proxy);
+        original.agent_module_id = Some("codex".to_string());
+        original.frozen_provider_context = Some(frozen_provider_context());
+        assert!(service.ingest(&original).unwrap().inserted);
+
+        let mut conflicting = original;
+        conflicting.agent_module_id = Some("claude-code".to_string());
+        let error = service.ingest(&conflicting).unwrap_err();
+
+        assert_eq!(error.to_string(), "usage_event_ownership_conflict");
     }
 
     #[test]

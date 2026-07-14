@@ -228,6 +228,7 @@ impl ProviderAdapter for GeminiAdapter {
         url
     }
 
+    #[cfg(test)]
     fn get_auth_headers(
         &self,
         auth: &AuthInfo,

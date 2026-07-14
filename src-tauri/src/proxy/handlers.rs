@@ -8,6 +8,9 @@
 //! - Claude 的格式转换逻辑保留在此文件（用于 OpenRouter 旧接口回退）
 
 use super::{
+    binding_auth::{
+        extract_and_strip_binding_auth, BindingAuthProtocol, InboundBindingCredentials,
+    },
     content_encoding::{decompress_body, get_content_encoding, is_supported_content_encoding},
     error_mapper::{get_error_message, map_proxy_error_to_status},
     forwarder::ActiveConnectionGuard,
@@ -15,19 +18,21 @@ use super::{
         claude_stream_usage_event_filter, codex_stream_usage_event_filter, CLAUDE_PARSER_CONFIG,
         CODEX_PARSER_CONFIG, GEMINI_PARSER_CONFIG, OPENAI_PARSER_CONFIG,
     },
-    handler_context::RequestContext,
+    handler_context::{canonical_route_protocol, RequestContext},
     providers::{
         codex_chat_common::extract_reasoning_field_text,
-        codex_chat_history::record_responses_sse_stream, get_adapter, get_claude_api_format,
+        codex_chat_history::record_responses_sse_stream_scoped, get_adapter, get_claude_api_format,
         streaming::create_anthropic_sse_stream,
         streaming_codex_chat::create_responses_sse_stream_from_chat_with_context,
-        streaming_gemini::create_anthropic_sse_stream_from_gemini,
+        streaming_gemini::create_anthropic_sse_stream_from_gemini_guarded,
         streaming_responses::create_anthropic_sse_stream_from_responses, transform,
         transform_codex_chat, transform_gemini, transform_responses,
     },
     response_processor::{
-        capture_raw_sse_usage_metadata, create_logged_passthrough_stream, process_response,
-        read_decoded_body, stable_session_id, strip_entity_headers_for_rebuilt_body,
+        capture_raw_sse_usage_metadata, create_logged_passthrough_stream,
+        guard_credential_response_stream, process_response, read_decoded_body,
+        reject_credential_bearing_response_body, stable_session_id,
+        strip_credential_bearing_response_headers, strip_entity_headers_for_rebuilt_body,
         strip_hop_by_hop_response_headers, upstream_correlation_id_from_body,
         usage_logging_enabled, validated_raw_sse_usage_metadata, validated_upstream_cost,
         RawSseUsageMetadata, SseUsageCollector,
@@ -123,7 +128,6 @@ pub async fn handle_claude_desktop_messages(
     State(state): State<ProxyState>,
     request: axum::extract::Request,
 ) -> Result<axum::response::Response, ProxyError> {
-    validate_claude_desktop_gateway_auth(&state, request.headers())?;
     handle_messages_for_app(
         state,
         request,
@@ -137,15 +141,40 @@ pub async fn handle_claude_desktop_messages(
 
 pub async fn handle_claude_desktop_models(
     State(state): State<ProxyState>,
-    headers: axum::http::HeaderMap,
+    request: axum::extract::Request,
 ) -> Result<Json<Value>, ProxyError> {
-    validate_claude_desktop_gateway_auth(&state, &headers)?;
-    let provider = state
-        .provider_router
-        .select_bound_provider("claude")
-        .await
-        .map_err(crate::proxy::handler_context::map_route_selection_error)?;
-    let response = crate::claude_desktop_config::model_list_response(&provider)
+    let (parts, _body) = request.into_parts();
+    let mut uri = parts.uri;
+    let mut headers = parts.headers;
+    let mut endpoint = uri
+        .path_and_query()
+        .map(|path_and_query| path_and_query.as_str())
+        .unwrap_or(uri.path())
+        .strip_prefix("/claude-desktop")
+        .unwrap_or("/v1/models")
+        .to_string();
+    let inbound = extract_binding_credentials(
+        BindingAuthProtocol::ClaudeDesktop,
+        &mut headers,
+        &mut uri,
+        &mut endpoint,
+    )?;
+    validate_claude_desktop_gateway_auth(&state, inbound.gateway_token)?;
+    preflight_binding_credential(&state, &inbound.binding_key, "claude-desktop").await?;
+    let mut ctx = RequestContext::new(
+        &state,
+        &Value::Null,
+        &headers,
+        inbound.binding_key,
+        AppType::ClaudeDesktop,
+        "Claude Desktop",
+        "claude-desktop",
+    )
+    .await?;
+    // This endpoint only builds a local model catalog. Drop the protected key
+    // after the atomic binding projection is resolved; it is never forwarded.
+    drop(ctx.take_binding_credential()?);
+    let response = crate::claude_desktop_config::model_list_response(&ctx.provider)
         .map_err(|e| ProxyError::ConfigError(e.to_string()))?;
     Ok(Json(response))
 }
@@ -160,9 +189,27 @@ async fn handle_messages_for_app(
 ) -> Result<axum::response::Response, ProxyError> {
     let (parts, body) = request.into_parts();
     let method = parts.method.clone();
-    let uri = parts.uri;
-    let headers = parts.headers;
+    let mut uri = parts.uri;
+    let mut headers = parts.headers;
     let extensions = parts.extensions;
+    let raw_endpoint = uri
+        .path_and_query()
+        .map(|path_and_query| path_and_query.as_str())
+        .unwrap_or(uri.path());
+    let mut endpoint = strip_prefix
+        .and_then(|prefix| raw_endpoint.strip_prefix(prefix))
+        .unwrap_or(raw_endpoint)
+        .to_string();
+    let protocol = if matches!(app_type, AppType::ClaudeDesktop) {
+        BindingAuthProtocol::ClaudeDesktop
+    } else {
+        BindingAuthProtocol::Claude
+    };
+    let inbound = extract_binding_credentials(protocol, &mut headers, &mut uri, &mut endpoint)?;
+    if matches!(app_type, AppType::ClaudeDesktop) {
+        validate_claude_desktop_gateway_auth(&state, inbound.gateway_token)?;
+    }
+    preflight_binding_credential(&state, &inbound.binding_key, app_type_str).await?;
     let body_bytes = body
         .collect()
         .await
@@ -171,16 +218,16 @@ async fn handle_messages_for_app(
     let body: Value = serde_json::from_slice(&body_bytes)
         .map_err(|e| ProxyError::Internal(format!("Failed to parse request body: {e}")))?;
 
-    let mut ctx =
-        RequestContext::new(&state, &body, &headers, app_type.clone(), tag, app_type_str).await?;
-
-    let raw_endpoint = uri
-        .path_and_query()
-        .map(|path_and_query| path_and_query.as_str())
-        .unwrap_or(uri.path());
-    let endpoint = strip_prefix
-        .and_then(|prefix| raw_endpoint.strip_prefix(prefix))
-        .unwrap_or(raw_endpoint);
+    let mut ctx = RequestContext::new(
+        &state,
+        &body,
+        &headers,
+        inbound.binding_key,
+        app_type.clone(),
+        tag,
+        app_type_str,
+    )
+    .await?;
 
     let is_stream = body
         .get("stream")
@@ -193,11 +240,12 @@ async fn handle_messages_for_app(
         .forward_with_retry(
             &app_type,
             method,
-            endpoint,
+            &endpoint,
             body.clone(),
             headers,
             extensions,
             ctx.get_providers(),
+            ctx.take_binding_credential()?,
         )
         .await
     {
@@ -250,29 +298,40 @@ async fn handle_messages_for_app(
     .await
 }
 
+fn extract_binding_credentials(
+    protocol: BindingAuthProtocol,
+    headers: &mut axum::http::HeaderMap,
+    uri: &mut axum::http::Uri,
+    endpoint: &mut String,
+) -> Result<InboundBindingCredentials, ProxyError> {
+    extract_and_strip_binding_auth(protocol, headers, uri, endpoint)
+        .map_err(|_| ProxyError::BindingAuthorizationFailed)
+}
+
+async fn preflight_binding_credential(
+    state: &ProxyState,
+    binding_key: &crate::credentials::SecretString,
+    app_type: &str,
+) -> Result<(), ProxyError> {
+    state
+        .binding_credential_service
+        .preflight_binding_api_key(binding_key, canonical_route_protocol(app_type))
+        .await
+        .map_err(|_| ProxyError::BindingAuthorizationFailed)
+}
+
 fn validate_claude_desktop_gateway_auth(
     state: &ProxyState,
-    headers: &axum::http::HeaderMap,
+    gateway_token: Option<crate::credentials::SecretString>,
 ) -> Result<(), ProxyError> {
     let expected = crate::claude_desktop_config::get_or_create_gateway_token(state.db.as_ref())
-        .map_err(|e| ProxyError::AuthError(e.to_string()))?;
-    let Some(value) = headers.get(axum::http::header::AUTHORIZATION) else {
-        return Err(ProxyError::AuthError(
-            "Claude Desktop gateway 缺少 Authorization 头".to_string(),
-        ));
-    };
-    let value = value
-        .to_str()
-        .map_err(|_| ProxyError::AuthError("Authorization 头格式无效".to_string()))?;
-    let token = value
-        .strip_prefix("Bearer ")
-        .or_else(|| value.strip_prefix("bearer "))
-        .unwrap_or("")
-        .trim();
-    if token != expected {
-        return Err(ProxyError::AuthError(
-            "Claude Desktop gateway token 无效".to_string(),
-        ));
+        .map_err(|_| ProxyError::BindingAuthorizationFailed)?;
+    let gateway_token = gateway_token.ok_or(ProxyError::BindingAuthorizationFailed)?;
+    if !bool::from(subtle::ConstantTimeEq::ct_eq(
+        gateway_token.expose_bytes(),
+        expected.as_bytes(),
+    )) {
+        return Err(ProxyError::BindingAuthorizationFailed);
     }
     Ok(())
 }
@@ -317,12 +376,19 @@ async fn handle_claude_transform(
     let tool_schema_hints = (!tool_schema_hints.is_empty()).then_some(tool_schema_hints);
 
     if use_streaming {
+        if get_content_encoding(response.headers()).is_some() {
+            log::warn!("[Claude] compressed upstream stream rejected");
+            return Err(ProxyError::UpstreamResponseRejected);
+        }
         // Capture cost and correlation metadata from the raw upstream SSE
         // before a protocol transformer can drop or rewrite those fields.
         let collect_usage = usage_logging_enabled(state);
         let raw_metadata =
             std::sync::Arc::new(std::sync::Mutex::new(RawSseUsageMetadata::default()));
-        let upstream_stream = response.bytes_stream();
+        let upstream_stream = guard_credential_response_stream(
+            response.bytes_stream(),
+            ctx.credential_exposure_guard().clone(),
+        );
         let stream: std::pin::Pin<
             Box<dyn futures::Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static>,
         > = if collect_usage {
@@ -341,22 +407,28 @@ async fn handle_claude_transform(
         > = if api_format == "openai_responses" {
             Box::new(Box::pin(create_anthropic_sse_stream_from_responses(stream)))
         } else if api_format == "gemini_native" {
-            Box::new(Box::pin(create_anthropic_sse_stream_from_gemini(
+            Box::new(Box::pin(create_anthropic_sse_stream_from_gemini_guarded(
                 stream,
                 Some(state.gemini_shadow.clone()),
-                Some(ctx.provider.id.clone()),
+                Some(ctx.binding_id.clone()),
                 Some(ctx.session_id.clone()),
                 tool_schema_hints.clone(),
+                ctx.credential_exposure_guard().clone(),
             )))
         } else {
             Box::new(Box::pin(create_anthropic_sse_stream(stream)))
         };
+        let sse_stream =
+            guard_credential_response_stream(sse_stream, ctx.credential_exposure_guard().clone());
 
         // 创建使用量收集器；关闭 usage logging 时不要再解析转换后的 SSE。
         let usage_collector = if collect_usage {
             let state = state.clone();
-            let provider_id = ctx.provider.id.clone();
+            let agent_module_id = ctx.agent_module_id.clone();
+            let legacy_provider_id = ctx.legacy_log_provider_id.clone();
+            let pricing_override = ctx.pricing_override.clone();
             let usage_provider_id = ctx.usage_provider_id.clone();
+            let frozen_provider_context = ctx.frozen_usage_provider_context.clone();
             let request_model = ctx.request_model.clone();
             // 上游/转换层未回显模型时，优先用映射后的出站模型兜底（路由接管真值），
             // 其次才是客户端请求别名。空字符串视为缺失（转换器对无回显上游会合成 ""）。
@@ -369,6 +441,7 @@ async fn handle_claude_transform(
             let session_id = ctx.session_id.clone();
             let session_client_provided = ctx.session_client_provided;
             let raw_metadata = raw_metadata.clone();
+            let credential_guard = ctx.credential_exposure_guard().clone();
             // 用 ctx 的 app_type：Claude Desktop 网关也走此转换路径，硬编码
             // "claude" 会把 claude-desktop 的行错记到 claude 名下
             let app_type_str = ctx.app_type_str;
@@ -390,17 +463,24 @@ async fn handle_claude_transform(
                             .unwrap_or_else(|| fallback_model.clone());
                         let latency_ms = start_time.elapsed().as_millis() as u64;
                         let state = state.clone();
-                        let provider_id = provider_id.clone();
+                        let agent_module_id = agent_module_id.clone();
+                        let legacy_provider_id = legacy_provider_id.clone();
+                        let pricing_override = pricing_override.clone();
                         let usage_provider_id = usage_provider_id.clone();
+                        let frozen_provider_context = frozen_provider_context.clone();
                         let session_id = session_id.clone();
                         let request_model = request_model.clone();
                         let outbound_model = fallback_model.clone();
+                        let credential_guard = credential_guard.clone();
 
                         tokio::spawn(async move {
                             log_usage(
                                 &state,
+                                &agent_module_id,
                                 &usage_provider_id,
-                                &provider_id,
+                                frozen_provider_context,
+                                &legacy_provider_id,
+                                pricing_override,
                                 app_type_str,
                                 &model,
                                 &request_model,
@@ -414,6 +494,7 @@ async fn handle_claude_transform(
                                 Some(session_id),
                                 upstream_cost,
                                 upstream_correlation_id,
+                                credential_guard,
                             )
                             .await;
                         });
@@ -460,11 +541,13 @@ async fn handle_claude_transform(
         };
     let (mut response_headers, _status, body_bytes) =
         read_decoded_body(response, ctx.tag, body_timeout).await?;
+    reject_credential_bearing_response_body(&body_bytes, ctx.credential_exposure_guard())?;
 
     let body_str = String::from_utf8_lossy(&body_bytes);
 
     let upstream_response: Value = if aggregate_codex_oauth_responses_sse {
-        responses_sse_to_response_value(&body_str)?
+        responses_sse_to_response_value(&body_str)
+            .map_err(|error| error.redact_credential(ctx.credential_exposure_guard()))?
     } else {
         match serde_json::from_slice(&body_bytes) {
             Ok(value) => value,
@@ -481,16 +564,16 @@ async fn handle_claude_transform(
                 } else {
                     chat_sse_to_response_value(&body_str)
                 };
-                // 聚合也失败时：保留全量 body 服务端日志，并给客户端错误附带同款
-                // 现场诊断（content-type/body 摘要），否则命中嗅探臂的用户只拿到
-                // 裸聚合错误、丢失非嗅探臂已有的诊断增强（C7）
-                aggregated.map_err(|e| {
-                    log::error!("[Claude] SSE 聚合兜底失败: {e}, body: {body_str}");
-                    aggregate_fallback_error(e, &response_headers, &body_str)
+                // 聚合也失败时只保留解析器错误。上游正文可能回显受保护密钥，
+                // 因此不得进入日志或客户端诊断。
+                aggregated.map_err(|error| {
+                    let error = error.redact_credential(ctx.credential_exposure_guard());
+                    log::error!("[Claude] SSE 聚合兜底失败: {error}; upstream body omitted");
+                    aggregate_fallback_error(error, &response_headers, &body_str)
                 })?
             }
             Err(e) => {
-                log::error!("[Claude] 解析上游响应失败: {e}, body: {body_str}");
+                log::error!("[Claude] 解析上游响应失败: {e}; upstream body omitted");
                 return Err(upstream_body_parse_error(
                     "Failed to parse upstream response",
                     &e,
@@ -500,7 +583,16 @@ async fn handle_claude_transform(
             }
         }
     };
-    let upstream_correlation_id = upstream_correlation_id_from_body(&upstream_response);
+    if ctx
+        .credential_exposure_guard()
+        .contains_json_value(&upstream_response)
+    {
+        log::warn!("[Claude] parsed upstream response repeated protected credential material");
+        return Err(ProxyError::UpstreamResponseRejected);
+    }
+    let upstream_correlation_id = ctx
+        .credential_exposure_guard()
+        .redact_option(upstream_correlation_id_from_body(&upstream_response));
     let upstream_cost = validated_upstream_cost(
         extract_upstream_cost(&upstream_response),
         &ctx.usage_provider_id,
@@ -511,20 +603,29 @@ async fn handle_claude_transform(
     let anthropic_response = if api_format == "openai_responses" {
         transform_responses::responses_to_anthropic(upstream_response)
     } else if api_format == "gemini_native" {
-        transform_gemini::gemini_to_anthropic_with_shadow_and_hints(
+        transform_gemini::gemini_to_anthropic_with_shadow_hints_and_guard(
             upstream_response,
             Some(state.gemini_shadow.as_ref()),
-            Some(&ctx.provider.id),
+            Some(&ctx.binding_id),
             Some(&ctx.session_id),
             tool_schema_hints.as_ref(),
+            Some(ctx.credential_exposure_guard()),
         )
     } else {
         transform::openai_to_anthropic(upstream_response)
     }
-    .map_err(|e| {
-        log::error!("[Claude] 转换响应失败: {e}");
-        e
+    .map_err(|error| {
+        let error = error.redact_credential(ctx.credential_exposure_guard());
+        log::error!("[Claude] 转换响应失败: {error}");
+        error
     })?;
+    if ctx
+        .credential_exposure_guard()
+        .contains_json_value(&anthropic_response)
+    {
+        log::warn!("[Claude] transformed response repeated protected credential material");
+        return Err(ProxyError::UpstreamResponseRejected);
+    }
 
     // 记录使用量
     // 全 0 usage 不落账（对齐 Codex 流式收集器的 skip）：SSE 聚合兜底救回的流
@@ -552,15 +653,22 @@ async fn handle_claude_transform(
         let app_type_str = ctx.app_type_str;
         tokio::spawn({
             let state = state.clone();
-            let provider_id = ctx.provider.id.clone();
+            let agent_module_id = ctx.agent_module_id.clone();
+            let legacy_provider_id = ctx.legacy_log_provider_id.clone();
+            let pricing_override = ctx.pricing_override.clone();
             let usage_provider_id = ctx.usage_provider_id.clone();
+            let frozen_provider_context = ctx.frozen_usage_provider_context.clone();
             let session_id = ctx.session_id.clone();
             let stable_session_id = stable_session_id(&session_id, ctx.session_client_provided);
+            let credential_guard = ctx.credential_exposure_guard().clone();
             async move {
                 log_usage(
                     &state,
+                    &agent_module_id,
                     &usage_provider_id,
-                    &provider_id,
+                    frozen_provider_context,
+                    &legacy_provider_id,
+                    pricing_override,
                     app_type_str,
                     &model,
                     &request_model,
@@ -574,6 +682,7 @@ async fn handle_claude_transform(
                     Some(session_id),
                     upstream_cost,
                     upstream_correlation_id,
+                    credential_guard,
                 )
                 .await;
             }
@@ -584,6 +693,10 @@ async fn handle_claude_transform(
     let mut builder = axum::response::Response::builder().status(status);
     strip_entity_headers_for_rebuilt_body(&mut response_headers);
     strip_hop_by_hop_response_headers(&mut response_headers);
+    strip_credential_bearing_response_headers(
+        &mut response_headers,
+        ctx.credential_exposure_guard(),
+    );
     // Builder::header 是 append 语义；不先 remove 会和上游 Content-Type 双发。
     response_headers.remove(axum::http::header::CONTENT_TYPE);
 
@@ -628,26 +741,26 @@ fn decode_codex_request_body(
     };
 
     if !is_supported_content_encoding(&encoding) {
-        return Err(ProxyError::InvalidRequest(format!(
-            "Unsupported request content-encoding: {encoding}"
-        )));
+        return Err(ProxyError::InvalidRequest(
+            "Unsupported request content-encoding".to_string(),
+        ));
     }
 
-    log::debug!("[Codex] 解压请求体: content-encoding={encoding}");
+    log::debug!("[Codex] 解压受支持编码的请求体");
     let decompressed = match decompress_body(&encoding, &body_bytes) {
         Ok(Some(decompressed)) => decompressed,
         // is_supported_content_encoding 已确保编码受支持，正常不会返回 None；
         // 防御性兜底：宁可报错，也不能把压缩字节当 JSON 透传下去。
         Ok(None) => {
-            return Err(ProxyError::InvalidRequest(format!(
-                "Unsupported request content-encoding: {encoding}"
-            )));
+            return Err(ProxyError::InvalidRequest(
+                "Unsupported request content-encoding".to_string(),
+            ));
         }
-        Err(e) => {
-            log::warn!("[Codex] 请求体解压失败 ({encoding}): {e}");
-            return Err(ProxyError::InvalidRequest(format!(
-                "Failed to decompress request body ({encoding}): {e}"
-            )));
+        Err(_) => {
+            log::warn!("[Codex] 请求体解压失败；编码值与解码器细节已省略");
+            return Err(ProxyError::InvalidRequest(
+                "Failed to decompress request body".to_string(),
+            ));
         }
     };
 
@@ -669,9 +782,17 @@ pub async fn handle_chat_completions(
 ) -> Result<axum::response::Response, ProxyError> {
     let (parts, req_body) = request.into_parts();
     let method = parts.method.clone();
-    let uri = parts.uri;
+    let mut uri = parts.uri;
     let mut headers = parts.headers;
     let extensions = parts.extensions;
+    let mut endpoint = endpoint_with_query(&uri, "/chat/completions");
+    let inbound = extract_binding_credentials(
+        BindingAuthProtocol::Codex,
+        &mut headers,
+        &mut uri,
+        &mut endpoint,
+    )?;
+    preflight_binding_credential(&state, &inbound.binding_key, "codex").await?;
     let body_bytes = req_body
         .collect()
         .await
@@ -681,9 +802,16 @@ pub async fn handle_chat_completions(
     let body: Value = serde_json::from_slice(&body_bytes)
         .map_err(|e| ProxyError::Internal(format!("Failed to parse request body: {e}")))?;
 
-    let mut ctx =
-        RequestContext::new(&state, &body, &headers, AppType::Codex, "Codex", "codex").await?;
-    let endpoint = endpoint_with_query(&uri, "/chat/completions");
+    let mut ctx = RequestContext::new(
+        &state,
+        &body,
+        &headers,
+        inbound.binding_key,
+        AppType::Codex,
+        "Codex",
+        "codex",
+    )
+    .await?;
 
     let is_stream = body
         .get("stream")
@@ -700,6 +828,7 @@ pub async fn handle_chat_completions(
             headers,
             extensions,
             ctx.get_providers(),
+            ctx.take_binding_credential()?,
         )
         .await
     {
@@ -735,9 +864,17 @@ pub async fn handle_responses(
 ) -> Result<axum::response::Response, ProxyError> {
     let (parts, req_body) = request.into_parts();
     let method = parts.method.clone();
-    let uri = parts.uri;
+    let mut uri = parts.uri;
     let mut headers = parts.headers;
     let extensions = parts.extensions;
+    let mut endpoint = endpoint_with_query(&uri, "/responses");
+    let inbound = extract_binding_credentials(
+        BindingAuthProtocol::Codex,
+        &mut headers,
+        &mut uri,
+        &mut endpoint,
+    )?;
+    preflight_binding_credential(&state, &inbound.binding_key, "codex").await?;
     let body_bytes = req_body
         .collect()
         .await
@@ -747,9 +884,16 @@ pub async fn handle_responses(
     let body: Value = serde_json::from_slice(&body_bytes)
         .map_err(|e| ProxyError::Internal(format!("Failed to parse request body: {e}")))?;
 
-    let mut ctx =
-        RequestContext::new(&state, &body, &headers, AppType::Codex, "Codex", "codex").await?;
-    let endpoint = endpoint_with_query(&uri, "/responses");
+    let mut ctx = RequestContext::new(
+        &state,
+        &body,
+        &headers,
+        inbound.binding_key,
+        AppType::Codex,
+        "Codex",
+        "codex",
+    )
+    .await?;
 
     let is_stream = body
         .get("stream")
@@ -767,6 +911,7 @@ pub async fn handle_responses(
             headers,
             extensions,
             ctx.get_providers(),
+            ctx.take_binding_credential()?,
         )
         .await
     {
@@ -814,9 +959,17 @@ pub async fn handle_responses_compact(
 ) -> Result<axum::response::Response, ProxyError> {
     let (parts, req_body) = request.into_parts();
     let method = parts.method.clone();
-    let uri = parts.uri;
+    let mut uri = parts.uri;
     let mut headers = parts.headers;
     let extensions = parts.extensions;
+    let mut endpoint = endpoint_with_query(&uri, "/responses/compact");
+    let inbound = extract_binding_credentials(
+        BindingAuthProtocol::Codex,
+        &mut headers,
+        &mut uri,
+        &mut endpoint,
+    )?;
+    preflight_binding_credential(&state, &inbound.binding_key, "codex").await?;
     let body_bytes = req_body
         .collect()
         .await
@@ -826,9 +979,16 @@ pub async fn handle_responses_compact(
     let body: Value = serde_json::from_slice(&body_bytes)
         .map_err(|e| ProxyError::Internal(format!("Failed to parse request body: {e}")))?;
 
-    let mut ctx =
-        RequestContext::new(&state, &body, &headers, AppType::Codex, "Codex", "codex").await?;
-    let endpoint = endpoint_with_query(&uri, "/responses/compact");
+    let mut ctx = RequestContext::new(
+        &state,
+        &body,
+        &headers,
+        inbound.binding_key,
+        AppType::Codex,
+        "Codex",
+        "codex",
+    )
+    .await?;
 
     let is_stream = body
         .get("stream")
@@ -846,6 +1006,7 @@ pub async fn handle_responses_compact(
             headers,
             extensions,
             ctx.get_providers(),
+            ctx.take_binding_credential()?,
         )
         .await
     {
@@ -904,10 +1065,17 @@ async fn handle_codex_chat_to_responses_transform(
     }
 
     if is_stream || response.is_sse() {
+        if get_content_encoding(response.headers()).is_some() {
+            log::warn!("[Codex] compressed upstream stream rejected");
+            return Err(ProxyError::UpstreamResponseRejected);
+        }
         let collect_usage = usage_logging_enabled(state);
         let raw_metadata =
             std::sync::Arc::new(std::sync::Mutex::new(RawSseUsageMetadata::default()));
-        let upstream_stream = response.bytes_stream();
+        let upstream_stream = guard_credential_response_stream(
+            response.bytes_stream(),
+            ctx.credential_exposure_guard().clone(),
+        );
         let stream: std::pin::Pin<
             Box<dyn futures::Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static>,
         > = if collect_usage {
@@ -920,12 +1088,21 @@ async fn handle_codex_chat_to_responses_transform(
             Box::pin(upstream_stream)
         };
         let sse_stream = create_responses_sse_stream_from_chat_with_context(stream, tool_context);
-        let sse_stream = record_responses_sse_stream(sse_stream, state.codex_chat_history.clone());
+        let sse_stream =
+            guard_credential_response_stream(sse_stream, ctx.credential_exposure_guard().clone());
+        let sse_stream = record_responses_sse_stream_scoped(
+            sse_stream,
+            state.codex_chat_history.clone(),
+            ctx.binding_id.clone(),
+        );
 
         let usage_collector = if collect_usage {
             let state = state.clone();
-            let provider_id = ctx.provider.id.clone();
+            let agent_module_id = ctx.agent_module_id.clone();
+            let legacy_provider_id = ctx.legacy_log_provider_id.clone();
+            let pricing_override = ctx.pricing_override.clone();
             let usage_provider_id = ctx.usage_provider_id.clone();
+            let frozen_provider_context = ctx.frozen_usage_provider_context.clone();
             let request_model = ctx.request_model.clone();
             // 接管/模型覆写场景的归因兜底：出站真值优先于客户端请求别名
             let fallback_model = ctx
@@ -937,6 +1114,7 @@ async fn handle_codex_chat_to_responses_transform(
             let session_id = ctx.session_id.clone();
             let session_client_provided = ctx.session_client_provided;
             let raw_metadata = raw_metadata.clone();
+            let credential_guard = ctx.credential_exposure_guard().clone();
 
             Some(SseUsageCollector::new(
                 start_time,
@@ -966,17 +1144,24 @@ async fn handle_codex_chat_to_responses_transform(
                     let latency_ms = start_time.elapsed().as_millis() as u64;
 
                     let state = state.clone();
-                    let provider_id = provider_id.clone();
+                    let agent_module_id = agent_module_id.clone();
+                    let legacy_provider_id = legacy_provider_id.clone();
+                    let pricing_override = pricing_override.clone();
                     let usage_provider_id = usage_provider_id.clone();
+                    let frozen_provider_context = frozen_provider_context.clone();
                     let request_model = request_model.clone();
                     let outbound_model = fallback_model.clone();
                     let session_id = session_id.clone();
+                    let credential_guard = credential_guard.clone();
 
                     tokio::spawn(async move {
                         log_usage(
                             &state,
+                            &agent_module_id,
                             &usage_provider_id,
-                            &provider_id,
+                            frozen_provider_context,
+                            &legacy_provider_id,
+                            pricing_override,
                             app_type_str,
                             &model,
                             &request_model,
@@ -990,6 +1175,7 @@ async fn handle_codex_chat_to_responses_transform(
                             Some(session_id),
                             upstream_cost,
                             upstream_correlation_id,
+                            credential_guard,
                         )
                         .await;
                     });
@@ -1030,6 +1216,7 @@ async fn handle_codex_chat_to_responses_transform(
         };
     let (mut response_headers, status, body_bytes) =
         read_decoded_body(response, ctx.tag, body_timeout).await?;
+    reject_credential_bearing_response_body(&body_bytes, ctx.credential_exposure_guard())?;
     let body_str = String::from_utf8_lossy(&body_bytes);
     let chat_response: Value = match serde_json::from_slice(&body_bytes) {
         Ok(value) => value,
@@ -1037,14 +1224,15 @@ async fn handle_codex_chat_to_responses_transform(
         // 上游对 stream:false 返回未标记 Content-Type 的 SSE 体时按 SSE 聚合。
         Err(_) if body_looks_like_sse(&body_str) => {
             log::warn!("[Codex] 上游对非流请求返回未标记的 SSE 体，按 Chat SSE 聚合兜底");
-            // 聚合也失败时：保留全量 body 服务端日志，并给客户端错误附带现场诊断（C7）
-            chat_sse_to_response_value(&body_str).map_err(|e| {
-                log::error!("[Codex] SSE 聚合兜底失败: {e}, body: {body_str}");
-                aggregate_fallback_error(e, &response_headers, &body_str)
+            // 上游正文可能回显受保护密钥，不进入日志或客户端诊断。
+            chat_sse_to_response_value(&body_str).map_err(|error| {
+                let error = error.redact_credential(ctx.credential_exposure_guard());
+                log::error!("[Codex] SSE 聚合兜底失败: {error}; upstream body omitted");
+                aggregate_fallback_error(error, &response_headers, &body_str)
             })?
         }
         Err(e) => {
-            log::error!("[Codex] 解析 Chat 上游响应失败: {e}, body: {body_str}");
+            log::error!("[Codex] 解析 Chat 上游响应失败: {e}; upstream body omitted");
             return Err(upstream_body_parse_error(
                 "Failed to parse upstream chat response",
                 &e,
@@ -1053,7 +1241,16 @@ async fn handle_codex_chat_to_responses_transform(
             ));
         }
     };
-    let upstream_correlation_id = upstream_correlation_id_from_body(&chat_response);
+    if ctx
+        .credential_exposure_guard()
+        .contains_json_value(&chat_response)
+    {
+        log::warn!("[Codex] parsed upstream response repeated protected credential material");
+        return Err(ProxyError::UpstreamResponseRejected);
+    }
+    let upstream_correlation_id = ctx
+        .credential_exposure_guard()
+        .redact_option(upstream_correlation_id_from_body(&chat_response));
     let upstream_cost = validated_upstream_cost(
         extract_upstream_cost(&chat_response),
         &ctx.usage_provider_id,
@@ -1063,13 +1260,21 @@ async fn handle_codex_chat_to_responses_transform(
         chat_response,
         &tool_context,
     )
-    .map_err(|e| {
-        log::error!("[Codex] Chat → Responses 响应转换失败: {e}");
-        e
+    .map_err(|error| {
+        let error = error.redact_credential(ctx.credential_exposure_guard());
+        log::error!("[Codex] Chat → Responses 响应转换失败: {error}");
+        error
     })?;
+    if ctx
+        .credential_exposure_guard()
+        .contains_json_value(&responses_response)
+    {
+        log::warn!("[Codex] transformed response repeated protected credential material");
+        return Err(ProxyError::UpstreamResponseRejected);
+    }
     state
         .codex_chat_history
-        .record_response(&responses_response)
+        .record_response_scoped(&ctx.binding_id, &responses_response)
         .await;
 
     // 上游非流式 Chat 省略 usage 时，chat_usage_to_responses_usage 会合成全 0 usage
@@ -1096,16 +1301,23 @@ async fn handle_codex_chat_to_responses_transform(
         let app_type_str = ctx.app_type_str;
         tokio::spawn({
             let state = state.clone();
-            let provider_id = ctx.provider.id.clone();
+            let agent_module_id = ctx.agent_module_id.clone();
+            let legacy_provider_id = ctx.legacy_log_provider_id.clone();
+            let pricing_override = ctx.pricing_override.clone();
             let usage_provider_id = ctx.usage_provider_id.clone();
+            let frozen_provider_context = ctx.frozen_usage_provider_context.clone();
             let session_id = ctx.session_id.clone();
             let stable_session_id = stable_session_id(&session_id, ctx.session_client_provided);
             let latency_ms = ctx.latency_ms();
+            let credential_guard = ctx.credential_exposure_guard().clone();
             async move {
                 log_usage(
                     &state,
+                    &agent_module_id,
                     &usage_provider_id,
-                    &provider_id,
+                    frozen_provider_context,
+                    &legacy_provider_id,
+                    pricing_override,
                     app_type_str,
                     &model,
                     &request_model,
@@ -1119,6 +1331,7 @@ async fn handle_codex_chat_to_responses_transform(
                     Some(session_id),
                     upstream_cost,
                     upstream_correlation_id,
+                    credential_guard,
                 )
                 .await;
             }
@@ -1127,6 +1340,10 @@ async fn handle_codex_chat_to_responses_transform(
 
     strip_entity_headers_for_rebuilt_body(&mut response_headers);
     strip_hop_by_hop_response_headers(&mut response_headers);
+    strip_credential_bearing_response_headers(
+        &mut response_headers,
+        ctx.credential_exposure_guard(),
+    );
     // Builder::header 是 append 语义；不先 remove 会和上游 Content-Type 双发。
     response_headers.remove(axum::http::header::CONTENT_TYPE);
 
@@ -1169,34 +1386,16 @@ async fn handle_codex_chat_error_response(
         } else {
             std::time::Duration::ZERO
         };
-    let (mut response_headers, _status, body_bytes) =
+    let (mut response_headers, _status, _body_bytes) =
         read_decoded_body(response, ctx.tag, body_timeout).await?;
-
-    // 非 JSON 上游错误体（Cloudflare HTML、纯文本 "Unauthorized" 等）若丢成 None，
-    // 客户端就看不到原始诊断信息；包成 Value::String 走转换函数的字符串分支。
-    let parsed_value: Value = match serde_json::from_slice::<Value>(&body_bytes) {
-        Ok(value) => value,
-        Err(_) => {
-            const MAX_RAW_ERROR_BYTES: usize = 1024;
-            let lossy = String::from_utf8_lossy(&body_bytes);
-            let truncated = if lossy.len() > MAX_RAW_ERROR_BYTES {
-                let mut end = MAX_RAW_ERROR_BYTES;
-                while end > 0 && !lossy.is_char_boundary(end) {
-                    end -= 1;
-                }
-                format!("{}…(truncated)", &lossy[..end])
-            } else {
-                lossy.into_owned()
-            };
-            log::warn!("[Codex] Chat 错误响应不是合法 JSON，按文本透传: {truncated}");
-            Value::String(truncated)
-        }
-    };
-
-    let responses_error = transform_codex_chat::chat_error_to_response_error(Some(&parsed_value));
+    let responses_error = transform_codex_chat::chat_error_to_response_error(None);
 
     strip_entity_headers_for_rebuilt_body(&mut response_headers);
     strip_hop_by_hop_response_headers(&mut response_headers);
+    strip_credential_bearing_response_headers(
+        &mut response_headers,
+        ctx.credential_exposure_guard(),
+    );
     // Builder::header 是 append 语义；不先 remove 会和上游 Content-Type 双发。
     response_headers.remove(axum::http::header::CONTENT_TYPE);
 
@@ -1226,9 +1425,9 @@ async fn handle_codex_chat_error_response(
 /// 这里没有上游响应可参照，只产出一个 `application/json` 错误体。状态码走
 /// `map_proxy_error_to_status`，该函数已与 `ProxyError::into_response` 对齐。
 ///
-/// 注意：`endpoint` 经 `endpoint_with_query` 可能携带 query（如 `?beta=true`）并被
-/// 原样写入错误体。当前 Codex 端点不在 query 里放凭证，故安全；若将来复用到
-/// query 携带密钥的端点（如 Gemini 的 `?key=`），需先脱敏再回显。
+/// `endpoint` 经 `endpoint_with_query` 可能携带任意客户端 query。即使凭证提取层
+/// 已移除已知 key 参数，客户端仍可把同一 binding key 放进普通参数；公开错误体
+/// 因此必须使用 fingerprint guard，而不能按参数名推断安全性。
 fn build_codex_proxy_error_response(
     ctx: &RequestContext,
     endpoint: &str,
@@ -1236,7 +1435,11 @@ fn build_codex_proxy_error_response(
 ) -> Result<axum::response::Response, ProxyError> {
     let status = axum::http::StatusCode::from_u16(map_proxy_error_to_status(error))
         .unwrap_or(axum::http::StatusCode::INTERNAL_SERVER_ERROR);
-    let body = codex_proxy_error_json(&ctx.provider.name, &ctx.request_model, endpoint, error);
+    let credential_guard = ctx.credential_exposure_guard();
+    let provider_name = credential_guard.redact_or(&ctx.provider.name, "unknown");
+    let request_model = credential_guard.redact_or(&ctx.request_model, "unknown");
+    let endpoint = credential_guard.redact_or(endpoint, "credential-bearing endpoint omitted");
+    let body = codex_proxy_error_json(provider_name, request_model, endpoint, error);
     let body = serde_json::to_vec(&body).map_err(|e| {
         log::error!("[Codex] 序列化代理错误体失败: {e}");
         ProxyError::Internal(format!("Failed to serialize proxy error: {e}"))
@@ -1262,15 +1465,10 @@ fn codex_proxy_error_json(
     error: &ProxyError,
 ) -> Value {
     let (mut body, upstream_status) = match error {
-        ProxyError::UpstreamError { status, body } => {
-            let parsed_body = body
-                .as_deref()
-                .map(|body| serde_json::from_str::<Value>(body).unwrap_or_else(|_| json!(body)));
-            (
-                transform_codex_chat::chat_error_to_response_error(parsed_body.as_ref()),
-                Some(*status),
-            )
-        }
+        ProxyError::UpstreamError { status, .. } => (
+            transform_codex_chat::chat_error_to_response_error(None),
+            Some(*status),
+        ),
         _ => (
             json!({
                 "error": {
@@ -1387,7 +1585,9 @@ fn legacy_compatible_codex_proxy_error_code(error: &ProxyError) -> &'static str 
         ProxyError::TransformError(_) => "cc_switch_transform_error",
         ProxyError::InvalidRequest(_) => "cc_switch_invalid_request",
         ProxyError::AuthError(_) => "cc_switch_auth_error",
+        ProxyError::BindingAuthorizationFailed => "binding_authorization_failed",
         ProxyError::UpstreamError { .. } => "cc_switch_upstream_error",
+        ProxyError::UpstreamResponseRejected => "cc_switch_upstream_response_rejected",
         ProxyError::DatabaseError(_) => "cc_switch_database_error",
         ProxyError::Internal(_) => "cc_switch_internal_error",
         ProxyError::AlreadyRunning
@@ -1425,8 +1625,21 @@ pub async fn handle_gemini(
 ) -> Result<axum::response::Response, ProxyError> {
     let (parts, req_body) = request.into_parts();
     let method = parts.method.clone();
-    let headers = parts.headers;
+    let mut headers = parts.headers;
     let extensions = parts.extensions;
+    let mut uri = uri;
+    let mut endpoint = uri
+        .path_and_query()
+        .map(|pq| pq.as_str())
+        .unwrap_or(uri.path())
+        .to_string();
+    let inbound = extract_binding_credentials(
+        BindingAuthProtocol::Gemini,
+        &mut headers,
+        &mut uri,
+        &mut endpoint,
+    )?;
+    preflight_binding_credential(&state, &inbound.binding_key, "gemini").await?;
     let body_bytes = req_body
         .collect()
         .await
@@ -1442,15 +1655,25 @@ pub async fn handle_gemini(
     };
 
     // Gemini 的模型名称在 URI 中
-    let mut ctx = RequestContext::new(&state, &body, &headers, AppType::Gemini, "Gemini", "gemini")
-        .await?
-        .with_model_from_uri(&uri);
-
-    // 提取完整的路径和查询参数
-    let endpoint = uri
-        .path_and_query()
-        .map(|pq| pq.as_str())
-        .unwrap_or(uri.path());
+    let mut ctx = RequestContext::new(
+        &state,
+        &body,
+        &headers,
+        inbound.binding_key,
+        AppType::Gemini,
+        "Gemini",
+        "gemini",
+    )
+    .await?;
+    // The query credential has already been removed, but a client can repeat
+    // the same protected value inside the path's model segment. Reject before
+    // URL construction so it cannot reach an upstream or URL/status logs.
+    if ctx.credential_exposure_guard().contains(&endpoint)
+        || ctx.credential_exposure_guard().contains(uri.path())
+    {
+        return Err(ProxyError::BindingAuthorizationFailed);
+    }
+    ctx = ctx.with_model_from_uri(&uri);
 
     let is_stream = body
         .get("stream")
@@ -1462,11 +1685,12 @@ pub async fn handle_gemini(
         .forward_with_retry(
             &AppType::Gemini,
             method,
-            endpoint,
+            &endpoint,
             body,
             headers,
             extensions,
             ctx.get_providers(),
+            ctx.take_binding_credential()?,
         )
         .await
     {
@@ -1526,7 +1750,7 @@ fn responses_sse_to_response_value(body: &str) -> Result<Value, ProxyError> {
         let mut event_name = "";
         let mut data_lines: Vec<&str> = Vec::new();
 
-        for line in block.lines() {
+        for line in block.split(['\r', '\n']) {
             let line = line.trim_start();
             if let Some(evt) = strip_sse_field(line, "event") {
                 event_name = evt.trim();
@@ -1564,11 +1788,9 @@ fn responses_sse_to_response_value(body: &str) -> Result<Value, ProxyError> {
                 completed_response = Some(data.get("response").cloned().unwrap_or(data));
             }
             "response.failed" => {
-                let message = data
-                    .pointer("/response/error/message")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("response.failed event received");
-                return Err(ProxyError::TransformError(message.to_string()));
+                return Err(ProxyError::TransformError(
+                    "upstream response failed".to_string(),
+                ));
             }
             _ => {}
         }
@@ -1612,9 +1834,7 @@ fn body_looks_like_sse(body: &str) -> bool {
         .any(|prefix| trimmed.starts_with(prefix))
 }
 
-/// 构造带现场诊断的上游解析错误：附 content-type / content-encoding 与 body
-/// 前缀摘要，让客户端收到的报错自带根因判别（"data:"=错标 SSE、"<"=HTML
-/// 拦截页、� 乱码=未解压二进制），不再依赖向用户索要服务端日志。
+/// 构造不携带上游值/正文的解析错误。上游可在任意字段回显绑定密钥。
 fn upstream_body_parse_error(
     prefix: &str,
     err: &serde_json::Error,
@@ -1627,9 +1847,7 @@ fn upstream_body_parse_error(
     ))
 }
 
-/// SSE 聚合兜底失败时，给聚合器内部错误附加同款现场诊断（content-type/
-/// content-encoding/body 摘要），使命中 #2234 嗅探臂的客户端也拿到根因线索，
-/// 而非仅 "No chat completion choices in upstream SSE" 这类无 header/body 的裸消息。
+/// SSE 聚合兜底失败时仅附加固定诊断，不携带上游值/正文。
 fn aggregate_fallback_error(
     err: ProxyError,
     headers: &axum::http::HeaderMap,
@@ -1642,20 +1860,10 @@ fn aggregate_fallback_error(
     ProxyError::TransformError(format!("{base} {}", body_diagnostics_suffix(headers, body)))
 }
 
-/// 现场诊断后缀：content-type、content-encoding 与 body 前 120 字符摘要。
+/// 固定诊断后缀；参数只用于保持转换调用点的统一形状。
 fn body_diagnostics_suffix(headers: &axum::http::HeaderMap, body: &str) -> String {
-    let header_str = |name: &str| {
-        headers
-            .get(name)
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("<none>")
-    };
-    format!(
-        "(content-type: {}; content-encoding: {}; body[..120]: '{}')",
-        header_str("content-type"),
-        header_str("content-encoding"),
-        body_snippet(body, 120),
-    )
+    let _ = (headers, body);
+    "(upstream response details omitted)".to_string()
 }
 
 /// 从 SSE chunk 的 error 字段提取可报告的错误消息。占位形状（空对象、空消息、
@@ -1671,31 +1879,13 @@ fn error_event_message(error: &Value) -> Option<String> {
     None
 }
 
-/// 取 body 前 `max_chars` 个字符的单行摘要：\r 丢弃、\n 折叠为字面 \n、
-/// 其余控制字符替换为 �，超长加省略号。
-fn body_snippet(body: &str, max_chars: usize) -> String {
-    let mut snippet = String::new();
-    for c in body.chars().take(max_chars) {
-        match c {
-            '\n' => snippet.push_str("\\n"),
-            '\r' => {}
-            c if c.is_control() => snippet.push('\u{FFFD}'),
-            c => snippet.push(c),
-        }
-    }
-    if body.chars().nth(max_chars).is_some() {
-        snippet.push('…');
-    }
-    snippet
-}
-
 /// 解析单个 SSE 块的 event 名与 data 负载（多行 data 按规范以 \n 连接）。
 /// 行首允许前导空白后再匹配字段名——与 body_looks_like_sse 的 trim 宽容度对齐，
 /// 否则缩进的 `  data:` 行被嗅探接受却在此静默丢失（C4）。返回 None 表示无 data 行。
 fn sse_block_parts(block: &str) -> Option<(String, String)> {
     let mut event_name = String::new();
     let mut data_lines: Vec<&str> = Vec::new();
-    for line in block.lines() {
+    for line in block.split(['\r', '\n']) {
         let line = line.trim_start();
         if let Some(evt) = strip_sse_field(line, "event") {
             event_name = evt.trim().to_string();
@@ -1764,22 +1954,22 @@ fn chat_sse_to_response_value(body: &str) -> Result<Value, ProxyError> {
             // 错误对象）。即便此前已聚合完整 choice 也要据此判失败，否则会把网关的
             // 配额/限流错误伪装成成功（C18）。
             if event_name.eq_ignore_ascii_case("error") {
-                let message = chunk
-                    .get("error")
-                    .and_then(error_event_message)
-                    .or_else(|| error_event_message(&chunk))
-                    .unwrap_or_else(|| "upstream error event in SSE stream".to_string());
-                return Err(ProxyError::TransformError(message));
+                return Err(ProxyError::TransformError(
+                    "upstream error event in SSE stream".to_string(),
+                ));
             }
             // 网关把错误作为普通 data chunk 下发（{"error":{...}}）：仅在 error 含
             // 可报告消息时判失败。空对象 / 空消息 / null / false 等占位形状（部分
             // OpenAI 兼容网关每 chunk 都带）不能据此误杀成功流（C12）。
-            if let Some(message) = chunk
+            if chunk
                 .get("error")
                 .filter(|e| !e.is_null())
                 .and_then(error_event_message)
+                .is_some()
             {
-                return Err(ProxyError::TransformError(message));
+                return Err(ProxyError::TransformError(
+                    "upstream error event in SSE stream".to_string(),
+                ));
             }
 
             // 首个"有意义"的值锁定 envelope。Azure 的 content-filter 前置块带
@@ -2056,20 +2246,35 @@ fn log_forward_error(
 
     let logger = UsageLogger::new(&state.db);
     let status_code = map_proxy_error_to_status(error);
-    let error_message = get_error_message(error);
+    let raw_error_message = get_error_message(error);
+    let credential_guard = ctx.credential_exposure_guard();
+    let error_message = credential_guard
+        .redact_or(&raw_error_message, "request failed")
+        .to_string();
+    let provider_id = credential_guard
+        .redact_or(
+            &ctx.legacy_log_provider_id,
+            "credential-bearing-provider-omitted",
+        )
+        .to_string();
+    let request_model = credential_guard
+        .redact_or(&ctx.request_model, "unknown")
+        .to_string();
+    let session_id = credential_guard.redact_option(Some(ctx.session_id.clone()));
     let request_id = uuid::Uuid::new_v4().to_string();
 
-    if let Err(e) = logger.log_error_with_context(
+    if let Err(e) = logger.log_error_with_context_guarded(
         request_id,
-        ctx.provider.id.clone(),
+        provider_id,
         ctx.app_type_str.to_string(),
-        ctx.request_model.clone(),
+        request_model,
         status_code,
         error_message,
         ctx.latency_ms(),
         is_streaming,
-        Some(ctx.session_id.clone()),
+        session_id,
         None,
+        credential_guard,
     ) {
         log::warn!("记录失败请求日志失败: {e}");
     }
@@ -2082,8 +2287,11 @@ fn log_forward_error(
 #[allow(clippy::too_many_arguments)]
 async fn log_usage(
     state: &ProxyState,
+    agent_module_id: &str,
     usage_provider_id: &str,
+    frozen_provider_context: crate::usage::ingestion::FrozenUsageProviderContext,
     legacy_provider_id: &str,
+    pricing_override: super::provider_router::BindingPricingOverride,
     app_type: &str,
     model: &str,
     request_model: &str,
@@ -2097,14 +2305,18 @@ async fn log_usage(
     legacy_session_id: Option<String>,
     upstream_cost: Option<UpstreamCost>,
     upstream_correlation_id: Option<String>,
+    credential_guard: crate::credentials::CredentialExposureGuard,
 ) {
     if !usage_logging_enabled(state) {
         return;
     }
     super::response_processor::ingest_usage_internal(
         state,
+        agent_module_id,
         usage_provider_id,
+        frozen_provider_context,
         legacy_provider_id,
+        pricing_override,
         app_type,
         model,
         request_model,
@@ -2118,6 +2330,7 @@ async fn log_usage(
         legacy_session_id,
         upstream_cost,
         upstream_correlation_id,
+        credential_guard,
     )
     .await;
 }
@@ -2125,9 +2338,10 @@ async fn log_usage(
 #[cfg(test)]
 mod tests {
     use super::{
-        body_looks_like_sse, body_snippet, chat_sse_to_response_value, codex_proxy_error_json,
-        legacy_compatible_codex_proxy_error_code, responses_sse_to_response_value,
-        should_use_claude_transform_streaming, transform, upstream_body_parse_error,
+        body_looks_like_sse, chat_sse_to_response_value, codex_proxy_error_json,
+        decode_codex_request_body, legacy_compatible_codex_proxy_error_code,
+        responses_sse_to_response_value, should_use_claude_transform_streaming, transform,
+        upstream_body_parse_error,
     };
     use crate::proxy::ProxyError;
 
@@ -2151,7 +2365,7 @@ mod tests {
     }
 
     #[test]
-    fn upstream_body_parse_error_carries_field_diagnostics() {
+    fn upstream_body_parse_error_omits_upstream_values_and_body() {
         let mut headers = axum::http::HeaderMap::new();
         headers.insert("content-type", "text/html".parse().unwrap());
         headers.insert("content-encoding", "gzip".parse().unwrap());
@@ -2166,16 +2380,17 @@ mod tests {
 
         match err {
             ProxyError::TransformError(msg) => {
-                assert!(msg.contains("content-type: text/html"), "{msg}");
-                assert!(msg.contains("content-encoding: gzip"), "{msg}");
-                assert!(msg.contains("<html>\\nblocked</html>"), "{msg}");
+                assert!(!msg.contains("text/html"), "{msg}");
+                assert!(!msg.contains("gzip"), "{msg}");
+                assert!(!msg.contains("<html>\\nblocked</html>"), "{msg}");
+                assert!(msg.contains("upstream response details omitted"), "{msg}");
             }
             other => panic!("expected TransformError, got {other:?}"),
         }
     }
 
     #[test]
-    fn upstream_body_parse_error_marks_missing_headers() {
+    fn upstream_body_parse_error_never_adds_missing_header_diagnostics() {
         let headers = axum::http::HeaderMap::new();
         let parse_err = serde_json::from_str::<serde_json::Value>("data:").unwrap_err();
 
@@ -2183,11 +2398,27 @@ mod tests {
 
         match err {
             ProxyError::TransformError(msg) => {
-                assert!(msg.contains("content-type: <none>"), "{msg}");
-                assert!(msg.contains("content-encoding: <none>"), "{msg}");
+                assert!(!msg.contains("content-type"), "{msg}");
+                assert!(!msg.contains("content-encoding"), "{msg}");
+                assert!(!msg.contains("data: oops"), "{msg}");
             }
             other => panic!("expected TransformError, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn unsupported_codex_content_encoding_does_not_echo_the_header_value() {
+        const SECRET: &str = "protected-content-encoding-sentinel";
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::CONTENT_ENCODING,
+            SECRET.parse().unwrap(),
+        );
+
+        let error = decode_codex_request_body(&mut headers, bytes::Bytes::new()).unwrap_err();
+
+        assert!(matches!(error, ProxyError::InvalidRequest(_)));
+        assert!(!error.to_string().contains(SECRET));
     }
 
     #[test]
@@ -2330,18 +2561,6 @@ data: {\"id\":\"c1\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant
     }
 
     #[test]
-    fn body_snippet_sanitizes_controls_and_truncates() {
-        assert_eq!(
-            body_snippet("<html>\r\nblocked\u{0}</html>", 120),
-            "<html>\\nblocked\u{FFFD}</html>"
-        );
-        let long = "a".repeat(200);
-        let snippet = body_snippet(&long, 120);
-        assert_eq!(snippet.chars().count(), 121); // 120 个字符 + 省略号
-        assert!(snippet.ends_with('…'));
-    }
-
-    #[test]
     fn chat_sse_to_response_value_aggregates_text_finish_reason_and_usage() {
         let sse = "data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"created\":123,\"model\":\"gpt-5.4\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Hel\"},\"finish_reason\":null}]}\n\n\
 data: {\"id\":\"chatcmpl-1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"lo\"},\"finish_reason\":null}]}\n\n\
@@ -2416,12 +2635,17 @@ data: [DONE]\r\n\
     }
 
     #[test]
-    fn chat_sse_to_response_value_propagates_upstream_error_event() {
-        let sse = "data: {\"error\":{\"message\":\"rate limited by gateway\",\"code\":429}}\n\n";
+    fn chat_sse_to_response_value_uses_payload_free_upstream_error() {
+        const SECRET: &str = "protected-chat-sse-sentinel";
+        let sse =
+            format!("data: {{\"error\":{{\"message\":\"invalid {SECRET}\",\"code\":429}}}}\n\n");
 
-        let err = chat_sse_to_response_value(sse).unwrap_err();
+        let err = chat_sse_to_response_value(&sse).unwrap_err();
         match err {
-            ProxyError::TransformError(msg) => assert!(msg.contains("rate limited by gateway")),
+            ProxyError::TransformError(msg) => {
+                assert_eq!(msg, "upstream error event in SSE stream");
+                assert!(!msg.contains(SECRET));
+            }
             other => panic!("expected TransformError, got {other:?}"),
         }
     }
@@ -2567,7 +2791,7 @@ data: {\"message\":\"insufficient_user_quota\",\"code\":429}\n\n";
         let err = chat_sse_to_response_value(sse).unwrap_err();
         match err {
             ProxyError::TransformError(msg) => {
-                assert!(msg.contains("insufficient_user_quota"), "{msg}")
+                assert_eq!(msg, "upstream error event in SSE stream")
             }
             other => panic!("expected TransformError, got {other:?}"),
         }
@@ -2720,13 +2944,17 @@ data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_crlf\",\"stat
     }
 
     #[test]
-    fn responses_sse_to_response_value_returns_err_on_response_failed() {
+    fn responses_sse_to_response_value_returns_payload_free_err_on_response_failed() {
+        const SECRET: &str = "protected-responses-sse-sentinel";
         let sse = "event: response.failed\n\
-data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"message\":\"upstream blew up\"}}}\n\n";
+data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"message\":\"protected-responses-sse-sentinel\"}}}\n\n";
 
         let err = responses_sse_to_response_value(sse).unwrap_err();
         match err {
-            ProxyError::TransformError(msg) => assert!(msg.contains("upstream blew up")),
+            ProxyError::TransformError(msg) => {
+                assert_eq!(msg, "upstream response failed");
+                assert!(!msg.contains(SECRET));
+            }
             other => panic!("expected TransformError, got {other:?}"),
         }
     }
@@ -2850,7 +3078,7 @@ data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\"}}\n
     }
 
     #[test]
-    fn codex_proxy_upstream_error_normalizes_nonstandard_body() {
+    fn codex_proxy_upstream_error_omits_nonstandard_body() {
         let error = ProxyError::UpstreamError {
             status: 502,
             body: Some(
@@ -2862,8 +3090,8 @@ data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\"}}\n
 
         let message = body["error"]["message"].as_str().unwrap();
         assert!(message.contains("upstream_status: HTTP 502"));
-        assert!(message.contains("upstream gateway failed"));
-        assert_eq!(body["error"]["code"], 2013);
+        assert!(!message.contains("upstream gateway failed"));
+        assert!(!serde_json::to_string(&body).unwrap().contains("2013"));
         assert_eq!(body["error"]["upstream_status"], 502);
     }
 

@@ -563,6 +563,7 @@ impl ProviderAdapter for CodexAdapter {
         url
     }
 
+    #[cfg(test)]
     fn get_auth_headers(
         &self,
         auth: &AuthInfo,

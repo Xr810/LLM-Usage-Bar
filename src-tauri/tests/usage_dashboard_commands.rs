@@ -52,6 +52,7 @@ fn event() -> UsageEvent {
     UsageEvent {
         event_id: "event".to_string(),
         source: TokenSource::Proxy,
+        agent_module_id: Some("claude-code".to_string()),
         provider_id: "metered".to_string(),
         product_group_id: "product".to_string(),
         occurred_at: 50,

@@ -57,6 +57,7 @@ fn usage_event_from_row(row: &Row<'_>) -> rusqlite::Result<UsageEvent> {
         cost_source: enum_from_text(row.get(18)?, 18)?,
         legacy_request_id: row.get(19)?,
         created_at: row.get(20)?,
+        agent_module_id: row.get(21)?,
     })
 }
 
@@ -64,7 +65,9 @@ const EVENT_COLUMNS: &str = "event_id, source, provider_id, product_group_id, oc
     model, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
     request_id, session_id, upstream_correlation_id, input_cost_usd, output_cost_usd,
     cache_read_cost_usd, cache_creation_cost_usd, total_cost_usd, cost_source,
-    legacy_request_id, created_at";
+    legacy_request_id, created_at, agent_module_id";
+
+const USAGE_EVENT_OWNERSHIP_CONFLICT: &str = "usage_event_ownership_conflict";
 
 fn token_count(value: u64) -> Result<i64, AppError> {
     i64::try_from(value).map_err(|_| AppError::Message("token count is too large".to_string()))
@@ -79,10 +82,11 @@ impl Database {
                 input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
                 request_id, session_id, upstream_correlation_id, input_cost_usd,
                 output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd,
-                total_cost_usd, cost_source, legacy_request_id, created_at
+                total_cost_usd, cost_source, legacy_request_id, created_at,
+                agent_module_id
              ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-                ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21
+                ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22
              ) ON CONFLICT(event_id) DO NOTHING",
             params![
                 event.event_id,
@@ -106,8 +110,26 @@ impl Database {
                 cost_source_value(event.cost_source),
                 event.legacy_request_id,
                 event.created_at,
+                event.agent_module_id,
             ],
         )?;
+        if inserted == 0 {
+            let existing_ownership = conn
+                .query_row(
+                    "SELECT provider_id, agent_module_id
+                     FROM usage_events WHERE event_id = ?1",
+                    [&event.event_id],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+                )
+                .optional()?;
+            if !existing_ownership.is_some_and(|(provider_id, agent_module_id)| {
+                provider_id == event.provider_id && agent_module_id == event.agent_module_id
+            }) {
+                return Err(AppError::Message(
+                    USAGE_EVENT_OWNERSHIP_CONFLICT.to_string(),
+                ));
+            }
+        }
         Ok(inserted == 1)
     }
 
@@ -278,6 +300,7 @@ mod tests {
             event_id: id.to_string(),
             source,
             provider_id: provider_id.to_string(),
+            agent_module_id: None,
             product_group_id: "claude".to_string(),
             occurred_at,
             model: "claude-sonnet".to_string(),
@@ -314,6 +337,48 @@ mod tests {
         let page = db.list_usage_events("metered", 0, 200, 1, 10).unwrap();
         assert_eq!(page.total, 1);
         assert_eq!(page.items, vec![original]);
+    }
+
+    #[test]
+    fn duplicate_event_id_rejects_conflicting_provider_ownership() {
+        let db = Database::memory().unwrap();
+        save_provider(&db, "one");
+        save_provider(&db, "two");
+        assert!(db
+            .insert_usage_event(&event("evt", "one", TokenSource::Proxy, 100))
+            .unwrap());
+
+        let error = db
+            .insert_usage_event(&event("evt", "two", TokenSource::Proxy, 101))
+            .unwrap_err();
+
+        assert_eq!(error.to_string(), "usage_event_ownership_conflict");
+    }
+
+    #[test]
+    fn event_round_trips_frozen_agent_ownership_and_rejects_agent_conflicts() {
+        let db = Database::memory().unwrap();
+        save_provider(&db, "metered");
+        let mut original = event("agent-owned", "metered", TokenSource::Proxy, 100);
+        original.agent_module_id = Some("codex".to_string());
+        assert!(db.insert_usage_event(&original).unwrap());
+
+        let mut same_ownership = original.clone();
+        same_ownership.model = "changed-but-idempotent".to_string();
+        assert!(!db.insert_usage_event(&same_ownership).unwrap());
+
+        let mut conflicting = original.clone();
+        conflicting.agent_module_id = Some("claude-code".to_string());
+        let error = db.insert_usage_event(&conflicting).unwrap_err();
+        assert_eq!(error.to_string(), "usage_event_ownership_conflict");
+
+        let stored = db
+            .list_usage_events("metered", 0, 200, 1, 10)
+            .unwrap()
+            .items
+            .pop()
+            .unwrap();
+        assert_eq!(stored, original);
     }
 
     #[test]

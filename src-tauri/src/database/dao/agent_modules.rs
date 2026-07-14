@@ -224,9 +224,16 @@ impl Database {
         let transaction = conn.transaction()?;
         let module = transaction
             .query_row(
-                "SELECT is_fixed, archived_at FROM agent_modules WHERE id = ?1",
+                "SELECT is_fixed, archived_at, ever_bound
+                 FROM agent_modules WHERE id = ?1",
                 [agent_id],
-                |row| Ok((row.get::<_, bool>(0)?, row.get::<_, Option<i64>>(1)?)),
+                |row| {
+                    Ok((
+                        row.get::<_, bool>(0)?,
+                        row.get::<_, Option<i64>>(1)?,
+                        row.get::<_, bool>(2)?,
+                    ))
+                },
             )
             .optional()?
             .ok_or_else(invalid_agent_module)?;
@@ -252,7 +259,10 @@ impl Database {
             ids
         };
 
-        let outcome = if has_history || !binding_ids.is_empty() {
+        let outcome = if has_history || module.2 || !binding_ids.is_empty() {
+            // Any binding is also the lease/tombstone for a request that may
+            // already have frozen this Agent identity. Archive first and make
+            // every binding ineffective in the same transaction.
             transaction.execute(
                 "UPDATE agent_modules
                  SET archived_at = ?2, visible = 0, updated_at = ?2 WHERE id = ?1",
@@ -349,7 +359,7 @@ mod tests {
     }
 
     #[test]
-    fn custom_agent_can_be_created_trimmed_renamed_hidden_and_hard_deleted() {
+    fn custom_agent_can_be_created_trimmed_renamed_hidden_and_hard_deleted_when_unused() {
         let db = Database::memory().unwrap();
         let mut custom = create_custom(&db, "  Team Agent  ");
         assert_eq!(custom.name, "Team Agent");
@@ -368,10 +378,7 @@ mod tests {
         assert!(!custom.visible);
 
         let outcome = db.delete_agent_module(&custom.id).unwrap();
-        assert!(matches!(
-            outcome,
-            super::AgentModuleDeleteOutcome::HardDeleted
-        ));
+        assert_eq!(outcome, super::AgentModuleDeleteOutcome::HardDeleted);
         assert!(db
             .get_agent_module_including_archived(&custom.id)
             .unwrap()
@@ -430,13 +437,46 @@ mod tests {
             .unwrap();
 
         let outcome = db.delete_agent_module(&custom.id).unwrap();
-        let super::AgentModuleDeleteOutcome::Archived { binding_ids } = outcome else {
-            panic!("bound custom Agent must be archived")
+        let binding_ids = match outcome {
+            super::AgentModuleDeleteOutcome::Archived { binding_ids } => binding_ids,
+            super::AgentModuleDeleteOutcome::HardDeleted => {
+                panic!("bound Agent must be archived")
+            }
         };
         assert_eq!(binding_ids, vec![binding.id.clone()]);
         let listed = db.list_agent_provider_bindings(Some(&custom.id)).unwrap();
         assert_eq!(listed.len(), 1);
         assert!(!listed[0].enabled);
+    }
+
+    #[test]
+    fn formerly_bound_agent_keeps_a_tombstone_after_binding_metadata_is_deleted() {
+        let db = Database::memory().unwrap();
+        let custom = create_custom(&db, "Formerly Bound Agent");
+        insert_provider(&db, "former-provider");
+        let binding = db
+            .save_agent_provider_binding(&AgentProviderBindingInput {
+                id: None,
+                agent_module_id: custom.id.clone(),
+                provider_id: "former-provider".to_string(),
+                enabled: false,
+            })
+            .unwrap();
+        db.delete_agent_provider_binding_metadata(&binding.id, 0)
+            .unwrap();
+
+        let outcome = db.delete_agent_module(&custom.id).unwrap();
+        assert_eq!(
+            outcome,
+            super::AgentModuleDeleteOutcome::Archived {
+                binding_ids: Vec::new()
+            }
+        );
+        let archived = db
+            .get_agent_module_including_archived(&custom.id)
+            .unwrap()
+            .expect("ever-bound Agent must remain as an attribution tombstone");
+        assert!(archived.archived_at.is_some());
     }
 
     #[test]

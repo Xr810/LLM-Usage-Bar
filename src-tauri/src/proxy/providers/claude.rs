@@ -804,6 +804,7 @@ impl ProviderAdapter for ClaudeAdapter {
         base
     }
 
+    #[cfg(test)]
     fn get_auth_headers(
         &self,
         auth: &AuthInfo,

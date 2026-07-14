@@ -11,6 +11,7 @@ const MAX_CACHED_RESPONSES: usize = 512;
 
 #[derive(Debug, Clone, Default)]
 struct CachedResponse {
+    scope: String,
     calls_by_id: HashMap<String, Value>,
     call_order: Vec<String>,
 }
@@ -45,7 +46,12 @@ pub struct CodexChatHistoryStore {
 }
 
 impl CodexChatHistoryStore {
+    #[cfg(test)]
     pub async fn record_response(&self, response: &Value) -> usize {
+        self.record_response_scoped("", response).await
+    }
+
+    pub async fn record_response_scoped(&self, scope: &str, response: &Value) -> usize {
         let Some(response_id) = response
             .get("id")
             .and_then(|value| value.as_str())
@@ -70,23 +76,33 @@ impl CodexChatHistoryStore {
         }
 
         let mut inner = self.inner.write().await;
-        inner.insert_calls(response_id, calls)
+        inner.insert_calls(scope, response_id, calls)
     }
 
-    async fn record_call_item(&self, response_id: Option<&str>, item: &Value) -> bool {
+    async fn record_call_item_scoped(
+        &self,
+        scope: &str,
+        response_id: Option<&str>,
+        item: &Value,
+    ) -> bool {
         let Some(call) = cached_call_item(item) else {
             return false;
         };
 
         let mut inner = self.inner.write().await;
         if let Some(response_id) = response_id.filter(|value| !value.is_empty()) {
-            inner.insert_calls(response_id, vec![call]) > 0
+            inner.insert_calls(scope, response_id, vec![call]) > 0
         } else {
             false
         }
     }
 
+    #[cfg(test)]
     pub async fn enrich_request(&self, body: &mut Value) -> usize {
+        self.enrich_request_scoped("", body).await
+    }
+
+    pub async fn enrich_request_scoped(&self, scope: &str, body: &mut Value) -> usize {
         let previous_response_id = body
             .get("previous_response_id")
             .and_then(|value| value.as_str())
@@ -130,7 +146,7 @@ impl CodexChatHistoryStore {
             .cloned()
             .collect::<HashSet<_>>();
         let lookup = self
-            .lookup(previous_response_id.as_deref(), &requested_call_ids)
+            .lookup(scope, previous_response_id.as_deref(), &requested_call_ids)
             .await;
 
         let restore_group = lookup.restore_group(&output_call_ids, &existing_call_ids);
@@ -195,23 +211,32 @@ impl CodexChatHistoryStore {
 
     async fn lookup(
         &self,
+        scope: &str,
         previous_response_id: Option<&str>,
         requested_call_ids: &HashSet<String>,
     ) -> CachedLookup {
         let inner = self.inner.read().await;
-        let previous = previous_response_id.and_then(|id| inner.responses.get(id).cloned());
-        let fallback = inner.unique_fallback_calls(requested_call_ids, previous.as_ref());
+        let previous = previous_response_id
+            .and_then(|id| inner.responses.get(&scoped_cache_key(scope, id)).cloned());
+        let fallback = inner.unique_fallback_calls(scope, requested_call_ids, previous.as_ref());
         CachedLookup { previous, fallback }
     }
 }
 
 impl CodexChatHistoryInner {
-    fn insert_calls(&mut self, response_id: &str, calls: Vec<(String, Value)>) -> usize {
-        if !self.responses.contains_key(response_id) {
-            self.response_order.push_back(response_id.to_string());
+    fn insert_calls(
+        &mut self,
+        scope: &str,
+        response_id: &str,
+        calls: Vec<(String, Value)>,
+    ) -> usize {
+        let response_key = scoped_cache_key(scope, response_id);
+        if !self.responses.contains_key(&response_key) {
+            self.response_order.push_back(response_key.clone());
         }
 
-        let cached_response = self.responses.entry(response_id.to_string()).or_default();
+        let cached_response = self.responses.entry(response_key.clone()).or_default();
+        cached_response.scope = scope.to_string();
         let mut inserted_or_updated = 0usize;
         let mut indexed_call_ids = Vec::new();
         for (call_id, item) in calls {
@@ -223,7 +248,7 @@ impl CodexChatHistoryInner {
             inserted_or_updated += 1;
         }
         for call_id in indexed_call_ids {
-            self.index_call(&call_id, response_id);
+            self.index_call(scope, &call_id, &response_key);
         }
 
         self.prune();
@@ -240,8 +265,11 @@ impl CodexChatHistoryInner {
         }
     }
 
-    fn index_call(&mut self, call_id: &str, response_id: &str) {
-        let response_ids = self.call_index.entry(call_id.to_string()).or_default();
+    fn index_call(&mut self, scope: &str, call_id: &str, response_id: &str) {
+        let response_ids = self
+            .call_index
+            .entry(scoped_cache_key(scope, call_id))
+            .or_default();
         if !response_ids
             .iter()
             .any(|cached_id| cached_id == response_id)
@@ -260,6 +288,7 @@ impl CodexChatHistoryInner {
 
     fn unique_fallback_calls(
         &self,
+        scope: &str,
         requested_call_ids: &HashSet<String>,
         previous: Option<&CachedResponse>,
     ) -> CachedResponse {
@@ -268,7 +297,7 @@ impl CodexChatHistoryInner {
             if previous.is_some_and(|response| response.calls_by_id.contains_key(call_id)) {
                 continue;
             }
-            if let Some(item) = self.unique_call(call_id) {
+            if let Some(item) = self.unique_call(scope, call_id) {
                 selected.insert(call_id.clone(), item.clone());
             }
         }
@@ -278,6 +307,9 @@ impl CodexChatHistoryInner {
             let Some(response) = self.responses.get(response_id) else {
                 continue;
             };
+            if response.scope != scope {
+                continue;
+            }
             for call_id in &response.call_order {
                 if let Some(item) = selected.remove(call_id) {
                     fallback.call_order.push(call_id.clone());
@@ -288,8 +320,8 @@ impl CodexChatHistoryInner {
         fallback
     }
 
-    fn unique_call(&self, call_id: &str) -> Option<&Value> {
-        let response_ids = self.call_index.get(call_id)?;
+    fn unique_call(&self, scope: &str, call_id: &str) -> Option<&Value> {
+        let response_ids = self.call_index.get(&scoped_cache_key(scope, call_id))?;
         let mut found = None;
         for response_id in response_ids {
             let Some(item) = self
@@ -306,6 +338,10 @@ impl CodexChatHistoryInner {
         }
         found
     }
+}
+
+fn scoped_cache_key(scope: &str, id: &str) -> String {
+    format!("{}:{scope}{id}", scope.len())
 }
 
 impl CachedLookup {
@@ -364,9 +400,18 @@ fn append_restore_group(
     }
 }
 
+#[cfg(test)]
 pub fn record_responses_sse_stream(
     stream: impl Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static,
     history: Arc<CodexChatHistoryStore>,
+) -> impl Stream<Item = Result<Bytes, std::io::Error>> + Send {
+    record_responses_sse_stream_scoped(stream, history, String::new())
+}
+
+pub fn record_responses_sse_stream_scoped(
+    stream: impl Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static,
+    history: Arc<CodexChatHistoryStore>,
+    scope: String,
 ) -> impl Stream<Item = Result<Bytes, std::io::Error>> + Send {
     async_stream::stream! {
         let mut buffer = String::new();
@@ -380,7 +425,12 @@ pub fn record_responses_sse_stream(
                 Ok(bytes) => {
                     append_utf8_safe(&mut buffer, &mut utf8_remainder, &bytes);
                     while let Some(block) = take_sse_block(&mut buffer) {
-                        inspect_sse_block(&block, &mut current_response_id, history.as_ref()).await;
+                        inspect_sse_block(
+                            &block,
+                            &mut current_response_id,
+                            history.as_ref(),
+                            &scope,
+                        ).await;
                     }
                     yield Ok(bytes);
                 }
@@ -394,13 +444,14 @@ async fn inspect_sse_block(
     block: &str,
     current_response_id: &mut Option<String>,
     history: &CodexChatHistoryStore,
+    scope: &str,
 ) {
     if block.trim().is_empty() {
         return;
     }
 
     let mut data_parts = Vec::new();
-    for line in block.lines() {
+    for line in block.split(['\r', '\n']) {
         if let Some(data) = strip_sse_field(line, "data") {
             data_parts.push(data.to_string());
         }
@@ -427,13 +478,13 @@ async fn inspect_sse_block(
         Some("response.output_item.done") => {
             if let Some(item) = value.get("item") {
                 history
-                    .record_call_item(current_response_id.as_deref(), item)
+                    .record_call_item_scoped(scope, current_response_id.as_deref(), item)
                     .await;
             }
         }
         Some("response.completed") => {
             if let Some(response) = value.get("response") {
-                history.record_response(response).await;
+                history.record_response_scoped(scope, response).await;
             }
         }
         _ => {}
@@ -532,6 +583,50 @@ mod tests {
         assert_eq!(input[0]["type"], "function_call");
         assert_eq!(input[0]["reasoning_content"], "Need to inspect the file.");
         assert_eq!(input[1]["type"], "function_call_output");
+    }
+
+    #[tokio::test]
+    async fn scoped_history_never_restores_another_bindings_cached_call() {
+        let history = CodexChatHistoryStore::default();
+        history
+            .record_response_scoped(
+                "binding-a",
+                &json!({
+                    "id": "resp_shared",
+                    "output": [{
+                        "type": "function_call",
+                        "call_id": "call_shared",
+                        "name": "private_a",
+                        "arguments": "{\"scope\":\"a\"}"
+                    }]
+                }),
+            )
+            .await;
+
+        let mut other_binding = json!({
+            "previous_response_id": "resp_shared",
+            "input": [{
+                "type": "function_call_output",
+                "call_id": "call_shared",
+                "output": "ok"
+            }]
+        });
+        assert_eq!(
+            history
+                .enrich_request_scoped("binding-b", &mut other_binding)
+                .await,
+            0
+        );
+        assert_eq!(other_binding["input"][0]["type"], "function_call_output");
+
+        let mut same_binding = other_binding.clone();
+        assert_eq!(
+            history
+                .enrich_request_scoped("binding-a", &mut same_binding)
+                .await,
+            1
+        );
+        assert_eq!(same_binding["input"][0]["name"], "private_a");
     }
 
     #[tokio::test]

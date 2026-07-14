@@ -6,6 +6,7 @@
 
 use super::gemini_schema::build_gemini_function_declaration;
 use super::gemini_shadow::{GeminiAssistantTurn, GeminiShadowStore, GeminiToolCallMeta};
+use crate::credentials::CredentialExposureGuard;
 use crate::proxy::error::ProxyError;
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
@@ -138,6 +139,26 @@ pub fn gemini_to_anthropic_with_shadow_and_hints(
     session_id: Option<&str>,
     tool_schema_hints: Option<&AnthropicToolSchemaHints>,
 ) -> Result<Value, ProxyError> {
+    gemini_to_anthropic_with_shadow_hints_and_guard(
+        body,
+        shadow_store,
+        provider_id,
+        session_id,
+        tool_schema_hints,
+        None,
+    )
+}
+
+/// Guarded production variant. The response and exact Gemini shadow value are
+/// checked before the shadow store can observe either of them.
+pub(crate) fn gemini_to_anthropic_with_shadow_hints_and_guard(
+    body: Value,
+    shadow_store: Option<&GeminiShadowStore>,
+    provider_id: Option<&str>,
+    session_id: Option<&str>,
+    tool_schema_hints: Option<&AnthropicToolSchemaHints>,
+    credential_guard: Option<&CredentialExposureGuard>,
+) -> Result<Value, ProxyError> {
     if let Some(block_reason) = body
         .get("promptFeedback")
         .and_then(|value| value.get("blockReason"))
@@ -255,6 +276,10 @@ pub fn gemini_to_anthropic_with_shadow_and_hints(
         "usage": build_anthropic_usage(body.get("usageMetadata"))
     });
 
+    if credential_guard.is_some_and(|guard| guard.contains_json_value(&anthropic_response)) {
+        return Err(ProxyError::UpstreamResponseRejected);
+    }
+
     if let (Some(store), Some(provider_id), Some(session_id), Some(content)) = (
         shadow_store,
         provider_id,
@@ -264,6 +289,9 @@ pub fn gemini_to_anthropic_with_shadow_and_hints(
         let mut shadow_content = content.clone();
         if let Some(parts_value) = shadow_content.get_mut("parts") {
             *parts_value = json!(rectified_parts.clone());
+        }
+        if credential_guard.is_some_and(|guard| guard.contains_json_value(&shadow_content)) {
+            return Err(ProxyError::UpstreamResponseRejected);
         }
         store.record_assistant_turn(
             provider_id,
@@ -836,7 +864,7 @@ pub fn rectify_tool_call_parts(
         };
 
         if rectify_tool_call_args(&name, args, tool_schema_hints) {
-            log::info!("[Claude/Gemini] Rectified tool args for `{name}`");
+            log::info!("[Claude/Gemini] Rectified tool args; tool name omitted");
         }
     }
 }
@@ -1154,8 +1182,8 @@ fn map_finish_reason(reason: Option<&str>, has_tool_use: bool) -> Value {
         | Some("SPII")
         | Some("BLOCKLIST")
         | Some("PROHIBITED_CONTENT") => Some("refusal"),
-        Some(other) => {
-            log::warn!("[Claude/Gemini] Unknown Gemini finishReason `{other}`, using end_turn");
+        Some(_) => {
+            log::warn!("[Claude/Gemini] Unknown Gemini finishReason; value omitted");
             Some("end_turn")
         }
     };
@@ -2011,6 +2039,39 @@ mod tests {
     // and (c), so the next round's `tool_result(tool_use_id=A)` would
     // fail to resolve through `tool_name_by_id` (populated from (c)).
     // ------------------------------------------------------------------
+
+    #[test]
+    fn guarded_non_stream_response_is_rejected_before_shadow_write() {
+        const SECRET: &str = "protected-gemini-shadow-key";
+        let store = GeminiShadowStore::with_limits(8, 4);
+        let input = json!({
+            "responseId": "response-safe",
+            "modelVersion": "gemini-2.5-pro",
+            "candidates": [{
+                "finishReason": "STOP",
+                "content": {
+                    "parts": [
+                        { "text": "protected-gemini-" },
+                        { "text": "shadow-key" }
+                    ]
+                }
+            }]
+        });
+
+        let result = gemini_to_anthropic_with_shadow_hints_and_guard(
+            input,
+            Some(&store),
+            Some("binding-a"),
+            Some("session-a"),
+            None,
+            Some(&CredentialExposureGuard::from_secret(SECRET.as_bytes())),
+        );
+
+        assert!(matches!(result, Err(ProxyError::UpstreamResponseRejected)));
+        assert!(store
+            .latest_assistant_content("binding-a", "session-a")
+            .is_none());
+    }
 
     /// The id surfaced to the Anthropic client must equal the id recorded
     /// in the shadow's `tool_calls` metadata and the shadow's serialized

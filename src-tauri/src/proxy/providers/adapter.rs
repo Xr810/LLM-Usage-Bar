@@ -34,6 +34,7 @@ pub trait ProviderAdapter: Send + Sync {
     /// Returns `ProxyError::AuthError` when the credential contains characters
     /// that cannot be encoded as an HTTP header value (e.g. control chars,
     /// CR/LF), which would otherwise panic inside `HeaderValue::from_str`.
+    #[cfg(test)]
     fn get_auth_headers(
         &self,
         auth: &AuthInfo,
@@ -63,6 +64,7 @@ pub trait ProviderAdapter: Send + Sync {
 /// Adapters call this for every header value derived from user-pasted
 /// material so a malformed key surfaces as a 401 instead of panicking
 /// the worker via `HeaderValue::from_str(...).unwrap()`.
+#[cfg(test)]
 pub fn auth_header_value(s: &str) -> Result<http::HeaderValue, ProxyError> {
     http::HeaderValue::from_str(s)
         .map_err(|e| ProxyError::AuthError(format!("invalid auth header value: {e}")))

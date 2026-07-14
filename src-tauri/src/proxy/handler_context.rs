@@ -3,15 +3,19 @@
 //! 提供请求生命周期的上下文管理，封装通用初始化逻辑
 
 use crate::app_config::AppType;
+use crate::credentials::{CredentialExposureGuard, ResolvedBindingCredential, SecretString};
+#[cfg(test)]
 use crate::error::AppError;
 use crate::provider::Provider;
 use crate::proxy::{
     extract_session_id,
     forwarder::RequestForwarder,
+    provider_router::BindingPricingOverride,
     server::ProxyState,
     types::{AppProxyConfig, CopilotOptimizerConfig, OptimizerConfig, RectifierConfig},
     ProxyError,
 };
+use crate::usage::ingestion::FrozenUsageProviderContext;
 use axum::http::HeaderMap;
 use std::time::Instant;
 
@@ -40,8 +44,31 @@ pub struct RequestContext {
     pub app_config: AppProxyConfig,
     /// 选中的 Provider（故障转移链的第一个）
     pub provider: Provider,
+    /// Binding identity frozen at the same lookup boundary as the route and
+    /// protected credential. This remains available after the secret is moved
+    /// into and dropped by the forwarder.
+    pub binding_id: String,
+    /// Agent identity frozen together with the binding, Provider route, and
+    /// protected key at request resolution time.
+    pub agent_module_id: String,
     /// v13 全局 Provider ID；与兼容运行时 `provider.id` 明确分离。
     pub usage_provider_id: String,
+    /// Provider grouping/protocol frozen at the binding lookup linearization
+    /// point so asynchronous ingestion cannot observe later Provider edits.
+    pub frozen_usage_provider_context: FrozenUsageProviderContext,
+    /// Explicit v12 migration identity used only for compatibility log rows.
+    /// Unlinked v13 Providers fall back to their own runtime identity without
+    /// gaining access to a same-ID v12 pricing record.
+    pub legacy_log_provider_id: String,
+    /// Safe pricing fields frozen from an explicit legacy migration snapshot.
+    pub pricing_override: BindingPricingOverride,
+    /// Non-clone protected credential. Handlers move this into the forwarder so
+    /// it is dropped immediately after the upstream request attempt finishes.
+    binding_credential: Option<ResolvedBindingCredential>,
+    /// Request-lifetime response guard retained after the forwarding copy is
+    /// consumed. Its protected zeroized key copy enables exact prefix-safe
+    /// egress inspection and is dropped with the request context.
+    credential_exposure_guard: CredentialExposureGuard,
     /// 完整的 Provider 列表（用于故障转移）
     providers: Vec<Provider>,
     /// 请求中的模型名称
@@ -87,6 +114,7 @@ impl RequestContext {
         state: &ProxyState,
         body: &serde_json::Value,
         headers: &HeaderMap,
+        binding_key: SecretString,
         app_type: AppType,
         tag: &'static str,
         app_type_str: &'static str,
@@ -105,49 +133,70 @@ impl RequestContext {
         let optimizer_config = state.db.get_optimizer_config().unwrap_or_default();
         let copilot_optimizer_config = state.db.get_copilot_optimizer_config().unwrap_or_default();
 
-        // 从请求体提取模型名称
-        let request_model = body
-            .get("model")
-            .and_then(|m| m.as_str())
-            .unwrap_or("unknown")
-            .to_string();
-
-        // 提取 Session ID
-        let session_result = extract_session_id(headers, body, app_type_str);
-        let session_id = session_result.session_id.clone();
-
-        log::debug!(
-            "[{}] Session ID: {} (from {:?}, client_provided: {})",
-            tag,
-            session_id,
-            session_result.source,
-            session_result.client_provided
-        );
-
-        // Route bindings are the request-path SSOT. Resolve exactly one provider
-        // for every request so binding/provider edits take effect immediately.
-        let bound = state
-            .provider_router
-            .select_bound_route(canonical_route_protocol(app_type_str))
+        // The protected binding lookup is the request-path linearization point.
+        // Every failure is deliberately collapsed to one payload-free local
+        // authorization error so credential/store/binding state is not exposed.
+        let binding_credential = state
+            .binding_credential_service
+            .resolve_binding_api_key(binding_key)
             .await
-            .map_err(map_route_selection_error)?;
-        let usage_provider_id = bound.usage_provider_id;
-        let provider = bound.provider;
+            .map_err(|_| ProxyError::BindingAuthorizationFailed)?;
+        if binding_credential.route_app_type() != canonical_route_protocol(app_type_str) {
+            return Err(ProxyError::BindingAuthorizationFailed);
+        }
+        let credential_exposure_guard = binding_credential.exposure_guard();
+        let request_model = credential_exposure_guard
+            .redact_or(
+                body.get("model")
+                    .and_then(|model| model.as_str())
+                    .unwrap_or("unknown"),
+                "unknown",
+            )
+            .to_string();
+        let session_result = extract_session_id(headers, body, app_type_str);
+        let session_was_secret = credential_exposure_guard.contains(&session_result.session_id);
+        let session_id = if session_was_secret {
+            uuid::Uuid::new_v4().to_string()
+        } else {
+            session_result.session_id.clone()
+        };
+        let session_client_provided = session_result.client_provided && !session_was_secret;
+        log::debug!(
+            "[{tag}] Session resolved (source={:?}, client_provided={session_client_provided}); value omitted",
+            session_result.source
+        );
+        let ownership = binding_credential.frozen_ownership();
+        let frozen_usage_provider_context = FrozenUsageProviderContext {
+            product_group_id: binding_credential.product_group_id().to_string(),
+            route_app_type: binding_credential.route_app_type().to_string(),
+        };
+        let binding_id = ownership.binding_id;
+        let agent_module_id = ownership.agent_module_id;
+        let usage_provider_id = ownership.provider_id;
+        let provider = binding_credential.runtime_provider().clone();
+        let legacy_log_provider_id = binding_credential
+            .legacy_pricing_provider_id()
+            .unwrap_or(provider.id.as_str())
+            .to_string();
+        let pricing_override = binding_credential.pricing_override().clone();
         let providers = vec![provider.clone()];
 
         log::debug!(
-            "[{}] Bound provider: {}, model: {}, session: {}",
-            tag,
-            provider.name,
-            request_model,
-            session_id
+            "[{tag}] Binding resolved: agent={agent_module_id}, provider={usage_provider_id}; model/session values omitted"
         );
 
         Ok(Self {
             start_time,
             app_config,
             provider,
+            binding_id,
+            agent_module_id,
             usage_provider_id,
+            frozen_usage_provider_context,
+            legacy_log_provider_id,
+            pricing_override,
+            binding_credential: Some(binding_credential),
+            credential_exposure_guard,
             providers,
             request_model,
             outbound_model: None,
@@ -155,11 +204,25 @@ impl RequestContext {
             app_type_str,
             app_type,
             session_id,
-            session_client_provided: session_result.client_provided,
+            session_client_provided,
             rectifier_config,
             optimizer_config,
             copilot_optimizer_config,
         })
+    }
+
+    pub(crate) fn credential_exposure_guard(&self) -> &CredentialExposureGuard {
+        &self.credential_exposure_guard
+    }
+
+    /// Move the verified protected credential into the forwarder. The
+    /// credential is non-clone, so no response/logging task can retain it.
+    pub(crate) fn take_binding_credential(
+        &mut self,
+    ) -> Result<ResolvedBindingCredential, ProxyError> {
+        self.binding_credential
+            .take()
+            .ok_or(ProxyError::BindingAuthorizationFailed)
     }
 
     /// 从 URI 提取模型名称（Gemini 专用）
@@ -171,8 +234,12 @@ impl RequestContext {
         // 否则 GET /v1beta/models/<id>?key=... 会把 query 拼到 request_model 上。
         let endpoint = uri.path();
 
-        self.request_model =
+        let model =
             extract_gemini_model_from_path(endpoint).unwrap_or_else(|| "unknown".to_string());
+        self.request_model = self
+            .credential_exposure_guard
+            .redact_or(&model, "unknown")
+            .to_string();
 
         self
     }
@@ -188,6 +255,7 @@ impl RequestContext {
             state.current_providers.clone(),
             state.gemini_shadow.clone(),
             state.codex_chat_history.clone(),
+            self.binding_id.clone(),
             state.app_handle.clone(),
             self.session_id.clone(),
             self.session_client_provided,
@@ -196,6 +264,7 @@ impl RequestContext {
             self.rectifier_config.clone(),
             self.optimizer_config.clone(),
             self.copilot_optimizer_config.clone(),
+            self.credential_exposure_guard.clone(),
         )
         .without_reactive_retries()
     }
@@ -254,18 +323,16 @@ pub(crate) fn extract_gemini_model_from_path(endpoint: &str) -> Option<String> {
         .map(|s| s.to_string())
 }
 
-/// Claude Desktop shares the Claude inbound protocol binding. All persisted
-/// route-binding keys remain constrained to claude/codex/gemini.
+/// Persisted route protocol identity is exact. Claude Desktop has its own
+/// migrated Provider rows and must not consume an ordinary Claude binding (or
+/// vice versa), even though both ultimately speak an Anthropic wire format.
 pub(crate) fn canonical_route_protocol(app_type: &str) -> &str {
-    if app_type == "claude-desktop" {
-        "claude"
-    } else {
-        app_type
-    }
+    app_type
 }
 
 /// Convert route-selection errors from `ProviderRouter::select_bound_provider` into typed
 /// `ProxyError` variants so callers can respond with consistent HTTP status codes.
+#[cfg(test)]
 pub(crate) fn map_route_selection_error(error: AppError) -> ProxyError {
     match error {
         AppError::Message(message) => {
@@ -330,8 +397,8 @@ mod tests {
     }
 
     #[test]
-    fn claude_desktop_uses_the_claude_route_binding() {
-        assert_eq!(canonical_route_protocol("claude-desktop"), "claude");
+    fn claude_desktop_keeps_its_exact_route_identity() {
+        assert_eq!(canonical_route_protocol("claude-desktop"), "claude-desktop");
         assert_eq!(canonical_route_protocol("codex"), "codex");
         assert_eq!(canonical_route_protocol("gemini"), "gemini");
     }

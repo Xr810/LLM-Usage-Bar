@@ -116,6 +116,7 @@ fn create_agent_schema(conn: &Connection) -> Result<(), AppError> {
              visible INTEGER NOT NULL CHECK (visible IN (0, 1)),
              is_fixed INTEGER NOT NULL CHECK (is_fixed IN (0, 1)),
              archived_at INTEGER,
+             ever_bound INTEGER NOT NULL DEFAULT 0 CHECK (ever_bound IN (0, 1)),
              created_at INTEGER NOT NULL,
              updated_at INTEGER NOT NULL,
              CHECK (
@@ -393,6 +394,15 @@ fn backfill_agent_bindings(conn: &Connection) -> Result<(), AppError> {
             ],
         )?;
     }
+    conn.execute(
+        "UPDATE agent_modules
+         SET ever_bound = 1
+         WHERE EXISTS (
+             SELECT 1 FROM agent_provider_bindings AS binding
+             WHERE binding.agent_module_id = agent_modules.id
+         )",
+        [],
+    )?;
     Ok(())
 }
 
@@ -549,6 +559,7 @@ pub(crate) fn validate_schema_v16_complete(conn: &Connection) -> Result<(), AppE
             ("visible", "INTEGER", 1, None, 0),
             ("is_fixed", "INTEGER", 1, None, 0),
             ("archived_at", "INTEGER", 0, None, 0),
+            ("ever_bound", "INTEGER", 1, Some("0"), 0),
             ("created_at", "INTEGER", 1, None, 0),
             ("updated_at", "INTEGER", 1, None, 0),
         ],
@@ -593,6 +604,7 @@ pub(crate) fn validate_schema_v16_complete(conn: &Connection) -> Result<(), AppE
             "check (length(trim(name)) > 0)",
             "check (visible in (0, 1))",
             "check (is_fixed in (0, 1))",
+            "check (ever_bound in (0, 1))",
             "check ( (id in ('codex','claude-code','opencode','openclaw','hermes') and is_fixed = 1) or (id not in ('codex','claude-code','opencode','openclaw','hermes') and is_fixed = 0) )",
             "check (is_fixed = 0 or archived_at is null)",
         ],

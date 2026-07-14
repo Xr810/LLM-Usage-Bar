@@ -340,6 +340,7 @@ mod tests {
             event_id: event_id.to_string(),
             source,
             provider_id: provider_id.to_string(),
+            agent_module_id: None,
             product_group_id: product_group_id.to_string(),
             occurred_at,
             model: "model".to_string(),

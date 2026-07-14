@@ -467,7 +467,12 @@ impl ProxyService {
 
         // 4. 创建并启动服务器
         let app_handle = self.app_handle.read().await.clone();
-        let server = ProxyServer::new(config.clone(), self.db.clone(), app_handle);
+        let server = ProxyServer::new(
+            config.clone(),
+            self.db.clone(),
+            self.binding_credential_service.clone(),
+            app_handle,
+        );
         let info = server
             .start()
             .await
@@ -2669,7 +2674,12 @@ impl ProxyService {
             }
 
             let app_handle = self.app_handle.read().await.clone();
-            let new_server = ProxyServer::new(new_config.clone(), self.db.clone(), app_handle);
+            let new_server = ProxyServer::new(
+                new_config.clone(),
+                self.db.clone(),
+                self.binding_credential_service.clone(),
+                app_handle,
+            );
             let info = new_server
                 .start()
                 .await

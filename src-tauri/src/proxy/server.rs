@@ -17,6 +17,7 @@ use super::{
     types::*,
     ProxyError,
 };
+use crate::credentials::BindingCredentialService;
 use crate::database::Database;
 use axum::{
     extract::DefaultBodyLimit,
@@ -33,6 +34,10 @@ use tokio::task::JoinHandle;
 #[derive(Clone)]
 pub struct ProxyState {
     pub db: Arc<Database>,
+    /// Binding credentials used by the request path. This must be the exact
+    /// service instance owned by `ProxyService`, so key rotation and cleanup
+    /// become visible at the next request-resolution boundary.
+    pub binding_credential_service: Arc<BindingCredentialService>,
     pub config: Arc<RwLock<ProxyConfig>>,
     pub status: Arc<RwLock<ProxyStatus>>,
     pub start_time: Arc<RwLock<Option<std::time::Instant>>>,
@@ -64,6 +69,7 @@ impl ProxyServer {
     pub fn new(
         config: ProxyConfig,
         db: Arc<Database>,
+        binding_credential_service: Arc<BindingCredentialService>,
         app_handle: Option<tauri::AppHandle>,
     ) -> Self {
         // 创建共享的 ProviderRouter（熔断器状态将跨所有请求保持）
@@ -73,6 +79,7 @@ impl ProxyServer {
 
         let state = ProxyState {
             db,
+            binding_credential_service,
             config: Arc::new(RwLock::new(config.clone())),
             status: Arc::new(RwLock::new(ProxyStatus::default())),
             start_time: Arc::new(RwLock::new(None)),

@@ -935,7 +935,7 @@ pub fn create_responses_sse_stream_from_chat_with_context<E: std::error::Error +
 
                         let mut event_name: Option<String> = None;
                         let mut data_parts: Vec<String> = Vec::new();
-                        for line in block.lines() {
+                        for line in block.split(['\r', '\n']) {
                             if let Some(event) = strip_sse_field(line, "event") {
                                 event_name = Some(event.trim().to_string());
                             }
@@ -962,8 +962,10 @@ pub fn create_responses_sse_stream_from_chat_with_context<E: std::error::Error +
                         };
 
                         if event_name.as_deref() == Some("error") || chunk.get("error").is_some() {
-                            let (message, error_type) = extract_chat_sse_error(&chunk);
-                            yield Ok(state.failed_event(message, error_type));
+                            yield Ok(state.failed_event(
+                                "upstream error event in SSE stream".to_string(),
+                                Some("upstream_error".to_string()),
+                            ));
                             stream_failed = true;
                             break;
                         }
@@ -977,9 +979,9 @@ pub fn create_responses_sse_stream_from_chat_with_context<E: std::error::Error +
                         break;
                     }
                 }
-                Err(e) => {
+                Err(_) => {
                     yield Ok(state.failed_event(
-                        format!("Stream error: {e}"),
+                        "upstream stream failed".to_string(),
                         Some("stream_error".to_string()),
                     ));
                     stream_failed = true;
@@ -1006,28 +1008,6 @@ pub fn create_responses_sse_stream_from_chat_with_context<E: std::error::Error +
             }
         }
     }
-}
-
-fn extract_chat_sse_error(value: &Value) -> (String, Option<String>) {
-    let error = value.get("error").unwrap_or(value);
-    let message = error
-        .as_str()
-        .map(ToString::to_string)
-        .or_else(|| {
-            error
-                .get("message")
-                .or_else(|| error.get("detail"))
-                .and_then(|v| v.as_str())
-                .map(ToString::to_string)
-        })
-        .unwrap_or_else(|| error.to_string());
-    let error_type = error
-        .get("type")
-        .or_else(|| error.get("code"))
-        .and_then(|v| v.as_str())
-        .map(ToString::to_string);
-
-    (message, error_type)
 }
 
 fn sse_event(event: &str, data: Value) -> Bytes {
@@ -1071,6 +1051,19 @@ mod tests {
         assert!(output.contains("\"text\":\"Hello\""));
         assert!(output.contains("event: response.completed"));
         assert!(output.contains("\"input_tokens\":4"));
+    }
+
+    #[tokio::test]
+    async fn converts_cr_only_event_and_data_fields() {
+        let output = collect(vec![
+            "event: message\rdata: {\"id\":\"chatcmpl_cr\",\"model\":\"gpt-5.4\",\"choices\":[{\"delta\":{\"content\":\"CR works\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":2,\"total_tokens\":4}}\r\r",
+            "data: [DONE]\r\r",
+        ])
+        .await;
+
+        assert!(output.contains("event: response.output_text.delta"));
+        assert!(output.contains("\"text\":\"CR works\""));
+        assert!(output.contains("event: response.completed"));
     }
 
     #[tokio::test]
@@ -1304,15 +1297,16 @@ mod tests {
 
     #[tokio::test]
     async fn chat_sse_error_event_emits_failed_without_completed() {
+        const SECRET: &str = "protected-chat-stream-error-sentinel";
         let output = collect(vec![
-            "event: error\ndata: {\"error\":{\"message\":\"bad request\",\"type\":\"invalid_request_error\"}}\n\n",
+            "event: error\ndata: {\"error\":{\"message\":\"protected-chat-stream-error-sentinel\",\"type\":\"invalid_request_error\"}}\n\n",
             "data: [DONE]\n\n",
         ])
         .await;
 
         assert!(output.contains("event: response.failed"));
-        assert!(output.contains("bad request"));
-        assert!(output.contains("invalid_request_error"));
+        assert!(output.contains("upstream error event in SSE stream"));
+        assert!(!output.contains(SECRET));
         assert!(!output.contains("event: response.completed"));
     }
 
@@ -1325,8 +1319,9 @@ mod tests {
         .await;
 
         assert!(output.contains("event: response.failed"));
-        assert!(output.contains("quota exceeded"));
-        assert!(output.contains("rate_limit_exceeded"));
+        assert!(output.contains("upstream error event in SSE stream"));
+        assert!(!output.contains("quota exceeded"));
+        assert!(!output.contains("rate_limit_exceeded"));
         assert!(!output.contains("event: response.completed"));
     }
 }

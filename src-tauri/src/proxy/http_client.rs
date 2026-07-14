@@ -12,6 +12,7 @@ use std::time::Duration;
 
 /// 全局 HTTP 客户端实例
 static GLOBAL_CLIENT: OnceCell<RwLock<Client>> = OnceCell::new();
+static GLOBAL_NO_REDIRECT_CLIENT: OnceCell<RwLock<Client>> = OnceCell::new();
 
 /// 当前代理 URL（用于日志和状态查询）
 static CURRENT_PROXY_URL: OnceCell<RwLock<Option<String>>> = OnceCell::new();
@@ -53,6 +54,7 @@ fn get_proxy_port() -> u16 {
 pub fn init(proxy_url: Option<&str>) -> Result<(), String> {
     let effective_url = proxy_url.filter(|s| !s.trim().is_empty());
     let client = build_client(effective_url)?;
+    let no_redirect_client = build_client_with_redirects(effective_url, false)?;
 
     // 尝试初始化全局客户端，如果已存在则记录警告并使用 apply_proxy 更新
     if GLOBAL_CLIENT.set(RwLock::new(client.clone())).is_err() {
@@ -65,6 +67,7 @@ pub fn init(proxy_url: Option<&str>) -> Result<(), String> {
         // 已初始化，改用 apply_proxy 更新
         return apply_proxy(proxy_url);
     }
+    let _ = GLOBAL_NO_REDIRECT_CLIENT.set(RwLock::new(no_redirect_client));
 
     // 初始化代理 URL 记录
     let _ = CURRENT_PROXY_URL.set(RwLock::new(effective_url.map(|s| s.to_string())));
@@ -106,6 +109,7 @@ pub fn validate_proxy(proxy_url: Option<&str>) -> Result<(), String> {
 pub fn apply_proxy(proxy_url: Option<&str>) -> Result<(), String> {
     let effective_url = proxy_url.filter(|s| !s.trim().is_empty());
     let new_client = build_client(effective_url)?;
+    let new_no_redirect_client = build_client_with_redirects(effective_url, false)?;
 
     // 更新客户端
     if let Some(lock) = GLOBAL_CLIENT.get() {
@@ -117,6 +121,14 @@ pub fn apply_proxy(proxy_url: Option<&str>) -> Result<(), String> {
     } else {
         // 如果还没初始化，则初始化
         return init(proxy_url);
+    }
+    if let Some(lock) = GLOBAL_NO_REDIRECT_CLIENT.get() {
+        *lock
+            .write()
+            .map_err(|_| "Failed to update no-redirect client: lock poisoned".to_string())? =
+            new_no_redirect_client;
+    } else {
+        let _ = GLOBAL_NO_REDIRECT_CLIENT.set(RwLock::new(new_no_redirect_client));
     }
 
     // 更新代理 URL 记录
@@ -150,6 +162,7 @@ pub fn apply_proxy(proxy_url: Option<&str>) -> Result<(), String> {
 pub fn update_proxy(proxy_url: Option<&str>) -> Result<(), String> {
     let effective_url = proxy_url.filter(|s| !s.trim().is_empty());
     let new_client = build_client(effective_url)?;
+    let new_no_redirect_client = build_client_with_redirects(effective_url, false)?;
 
     // 更新客户端
     if let Some(lock) = GLOBAL_CLIENT.get() {
@@ -161,6 +174,14 @@ pub fn update_proxy(proxy_url: Option<&str>) -> Result<(), String> {
     } else {
         // 如果还没初始化，则初始化
         return init(proxy_url);
+    }
+    if let Some(lock) = GLOBAL_NO_REDIRECT_CLIENT.get() {
+        *lock
+            .write()
+            .map_err(|_| "Failed to update no-redirect client: lock poisoned".to_string())? =
+            new_no_redirect_client;
+    } else {
+        let _ = GLOBAL_NO_REDIRECT_CLIENT.set(RwLock::new(new_no_redirect_client));
     }
 
     // 更新代理 URL 记录
@@ -196,6 +217,16 @@ pub fn get() -> Client {
         })
 }
 
+/// Client used for binding-owned upstream requests. Redirects are surfaced to
+/// the proxy instead of being followed with protected authentication headers.
+pub(crate) fn get_no_redirect() -> Client {
+    GLOBAL_NO_REDIRECT_CLIENT
+        .get()
+        .and_then(|lock| lock.read().ok())
+        .map(|client| client.clone())
+        .unwrap_or_else(|| build_client_with_redirects(None, false).unwrap_or_default())
+}
+
 /// 获取当前代理 URL
 ///
 /// 返回当前配置的代理 URL，None 表示直连。
@@ -214,6 +245,13 @@ pub fn is_proxy_enabled() -> bool {
 
 /// 构建 HTTP 客户端
 fn build_client(proxy_url: Option<&str>) -> Result<Client, String> {
+    build_client_with_redirects(proxy_url, true)
+}
+
+fn build_client_with_redirects(
+    proxy_url: Option<&str>,
+    follow_redirects: bool,
+) -> Result<Client, String> {
     let mut builder = Client::builder()
         .timeout(Duration::from_secs(600))
         .connect_timeout(Duration::from_secs(30))
@@ -224,7 +262,12 @@ fn build_client(proxy_url: Option<&str>) -> Result<Client, String> {
         .no_gzip()
         .no_brotli()
         .no_deflate()
-        .no_zstd();
+        .no_zstd()
+        .redirect(if follow_redirects {
+            reqwest::redirect::Policy::default()
+        } else {
+            reqwest::redirect::Policy::none()
+        });
 
     // 有代理地址则使用代理，否则跟随系统代理
     if let Some(url) = proxy_url {

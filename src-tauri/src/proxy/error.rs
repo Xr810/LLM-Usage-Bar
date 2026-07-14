@@ -6,6 +6,8 @@ use axum::{
 use serde_json::json;
 use thiserror::Error;
 
+use crate::credentials::CredentialExposureGuard;
+
 #[derive(Debug, Error)]
 pub enum ProxyError {
     #[error("服务器已在运行")]
@@ -53,8 +55,16 @@ pub enum ProxyError {
     #[error("Provider不健康: {0}")]
     ProviderUnhealthy(String),
 
-    #[error("上游错误 (状态码 {status}): {body:?}")]
+    // The body remains available only inside the forwarder for protocol
+    // rectification/classification. Display and public boundaries must never
+    // render it because an upstream can echo the protected binding key.
+    #[error("上游错误 (状态码 {status})")]
     UpstreamError { status: u16, body: Option<String> },
+
+    /// A fixed, payload-free failure used when an upstream response reflects a
+    /// protected binding credential or cannot be safely inspected.
+    #[error("upstream response rejected")]
+    UpstreamResponseRejected,
 
     #[error("超过最大重试次数")]
     MaxRetriesExceeded,
@@ -85,9 +95,89 @@ pub enum ProxyError {
     #[error("认证失败: {0}")]
     AuthError(String),
 
+    /// Local binding credentials are deliberately indistinguishable: missing,
+    /// unknown, disabled, archived, protocol-mismatched, and store failures all
+    /// return this payload-free error without consulting an upstream.
+    #[error("binding authorization failed")]
+    BindingAuthorizationFailed,
+
     #[allow(dead_code)]
     #[error("内部错误: {0}")]
     Internal(String),
+}
+
+impl ProxyError {
+    /// Preserve the error category/status while removing any string that
+    /// contains the protected binding credential. This must run before an
+    /// error reaches retry diagnostics, proxy status, persistence, or HTTP.
+    pub(crate) fn redact_credential(self, guard: &CredentialExposureGuard) -> Self {
+        fn redact(
+            value: String,
+            replacement: &'static str,
+            guard: &CredentialExposureGuard,
+        ) -> String {
+            if guard.contains(&value) {
+                replacement.to_string()
+            } else {
+                value
+            }
+        }
+
+        match self {
+            Self::BindFailed(value) => {
+                Self::BindFailed(redact(value, "address binding failed", guard))
+            }
+            Self::StopFailed(value) => Self::StopFailed(redact(value, "proxy stop failed", guard)),
+            Self::ForwardFailed(value) => {
+                Self::ForwardFailed(redact(value, "request forwarding failed", guard))
+            }
+            Self::RouteNotBound(value) => {
+                Self::RouteNotBound(redact(value, "route unavailable", guard))
+            }
+            Self::RouteProviderDisabled(value) => {
+                Self::RouteProviderDisabled(redact(value, "route unavailable", guard))
+            }
+            Self::RouteProviderNotMetered(value) => {
+                Self::RouteProviderNotMetered(redact(value, "route unavailable", guard))
+            }
+            Self::RouteConfigIncomplete(value) => {
+                Self::RouteConfigIncomplete(redact(value, "route unavailable", guard))
+            }
+            Self::ProviderUnhealthy(value) => {
+                Self::ProviderUnhealthy(redact(value, "provider unavailable", guard))
+            }
+            Self::UpstreamError { status, body } => Self::UpstreamError {
+                status,
+                body: body.filter(|value| !guard.contains(value)),
+            },
+            Self::DatabaseError(value) => {
+                Self::DatabaseError(redact(value, "database operation failed", guard))
+            }
+            Self::ConfigError(value) => {
+                Self::ConfigError(redact(value, "invalid proxy configuration", guard))
+            }
+            Self::TransformError(value) => Self::TransformError(redact(
+                value,
+                "request or upstream transformation failed",
+                guard,
+            )),
+            Self::InvalidRequest(value) => {
+                Self::InvalidRequest(redact(value, "invalid request", guard))
+            }
+            Self::Timeout(value) => Self::Timeout(redact(value, "upstream timeout", guard)),
+            Self::AuthError(value) => {
+                Self::AuthError(redact(value, "authentication failed", guard))
+            }
+            Self::Internal(value) => Self::Internal(redact(value, "internal proxy error", guard)),
+            error => error,
+        }
+    }
+
+    pub(crate) fn discard_upstream_body(&mut self) {
+        if let ProxyError::UpstreamError { body, .. } = self {
+            *body = None;
+        }
+    }
 }
 
 impl IntoResponse for ProxyError {
@@ -95,33 +185,17 @@ impl IntoResponse for ProxyError {
         let (status, body) = match &self {
             ProxyError::UpstreamError {
                 status: upstream_status,
-                body: upstream_body,
+                ..
             } => {
                 let http_status =
                     StatusCode::from_u16(*upstream_status).unwrap_or(StatusCode::BAD_GATEWAY);
 
-                // 尝试解析上游响应体为 JSON，如果失败则包装为字符串
-                let error_body = if let Some(body_str) = upstream_body {
-                    if let Ok(json_body) = serde_json::from_str::<serde_json::Value>(body_str) {
-                        // 上游返回的是 JSON，直接透传
-                        json_body
-                    } else {
-                        // 上游返回的不是 JSON，包装为错误消息
-                        json!({
-                            "error": {
-                                "message": body_str,
-                                "type": "upstream_error",
-                            }
-                        })
+                let error_body = json!({
+                    "error": {
+                        "message": format!("Upstream error (status {})", upstream_status),
+                        "type": "upstream_error",
                     }
-                } else {
-                    json!({
-                        "error": {
-                            "message": format!("Upstream error (status {})", upstream_status),
-                            "type": "upstream_error",
-                        }
-                    })
-                };
+                });
 
                 (http_status, error_body)
             }
@@ -139,6 +213,9 @@ impl IntoResponse for ProxyError {
                         (StatusCode::INTERNAL_SERVER_ERROR, self.to_string())
                     }
                     ProxyError::ForwardFailed(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
+                    ProxyError::UpstreamResponseRejected => {
+                        (StatusCode::BAD_GATEWAY, self.to_string())
+                    }
                     ProxyError::NoAvailableProvider => {
                         (StatusCode::SERVICE_UNAVAILABLE, self.to_string())
                     }
@@ -172,7 +249,9 @@ impl IntoResponse for ProxyError {
                     ProxyError::StreamIdleTimeout(_) => {
                         (StatusCode::GATEWAY_TIMEOUT, self.to_string())
                     }
-                    ProxyError::AuthError(_) => (StatusCode::UNAUTHORIZED, self.to_string()),
+                    ProxyError::AuthError(_) | ProxyError::BindingAuthorizationFailed => {
+                        (StatusCode::UNAUTHORIZED, self.to_string())
+                    }
                     ProxyError::Internal(_) => {
                         (StatusCode::INTERNAL_SERVER_ERROR, self.to_string())
                     }
@@ -222,5 +301,49 @@ pub fn categorize_error(error: &reqwest::Error) -> ErrorCategory {
         }
     } else {
         ErrorCategory::Retryable
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ProxyError;
+    use crate::credentials::CredentialExposureGuard;
+
+    #[test]
+    fn credential_redaction_preserves_error_kind_without_rendering_secret() {
+        const SECRET: &str = "protected-binding-error-sentinel";
+        let guard = CredentialExposureGuard::from_secret(SECRET.as_bytes());
+
+        let error = ProxyError::TransformError(format!(
+            "Gemini Native only supports base64 image sources, got `{SECRET}`"
+        ))
+        .redact_credential(&guard);
+
+        assert!(matches!(error, ProxyError::TransformError(_)));
+        assert!(!error.to_string().contains(SECRET));
+        assert_eq!(
+            error.to_string(),
+            "格式转换错误: request or upstream transformation failed"
+        );
+    }
+
+    #[test]
+    fn credential_redaction_removes_secret_from_upstream_body() {
+        const SECRET: &str = "protected-upstream-body-sentinel";
+        let guard = CredentialExposureGuard::from_secret(SECRET.as_bytes());
+
+        let error = ProxyError::UpstreamError {
+            status: 401,
+            body: Some(format!(r#"{{"message":"invalid {SECRET}"}}"#)),
+        }
+        .redact_credential(&guard);
+
+        assert!(matches!(
+            error,
+            ProxyError::UpstreamError {
+                status: 401,
+                body: None
+            }
+        ));
     }
 }

@@ -87,7 +87,7 @@ impl StreamHandler {
 
                         // 提取完整事件
                         while let Some(event_text) = take_sse_block(&mut buffer) {
-                            for line in event_text.lines() {
+                            for line in event_text.split(['\r', '\n']) {
                                 if let Some(data) = strip_sse_field(line, "data") {
                                     if data.trim() != "[DONE]" {
                                         if let Ok(json) = serde_json::from_str::<Value>(data) {
@@ -101,9 +101,9 @@ impl StreamHandler {
 
                         yield Ok(bytes);
                     }
-                    Ok(Some(Err(e))) => {
-                        log::error!("流错误: {e}");
-                        yield Err(std::io::Error::other(e.to_string()));
+                    Ok(Some(Err(_))) => {
+                        log::error!("流错误；细节已省略");
+                        yield Err(std::io::Error::other("upstream stream failed"));
                         break;
                     }
                     Ok(None) => {

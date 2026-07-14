@@ -505,6 +505,8 @@ fn insert_bound_codex_session_entry(
         event_id: format!("codex-session:{request_id}"),
         source: TokenSource::SessionLog,
         provider_id: provider_id.to_string(),
+        agent_module_id: None,
+        frozen_provider_context: None,
         occurred_at,
         model: model.to_string(),
         usage,
