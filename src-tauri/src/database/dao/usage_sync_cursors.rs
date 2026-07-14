@@ -110,6 +110,30 @@ impl Database {
         Self::put_usage_sync_cursor_on_conn(&conn, cursor)
     }
 
+    /// Atomically publishes a cursor under a stable key and retires its legacy key.
+    pub fn promote_usage_sync_cursor(
+        &self,
+        legacy_source: &str,
+        legacy_cursor_key: &str,
+        cursor: &UsageSyncCursor,
+    ) -> Result<(), AppError> {
+        validate_usage_sync_cursor(cursor)?;
+        if legacy_source == cursor.source && legacy_cursor_key == cursor.cursor_key {
+            return self.put_usage_sync_cursor(cursor);
+        }
+
+        let mut conn = lock_conn!(self.conn);
+        let transaction = conn.transaction()?;
+        Self::put_usage_sync_cursor_on_conn(&transaction, cursor)?;
+        transaction.execute(
+            "DELETE FROM usage_sync_cursors
+             WHERE source = ?1 AND cursor_key = ?2",
+            params![legacy_source, legacy_cursor_key],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
     pub(crate) fn put_usage_sync_cursor_on_conn(
         conn: &Connection,
         cursor: &UsageSyncCursor,

@@ -1072,7 +1072,7 @@ pub(crate) async fn ingest_usage_internal(
         event_id: event_id.clone(),
         source: TokenSource::Proxy,
         provider_id: usage_provider_id.to_string(),
-        agent_module_id: Some(agent_module_id.to_string()),
+        agent_module_id: agent_module_id.to_string(),
         frozen_provider_context: Some(frozen_provider_context),
         occurred_at: chrono::Utc::now().timestamp(),
         model,

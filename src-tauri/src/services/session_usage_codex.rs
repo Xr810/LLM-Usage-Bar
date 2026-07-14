@@ -19,13 +19,14 @@ use crate::error::AppError;
 use crate::proxy::usage::calculator::{CostCalculator, ModelPricing};
 use crate::proxy::usage::parser::TokenUsage;
 use crate::services::session_usage::{
-    get_sync_state, metadata_modified_nanos, update_sync_state, SessionSyncResult,
+    metadata_modified_nanos, update_sync_state_for_resource, SessionSyncResult,
 };
 use crate::services::usage_stats::{find_model_pricing, should_skip_session_insert, DedupKey};
-use crate::usage::domain::TokenSource;
+use crate::usage::domain::{TokenSource, CODEX_AGENT_MODULE_ID};
 use crate::usage::ingestion::{LegacyLogInput, UsageIngestionInput, UsageIngestionService};
-use crate::usage::session::ProviderSessionSyncResult;
+use crate::usage::session::{validate_bound_session_agent, ProviderSessionSyncResult};
 use rust_decimal::Decimal;
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -59,6 +60,73 @@ struct FileParseState {
     current_model: String,
     prev_total: Option<CumulativeTokens>,
     event_index: u32,
+}
+
+struct CodexFileIdentity {
+    resource_identity: String,
+    event_scope: String,
+}
+
+/// 从已打开文件的 OS 实体标识生成不含路径的稳定作用域。
+///
+/// Unix 的 `(device, inode)` 与 Windows 的 `(volume, file index)` 在文件存续期内
+/// 不随 rename 变化，且不同文件复用同一路径时不会沿用旧 cursor 或事件 ID。
+fn codex_file_identity(
+    _path: &Path,
+    _file: &fs::File,
+    _metadata: &fs::Metadata,
+) -> Result<CodexFileIdentity, AppError> {
+    let mut hasher = Sha256::new();
+    hasher.update(b"codex-jsonl-file-v1\0");
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        hasher.update(b"unix\0");
+        hasher.update(_metadata.dev().to_le_bytes());
+        hasher.update(_metadata.ino().to_le_bytes());
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Foundation::HANDLE;
+        use windows_sys::Win32::Storage::FileSystem::{
+            GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+        };
+
+        let mut information = BY_HANDLE_FILE_INFORMATION::default();
+        // SAFETY: `_file` owns a live Windows handle for the duration of this
+        // call and `information` is a correctly sized writable binding type.
+        let succeeded = unsafe {
+            GetFileInformationByHandle(
+                _file.as_raw_handle() as HANDLE,
+                std::ptr::addr_of_mut!(information),
+            )
+        };
+        if succeeded == 0 {
+            return Err(AppError::io(_path, std::io::Error::last_os_error()));
+        }
+        let file_index =
+            ((information.nFileIndexHigh as u64) << 32) | information.nFileIndexLow as u64;
+        hasher.update(b"windows\0");
+        hasher.update(information.dwVolumeSerialNumber.to_le_bytes());
+        hasher.update(file_index.to_le_bytes());
+    }
+
+    #[cfg(all(not(unix), not(windows)))]
+    {
+        return Err(AppError::Config(format!(
+            "当前平台不支持稳定的 Codex 会话文件标识: {}",
+            _path.display()
+        )));
+    }
+
+    let event_scope = hex::encode(hasher.finalize());
+    Ok(CodexFileIdentity {
+        resource_identity: format!("codex-jsonl-file-v1:{event_scope}"),
+        event_scope,
+    })
 }
 
 /// 归一化 Codex 模型名
@@ -157,6 +225,7 @@ pub fn sync_codex_usage_bound(
     provider_id: &str,
 ) -> Result<ProviderSessionSyncResult, AppError> {
     let legacy = db.with_bound_usage_source("codex", provider_id, || {
+        validate_bound_session_agent(db, "codex", provider_id)?;
         sync_codex_usage_impl(db, Some(provider_id))
     })?;
     let Some(legacy) = legacy else {
@@ -268,24 +337,69 @@ fn sync_single_codex_file(
     file_path: &Path,
     bound_provider_id: Option<&str>,
 ) -> Result<(u32, u32), AppError> {
+    if let Some(provider_id) = bound_provider_id {
+        validate_bound_session_agent(db, "codex", provider_id)?;
+    }
     let file_path_str = file_path.to_string_lossy().to_string();
 
-    // 获取文件元数据
-    let metadata = fs::metadata(file_path)
+    // 先打开文件，再从同一句柄取 metadata 和实体标识，
+    // 避免路径在 metadata 查询与实际解析之间被替换。
+    let file =
+        fs::File::open(file_path).map_err(|e| AppError::Config(format!("无法打开文件: {e}")))?;
+    let metadata = file
+        .metadata()
         .map_err(|e| AppError::Config(format!("无法读取文件元数据: {e}")))?;
+    let file_identity = codex_file_identity(file_path, &file, &metadata)?;
+    let cursor_key = &file_identity.resource_identity;
     let file_modified = metadata_modified_nanos(&metadata);
+    let file_size = metadata.len().min(i64::MAX as u64) as i64;
 
-    // 检查同步状态
-    let (last_modified, last_offset) = get_sync_state(db, "codex", &file_path_str)?;
+    // 新 cursor 以文件实体为 key；首次升级时可从同路径的旧 cursor 提升。
+    let resource_cursor = db.get_usage_sync_cursor("codex", cursor_key)?;
+    let legacy_path_cursor = if resource_cursor.is_none() {
+        db.get_usage_sync_cursor("codex", &file_path_str)?
+            .filter(|cursor| {
+                cursor
+                    .resource_identity
+                    .as_deref()
+                    .is_none_or(|identity| identity == file_identity.resource_identity.as_str())
+            })
+    } else {
+        None
+    };
+    let sync_cursor = resource_cursor.as_ref().or(legacy_path_cursor.as_ref());
+    let legacy_cursor_key = legacy_path_cursor
+        .as_ref()
+        .map(|cursor| cursor.cursor_key.as_str());
+    let (last_modified, last_offset) = sync_cursor
+        .map(|cursor| (cursor.modified_at_ns, cursor.line_offset))
+        .unwrap_or((0, 0));
 
     // 文件未变化则跳过
     if file_modified <= last_modified {
+        let cursor_needs_promotion_or_path_refresh =
+            resource_cursor.as_ref().is_none_or(|cursor| {
+                cursor.resource_path.as_deref() != Some(file_path_str.as_str())
+                    || cursor.resource_identity.as_deref()
+                        != Some(file_identity.resource_identity.as_str())
+            });
+        if cursor_needs_promotion_or_path_refresh {
+            update_sync_state_for_resource(
+                db,
+                "codex",
+                cursor_key,
+                &file_path_str,
+                Some(&file_identity.resource_identity),
+                legacy_cursor_key,
+                last_modified.max(file_modified),
+                file_size,
+                last_offset,
+            )?;
+        }
         return Ok((0, 0));
     }
 
-    // 打开文件逐行解析
-    let file =
-        fs::File::open(file_path).map_err(|e| AppError::Config(format!("无法打开文件: {e}")))?;
+    // 逐行解析已用于确定实体标识的同一文件句柄。
     let reader = BufReader::new(file);
 
     let mut state = FileParseState {
@@ -429,8 +543,12 @@ fn sync_single_codex_file(
                 }
 
                 // 生成唯一 request_id
-                let session_id_str = state.session_id.as_deref().unwrap_or("unknown");
-                let request_id = format!("codex_session:{}:{}", session_id_str, state.event_index);
+                let request_scope = state
+                    .session_id
+                    .as_deref()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| format!("file-{}", file_identity.event_scope));
+                let request_id = format!("codex_session:{request_scope}:{}", state.event_index);
 
                 // 提取时间戳
                 let timestamp = value
@@ -475,7 +593,17 @@ fn sync_single_codex_file(
     }
 
     // 更新同步状态
-    update_sync_state(db, "codex", &file_path_str, file_modified, line_offset)?;
+    update_sync_state_for_resource(
+        db,
+        "codex",
+        cursor_key,
+        &file_path_str,
+        Some(&file_identity.resource_identity),
+        legacy_cursor_key,
+        file_modified,
+        file_size,
+        line_offset,
+    )?;
 
     Ok((imported, skipped))
 }
@@ -505,7 +633,7 @@ fn insert_bound_codex_session_entry(
         event_id: format!("codex-session:{request_id}"),
         source: TokenSource::SessionLog,
         provider_id: provider_id.to_string(),
-        agent_module_id: None,
+        agent_module_id: CODEX_AGENT_MODULE_ID.to_string(),
         frozen_provider_context: None,
         occurred_at,
         model: model.to_string(),
@@ -665,6 +793,51 @@ fn find_codex_pricing(conn: &rusqlite::Connection, model_id: &str) -> Option<Mod
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn save_session_provider(db: &Database, provider_id: &str) -> Result<(), AppError> {
+        db.save_usage_provider(&crate::usage::domain::UsageProviderInput {
+            id: provider_id.to_string(),
+            name: format!("{provider_id} session provider"),
+            billing_kind: crate::usage::domain::BillingKind::Subscription,
+            product_group_id: "codex".to_string(),
+            token_sources: vec![TokenSource::SessionLog],
+            session_source_bindings: None,
+            quota_source: None,
+            quota_interval_seconds: Some(300),
+            route_app_type: None,
+            route_config: None,
+            quota_config: None,
+            enabled: true,
+        })?;
+        db.set_usage_source_binding("codex", provider_id)?;
+        Ok(())
+    }
+
+    fn save_enabled_agent_binding(
+        db: &Database,
+        agent_module_id: &str,
+        provider_id: &str,
+    ) -> Result<(), AppError> {
+        let binding =
+            db.save_agent_provider_binding(&crate::usage::domain::AgentProviderBindingInput {
+                id: None,
+                agent_module_id: agent_module_id.to_string(),
+                provider_id: provider_id.to_string(),
+                enabled: true,
+            })?;
+        assert!(binding.enabled);
+        Ok(())
+    }
+
+    fn codex_token_count_log(session_id: Option<&str>, input_tokens: u64) -> String {
+        let session_meta = session_id.map_or_else(String::new, |session_id| {
+            format!("{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"{session_id}\"}}}}\n")
+        });
+        format!(
+            "{session_meta}{{\"type\":\"turn_context\",\"payload\":{{\"model\":\"gpt-5.4\"}}}}\n\
+             {{\"timestamp\":\"2026-07-14T00:00:00Z\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"token_count\",\"info\":{{\"total_token_usage\":{{\"input_tokens\":{input_tokens},\"cached_input_tokens\":1,\"output_tokens\":2}}}}}}}}\n"
+        )
+    }
 
     #[test]
     fn test_delta_first_event() {
@@ -826,6 +999,273 @@ mod tests {
         })?;
         assert_eq!(count, 1);
 
+        Ok(())
+    }
+
+    #[test]
+    fn bound_codex_parser_freezes_codex_agent_when_provider_has_multiple_agent_bindings(
+    ) -> Result<(), AppError> {
+        let db = Database::memory()?;
+        save_session_provider(&db, "shared-session")?;
+        save_enabled_agent_binding(&db, "codex", "shared-session")?;
+        save_enabled_agent_binding(&db, "claude-code", "shared-session")?;
+
+        let tmp = std::env::temp_dir().join(format!(
+            "llm-usage-bar-bound-codex-agent-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&tmp).unwrap();
+        let file = tmp.join("session.jsonl");
+        fs::write(&file, codex_token_count_log(Some("codex-session"), 10)).unwrap();
+
+        assert_eq!(
+            sync_single_codex_file(&db, &file, Some("shared-session"))?,
+            (1, 0)
+        );
+        let ownership: (String, Option<String>) = {
+            let conn = lock_conn!(db.conn);
+            conn.query_row(
+                "SELECT provider_id, agent_module_id FROM usage_events",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?
+        };
+        assert_eq!(ownership.0, "shared-session");
+        assert_eq!(ownership.1.as_deref(), Some("codex"));
+
+        fs::remove_dir_all(&tmp).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn bound_codex_parser_rejects_provider_without_codex_agent_before_cursor_advance(
+    ) -> Result<(), AppError> {
+        let db = Database::memory()?;
+        save_session_provider(&db, "wrong-agent-session")?;
+        save_enabled_agent_binding(&db, "claude-code", "wrong-agent-session")?;
+
+        let tmp = std::env::temp_dir().join(format!(
+            "llm-usage-bar-wrong-codex-agent-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&tmp).unwrap();
+        let file = tmp.join("session.jsonl");
+        fs::write(&file, codex_token_count_log(Some("wrong-agent"), 10)).unwrap();
+        let file_key = file.to_string_lossy().to_string();
+
+        let result = sync_single_codex_file(&db, &file, Some("wrong-agent-session"));
+        assert!(
+            result.is_err(),
+            "Codex session import must reject a provider bound only to another Agent"
+        );
+        assert_eq!(
+            crate::services::session_usage::get_sync_state(&db, "codex", &file_key)?,
+            (0, 0)
+        );
+        let event_count: i64 = {
+            let conn = lock_conn!(db.conn);
+            conn.query_row("SELECT COUNT(*) FROM usage_events", [], |row| row.get(0))?
+        };
+        assert_eq!(event_count, 0);
+
+        fs::remove_dir_all(&tmp).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn codex_files_without_session_meta_use_distinct_event_identity() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        save_session_provider(&db, "codex-session")?;
+        save_enabled_agent_binding(&db, "codex", "codex-session")?;
+
+        let tmp = std::env::temp_dir().join(format!(
+            "llm-usage-bar-codex-file-scope-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&tmp).unwrap();
+        let first = tmp.join("first.jsonl");
+        let second = tmp.join("second.jsonl");
+        fs::write(&first, codex_token_count_log(None, 10)).unwrap();
+        fs::write(&second, codex_token_count_log(None, 10)).unwrap();
+
+        assert_eq!(
+            sync_single_codex_file(&db, &first, Some("codex-session"))?,
+            (1, 0)
+        );
+        assert_eq!(
+            sync_single_codex_file(&db, &second, Some("codex-session"))?,
+            (1, 0),
+            "the first token event in a different no-meta file must not collide"
+        );
+        let (event_count, request_id_count): (i64, i64) = {
+            let conn = lock_conn!(db.conn);
+            conn.query_row(
+                "SELECT COUNT(*), COUNT(DISTINCT request_id) FROM usage_events",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?
+        };
+        assert_eq!(event_count, 2);
+        assert_eq!(request_id_count, 2);
+
+        fs::remove_dir_all(&tmp).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn codex_file_without_session_meta_keeps_event_identity_after_archive_move(
+    ) -> Result<(), AppError> {
+        let db = Database::memory()?;
+        save_session_provider(&db, "codex-session")?;
+        save_enabled_agent_binding(&db, "codex", "codex-session")?;
+
+        let tmp = std::env::temp_dir().join(format!(
+            "llm-usage-bar-codex-archive-scope-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let sessions_dir = tmp.join("sessions/2026/07/14");
+        let archived_dir = tmp.join("archived_sessions");
+        fs::create_dir_all(&sessions_dir).unwrap();
+        fs::create_dir_all(&archived_dir).unwrap();
+        let active = sessions_dir.join("no-meta.jsonl");
+        let archived = archived_dir.join("no-meta.jsonl");
+        fs::write(&active, codex_token_count_log(None, 10)).unwrap();
+
+        assert_eq!(
+            sync_single_codex_file(&db, &active, Some("codex-session"))?,
+            (1, 0)
+        );
+        let original_request_id: String = {
+            let conn = lock_conn!(db.conn);
+            conn.query_row("SELECT request_id FROM usage_events", [], |row| row.get(0))?
+        };
+
+        fs::rename(&active, &archived).unwrap();
+        let (imported, _skipped) = sync_single_codex_file(&db, &archived, Some("codex-session"))?;
+        assert_eq!(
+            imported, 0,
+            "archiving the same no-meta file must not import a second copy"
+        );
+        let (event_count, request_id): (i64, String) = {
+            let conn = lock_conn!(db.conn);
+            conn.query_row(
+                "SELECT COUNT(*), MIN(request_id) FROM usage_events",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?
+        };
+        assert_eq!(event_count, 1);
+        assert_eq!(request_id, original_request_id);
+        let cursors = db.list_usage_sync_cursors("codex")?;
+        assert_eq!(cursors.len(), 1);
+        assert_eq!(
+            cursors[0].resource_path.as_deref(),
+            Some(archived.to_string_lossy().as_ref())
+        );
+        assert!(cursors[0].resource_identity.is_some());
+
+        fs::remove_dir_all(&tmp).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn codex_reused_no_meta_path_gets_a_new_file_identity() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        save_session_provider(&db, "codex-session")?;
+        save_enabled_agent_binding(&db, "codex", "codex-session")?;
+
+        let tmp = std::env::temp_dir().join(format!(
+            "llm-usage-bar-codex-reused-path-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&tmp).unwrap();
+        let current = tmp.join("no-meta.jsonl");
+        let retired = tmp.join("retired.jsonl");
+        fs::write(&current, codex_token_count_log(None, 10)).unwrap();
+
+        assert_eq!(
+            sync_single_codex_file(&db, &current, Some("codex-session"))?,
+            (1, 0)
+        );
+        fs::rename(&current, &retired).unwrap();
+        fs::write(&current, codex_token_count_log(None, 20)).unwrap();
+
+        assert_eq!(
+            sync_single_codex_file(&db, &current, Some("codex-session"))?,
+            (1, 0),
+            "a different file reusing the same path must not inherit the old cursor or event IDs"
+        );
+        let (event_count, request_id_count): (i64, i64) = {
+            let conn = lock_conn!(db.conn);
+            conn.query_row(
+                "SELECT COUNT(*), COUNT(DISTINCT request_id) FROM usage_events",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?
+        };
+        assert_eq!(event_count, 2);
+        assert_eq!(request_id_count, 2);
+        let cursors = db.list_usage_sync_cursors("codex")?;
+        assert_eq!(cursors.len(), 2);
+        assert_ne!(cursors[0].resource_identity, cursors[1].resource_identity);
+
+        fs::remove_dir_all(&tmp).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_codex_cursor_promotion_does_not_poison_a_reused_path() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        save_session_provider(&db, "codex-session")?;
+        save_enabled_agent_binding(&db, "codex", "codex-session")?;
+
+        let tmp = std::env::temp_dir().join(format!(
+            "llm-usage-bar-codex-legacy-cursor-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&tmp).unwrap();
+        let current = tmp.join("no-meta.jsonl");
+        let retired = tmp.join("retired.jsonl");
+        fs::write(&current, codex_token_count_log(None, 10)).unwrap();
+
+        let current_key = current.to_string_lossy().to_string();
+        let metadata = fs::metadata(&current).unwrap();
+        db.put_usage_sync_cursor(&crate::database::UsageSyncCursor {
+            source: "codex".to_string(),
+            cursor_key: current_key.clone(),
+            resource_path: Some(current_key.clone()),
+            resource_identity: None,
+            modified_at_ns: metadata_modified_nanos(&metadata),
+            size_bytes: metadata.len() as i64,
+            byte_offset: 0,
+            line_offset: 2,
+            parser_state_json: None,
+            last_success_at: 1,
+        })?;
+
+        assert_eq!(
+            sync_single_codex_file(&db, &current, Some("codex-session"))?,
+            (0, 0),
+            "an unchanged legacy cursor should promote without replaying old lines"
+        );
+        fs::rename(&current, &retired).unwrap();
+        fs::write(&current, codex_token_count_log(None, 20)).unwrap();
+
+        assert_eq!(
+            sync_single_codex_file(&db, &current, Some("codex-session"))?,
+            (1, 0),
+            "a new file must not inherit the promoted legacy path cursor"
+        );
+        let cursors = db.list_usage_sync_cursors("codex")?;
+        assert_eq!(cursors.len(), 2);
+        assert!(
+            cursors
+                .iter()
+                .all(|cursor| cursor.cursor_key.starts_with("codex-jsonl-file-v1:")),
+            "promotion must retire the legacy path-keyed cursor"
+        );
+
+        fs::remove_dir_all(&tmp).ok();
         Ok(())
     }
 

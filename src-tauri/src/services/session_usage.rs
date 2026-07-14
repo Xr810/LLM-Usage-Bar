@@ -16,9 +16,9 @@ use crate::proxy::usage::parser::TokenUsage;
 use crate::services::usage_stats::{
     effective_usage_log_filter, find_model_pricing, should_skip_session_insert, DedupKey,
 };
-use crate::usage::domain::TokenSource;
+use crate::usage::domain::{TokenSource, CLAUDE_CODE_AGENT_MODULE_ID};
 use crate::usage::ingestion::{LegacyLogInput, UsageIngestionInput, UsageIngestionService};
-use crate::usage::session::ProviderSessionSyncResult;
+use crate::usage::session::{validate_bound_session_agent, ProviderSessionSyncResult};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -73,6 +73,7 @@ pub fn sync_claude_session_logs_bound(
     provider_id: &str,
 ) -> Result<ProviderSessionSyncResult, AppError> {
     let legacy = db.with_bound_usage_source("claude", provider_id, || {
+        validate_bound_session_agent(db, "claude", provider_id)?;
         sync_claude_session_logs_impl(db, Some(provider_id))
     })?;
     let Some(legacy) = legacy else {
@@ -219,6 +220,9 @@ fn sync_single_file(
     file_path: &Path,
     bound_provider_id: Option<&str>,
 ) -> Result<(u32, u32), AppError> {
+    if let Some(provider_id) = bound_provider_id {
+        validate_bound_session_agent(db, "claude", provider_id)?;
+    }
     let file_path_str = file_path.to_string_lossy().to_string();
 
     // 获取文件元数据
@@ -427,7 +431,7 @@ fn insert_bound_session_entry(
         event_id: format!("claude-session:{}", msg.message_id),
         source: TokenSource::SessionLog,
         provider_id: provider_id.to_string(),
-        agent_module_id: None,
+        agent_module_id: CLAUDE_CODE_AGENT_MODULE_ID.to_string(),
         frozen_provider_context: None,
         occurred_at,
         model: msg.model.clone(),
@@ -504,34 +508,73 @@ pub(crate) fn update_sync_state(
     last_modified: i64,
     last_offset: i64,
 ) -> Result<(), AppError> {
+    let existing = db.get_usage_sync_cursor(source, cursor_key)?;
+    let resource_identity = existing
+        .as_ref()
+        .and_then(|cursor| cursor.resource_identity.as_deref());
+    let size_bytes = existing
+        .as_ref()
+        .map(|cursor| cursor.size_bytes)
+        .unwrap_or(0);
+    update_sync_state_for_resource(
+        db,
+        source,
+        cursor_key,
+        cursor_key,
+        resource_identity,
+        None,
+        last_modified,
+        size_bytes,
+        last_offset,
+    )
+}
+
+/// 更新以稳定资源标识为 key 的同步进度，同时保留当前展示路径。
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn update_sync_state_for_resource(
+    db: &Database,
+    source: &str,
+    cursor_key: &str,
+    resource_path: &str,
+    resource_identity: Option<&str>,
+    legacy_cursor_key: Option<&str>,
+    last_modified: i64,
+    size_bytes: i64,
+    last_offset: i64,
+) -> Result<(), AppError> {
     let now = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
 
     let existing = db.get_usage_sync_cursor(source, cursor_key)?;
-    db.put_usage_sync_cursor(&UsageSyncCursor {
+    let legacy_existing = if existing.is_none() {
+        match legacy_cursor_key {
+            Some(legacy_cursor_key) => db.get_usage_sync_cursor(source, legacy_cursor_key)?,
+            None => None,
+        }
+    } else {
+        None
+    };
+    let previous = existing.as_ref().or(legacy_existing.as_ref());
+    let cursor = UsageSyncCursor {
         source: source.to_string(),
         cursor_key: cursor_key.to_string(),
-        resource_path: Some(cursor_key.to_string()),
-        resource_identity: existing
-            .as_ref()
-            .and_then(|cursor| cursor.resource_identity.clone()),
+        resource_path: Some(resource_path.to_string()),
+        resource_identity: resource_identity
+            .map(str::to_string)
+            .or_else(|| previous.and_then(|cursor| cursor.resource_identity.clone())),
         modified_at_ns: last_modified,
-        size_bytes: existing
-            .as_ref()
-            .map(|cursor| cursor.size_bytes)
-            .unwrap_or(0),
-        byte_offset: existing
-            .as_ref()
-            .map(|cursor| cursor.byte_offset)
-            .unwrap_or(0),
+        size_bytes,
+        byte_offset: previous.map(|cursor| cursor.byte_offset).unwrap_or(0),
         line_offset: last_offset,
-        parser_state_json: existing
-            .as_ref()
-            .and_then(|cursor| cursor.parser_state_json.clone()),
+        parser_state_json: previous.and_then(|cursor| cursor.parser_state_json.clone()),
         last_success_at: now,
-    })
+    };
+    match legacy_cursor_key {
+        Some(legacy_cursor_key) => db.promote_usage_sync_cursor(source, legacy_cursor_key, &cursor),
+        None => db.put_usage_sync_cursor(&cursor),
+    }
 }
 
 /// 插入单条会话日志到 proxy_request_logs，返回是否成功插入 (true=新插入, false=已存在)
@@ -964,6 +1007,12 @@ mod tests {
             enabled: true,
         })?;
         db.set_usage_source_binding("claude", "claude-sub")?;
+        db.save_agent_provider_binding(&crate::usage::domain::AgentProviderBindingInput {
+            id: None,
+            agent_module_id: "claude-code".to_string(),
+            provider_id: "claude-sub".to_string(),
+            enabled: true,
+        })?;
 
         let tmp = std::env::temp_dir().join(format!(
             "llm-usage-bar-bound-session-test-{}",
@@ -1019,13 +1068,30 @@ mod tests {
             enabled: true,
         })?;
         db.set_usage_source_binding("claude", "claude-sub")?;
+        for agent_module_id in ["claude-code", "codex"] {
+            let binding =
+                db.save_agent_provider_binding(&crate::usage::domain::AgentProviderBindingInput {
+                    id: None,
+                    agent_module_id: agent_module_id.to_string(),
+                    provider_id: "claude-sub".to_string(),
+                    enabled: false,
+                })?;
+            let conn = lock_conn!(db.conn);
+            conn.execute(
+                "UPDATE agent_provider_bindings SET enabled = 1 WHERE id = ?1",
+                [&binding.id],
+            )?;
+        }
 
         UsageIngestionService::new(&db).ingest(&UsageIngestionInput {
             event_id: "proxy-event".to_string(),
             source: TokenSource::Proxy,
             provider_id: "claude-sub".to_string(),
-            agent_module_id: None,
-            frozen_provider_context: None,
+            agent_module_id: "claude-code".to_string(),
+            frozen_provider_context: Some(crate::usage::ingestion::FrozenUsageProviderContext {
+                product_group_id: "claude".to_string(),
+                route_app_type: "claude".to_string(),
+            }),
             occurred_at: 1_000,
             model: "claude-sonnet-4-5".to_string(),
             usage: TokenUsage {
@@ -1054,18 +1120,29 @@ mod tests {
 
         assert_eq!(sync_single_file(&db, &file, Some("claude-sub"))?, (1, 0));
         let conn = lock_conn!(db.conn);
-        let link: (String, String) = conn.query_row(
-            "SELECT link_kind, link_value FROM usage_event_links",
+        let link: (String, String, String, String) = conn.query_row(
+            "SELECT link.canonical_event_id, link.duplicate_event_id,
+                    link.link_kind, link.link_value
+             FROM usage_event_links AS link",
             [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )?;
         assert_eq!(
             link,
             (
+                "proxy-event".to_string(),
+                "claude-session:msg_exact".to_string(),
                 "upstream_correlation_id".to_string(),
                 "msg_exact".to_string()
             )
         );
+        let agent_module_id: Option<String> = conn.query_row(
+            "SELECT agent_module_id FROM usage_events
+             WHERE event_id = 'claude-session:msg_exact'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(agent_module_id.as_deref(), Some("claude-code"));
         drop(conn);
 
         fs::remove_dir_all(&tmp).ok();

@@ -6,7 +6,7 @@ use crate::proxy::usage::cost_parser::UpstreamCost;
 use crate::proxy::usage::parser::TokenUsage;
 use crate::services::usage_stats::find_model_pricing_row;
 use crate::usage::domain::{CostSource, TokenSource, UsageEvent};
-use rusqlite::{params, OptionalExtension, Transaction};
+use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use rust_decimal::Decimal;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -37,9 +37,9 @@ pub struct UsageIngestionInput {
     /// Global `usage_providers.id`. Never put a transitional v12 provider ID
     /// here; the compatibility identity belongs in `legacy.provider_id`.
     pub provider_id: String,
-    /// Frozen Agent ownership supplied by the trusted source boundary. Legacy
-    /// inputs that cannot be attributed safely leave this null.
-    pub agent_module_id: Option<String>,
+    /// Frozen Agent ownership supplied by the trusted source boundary. Ambiguous
+    /// historical rows may remain null in `UsageEvent`, but new inputs may not.
+    pub agent_module_id: String,
     /// Provider grouping and route protocol frozen at the same trusted proxy
     /// binding lookup as `provider_id`. Non-proxy importers leave this absent
     /// and resolve their provider context transactionally during ingestion.
@@ -70,6 +70,14 @@ pub struct UsageIngestionOutcome {
 struct StoredProviderContext {
     product_group_id: String,
     route_app_type: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct StableCrossSourceMatch {
+    event_id: String,
+    source: TokenSource,
+    link_kind: &'static str,
+    link_value: String,
 }
 
 #[derive(Debug, Clone)]
@@ -233,7 +241,20 @@ fn ingest_on_transaction_with_guard(
         });
     }
 
-    let link_created = if let Some((canonical_event_id, link_kind, link_value)) = stable_match {
+    let link_created = if let Some(stable_match) = stable_match {
+        let (canonical_event_id, duplicate_event_id) = match (input.source, stable_match.source) {
+            (TokenSource::Proxy, TokenSource::SessionLog) => {
+                (input.event_id.as_str(), stable_match.event_id.as_str())
+            }
+            (TokenSource::SessionLog, TokenSource::Proxy) => {
+                (stable_match.event_id.as_str(), input.event_id.as_str())
+            }
+            _ => {
+                return Err(AppError::Database(
+                    "invalid cross-source usage match".to_string(),
+                ))
+            }
+        };
         transaction.execute(
             "INSERT INTO usage_event_links (
                     canonical_event_id, duplicate_event_id, link_kind, link_value, created_at
@@ -241,9 +262,9 @@ fn ingest_on_transaction_with_guard(
                  ON CONFLICT DO NOTHING",
             params![
                 canonical_event_id,
-                input.event_id,
-                link_kind,
-                link_value,
+                duplicate_event_id,
+                stable_match.link_kind,
+                stable_match.link_value,
                 created_at,
             ],
         )? == 1
@@ -272,18 +293,12 @@ fn validate_input(input: &UsageIngestionInput) -> Result<(), AppError> {
             "usage provider id must not be empty".to_string(),
         ));
     }
-    if input
-        .agent_module_id
-        .as_deref()
-        .is_some_and(|agent_module_id| agent_module_id.trim().is_empty())
-    {
+    if input.agent_module_id.trim().is_empty() {
         return Err(AppError::Message(
             "usage agent module id must not be empty".to_string(),
         ));
     }
-    let resolved_proxy_ownership =
-        input.source == TokenSource::Proxy && input.agent_module_id.is_some();
-    if resolved_proxy_ownership != input.frozen_provider_context.is_some() {
+    if (input.source == TokenSource::Proxy) != input.frozen_provider_context.is_some() {
         return Err(AppError::Message(
             "invalid frozen usage provider context".to_string(),
         ));
@@ -317,6 +332,34 @@ fn validate_input(input: &UsageIngestionInput) -> Result<(), AppError> {
     Ok(())
 }
 
+pub(crate) fn validate_session_agent_provider_binding_on_conn(
+    conn: &Connection,
+    agent_module_id: &str,
+    provider_id: &str,
+) -> Result<(), AppError> {
+    let available: bool = conn.query_row(
+        "SELECT EXISTS(
+             SELECT 1
+             FROM agent_provider_bindings AS binding
+             JOIN usage_providers AS provider ON provider.id = binding.provider_id
+             JOIN agent_modules AS agent ON agent.id = binding.agent_module_id
+             WHERE binding.agent_module_id = ?1
+               AND binding.provider_id = ?2
+               AND binding.enabled = 1
+               AND provider.enabled = 1
+               AND agent.archived_at IS NULL
+         )",
+        params![agent_module_id, provider_id],
+        |row| row.get(0),
+    )?;
+    if !available {
+        return Err(AppError::Message(
+            "usage_session_agent_binding_unavailable".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 fn load_and_validate_provider(
     transaction: &Transaction<'_>,
     input: &UsageIngestionInput,
@@ -340,15 +383,20 @@ fn load_and_validate_provider(
     };
     let token_sources: Vec<TokenSource> = serde_json::from_str(&token_sources)
         .map_err(|error| AppError::Database(format!("invalid provider token_sources: {error}")))?;
-    let resolved_proxy_ownership =
-        input.source == TokenSource::Proxy && input.agent_module_id.is_some();
-    if !resolved_proxy_ownership && !token_sources.contains(&input.source) {
+    if input.source == TokenSource::SessionLog {
+        validate_session_agent_provider_binding_on_conn(
+            transaction,
+            &input.agent_module_id,
+            &input.provider_id,
+        )?;
+    }
+    if input.source != TokenSource::Proxy && !token_sources.contains(&input.source) {
         return Err(AppError::Message(format!(
             "usage provider does not accept {}",
             token_source_value(input.source)
         )));
     }
-    if resolved_proxy_ownership {
+    if input.source == TokenSource::Proxy {
         if let Some(context) = &input.frozen_provider_context {
             return Ok(StoredProviderContext {
                 product_group_id: context.product_group_id.clone(),
@@ -410,7 +458,7 @@ fn decide_cost(
 fn find_stable_cross_source_match(
     transaction: &Transaction<'_>,
     input: &UsageIngestionInput,
-) -> Result<Option<(String, &'static str, String)>, AppError> {
+) -> Result<Option<StableCrossSourceMatch>, AppError> {
     for (column, value) in [
         ("request_id", input.request_id.as_deref()),
         ("session_id", input.session_id.as_deref()),
@@ -423,19 +471,35 @@ fn find_stable_cross_source_match(
             continue;
         };
         let sql = format!(
-            "SELECT event_id FROM usage_events
-             WHERE provider_id = ?1 AND source <> ?2 AND {column} = ?3
+            "SELECT event_id, source FROM usage_events
+             WHERE provider_id = ?1 AND agent_module_id = ?2
+               AND source <> ?3 AND {column} = ?4
              ORDER BY occurred_at ASC, event_id ASC LIMIT 1"
         );
-        if let Some(event_id) = transaction
+        if let Some((event_id, source)) = transaction
             .query_row(
                 &sql,
-                params![input.provider_id, token_source_value(input.source), value],
-                |row| row.get::<_, String>(0),
+                params![
+                    input.provider_id,
+                    input.agent_module_id,
+                    token_source_value(input.source),
+                    value
+                ],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
             )
             .optional()?
         {
-            return Ok(Some((event_id, column, value.to_string())));
+            let source = match source.as_str() {
+                "proxy" => TokenSource::Proxy,
+                "session_log" => TokenSource::SessionLog,
+                _ => return Err(AppError::Database("invalid usage event source".to_string())),
+            };
+            return Ok(Some(StableCrossSourceMatch {
+                event_id,
+                source,
+                link_kind: column,
+                link_value: value.to_string(),
+            }));
         }
     }
     Ok(None)
@@ -451,7 +515,7 @@ fn build_event(
         event_id: input.event_id.clone(),
         source: input.source,
         provider_id: input.provider_id.clone(),
-        agent_module_id: input.agent_module_id.clone(),
+        agent_module_id: Some(input.agent_module_id.clone()),
         product_group_id: provider.product_group_id.clone(),
         occurred_at: input.occurred_at,
         model: input.model.clone(),
@@ -481,7 +545,7 @@ fn persisted_values_contain_credential(
     input: &UsageIngestionInput,
     event: &UsageEvent,
     cost: &TrustedCost,
-    stable_match: Option<&(String, &'static str, String)>,
+    stable_match: Option<&StableCrossSourceMatch>,
 ) -> bool {
     let text_values = [
         event.event_id.as_str(),
@@ -533,10 +597,15 @@ fn persisted_values_contain_credential(
         return true;
     }
 
-    if stable_match.is_some_and(|(canonical_event_id, link_kind, link_value)| {
-        [canonical_event_id.as_str(), *link_kind, link_value.as_str()]
-            .into_iter()
-            .any(|value| credential_guard.contains(value))
+    if stable_match.is_some_and(|stable_match| {
+        [
+            stable_match.event_id.as_str(),
+            token_source_value(stable_match.source),
+            stable_match.link_kind,
+            stable_match.link_value.as_str(),
+        ]
+        .into_iter()
+        .any(|value| credential_guard.contains(value))
     }) {
         return true;
     }
@@ -791,8 +860,8 @@ mod tests {
             event_id: event_id.to_string(),
             source,
             provider_id: "global-provider".to_string(),
-            agent_module_id: None,
-            frozen_provider_context: None,
+            agent_module_id: "claude-code".to_string(),
+            frozen_provider_context: (source == TokenSource::Proxy).then(frozen_provider_context),
             occurred_at: 100,
             model: "priced-model".to_string(),
             usage: TokenUsage {
@@ -816,6 +885,41 @@ mod tests {
             product_group_id: "claude-product".to_string(),
             route_app_type: "claude".to_string(),
         }
+    }
+
+    fn seed_session_binding(
+        db: &Database,
+        agent_module_id: &str,
+        provider_id: &str,
+        enabled: bool,
+    ) -> String {
+        let binding = db
+            .save_agent_provider_binding(&AgentProviderBindingInput {
+                id: None,
+                agent_module_id: agent_module_id.to_string(),
+                provider_id: provider_id.to_string(),
+                enabled: false,
+            })
+            .unwrap();
+        if enabled {
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE agent_provider_bindings SET enabled = 1 WHERE id = ?1",
+                [&binding.id],
+            )
+            .unwrap();
+        }
+        binding.id
+    }
+
+    fn attributed_input(
+        event_id: &str,
+        source: TokenSource,
+        agent_module_id: &str,
+    ) -> UsageIngestionInput {
+        let mut value = input(event_id, source);
+        value.agent_module_id = agent_module_id.to_string();
+        value
     }
 
     #[test]
@@ -855,7 +959,7 @@ mod tests {
         }
 
         let mut event = input("resolved-before-mutation", TokenSource::Proxy);
-        event.agent_module_id = Some(agent.id.clone());
+        event.agent_module_id = agent.id.clone();
         event.frozen_provider_context = Some(frozen_provider_context());
         let outcome = UsageIngestionService::new(&db).ingest(&event).unwrap();
         assert!(outcome.inserted);
@@ -905,6 +1009,7 @@ mod tests {
     fn batch_commits_all_events_and_cursor_together() {
         let db = Database::memory().unwrap();
         save_provider(&db, "global-provider", None);
+        seed_session_binding(&db, "claude-code", "global-provider", true);
         let service = UsageIngestionService::new(&db);
         let inputs = [
             input("batch-first", TokenSource::SessionLog),
@@ -944,6 +1049,7 @@ mod tests {
     fn batch_failure_rolls_back_prior_events_and_cursor() {
         let db = Database::memory().unwrap();
         save_provider(&db, "global-provider", None);
+        seed_session_binding(&db, "claude-code", "global-provider", true);
         let service = UsageIngestionService::new(&db);
         let first = input("batch-rollback-first", TokenSource::SessionLog);
         let mut second = input("batch-rollback-second", TokenSource::SessionLog);
@@ -968,6 +1074,7 @@ mod tests {
     fn batch_duplicate_still_advances_cursor() {
         let db = Database::memory().unwrap();
         save_provider(&db, "global-provider", None);
+        seed_session_binding(&db, "claude-code", "global-provider", true);
         let service = UsageIngestionService::new(&db);
         let duplicate = input("batch-duplicate", TokenSource::SessionLog);
         assert!(service.ingest(&duplicate).unwrap().inserted);
@@ -1120,8 +1227,7 @@ mod tests {
         save_provider(&db, "global-provider", None);
         let service = UsageIngestionService::new(&db);
         let mut owned = input("agent-owned-proxy", TokenSource::Proxy);
-        owned.agent_module_id = Some("codex".to_string());
-        owned.frozen_provider_context = Some(frozen_provider_context());
+        owned.agent_module_id = "codex".to_string();
 
         assert!(service.ingest(&owned).unwrap().inserted);
         let stored = db
@@ -1139,7 +1245,8 @@ mod tests {
         let db = Database::memory().unwrap();
         save_provider(&db, "global-provider", None);
         let mut owned = input("missing-frozen-context", TokenSource::Proxy);
-        owned.agent_module_id = Some("codex".to_string());
+        owned.agent_module_id = "codex".to_string();
+        owned.frozen_provider_context = None;
 
         let error = UsageIngestionService::new(&db).ingest(&owned).unwrap_err();
         assert_eq!(error.to_string(), "invalid frozen usage provider context");
@@ -1151,12 +1258,11 @@ mod tests {
         save_provider(&db, "global-provider", None);
         let service = UsageIngestionService::new(&db);
         let mut original = input("same-agent-event-owner", TokenSource::Proxy);
-        original.agent_module_id = Some("codex".to_string());
-        original.frozen_provider_context = Some(frozen_provider_context());
+        original.agent_module_id = "codex".to_string();
         assert!(service.ingest(&original).unwrap().inserted);
 
         let mut conflicting = original;
-        conflicting.agent_module_id = Some("claude-code".to_string());
+        conflicting.agent_module_id = "claude-code".to_string();
         let error = service.ingest(&conflicting).unwrap_err();
 
         assert_eq!(error.to_string(), "usage_event_ownership_conflict");
@@ -1187,6 +1293,7 @@ mod tests {
     fn forced_legacy_failure_rolls_back_new_event_and_exact_link() {
         let db = Database::memory().unwrap();
         save_provider(&db, "global-provider", Some("legacy-provider"));
+        seed_session_binding(&db, "claude-code", "global-provider", true);
         let service = UsageIngestionService::new(&db);
         let mut session = input("session", TokenSource::SessionLog);
         session.request_id = Some("stable-id".to_string());
@@ -1226,6 +1333,7 @@ mod tests {
     fn exact_cross_source_identifier_links_but_similarity_without_id_does_not() {
         let db = Database::memory().unwrap();
         save_provider(&db, "global-provider", None);
+        seed_session_binding(&db, "claude-code", "global-provider", true);
         let service = UsageIngestionService::new(&db);
 
         let mut proxy = input("proxy", TokenSource::Proxy);
@@ -1260,5 +1368,135 @@ mod tests {
                 "exact-correlation".to_string()
             )]
         );
+    }
+
+    #[test]
+    fn cross_source_matching_rejects_a_different_agent_on_the_same_provider() {
+        let db = Database::memory().unwrap();
+        save_provider(&db, "global-provider", None);
+        seed_session_binding(&db, "codex", "global-provider", true);
+        seed_session_binding(&db, "claude-code", "global-provider", true);
+        let service = UsageIngestionService::new(&db);
+
+        let mut proxy = attributed_input("proxy-codex", TokenSource::Proxy, "codex");
+        proxy.request_id = Some("shared-request".to_string());
+        assert!(service.ingest(&proxy).unwrap().inserted);
+
+        let mut session =
+            attributed_input("session-claude", TokenSource::SessionLog, "claude-code");
+        session.request_id = Some("shared-request".to_string());
+        let outcome = service.ingest(&session).unwrap();
+
+        assert!(outcome.inserted);
+        assert!(!outcome.link_created);
+        let conn = db.conn.lock().unwrap();
+        let link_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM usage_event_links", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(link_count, 0);
+    }
+
+    fn assert_proxy_is_canonical_for_arrival_order(session_first: bool) {
+        let db = Database::memory().unwrap();
+        save_provider(&db, "global-provider", None);
+        seed_session_binding(&db, "claude-code", "global-provider", true);
+        let service = UsageIngestionService::new(&db);
+
+        let mut proxy = attributed_input("proxy-owned", TokenSource::Proxy, "claude-code");
+        proxy.request_id = Some("same-request".to_string());
+        proxy.upstream_cost = Some(UpstreamCost {
+            input_cost: Some(Decimal::from_str("0.10").unwrap()),
+            output_cost: Some(Decimal::from_str("0.20").unwrap()),
+            cache_read_cost: None,
+            cache_creation_cost: None,
+            total_cost: Some(Decimal::from_str("0.30").unwrap()),
+        });
+        let mut session = attributed_input("session-owned", TokenSource::SessionLog, "claude-code");
+        session.request_id = Some("same-request".to_string());
+
+        if session_first {
+            assert!(service.ingest(&session).unwrap().inserted);
+            assert!(service.ingest(&proxy).unwrap().link_created);
+        } else {
+            assert!(service.ingest(&proxy).unwrap().inserted);
+            assert!(service.ingest(&session).unwrap().link_created);
+        }
+
+        let conn = db.conn.lock().unwrap();
+        let link: (String, String) = conn
+            .query_row(
+                "SELECT canonical_event_id, duplicate_event_id FROM usage_event_links",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            link,
+            ("proxy-owned".to_string(), "session-owned".to_string())
+        );
+        let costs: Vec<(String, String, Option<String>)> = {
+            let mut statement = conn
+                .prepare(
+                    "SELECT event_id, cost_source, total_cost_usd
+                     FROM usage_events ORDER BY event_id",
+                )
+                .unwrap();
+            statement
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        assert!(costs.iter().any(|(event_id, cost_source, total)| {
+            event_id == "proxy-owned"
+                && cost_source == "upstream"
+                && total.as_deref() == Some("0.30")
+        }));
+        assert!(costs
+            .iter()
+            .any(|(event_id, _, _)| event_id == "session-owned"));
+    }
+
+    #[test]
+    fn proxy_with_upstream_cost_is_canonical_when_proxy_arrives_first() {
+        assert_proxy_is_canonical_for_arrival_order(false);
+    }
+
+    #[test]
+    fn proxy_with_upstream_cost_is_canonical_when_session_arrives_first() {
+        assert_proxy_is_canonical_for_arrival_order(true);
+    }
+
+    #[test]
+    fn session_ingestion_requires_an_enabled_exact_agent_provider_binding() {
+        let db = Database::memory().unwrap();
+        save_provider(&db, "global-provider", None);
+        let service = UsageIngestionService::new(&db);
+
+        let missing = attributed_input("missing-binding", TokenSource::SessionLog, "claude-code");
+        assert_eq!(
+            service.ingest(&missing).unwrap_err().to_string(),
+            "usage_session_agent_binding_unavailable"
+        );
+
+        let binding_id = seed_session_binding(&db, "claude-code", "global-provider", false);
+        let disabled = attributed_input("disabled-binding", TokenSource::SessionLog, "claude-code");
+        assert_eq!(
+            service.ingest(&disabled).unwrap_err().to_string(),
+            "usage_session_agent_binding_unavailable"
+        );
+
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE agent_provider_bindings SET enabled = 1 WHERE id = ?1",
+                [binding_id],
+            )
+            .unwrap();
+        }
+        let enabled = attributed_input("enabled-binding", TokenSource::SessionLog, "claude-code");
+        assert!(service.ingest(&enabled).unwrap().inserted);
     }
 }

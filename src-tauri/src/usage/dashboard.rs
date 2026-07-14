@@ -381,6 +381,7 @@ mod tests {
             Some("0.10"),
         );
         proxy.request_id = Some("stable".to_string());
+        proxy.agent_module_id = Some("claude-code".to_string());
         let mut linked = event(
             "linked-session",
             "sub",
@@ -391,6 +392,7 @@ mod tests {
             Some("0.20"),
         );
         linked.request_id = Some("stable".to_string());
+        linked.agent_module_id = Some("claude-code".to_string());
         let similar_a = event(
             "similar-a",
             "metered",

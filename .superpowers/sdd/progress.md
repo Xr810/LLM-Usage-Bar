@@ -22,7 +22,7 @@ worktree `.worktrees/agent-centric-usage-modules`.
 | 2. Agent module and binding persistence | completed | this task commit | focused 7/12/15; integration 4/4; library 1997 passed / 2 ignored; both reviews approved |
 | 3. Protected credential store and atomic key lifecycle | completed | this task commit | credentials 72/72; backup 30/30; library 2057 passed / 2 ignored; release check and Clippy pass; reviews approved |
 | 4. Credential-routed proxy and frozen event attribution | completed | this task commit | credentials 84/84; response guard 35/35; proxy E2E 16/16; library 2160 passed / 2 ignored; Clippy and both reviews approved |
-| 5. Trusted session attribution and Agent-safe dedup | pending | — | — |
+| 5. Trusted session attribution and Agent-safe dedup | completed | this task commit | session 9/9; ingestion 18/18; event DAO 11/11; session services 43/43; library 2176 passed / 2 ignored; Clippy and both reviews approved |
 | 6. Agent dashboard, events, diagnostics, commands | pending | — | — |
 | 7. Agent-centric frontend and Settings | pending | — | — |
 | 8. Integration, security review, and full acceptance | pending | — | — |
@@ -125,3 +125,38 @@ worktree `.worktrees/agent-centric-usage-modules`.
   outside the sandbox: proxy E2E 16/16 and library 2160 passed, 2 ignored.
 - Independent spec-compliance and route/ownership reviews approved the final tree
   with no P0-P2 findings after the code-quality and Clippy findings were resolved.
+
+## Task 5 Evidence
+
+- RED: the provider-only baseline left Claude/Codex session events without a fixed
+  Agent, accepted a Provider bound only to the wrong Agent, linked exact IDs across
+  different Agents, reversed canonical ownership for session-first arrival, and
+  globally collided Codex files without `session_meta`.
+- Claude and Codex now carry the fixed `claude-code` and `codex` Agent IDs. Bound
+  entrypoints and the ingestion transaction both require the same enabled
+  Agent-Provider binding, enabled Provider, and non-archived Agent; rebinding and
+  rescans cannot mutate prior event ownership.
+- Cross-source matching and link insertion require identical non-null Agent and
+  Provider ownership plus an exact identifier. Proxy/upstream-cost events remain
+  canonical for both arrival orders without rewriting immutable events.
+- Codex no-meta identities come from the same opened file handle used for parsing:
+  Unix uses device/inode and Windows uses volume/file-index, hashed into an opaque
+  entity cursor and event scope. Archive moves keep identity, different files with
+  identical content do not collide, and path reuse receives a new identity.
+- Legacy path cursors are promoted with a single SQLite transaction that upserts
+  the entity key and retires the old key while preserving parser state and offsets.
+  RED/GREEN coverage proves the retired path cannot poison a later replacement
+  file.
+- Focused verification passes session 9/9, ingestion 18/18, event DAO 11/11,
+  Codex 22/22, and all session services 43/43. Rust format, `git diff --check`, and
+  Clippy with `-D warnings` pass. The parallel full suite reproduced the known
+  process-wide `HOME` test race; the required single-thread rerun passed 2176 with
+  2 ignored and 0 failed.
+- Independent spec-compliance, code-quality, and file-identity reviews approved
+  the final tree with no P0-P2 findings. Windows identity code was statically
+  reviewed against the repository's existing implementation because no Windows
+  target is installed on this Mac.
+- Task 6 carry-forward: preserve every legacy link row. Runtime duplicate
+  exclusion may trust a link only when both endpoints have the same non-null Agent
+  and Provider, must select canonical ownership by `source='proxy'`, and must expose
+  invalid legacy links as diagnostics rather than rewriting migration history.

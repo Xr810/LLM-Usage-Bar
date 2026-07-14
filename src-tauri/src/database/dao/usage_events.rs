@@ -143,6 +143,9 @@ impl Database {
                 "provider_id must match event.provider_id".to_string(),
             ));
         }
+        let Some(agent_module_id) = event.agent_module_id.as_deref() else {
+            return Ok(None);
+        };
         let conn = lock_conn!(self.conn);
         for (column, value) in [
             ("request_id", event.request_id.as_deref()),
@@ -157,11 +160,23 @@ impl Database {
             };
             let sql = format!(
                 "SELECT {EVENT_COLUMNS} FROM usage_events
-                 WHERE provider_id = ?1 AND {column} = ?2
+                 WHERE provider_id = ?1
+                   AND agent_module_id = ?2
+                   AND source <> ?3
+                   AND {column} = ?4
                  ORDER BY occurred_at DESC, event_id DESC LIMIT 1"
             );
             if let Some(matched) = conn
-                .query_row(&sql, params![provider_id, value], usage_event_from_row)
+                .query_row(
+                    &sql,
+                    params![
+                        provider_id,
+                        agent_module_id,
+                        token_source_value(event.source),
+                        value
+                    ],
+                    usage_event_from_row,
+                )
                 .optional()?
             {
                 return Ok(Some(matched));
@@ -174,21 +189,35 @@ impl Database {
         let conn = lock_conn!(self.conn);
         let canonical = conn
             .query_row(
-                "SELECT source, provider_id FROM usage_events WHERE event_id = ?1",
+                "SELECT source, provider_id, agent_module_id
+                 FROM usage_events WHERE event_id = ?1",
                 [&link.canonical_event_id],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                },
             )
             .optional()?;
         let duplicate = conn
             .query_row(
-                "SELECT source, provider_id FROM usage_events WHERE event_id = ?1",
+                "SELECT source, provider_id, agent_module_id
+                 FROM usage_events WHERE event_id = ?1",
                 [&link.duplicate_event_id],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                },
             )
             .optional()?;
         let (
-            Some((canonical_source, canonical_provider)),
-            Some((duplicate_source, duplicate_provider)),
+            Some((canonical_source, canonical_provider, canonical_agent)),
+            Some((duplicate_source, duplicate_provider, duplicate_agent)),
         ) = (canonical, duplicate)
         else {
             return Err(AppError::Message("usage event not found".to_string()));
@@ -198,9 +227,21 @@ impl Database {
                 "usage event links require same provider".to_string(),
             ));
         }
+        if canonical_agent.is_none() || canonical_agent != duplicate_agent {
+            return Err(AppError::Message(
+                "usage event links require identical non-null agent ownership".to_string(),
+            ));
+        }
         if canonical_source == duplicate_source {
             return Err(AppError::Message(
                 "usage event links require different sources".to_string(),
+            ));
+        }
+        if canonical_source != token_source_value(TokenSource::Proxy)
+            || duplicate_source != token_source_value(TokenSource::SessionLog)
+        {
+            return Err(AppError::Message(
+                "usage event links require proxy canonical and session_log duplicate".to_string(),
             ));
         }
 
@@ -322,6 +363,18 @@ mod tests {
         }
     }
 
+    fn event_for_agent(
+        id: &str,
+        provider_id: &str,
+        source: TokenSource,
+        occurred_at: i64,
+        agent_module_id: Option<&str>,
+    ) -> UsageEvent {
+        let mut event = event(id, provider_id, source, occurred_at);
+        event.agent_module_id = agent_module_id.map(str::to_string);
+        event
+    }
+
     #[test]
     fn duplicate_event_id_does_not_overwrite_the_original() {
         let db = Database::memory().unwrap();
@@ -386,12 +439,24 @@ mod tests {
         let db = Database::memory().unwrap();
         save_provider(&db, "one");
         save_provider(&db, "two");
-        let mut stored = event("stored", "one", TokenSource::Proxy, 100);
+        let mut stored = event_for_agent(
+            "stored",
+            "one",
+            TokenSource::Proxy,
+            100,
+            Some("claude-code"),
+        );
         stored.request_id = Some("request-exact".to_string());
         stored.session_id = Some("session-exact".to_string());
         db.insert_usage_event(&stored).unwrap();
 
-        let mut exact = event("probe", "one", TokenSource::SessionLog, 101);
+        let mut exact = event_for_agent(
+            "probe",
+            "one",
+            TokenSource::SessionLog,
+            101,
+            Some("claude-code"),
+        );
         exact.request_id = Some("request-exact".to_string());
         assert_eq!(
             db.find_matching_usage_event("one", &exact)
@@ -424,6 +489,82 @@ mod tests {
     }
 
     #[test]
+    fn stable_match_requires_identical_non_null_agent_ownership() {
+        let db = Database::memory().unwrap();
+        save_provider(&db, "metered");
+        let mut stored = event_for_agent(
+            "stored",
+            "metered",
+            TokenSource::Proxy,
+            100,
+            Some("claude-code"),
+        );
+        stored.request_id = Some("shared-assigned".to_string());
+        db.insert_usage_event(&stored).unwrap();
+
+        let mut same_agent = event_for_agent(
+            "same-agent",
+            "metered",
+            TokenSource::SessionLog,
+            101,
+            Some("claude-code"),
+        );
+        same_agent.request_id = Some("shared-assigned".to_string());
+        assert_eq!(
+            db.find_matching_usage_event("metered", &same_agent)
+                .unwrap()
+                .unwrap()
+                .event_id,
+            "stored"
+        );
+
+        let mut different_agent = event_for_agent(
+            "different-agent",
+            "metered",
+            TokenSource::SessionLog,
+            102,
+            Some("codex"),
+        );
+        different_agent.request_id = Some("shared-assigned".to_string());
+        assert!(db
+            .find_matching_usage_event("metered", &different_agent)
+            .unwrap()
+            .is_none());
+
+        let mut missing_probe_agent = event_for_agent(
+            "missing-probe-agent",
+            "metered",
+            TokenSource::SessionLog,
+            103,
+            None,
+        );
+        missing_probe_agent.request_id = Some("shared-assigned".to_string());
+        assert!(db
+            .find_matching_usage_event("metered", &missing_probe_agent)
+            .unwrap()
+            .is_none());
+
+        let mut unassigned =
+            event_for_agent("unassigned", "metered", TokenSource::Proxy, 104, None);
+        unassigned.request_id = Some("shared-unassigned".to_string());
+        db.insert_usage_event(&unassigned).unwrap();
+
+        let mut assigned_probe = same_agent.clone();
+        assigned_probe.request_id = Some("shared-unassigned".to_string());
+        assert!(db
+            .find_matching_usage_event("metered", &assigned_probe)
+            .unwrap()
+            .is_none());
+
+        let mut unassigned_probe = missing_probe_agent;
+        unassigned_probe.request_id = Some("shared-unassigned".to_string());
+        assert!(db
+            .find_matching_usage_event("metered", &unassigned_probe)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
     fn matching_rejects_provider_parameter_mismatch() {
         let db = Database::memory().unwrap();
         save_provider(&db, "one");
@@ -446,9 +587,27 @@ mod tests {
     fn event_links_only_connect_events_from_different_sources_and_are_idempotent() {
         let db = Database::memory().unwrap();
         save_provider(&db, "metered");
-        let proxy = event("proxy", "metered", TokenSource::Proxy, 100);
-        let session = event("session", "metered", TokenSource::SessionLog, 101);
-        let second_proxy = event("proxy-2", "metered", TokenSource::Proxy, 102);
+        let proxy = event_for_agent(
+            "proxy",
+            "metered",
+            TokenSource::Proxy,
+            100,
+            Some("claude-code"),
+        );
+        let session = event_for_agent(
+            "session",
+            "metered",
+            TokenSource::SessionLog,
+            101,
+            Some("claude-code"),
+        );
+        let second_proxy = event_for_agent(
+            "proxy-2",
+            "metered",
+            TokenSource::Proxy,
+            102,
+            Some("claude-code"),
+        );
         db.insert_usage_event(&proxy).unwrap();
         db.insert_usage_event(&session).unwrap();
         db.insert_usage_event(&second_proxy).unwrap();
@@ -476,14 +635,107 @@ mod tests {
     }
 
     #[test]
+    fn event_links_require_identical_non_null_agent_ownership() {
+        let db = Database::memory().unwrap();
+        save_provider(&db, "metered");
+        for event in [
+            event_for_agent(
+                "proxy-claude",
+                "metered",
+                TokenSource::Proxy,
+                100,
+                Some("claude-code"),
+            ),
+            event_for_agent(
+                "session-codex",
+                "metered",
+                TokenSource::SessionLog,
+                101,
+                Some("codex"),
+            ),
+            event_for_agent(
+                "session-unassigned",
+                "metered",
+                TokenSource::SessionLog,
+                102,
+                None,
+            ),
+            event_for_agent("proxy-unassigned", "metered", TokenSource::Proxy, 103, None),
+        ] {
+            db.insert_usage_event(&event).unwrap();
+        }
+
+        let link = |canonical_event_id: &str, duplicate_event_id: &str| UsageEventLink {
+            canonical_event_id: canonical_event_id.to_string(),
+            duplicate_event_id: duplicate_event_id.to_string(),
+            link_kind: "request_id".to_string(),
+            link_value: "shared".to_string(),
+            created_at: 104,
+        };
+
+        assert!(db
+            .insert_usage_event_link(&link("proxy-claude", "session-codex"))
+            .is_err());
+        assert!(db
+            .insert_usage_event_link(&link("proxy-claude", "session-unassigned"))
+            .is_err());
+        assert!(db
+            .insert_usage_event_link(&link("proxy-unassigned", "session-unassigned"))
+            .is_err());
+    }
+
+    #[test]
+    fn event_links_require_proxy_canonical_and_session_log_duplicate() {
+        let db = Database::memory().unwrap();
+        save_provider(&db, "metered");
+        let proxy = event_for_agent(
+            "proxy",
+            "metered",
+            TokenSource::Proxy,
+            100,
+            Some("claude-code"),
+        );
+        let session = event_for_agent(
+            "session",
+            "metered",
+            TokenSource::SessionLog,
+            101,
+            Some("claude-code"),
+        );
+        db.insert_usage_event(&proxy).unwrap();
+        db.insert_usage_event(&session).unwrap();
+
+        let reversed = UsageEventLink {
+            canonical_event_id: "session".to_string(),
+            duplicate_event_id: "proxy".to_string(),
+            link_kind: "request_id".to_string(),
+            link_value: "shared".to_string(),
+            created_at: 102,
+        };
+        assert!(db.insert_usage_event_link(&reversed).is_err());
+    }
+
+    #[test]
     fn event_links_reject_events_from_different_providers() {
         let db = Database::memory().unwrap();
         save_provider(&db, "one");
         save_provider(&db, "two");
-        db.insert_usage_event(&event("proxy", "one", TokenSource::Proxy, 100))
-            .unwrap();
-        db.insert_usage_event(&event("session", "two", TokenSource::SessionLog, 101))
-            .unwrap();
+        db.insert_usage_event(&event_for_agent(
+            "proxy",
+            "one",
+            TokenSource::Proxy,
+            100,
+            Some("claude-code"),
+        ))
+        .unwrap();
+        db.insert_usage_event(&event_for_agent(
+            "session",
+            "two",
+            TokenSource::SessionLog,
+            101,
+            Some("claude-code"),
+        ))
+        .unwrap();
 
         let link = UsageEventLink {
             canonical_event_id: "proxy".to_string(),

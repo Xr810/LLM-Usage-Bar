@@ -1,8 +1,11 @@
-use crate::database::Database;
+use crate::database::{lock_conn, Database};
 use crate::error::AppError;
 use crate::proxy::usage::parser::TokenUsage;
-use crate::usage::domain::TokenSource;
-use crate::usage::ingestion::{LegacyLogInput, UsageIngestionInput, UsageIngestionService};
+use crate::usage::domain::{session_agent_module_id, TokenSource};
+use crate::usage::ingestion::{
+    validate_session_agent_provider_binding_on_conn, LegacyLogInput, UsageIngestionInput,
+    UsageIngestionService,
+};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -26,6 +29,18 @@ pub struct ProviderSessionSyncResult {
     pub files_scanned: u32,
     pub errors: Vec<String>,
     pub warnings: Vec<String>,
+}
+
+pub(crate) fn validate_bound_session_agent(
+    db: &Database,
+    source: &str,
+    provider_id: &str,
+) -> Result<&'static str, AppError> {
+    let agent_module_id = session_agent_module_id(source)
+        .ok_or_else(|| AppError::Message(format!("unsupported usage source: {source}")))?;
+    let conn = lock_conn!(db.conn);
+    validate_session_agent_provider_binding_on_conn(&conn, agent_module_id, provider_id)?;
+    Ok(agent_module_id)
 }
 
 #[derive(Clone)]
@@ -113,6 +128,7 @@ impl SessionUsageService {
                 ..ProviderSessionSyncResult::default()
             });
         };
+        let agent_module_id = validate_bound_session_agent(&self.db, source, &binding.provider_id)?;
 
         let ingestion = UsageIngestionService::new(&self.db);
         let mut result = ProviderSessionSyncResult::default();
@@ -121,7 +137,7 @@ impl SessionUsageService {
                 event_id: record.event_id,
                 source: TokenSource::SessionLog,
                 provider_id: binding.provider_id.clone(),
-                agent_module_id: None,
+                agent_module_id: agent_module_id.to_string(),
                 frozen_provider_context: None,
                 occurred_at: record.occurred_at,
                 model: record.model,
@@ -173,8 +189,12 @@ mod tests {
     use super::*;
     use crate::database::Database;
     use crate::proxy::usage::parser::TokenUsage;
-    use crate::usage::domain::{BillingKind, TokenSource, UsageProviderInput};
-    use crate::usage::ingestion::{UsageIngestionInput, UsageIngestionService};
+    use crate::usage::domain::{
+        AgentProviderBindingInput, BillingKind, TokenSource, UsageProviderInput,
+    };
+    use crate::usage::ingestion::{
+        FrozenUsageProviderContext, UsageIngestionInput, UsageIngestionService,
+    };
     use std::sync::mpsc;
     use std::sync::Arc;
     use std::time::Duration;
@@ -216,6 +236,25 @@ mod tests {
         }
     }
 
+    fn seed_agent_binding(db: &Database, agent_module_id: &str, provider_id: &str, enabled: bool) {
+        let binding = db
+            .save_agent_provider_binding(&AgentProviderBindingInput {
+                id: None,
+                agent_module_id: agent_module_id.to_string(),
+                provider_id: provider_id.to_string(),
+                enabled: false,
+            })
+            .unwrap();
+        if enabled {
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE agent_provider_bindings SET enabled = 1 WHERE id = ?1",
+                [&binding.id],
+            )
+            .unwrap();
+        }
+    }
+
     #[test]
     fn unbound_source_is_skipped_with_visible_warning() {
         let db = Arc::new(Database::memory().unwrap());
@@ -240,6 +279,7 @@ mod tests {
         let db = Arc::new(Database::memory().unwrap());
         db.save_usage_provider(&provider("sub")).unwrap();
         db.set_usage_source_binding("claude", "sub").unwrap();
+        seed_agent_binding(&db, "claude-code", "sub", true);
         let service = SessionUsageService::new(db.clone());
 
         UsageIngestionService::new(&db)
@@ -247,8 +287,11 @@ mod tests {
                 event_id: "proxy-like".to_string(),
                 source: TokenSource::Proxy,
                 provider_id: "sub".to_string(),
-                agent_module_id: None,
-                frozen_provider_context: None,
+                agent_module_id: "claude-code".to_string(),
+                frozen_provider_context: Some(FrozenUsageProviderContext {
+                    product_group_id: "claude".to_string(),
+                    route_app_type: "claude".to_string(),
+                }),
                 occurred_at: 1_000,
                 model: "claude-sonnet-4-5".to_string(),
                 usage: record("unused", None).usage,
@@ -290,6 +333,116 @@ mod tests {
         assert_eq!(providers, 3);
         assert_eq!(links, 1, "only the exact cross-source ID must link");
         assert_eq!(quotas, 0, "session import must never create quota rows");
+    }
+
+    #[test]
+    fn source_parsers_freeze_their_fixed_agents_even_with_multiple_provider_bindings() {
+        let db = Arc::new(Database::memory().unwrap());
+        db.save_usage_provider(&provider("shared")).unwrap();
+        db.set_usage_source_binding("claude", "shared").unwrap();
+        db.set_usage_source_binding("codex", "shared").unwrap();
+        seed_agent_binding(&db, "claude-code", "shared", true);
+        seed_agent_binding(&db, "codex", "shared", true);
+        let service = SessionUsageService::new(db.clone());
+
+        assert_eq!(
+            service
+                .ingest_records("claude", vec![record("claude-event", None)])
+                .unwrap()
+                .imported,
+            1
+        );
+        assert_eq!(
+            service
+                .ingest_records("codex", vec![record("codex-event", None)])
+                .unwrap()
+                .imported,
+            1
+        );
+
+        let conn = db.conn.lock().unwrap();
+        let owners: Vec<(String, Option<String>)> = {
+            let mut statement = conn
+                .prepare("SELECT event_id, agent_module_id FROM usage_events ORDER BY event_id")
+                .unwrap();
+            statement
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        assert_eq!(
+            owners,
+            vec![
+                ("claude-event".to_string(), Some("claude-code".to_string())),
+                ("codex-event".to_string(), Some("codex".to_string())),
+            ]
+        );
+    }
+
+    #[test]
+    fn source_binding_rejects_a_provider_without_the_fixed_agent_binding() {
+        let db = Arc::new(Database::memory().unwrap());
+        db.save_usage_provider(&provider("wrong-agent")).unwrap();
+        db.set_usage_source_binding("claude", "wrong-agent")
+            .unwrap();
+        seed_agent_binding(&db, "codex", "wrong-agent", true);
+        let service = SessionUsageService::new(db.clone());
+
+        let error = service
+            .ingest_records("claude", vec![record("must-not-import", None)])
+            .unwrap_err();
+
+        assert_eq!(error.to_string(), "usage_session_agent_binding_unavailable");
+        let conn = db.conn.lock().unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM usage_events", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn rebinding_and_rescan_cannot_move_an_existing_session_event() {
+        let db = Arc::new(Database::memory().unwrap());
+        db.save_usage_provider(&provider("first-owner")).unwrap();
+        db.save_usage_provider(&provider("second-owner")).unwrap();
+        seed_agent_binding(&db, "claude-code", "first-owner", true);
+        seed_agent_binding(&db, "claude-code", "second-owner", true);
+        db.set_usage_source_binding("claude", "first-owner")
+            .unwrap();
+        let service = SessionUsageService::new(db.clone());
+        let replayed = record("stable-session-event", None);
+
+        assert_eq!(
+            service
+                .ingest_records("claude", vec![replayed.clone()])
+                .unwrap()
+                .imported,
+            1
+        );
+        db.set_usage_source_binding("claude", "second-owner")
+            .unwrap();
+        assert_eq!(
+            service
+                .ingest_records("claude", vec![replayed])
+                .unwrap_err()
+                .to_string(),
+            "usage_event_ownership_conflict"
+        );
+
+        let conn = db.conn.lock().unwrap();
+        let owner: (String, Option<String>) = conn
+            .query_row(
+                "SELECT provider_id, agent_module_id FROM usage_events
+                 WHERE event_id = 'stable-session-event'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            owner,
+            ("first-owner".to_string(), Some("claude-code".to_string()))
+        );
     }
 
     #[test]

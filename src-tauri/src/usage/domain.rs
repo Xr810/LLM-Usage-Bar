@@ -15,6 +15,19 @@ pub enum TokenSource {
     SessionLog,
 }
 
+pub const CLAUDE_CODE_AGENT_MODULE_ID: &str = "claude-code";
+pub const CODEX_AGENT_MODULE_ID: &str = "codex";
+
+/// Return the immutable Agent owner for a trusted local session parser.
+/// Provider selection remains configurable, but parser identity does not.
+pub fn session_agent_module_id(source: &str) -> Option<&'static str> {
+    match source {
+        "claude" => Some(CLAUDE_CODE_AGENT_MODULE_ID),
+        "codex" => Some(CODEX_AGENT_MODULE_ID),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CostSource {
