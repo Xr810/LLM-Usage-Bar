@@ -43,10 +43,16 @@ pub async fn import_config_from_file(
     state: State<'_, AppState>,
 ) -> Result<Value, String> {
     let db = state.db.clone();
+    let credential_service = state.binding_credential_service.clone();
     let db_for_sync = db.clone();
+    let backup_id = credential_service
+        .run_exclusive_blocking_database_change(move || {
+            let path_buf = PathBuf::from(&filePath);
+            db.import_sql(&path_buf)
+        })
+        .await
+        .map_err(|error| error.to_string())?;
     tauri::async_runtime::spawn_blocking(move || {
-        let path_buf = PathBuf::from(&filePath);
-        let backup_id = db.import_sql(&path_buf)?;
         let warning = post_sync_warning_from_result(Ok(run_post_import_sync(db_for_sync)));
         if let Some(msg) = warning.as_ref() {
             log::warn!("[Import] post-import sync warning: {msg}");
@@ -153,10 +159,11 @@ pub async fn restore_db_backup(
     filename: String,
 ) -> Result<String, String> {
     let db = state.db.clone();
-    tauri::async_runtime::spawn_blocking(move || db.restore_from_backup(&filename))
+    let credential_service = state.binding_credential_service.clone();
+    credential_service
+        .run_exclusive_blocking_database_change(move || db.restore_from_backup(&filename))
         .await
-        .map_err(|e| format!("Restore failed: {e}"))?
-        .map_err(|e: AppError| e.to_string())
+        .map_err(|error| error.to_string())
 }
 
 /// Rename a database backup file

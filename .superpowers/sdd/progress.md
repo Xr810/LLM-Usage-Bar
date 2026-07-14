@@ -20,7 +20,7 @@ worktree `.worktrees/agent-centric-usage-modules`.
 | 0. Persist execution plan | completed | plan commit | two independent reviews approved; `git diff --check` passes |
 | 1. v16 schema and conservative history migration | completed | this task commit | focused 5/5; schema 5/5; integration 3/3; library 1981 passed / 2 ignored; both reviews approved |
 | 2. Agent module and binding persistence | completed | this task commit | focused 7/12/15; integration 4/4; library 1997 passed / 2 ignored; both reviews approved |
-| 3. Protected credential store and atomic key lifecycle | pending | — | — |
+| 3. Protected credential store and atomic key lifecycle | completed | this task commit | credentials 72/72; backup 30/30; library 2057 passed / 2 ignored; release check and Clippy pass; reviews approved |
 | 4. Credential-routed proxy and frozen event attribution | pending | — | — |
 | 5. Trusted session attribution and Agent-safe dedup | pending | — | — |
 | 6. Agent dashboard, events, diagnostics, commands | pending | — | — |
@@ -67,3 +67,29 @@ worktree `.worktrees/agent-centric-usage-modules`.
 - The command integration target passes 3/3 and the localhost proxy e2e passes
   1/1. Final library verification ran outside the sandbox with one test thread:
   1997 passed, 2 ignored, 0 failed.
+
+## Task 3 Evidence
+
+- RED: the first focused credential lifecycle compile failed on `E0583` because
+  the planned `credentials::service` implementation did not exist; the failing
+  behavior test requires a successful first set followed by a second set returning
+  `credential_conflict` rather than silently replacing the active generation.
+- Protected values live only in the platform credential store; SQLite contains a
+  domain-separated SHA-256 fingerprint, opaque slot, version, and crash journal.
+  Secret wrappers are non-serializable, non-cloneable, zeroized, and redact Debug.
+- Set/replace/clear/delete use ordered journal generations, compare-and-swap, global
+  active-slot checks, cancellation-safe in-process and cross-process lifecycle
+  locks, startup reconciliation, and idempotent cleanup.
+- SQL import, WebDAV/S3 sync, and binary restore cannot orphan local credential
+  slots or import foreign deletion intent. Sync preserves local credential columns
+  and exports no journal rows.
+- Security review reproduced route-retargeting through both direct Provider edits
+  and delayed SQLite triggers. Protected snapshots now pin binding/provider
+  enablement, Agent archive state, route/auth configuration, and legacy auth
+  context. Imported schemas must match the canonical object allowlist, and every
+  trigger including reserved `sqlite_*` names must match canonical SQL exactly.
+- Focused verification passes 72 credential tests and 30 backup tests. Rust format,
+  `git diff --check`, release `cargo check`, and Clippy pass. Final library
+  verification ran outside the sandbox: 2057 passed, 2 ignored, 0 failed.
+- Independent spec-compliance, code-quality, and final adversarial security reviews
+  approved the completed Task 3 implementation.

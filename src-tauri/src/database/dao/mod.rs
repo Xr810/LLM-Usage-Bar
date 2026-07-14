@@ -4,6 +4,7 @@
 
 pub mod agent_modules;
 pub mod agent_provider_bindings;
+pub(crate) mod binding_credentials;
 pub mod dashboard_modules;
 pub mod failover;
 pub mod mcp;

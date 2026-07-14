@@ -180,6 +180,9 @@ fn create_agent_schema(conn: &Connection) -> Result<(), AppError> {
          CREATE UNIQUE INDEX idx_agent_provider_bindings_fingerprint
              ON agent_provider_bindings(api_key_fingerprint)
              WHERE api_key_fingerprint IS NOT NULL;
+         CREATE UNIQUE INDEX idx_agent_provider_bindings_credential_slot
+             ON agent_provider_bindings(credential_slot)
+             WHERE credential_slot IS NOT NULL;
          CREATE INDEX idx_agent_provider_bindings_provider
              ON agent_provider_bindings(provider_id);
 
@@ -704,6 +707,15 @@ pub(crate) fn validate_schema_v16_complete(conn: &Connection) -> Result<(), AppE
         true,
         true,
         Some("where api_key_fingerprint is not null"),
+    )?;
+    require_index_shape(
+        conn,
+        "agent_provider_bindings",
+        "idx_agent_provider_bindings_credential_slot",
+        &["credential_slot"],
+        true,
+        true,
+        Some("where credential_slot is not null"),
     )?;
     require_index_shape(
         conn,

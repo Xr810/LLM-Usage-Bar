@@ -8,12 +8,55 @@ use chrono::{Local, Utc};
 use rusqlite::backup::Backup;
 use rusqlite::types::ValueRef;
 use rusqlite::Connection;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::NamedTempFile;
 
 const LLM_USAGE_BAR_SQL_EXPORT_HEADER: &str = "-- LLM Usage Bar SQLite export";
 const LEGACY_CC_SWITCH_SQL_EXPORT_HEADER: &str = "-- CC Switch SQLite 导出";
+
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct ProtectedBindingState {
+    binding_id: String,
+    agent_module_id: String,
+    provider_id: String,
+    binding_enabled: bool,
+    fingerprint: Option<Vec<u8>>,
+    credential_slot: Option<String>,
+    credential_version: i64,
+    provider_enabled: bool,
+    billing_kind: String,
+    token_sources: String,
+    route_app_type: Option<String>,
+    route_config: Option<String>,
+    quota_config: Option<String>,
+    legacy_app_type: Option<String>,
+    legacy_provider_id: Option<String>,
+    legacy_settings_config: Option<String>,
+    legacy_meta: Option<String>,
+    agent_archived_at: Option<i64>,
+}
+
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct CredentialJournalState {
+    operation_id: String,
+    binding_id: String,
+    generation: i64,
+    operation_kind: String,
+    status: String,
+    staging_slot: Option<String>,
+    previous_slot: Option<String>,
+    created_at: i64,
+    updated_at: i64,
+}
+
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct SchemaObjectIdentity {
+    object_type: String,
+    name: String,
+    table_name: String,
+}
 
 /// Tables whose data rows are skipped when exporting for WebDAV sync.
 const SYNC_SKIP_TABLES: &[&str] = &[
@@ -22,6 +65,7 @@ const SYNC_SKIP_TABLES: &[&str] = &[
     "provider_health",
     "proxy_live_backup",
     "usage_daily_rollups",
+    "agent_credential_operations",
 ];
 
 /// Tables whose local data is preserved (restored from local snapshot) during WebDAV import.
@@ -43,6 +87,215 @@ pub struct BackupEntry {
 }
 
 impl Database {
+    fn credential_conflict() -> AppError {
+        AppError::Message("credential_conflict".to_string())
+    }
+
+    fn protected_binding_state(
+        conn: &Connection,
+    ) -> Result<BTreeSet<ProtectedBindingState>, AppError> {
+        if !Self::table_exists(conn, "agent_provider_bindings")? {
+            return Ok(BTreeSet::new());
+        }
+
+        let mut statement = conn.prepare(
+            "SELECT binding.id, binding.agent_module_id, binding.provider_id,
+                    binding.enabled, binding.api_key_fingerprint,
+                    binding.credential_slot, binding.credential_version,
+                    provider.enabled, provider.billing_kind, provider.token_sources,
+                    provider.route_app_type, provider.route_config, provider.quota_config,
+                    provider.legacy_app_type, provider.legacy_provider_id,
+                    (SELECT legacy.settings_config FROM providers AS legacy
+                     WHERE legacy.id = provider.legacy_provider_id
+                       AND legacy.app_type = provider.legacy_app_type),
+                    (SELECT legacy.meta FROM providers AS legacy
+                     WHERE legacy.id = provider.legacy_provider_id
+                       AND legacy.app_type = provider.legacy_app_type),
+                    agent.archived_at
+             FROM agent_provider_bindings AS binding
+             JOIN usage_providers AS provider ON provider.id = binding.provider_id
+             JOIN agent_modules AS agent ON agent.id = binding.agent_module_id
+             WHERE binding.api_key_fingerprint IS NOT NULL
+                OR binding.credential_slot IS NOT NULL
+             ORDER BY binding.id",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(ProtectedBindingState {
+                binding_id: row.get(0)?,
+                agent_module_id: row.get(1)?,
+                provider_id: row.get(2)?,
+                binding_enabled: row.get(3)?,
+                fingerprint: row.get(4)?,
+                credential_slot: row.get(5)?,
+                credential_version: row.get(6)?,
+                provider_enabled: row.get(7)?,
+                billing_kind: row.get(8)?,
+                token_sources: row.get(9)?,
+                route_app_type: row.get(10)?,
+                route_config: row.get(11)?,
+                quota_config: row.get(12)?,
+                legacy_app_type: row.get(13)?,
+                legacy_provider_id: row.get(14)?,
+                legacy_settings_config: row.get(15)?,
+                legacy_meta: row.get(16)?,
+                agent_archived_at: row.get(17)?,
+            })
+        })?;
+
+        rows.collect::<Result<BTreeSet<_>, _>>()
+            .map_err(AppError::from)
+    }
+
+    fn credential_journal_state(
+        conn: &Connection,
+    ) -> Result<BTreeSet<CredentialJournalState>, AppError> {
+        if !Self::table_exists(conn, "agent_credential_operations")? {
+            return Ok(BTreeSet::new());
+        }
+
+        let mut statement = conn.prepare(
+            "SELECT operation_id, binding_id, generation, operation_kind, status,
+                    staging_slot, previous_slot, created_at, updated_at
+             FROM agent_credential_operations
+             ORDER BY operation_id",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(CredentialJournalState {
+                operation_id: row.get(0)?,
+                binding_id: row.get(1)?,
+                generation: row.get(2)?,
+                operation_kind: row.get(3)?,
+                status: row.get(4)?,
+                staging_slot: row.get(5)?,
+                previous_slot: row.get(6)?,
+                created_at: row.get(7)?,
+                updated_at: row.get(8)?,
+            })
+        })?;
+
+        rows.collect::<Result<BTreeSet<_>, _>>()
+            .map_err(AppError::from)
+    }
+
+    fn schema_object_identities(
+        conn: &Connection,
+    ) -> Result<BTreeSet<SchemaObjectIdentity>, AppError> {
+        let mut statement = conn.prepare(
+            "SELECT type, name, tbl_name
+             FROM sqlite_schema
+             WHERE type IN ('table', 'index', 'trigger', 'view')
+               AND sql IS NOT NULL
+             ORDER BY type, name",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(SchemaObjectIdentity {
+                object_type: row.get(0)?,
+                name: row.get(1)?,
+                table_name: row.get(2)?,
+            })
+        })?;
+        rows.collect::<Result<BTreeSet<_>, _>>()
+            .map_err(AppError::from)
+    }
+
+    fn trigger_definitions(conn: &Connection) -> Result<BTreeMap<String, String>, AppError> {
+        let mut statement = conn.prepare(
+            "SELECT name, sql FROM sqlite_schema
+             WHERE type = 'trigger'
+             ORDER BY name",
+        )?;
+        let rows = statement.query_map([], |row| {
+            let name: String = row.get(0)?;
+            let sql: String = row.get(1)?;
+            Ok((name, sql.split_whitespace().collect::<Vec<_>>().join(" ")))
+        })?;
+        rows.collect::<Result<BTreeMap<_, _>, _>>()
+            .map_err(AppError::from)
+    }
+
+    /// Imported DDL is untrusted executable SQLite state. Compare the migrated
+    /// object namespace with a database created by this exact build and require
+    /// every trigger body to be canonical before any Backup can reach the live
+    /// connection. This rejects extra dormant triggers as well as a malicious
+    /// body hidden behind a legitimate trigger name.
+    fn validate_import_schema_allowlist(incoming: &Connection) -> Result<(), AppError> {
+        let canonical = Database::memory().map_err(|_| Self::credential_conflict())?;
+        let canonical_conn = lock_conn!(canonical.conn);
+        let incoming_objects =
+            Self::schema_object_identities(incoming).map_err(|_| Self::credential_conflict())?;
+        let canonical_objects = Self::schema_object_identities(&canonical_conn)
+            .map_err(|_| Self::credential_conflict())?;
+        if incoming_objects != canonical_objects {
+            return Err(Self::credential_conflict());
+        }
+        let incoming_triggers =
+            Self::trigger_definitions(incoming).map_err(|_| Self::credential_conflict())?;
+        let canonical_triggers =
+            Self::trigger_definitions(&canonical_conn).map_err(|_| Self::credential_conflict())?;
+        if incoming_triggers != canonical_triggers {
+            return Err(Self::credential_conflict());
+        }
+        Ok(())
+    }
+
+    fn ensure_protected_credentials_preserved(
+        current: &Connection,
+        incoming: &Connection,
+    ) -> Result<(), AppError> {
+        let current_bindings = Self::protected_binding_state(current)?;
+        let incoming_bindings = Self::protected_binding_state(incoming)?;
+        // Incoming snapshots may add protected bindings whose local store will
+        // fail closed, but they must not orphan any slot already owned here.
+        if !current_bindings.is_subset(&incoming_bindings) {
+            return Err(Self::credential_conflict());
+        }
+
+        let current_journal = Self::credential_journal_state(current)?;
+        let incoming_journal = Self::credential_journal_state(incoming)?;
+        // Journal rows are device-local deletion intent. Neither dropping local
+        // work nor importing another device's cleanup work is safe.
+        if current_journal != incoming_journal {
+            return Err(Self::credential_conflict());
+        }
+
+        Ok(())
+    }
+
+    fn preserve_local_credentials_for_sync(
+        local: &Connection,
+        incoming: &Connection,
+    ) -> Result<(), AppError> {
+        // A journal is device-local deletion intent. Current sync exports omit
+        // it; reject stale or foreign snapshots instead of executing them here.
+        if !Self::credential_journal_state(local)?.is_empty()
+            || !Self::credential_journal_state(incoming)?.is_empty()
+        {
+            return Err(Self::credential_conflict());
+        }
+
+        for state in Self::protected_binding_state(local)? {
+            let updated = incoming.execute(
+                "UPDATE agent_provider_bindings
+                 SET api_key_fingerprint = ?2, credential_slot = ?3,
+                     credential_version = ?4
+                 WHERE id = ?1 AND agent_module_id = ?5 AND provider_id = ?6",
+                rusqlite::params![
+                    state.binding_id,
+                    state.fingerprint,
+                    state.credential_slot,
+                    state.credential_version,
+                    state.agent_module_id,
+                    state.provider_id,
+                ],
+            );
+            match updated {
+                Ok(1) => {}
+                Ok(_) | Err(_) => return Err(Self::credential_conflict()),
+            }
+        }
+        Ok(())
+    }
+
     fn authoritative_backup_dir(&self) -> Result<Option<PathBuf>, AppError> {
         let Some(database_path) = self.database_path() else {
             return Ok(None);
@@ -135,13 +388,16 @@ impl Database {
         Self::create_tables_on_conn(&temp_conn)?;
         Self::apply_schema_migrations_on_conn(&temp_conn)?;
         Self::validate_basic_state(&temp_conn)?;
+        Self::validate_import_schema_allowlist(&temp_conn)?;
         if let Some(local_snapshot) = local_snapshot.as_ref() {
             Self::restore_tables(local_snapshot, &temp_conn, preserve_tables)?;
+            Self::preserve_local_credentials_for_sync(local_snapshot, &temp_conn)?;
         }
 
         // 使用 Backup 将临时库原子写回主库
         {
             let mut main_conn = lock_conn!(self.conn);
+            Self::ensure_protected_credentials_preserved(&main_conn, &temp_conn)?;
             let backup = Backup::new(&temp_conn, &mut main_conn)
                 .map_err(|e| AppError::Database(e.to_string()))?;
             backup
@@ -591,20 +847,40 @@ impl Database {
             .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().to_string()))
             .unwrap_or_default();
 
-        // Step 2: Open the backup file and restore it to the main database
+        // Step 2: Stage and migrate the backup before it can replace the main database.
+        // Besides making old backups safe to inspect, this keeps a failed migration
+        // from partially overwriting the live connection.
         let source_conn =
             Connection::open(&backup_path).map_err(|e| AppError::Database(e.to_string()))?;
+        let staged_file = NamedTempFile::new().map_err(|e| AppError::IoContext {
+            context: "创建临时数据库文件失败".to_string(),
+            source: e,
+        })?;
+        let mut staged_conn =
+            Connection::open(staged_file.path()).map_err(|e| AppError::Database(e.to_string()))?;
+        {
+            let backup = Backup::new(&source_conn, &mut staged_conn)
+                .map_err(|e| AppError::Database(e.to_string()))?;
+            backup
+                .step(-1)
+                .map_err(|e| AppError::Database(e.to_string()))?;
+        }
+        Self::create_tables_on_conn(&staged_conn)?;
+        Self::apply_schema_migrations_on_conn(&staged_conn)?;
+        Self::validate_import_schema_allowlist(&staged_conn)?;
 
+        // Step 3: Preserve device-local credential lifecycle state, then restore.
         {
             let mut main_conn = lock_conn!(self.conn);
-            let backup = Backup::new(&source_conn, &mut main_conn)
+            Self::ensure_protected_credentials_preserved(&main_conn, &staged_conn)?;
+            let backup = Backup::new(&staged_conn, &mut main_conn)
                 .map_err(|e| AppError::Database(e.to_string()))?;
             backup
                 .step(-1)
                 .map_err(|e| AppError::Database(e.to_string()))?;
         }
 
-        // Step 3: Run schema migrations (backup may be from an older version)
+        // Step 4: Re-run idempotent initialization on the live connection.
         self.create_tables()?;
         self.apply_schema_migrations()?;
         self.ensure_model_pricing_seeded()?;
@@ -713,6 +989,7 @@ mod tests {
     use crate::error::AppError;
     use crate::product_identity::DATABASE_FILE;
     use crate::settings::{update_settings, AppSettings};
+    use rusqlite::params;
     use serial_test::serial;
     use std::ffi::OsString;
 
@@ -725,6 +1002,793 @@ mod tests {
                 None => std::env::remove_var("LLM_USAGE_BAR_TEST_HOME"),
             }
         }
+    }
+
+    fn insert_protected_credential_state(
+        db: &Database,
+        binding_id: &str,
+        slot: &str,
+        version: i64,
+        include_journal: bool,
+    ) -> Result<(), AppError> {
+        let conn = crate::database::lock_conn!(db.conn);
+        conn.execute(
+            "INSERT OR IGNORE INTO providers (id, app_type, name, settings_config, meta)
+             VALUES ('backup-provider', 'claude', 'Backup Provider', '{}', '{}')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT OR IGNORE INTO usage_providers (
+                 id, name, billing_kind, product_group_id, token_sources,
+                 route_app_type, route_config, enabled, needs_review,
+                 created_at, updated_at
+             ) VALUES (
+                 'backup-usage-provider', 'Backup Usage Provider', 'metered', 'backup',
+                 '[\"proxy\"]', 'claude', '{}', 1, 0, 10, 10
+             )",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO agent_provider_bindings (
+                 id, agent_module_id, provider_id, enabled,
+                 api_key_fingerprint, credential_slot, credential_version,
+                 created_at, updated_at
+             ) VALUES (?1, 'claude-code', 'backup-usage-provider', 1, ?2, ?3, ?4, 10, 10)",
+            params![binding_id, vec![0x5a_u8; 32], slot, version],
+        )?;
+        if include_journal {
+            conn.execute(
+                "INSERT INTO agent_credential_operations (
+                     operation_id, binding_id, generation, operation_kind,
+                     status, staging_slot, previous_slot, created_at, updated_at
+                 ) VALUES (
+                     'backup-cleanup-operation', ?1, ?2, 'replace',
+                     'cleanup', ?3, 'orphaned-previous-slot', 11, 12
+                 )",
+                params![binding_id, version, slot],
+            )?;
+        }
+        Ok(())
+    }
+
+    fn protected_tuple(
+        db: &Database,
+        binding_id: &str,
+    ) -> Result<(Vec<u8>, String, i64), AppError> {
+        let conn = crate::database::lock_conn!(db.conn);
+        conn.query_row(
+            "SELECT api_key_fingerprint, credential_slot, credential_version
+             FROM agent_provider_bindings WHERE id = ?1",
+            [binding_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .map_err(AppError::from)
+    }
+
+    fn install_delayed_route_retarget_trigger(db: &Database) -> Result<(), AppError> {
+        db.conn.lock().unwrap().execute_batch(
+            "CREATE TRIGGER delayed_protected_route_retarget
+             AFTER INSERT ON proxy_request_logs
+             BEGIN
+                 UPDATE usage_providers
+                 SET route_config = '{\"base_url\":\"https://attacker.invalid/v1\"}'
+                 WHERE id = 'backup-usage-provider';
+             END;",
+        )?;
+        Ok(())
+    }
+
+    fn reserved_name_route_retarget_trigger_sql() -> &'static str {
+        "CREATE TRIGGER sqlite_delayed_protected_route_retarget
+         AFTER INSERT ON proxy_request_logs
+         BEGIN
+             UPDATE usage_providers
+             SET route_config = '{\"base_url\":\"https://attacker.invalid/v1\"}'
+             WHERE id = 'backup-usage-provider';
+         END"
+    }
+
+    fn inject_reserved_name_trigger_into_sql(sql: &str) -> String {
+        let trigger_sql = reserved_name_route_retarget_trigger_sql().replace('\'', "''");
+        let payload = format!(
+            "PRAGMA writable_schema=ON;\n\
+             INSERT INTO sqlite_schema(type,name,tbl_name,rootpage,sql) VALUES(\
+             'trigger','sqlite_delayed_protected_route_retarget','proxy_request_logs',0,\
+             '{trigger_sql}');\n\
+             PRAGMA writable_schema=OFF;\n"
+        );
+        sql.replacen("COMMIT;\n", &format!("{payload}COMMIT;\n"), 1)
+    }
+
+    fn install_reserved_name_route_retarget_trigger(db: &Database) -> Result<(), AppError> {
+        let conn = db.conn.lock().unwrap();
+        conn.execute_batch("PRAGMA writable_schema=ON;")?;
+        let insert_result = conn.execute(
+            "INSERT INTO sqlite_schema(type,name,tbl_name,rootpage,sql)
+             VALUES('trigger', ?1, 'proxy_request_logs', 0, ?2)",
+            params![
+                "sqlite_delayed_protected_route_retarget",
+                reserved_name_route_retarget_trigger_sql()
+            ],
+        );
+        let disable_result = conn.execute_batch("PRAGMA writable_schema=OFF;");
+        insert_result?;
+        disable_result?;
+        Ok(())
+    }
+
+    #[test]
+    fn sql_import_rejects_removing_a_local_protected_credential() -> Result<(), AppError> {
+        let local = Database::memory()?;
+        insert_protected_credential_state(&local, "protected-binding", "local-slot", 1, false)?;
+
+        let incoming = Database::memory()?;
+        {
+            let conn = crate::database::lock_conn!(incoming.conn);
+            conn.execute(
+                "INSERT INTO providers (id, app_type, name, settings_config, meta)
+                 VALUES ('incoming-provider', 'claude', 'Incoming Provider', '{}', '{}')",
+                [],
+            )?;
+        }
+        let incoming_sql = incoming.export_sql_string()?;
+
+        let error = local
+            .import_sql_string(&incoming_sql)
+            .expect_err("import must not orphan the local credential slot");
+        assert_eq!(error.to_string(), "credential_conflict");
+        assert_eq!(
+            protected_tuple(&local, "protected-binding")?,
+            (vec![0x5a_u8; 32], "local-slot".to_string(), 1)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn sql_import_rejects_changing_a_local_protected_credential_tuple() -> Result<(), AppError> {
+        let local = Database::memory()?;
+        insert_protected_credential_state(&local, "protected-binding", "local-slot", 1, false)?;
+
+        let incoming = Database::memory()?;
+        insert_protected_credential_state(
+            &incoming,
+            "protected-binding",
+            "different-slot",
+            2,
+            false,
+        )?;
+        let incoming_sql = incoming.export_sql_string()?;
+
+        let error = local
+            .import_sql_string(&incoming_sql)
+            .expect_err("import must preserve the complete local credential tuple");
+        assert_eq!(error.to_string(), "credential_conflict");
+        assert_eq!(
+            protected_tuple(&local, "protected-binding")?,
+            (vec![0x5a_u8; 32], "local-slot".to_string(), 1)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn sql_import_rejects_retargeting_a_local_protected_credential() -> Result<(), AppError> {
+        let local = Database::memory()?;
+        insert_protected_credential_state(&local, "protected-binding", "local-slot", 1, false)?;
+
+        let incoming = Database::memory()?;
+        insert_protected_credential_state(&incoming, "protected-binding", "local-slot", 1, false)?;
+        incoming.conn.lock().unwrap().execute(
+            "UPDATE usage_providers
+             SET route_config = '{\"base_url\":\"https://attacker.invalid/v1\"}'
+             WHERE id = 'backup-usage-provider'",
+            [],
+        )?;
+
+        let error = local
+            .import_sql_string(&incoming.export_sql_string()?)
+            .expect_err("import must not retarget a locally protected API key");
+        assert_eq!(error.to_string(), "credential_conflict");
+        Ok(())
+    }
+
+    #[test]
+    fn sql_import_rejects_a_delayed_route_retarget_trigger() -> Result<(), AppError> {
+        let local = Database::memory()?;
+        insert_protected_credential_state(&local, "protected-binding", "local-slot", 1, false)?;
+
+        let incoming = Database::memory()?;
+        insert_protected_credential_state(&incoming, "protected-binding", "local-slot", 1, false)?;
+        install_delayed_route_retarget_trigger(&incoming)?;
+
+        let error = local
+            .import_sql_string(&incoming.export_sql_string()?)
+            .expect_err("import must reject dormant schema code that can retarget a local key");
+        assert_eq!(error.to_string(), "credential_conflict");
+        Ok(())
+    }
+
+    #[test]
+    fn sql_import_rejects_a_reserved_name_delayed_retarget_trigger() -> Result<(), AppError> {
+        let local = Database::memory()?;
+        insert_protected_credential_state(&local, "protected-binding", "local-slot", 1, false)?;
+
+        let incoming = Database::memory()?;
+        insert_protected_credential_state(&incoming, "protected-binding", "local-slot", 1, false)?;
+        let malicious_sql = inject_reserved_name_trigger_into_sql(&incoming.export_sql_string()?);
+
+        let error = local
+            .import_sql_string(&malicious_sql)
+            .expect_err("import must inspect reserved-name trigger rows too");
+        assert_eq!(error.to_string(), "credential_conflict");
+        Ok(())
+    }
+
+    #[test]
+    fn sql_import_rejects_changing_protected_auth_classification() -> Result<(), AppError> {
+        let local = Database::memory()?;
+        insert_protected_credential_state(&local, "protected-binding", "local-slot", 1, false)?;
+
+        let incoming = Database::memory()?;
+        insert_protected_credential_state(&incoming, "protected-binding", "local-slot", 1, false)?;
+        incoming.conn.lock().unwrap().execute(
+            "UPDATE usage_providers
+             SET token_sources = '[\"session_log\"]'
+             WHERE id = 'backup-usage-provider'",
+            [],
+        )?;
+
+        let error = local
+            .import_sql_string(&incoming.export_sql_string()?)
+            .expect_err("import must not change auth classification around a local key");
+        assert_eq!(error.to_string(), "credential_conflict");
+        Ok(())
+    }
+
+    #[test]
+    fn sql_import_rejects_changing_protected_legacy_auth_context() -> Result<(), AppError> {
+        let local = Database::memory()?;
+        insert_protected_credential_state(&local, "protected-binding", "local-slot", 1, false)?;
+        {
+            let conn = local.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE providers
+                 SET settings_config = '{\"providerType\":\"codex_oauth\"}'
+                 WHERE id = 'backup-provider' AND app_type = 'claude'",
+                [],
+            )?;
+            conn.execute(
+                "UPDATE usage_providers
+                 SET legacy_app_type = 'claude', legacy_provider_id = 'backup-provider'
+                 WHERE id = 'backup-usage-provider'",
+                [],
+            )?;
+        }
+
+        let incoming = Database::memory()?;
+        insert_protected_credential_state(&incoming, "protected-binding", "local-slot", 1, false)?;
+        incoming.conn.lock().unwrap().execute(
+            "UPDATE usage_providers
+             SET legacy_app_type = 'claude', legacy_provider_id = 'backup-provider'
+             WHERE id = 'backup-usage-provider'",
+            [],
+        )?;
+
+        let error = local
+            .import_sql_string(&incoming.export_sql_string()?)
+            .expect_err("import must not remove managed-auth evidence around a local key");
+        assert_eq!(error.to_string(), "credential_conflict");
+        Ok(())
+    }
+
+    #[test]
+    fn sql_import_rejects_reenabling_protected_routing_state() -> Result<(), AppError> {
+        let local = Database::memory()?;
+        insert_protected_credential_state(&local, "protected-binding", "local-slot", 1, false)?;
+        {
+            let conn = local.conn.lock().unwrap();
+            conn.execute(
+                "INSERT INTO agent_modules (
+                     id, name, sort_order, visible, is_fixed, archived_at,
+                     created_at, updated_at
+                 ) VALUES ('security-agent', 'Security Agent', 100, 1, 0, NULL, 10, 10)",
+                [],
+            )?;
+            conn.execute(
+                "UPDATE agent_provider_bindings
+                 SET agent_module_id = 'security-agent', enabled = 0
+                 WHERE id = 'protected-binding'",
+                [],
+            )?;
+            conn.execute(
+                "UPDATE usage_providers SET enabled = 0
+                 WHERE id = 'backup-usage-provider'",
+                [],
+            )?;
+            conn.execute(
+                "UPDATE agent_modules SET archived_at = 42 WHERE id = 'security-agent'",
+                [],
+            )?;
+        }
+
+        let incoming = Database::memory()?;
+        insert_protected_credential_state(&incoming, "protected-binding", "local-slot", 1, false)?;
+        {
+            let conn = incoming.conn.lock().unwrap();
+            conn.execute(
+                "INSERT INTO agent_modules (
+                     id, name, sort_order, visible, is_fixed, archived_at,
+                     created_at, updated_at
+                 ) VALUES ('security-agent', 'Security Agent', 100, 1, 0, NULL, 10, 10)",
+                [],
+            )?;
+            conn.execute(
+                "UPDATE agent_provider_bindings SET agent_module_id = 'security-agent'
+                 WHERE id = 'protected-binding'",
+                [],
+            )?;
+        }
+
+        let error = local
+            .import_sql_string(&incoming.export_sql_string()?)
+            .expect_err("import must not re-enable any local protected route");
+        assert_eq!(error.to_string(), "credential_conflict");
+        Ok(())
+    }
+
+    #[test]
+    fn sql_import_rejects_removing_a_local_credential_journal_row() -> Result<(), AppError> {
+        let local = Database::memory()?;
+        insert_protected_credential_state(&local, "protected-binding", "local-slot", 1, true)?;
+
+        let incoming = Database::memory()?;
+        insert_protected_credential_state(&incoming, "protected-binding", "local-slot", 1, false)?;
+        let incoming_sql = incoming.export_sql_string()?;
+
+        let error = local
+            .import_sql_string(&incoming_sql)
+            .expect_err("import must preserve every local lifecycle journal row");
+        assert_eq!(error.to_string(), "credential_conflict");
+        let journal_count = {
+            let conn = crate::database::lock_conn!(local.conn);
+            conn.query_row(
+                "SELECT COUNT(*) FROM agent_credential_operations
+                 WHERE operation_id = 'backup-cleanup-operation'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )?
+        };
+        assert_eq!(journal_count, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn sql_import_rejects_a_remote_only_credential_journal_row() -> Result<(), AppError> {
+        let local = Database::memory()?;
+        {
+            let conn = crate::database::lock_conn!(local.conn);
+            conn.execute(
+                "INSERT INTO providers (id, app_type, name, settings_config, meta)
+                 VALUES ('local-provider', 'claude', 'Local Provider', '{}', '{}')",
+                [],
+            )?;
+        }
+
+        let incoming = Database::memory()?;
+        insert_protected_credential_state(
+            &incoming,
+            "remote-protected-binding",
+            "remote-slot",
+            1,
+            true,
+        )?;
+        let incoming_sql = incoming.export_sql_string()?;
+
+        let error = local
+            .import_sql_string(&incoming_sql)
+            .expect_err("a remote deletion intent must never execute on this device");
+        assert_eq!(error.to_string(), "credential_conflict");
+        Ok(())
+    }
+
+    #[test]
+    fn sync_export_omits_device_local_credential_journal_rows() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        insert_protected_credential_state(&db, "protected-binding", "local-slot", 1, true)?;
+
+        let sync_sql = db.export_sql_string_for_sync()?;
+
+        assert!(!sync_sql.contains("INSERT INTO \"agent_credential_operations\""));
+        assert!(!sync_sql.contains("backup-cleanup-operation"));
+        Ok(())
+    }
+
+    #[test]
+    fn sync_import_preserves_local_active_credential_columns() -> Result<(), AppError> {
+        let local = Database::memory()?;
+        insert_protected_credential_state(&local, "protected-binding", "local-slot", 3, false)?;
+
+        let incoming = Database::memory()?;
+        insert_protected_credential_state(&incoming, "protected-binding", "remote-slot", 7, false)?;
+        incoming.conn.lock().unwrap().execute(
+            "UPDATE agent_provider_bindings SET api_key_fingerprint = ?1
+             WHERE id = 'protected-binding'",
+            [vec![0x6b_u8; 32]],
+        )?;
+
+        local.import_sql_string_for_sync(&incoming.export_sql_string_for_sync()?)?;
+
+        assert_eq!(
+            protected_tuple(&local, "protected-binding")?,
+            (vec![0x5a_u8; 32], "local-slot".to_string(), 3)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn sync_import_preserves_local_active_credential_when_remote_is_cleared() -> Result<(), AppError>
+    {
+        let local = Database::memory()?;
+        insert_protected_credential_state(&local, "protected-binding", "local-slot", 3, false)?;
+
+        let incoming = Database::memory()?;
+        insert_protected_credential_state(&incoming, "protected-binding", "remote-slot", 7, false)?;
+        incoming.conn.lock().unwrap().execute(
+            "UPDATE agent_provider_bindings
+             SET api_key_fingerprint = NULL, credential_slot = NULL,
+                 credential_version = 8
+             WHERE id = 'protected-binding'",
+            [],
+        )?;
+
+        local.import_sql_string_for_sync(&incoming.export_sql_string_for_sync()?)?;
+
+        assert_eq!(
+            protected_tuple(&local, "protected-binding")?,
+            (vec![0x5a_u8; 32], "local-slot".to_string(), 3)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn sync_import_rejects_retargeting_a_local_protected_credential() -> Result<(), AppError> {
+        let local = Database::memory()?;
+        insert_protected_credential_state(&local, "protected-binding", "local-slot", 3, false)?;
+
+        let incoming = Database::memory()?;
+        insert_protected_credential_state(&incoming, "protected-binding", "remote-slot", 7, false)?;
+        incoming.conn.lock().unwrap().execute(
+            "UPDATE usage_providers
+             SET route_config = '{\"base_url\":\"https://attacker.invalid/v1\"}'
+             WHERE id = 'backup-usage-provider'",
+            [],
+        )?;
+
+        let error = local
+            .import_sql_string_for_sync(&incoming.export_sql_string_for_sync()?)
+            .expect_err("sync must not retarget a locally protected API key");
+        assert_eq!(error.to_string(), "credential_conflict");
+        assert_eq!(
+            protected_tuple(&local, "protected-binding")?,
+            (vec![0x5a_u8; 32], "local-slot".to_string(), 3)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn sync_import_rejects_a_delayed_route_retarget_trigger() -> Result<(), AppError> {
+        let local = Database::memory()?;
+        insert_protected_credential_state(&local, "protected-binding", "local-slot", 3, false)?;
+
+        let incoming = Database::memory()?;
+        insert_protected_credential_state(&incoming, "protected-binding", "remote-slot", 7, false)?;
+        install_delayed_route_retarget_trigger(&incoming)?;
+
+        let error = local
+            .import_sql_string_for_sync(&incoming.export_sql_string_for_sync()?)
+            .expect_err("sync must reject dormant schema code that can retarget a local key");
+        assert_eq!(error.to_string(), "credential_conflict");
+        Ok(())
+    }
+
+    #[test]
+    fn sync_import_rejects_a_reserved_name_delayed_retarget_trigger() -> Result<(), AppError> {
+        let local = Database::memory()?;
+        insert_protected_credential_state(&local, "protected-binding", "local-slot", 3, false)?;
+
+        let incoming = Database::memory()?;
+        insert_protected_credential_state(&incoming, "protected-binding", "remote-slot", 7, false)?;
+        let malicious_sql =
+            inject_reserved_name_trigger_into_sql(&incoming.export_sql_string_for_sync()?);
+
+        let error = local
+            .import_sql_string_for_sync(&malicious_sql)
+            .expect_err("sync must inspect reserved-name trigger rows too");
+        assert_eq!(error.to_string(), "credential_conflict");
+        Ok(())
+    }
+
+    #[test]
+    fn sync_import_rejects_remote_deletion_of_a_locally_protected_binding() -> Result<(), AppError>
+    {
+        let local = Database::memory()?;
+        insert_protected_credential_state(&local, "protected-binding", "local-slot", 1, false)?;
+
+        let incoming = Database::memory()?;
+        insert_protected_credential_state(&incoming, "protected-binding", "remote-slot", 1, false)?;
+        incoming.conn.lock().unwrap().execute(
+            "DELETE FROM agent_provider_bindings WHERE id = 'protected-binding'",
+            [],
+        )?;
+
+        let error = local
+            .import_sql_string_for_sync(&incoming.export_sql_string_for_sync()?)
+            .expect_err("sync must not orphan a local protected item");
+        assert_eq!(error.to_string(), "credential_conflict");
+        assert_eq!(
+            protected_tuple(&local, "protected-binding")?,
+            (vec![0x5a_u8; 32], "local-slot".to_string(), 1)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn sync_import_rejects_rebinding_a_locally_protected_item_to_another_agent(
+    ) -> Result<(), AppError> {
+        let local = Database::memory()?;
+        insert_protected_credential_state(&local, "protected-binding", "local-slot", 1, false)?;
+
+        let incoming = Database::memory()?;
+        insert_protected_credential_state(&incoming, "protected-binding", "remote-slot", 1, false)?;
+        incoming.conn.lock().unwrap().execute(
+            "UPDATE agent_provider_bindings SET agent_module_id = 'codex'
+             WHERE id = 'protected-binding'",
+            [],
+        )?;
+
+        let error = local
+            .import_sql_string_for_sync(&incoming.export_sql_string_for_sync()?)
+            .expect_err("sync must not rebind a local protected item");
+        assert_eq!(error.to_string(), "credential_conflict");
+        assert_eq!(
+            protected_tuple(&local, "protected-binding")?,
+            (vec![0x5a_u8; 32], "local-slot".to_string(), 1)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn ordinary_import_is_allowed_after_the_local_credential_was_cleared() -> Result<(), AppError> {
+        let local = Database::memory()?;
+        insert_protected_credential_state(&local, "protected-binding", "local-slot", 1, false)?;
+        local.conn.lock().unwrap().execute(
+            "UPDATE agent_provider_bindings
+             SET api_key_fingerprint = NULL, credential_slot = NULL,
+                 credential_version = 2, enabled = 0
+             WHERE id = 'protected-binding'",
+            [],
+        )?;
+
+        let incoming = Database::memory()?;
+        insert_protected_credential_state(
+            &incoming,
+            "protected-binding",
+            "restored-missing-slot",
+            1,
+            false,
+        )?;
+
+        local.import_sql_string(&incoming.export_sql_string()?)?;
+        assert_eq!(
+            protected_tuple(&local, "protected-binding")?,
+            (vec![0x5a_u8; 32], "restored-missing-slot".to_string(), 1)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn sql_import_accepts_an_exact_superset_of_local_protected_state() -> Result<(), AppError> {
+        let local = Database::memory()?;
+        insert_protected_credential_state(&local, "protected-binding", "local-slot", 1, true)?;
+
+        let incoming = Database::memory()?;
+        insert_protected_credential_state(&incoming, "protected-binding", "local-slot", 1, true)?;
+        {
+            let conn = crate::database::lock_conn!(incoming.conn);
+            conn.execute(
+                "INSERT INTO providers (id, app_type, name, settings_config, meta)
+                 VALUES ('incoming-extra', 'claude', 'Incoming Extra', '{}', '{}')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO usage_providers (
+                     id, name, billing_kind, product_group_id, token_sources,
+                     route_app_type, route_config, enabled, needs_review,
+                     created_at, updated_at
+                 ) VALUES (
+                     'remote-usage-provider', 'Remote Usage Provider', 'metered', 'backup',
+                     '[\"proxy\"]', 'codex', '{}', 1, 0, 10, 10
+                 )",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO agent_provider_bindings (
+                     id, agent_module_id, provider_id, enabled,
+                     api_key_fingerprint, credential_slot, credential_version,
+                     created_at, updated_at
+                 ) VALUES (
+                     'remote-protected-binding', 'codex', 'remote-usage-provider', 1,
+                     ?1, 'remote-slot', 1, 10, 10
+                 )",
+                [vec![0x6b_u8; 32]],
+            )?;
+        }
+        let incoming_sql = incoming.export_sql_string()?;
+
+        local.import_sql_string(&incoming_sql)?;
+        assert_eq!(
+            protected_tuple(&local, "protected-binding")?,
+            (vec![0x5a_u8; 32], "local-slot".to_string(), 1)
+        );
+        assert_eq!(
+            protected_tuple(&local, "remote-protected-binding")?,
+            (vec![0x6b_u8; 32], "remote-slot".to_string(), 1)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn binary_restore_rejects_a_backup_missing_local_protected_state() -> Result<(), AppError> {
+        let temp = tempfile::tempdir().expect("create binary restore test root");
+        let local_dir = temp.path().join("local");
+        let incoming_dir = temp.path().join("incoming");
+        std::fs::create_dir_all(&local_dir).expect("create local database directory");
+        std::fs::create_dir_all(&incoming_dir).expect("create incoming database directory");
+
+        let local_path = local_dir.join(DATABASE_FILE);
+        let local = Database::init_at(&local_path)?;
+        insert_protected_credential_state(&local, "protected-binding", "local-slot", 1, false)?;
+
+        let incoming_path = incoming_dir.join(DATABASE_FILE);
+        let incoming = Database::init_at(&incoming_path)?;
+        {
+            let conn = crate::database::lock_conn!(incoming.conn);
+            conn.execute(
+                "INSERT INTO providers (id, app_type, name, settings_config, meta)
+                 VALUES ('incoming-provider', 'claude', 'Incoming Provider', '{}', '{}')",
+                [],
+            )?;
+        }
+        let incoming_backup = incoming
+            .backup_database_file()?
+            .expect("file database produces a backup");
+        let local_backup_dir = local_dir.join("backups");
+        std::fs::create_dir_all(&local_backup_dir).expect("create local backup directory");
+        std::fs::copy(
+            &incoming_backup,
+            local_backup_dir.join("missing-protected.db"),
+        )
+        .expect("copy incoming snapshot into local backup directory");
+
+        let error = local
+            .restore_from_backup("missing-protected.db")
+            .expect_err("binary restore must not orphan the local credential slot");
+        assert_eq!(error.to_string(), "credential_conflict");
+        assert_eq!(
+            protected_tuple(&local, "protected-binding")?,
+            (vec![0x5a_u8; 32], "local-slot".to_string(), 1)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn binary_restore_rejects_retargeting_a_local_protected_credential() -> Result<(), AppError> {
+        let temp = tempfile::tempdir().expect("create binary restore test root");
+        let local_dir = temp.path().join("local");
+        let incoming_dir = temp.path().join("incoming");
+        std::fs::create_dir_all(&local_dir).expect("create local database directory");
+        std::fs::create_dir_all(&incoming_dir).expect("create incoming database directory");
+
+        let local_path = local_dir.join(DATABASE_FILE);
+        let local = Database::init_at(&local_path)?;
+        insert_protected_credential_state(&local, "protected-binding", "local-slot", 1, false)?;
+
+        let incoming_path = incoming_dir.join(DATABASE_FILE);
+        let incoming = Database::init_at(&incoming_path)?;
+        insert_protected_credential_state(&incoming, "protected-binding", "local-slot", 1, false)?;
+        incoming.conn.lock().unwrap().execute(
+            "UPDATE usage_providers
+             SET route_config = '{\"base_url\":\"https://attacker.invalid/v1\"}'
+             WHERE id = 'backup-usage-provider'",
+            [],
+        )?;
+        let incoming_backup = incoming
+            .backup_database_file()?
+            .expect("file database produces a backup");
+        let local_backup_dir = local_dir.join("backups");
+        std::fs::create_dir_all(&local_backup_dir).expect("create local backup directory");
+        std::fs::copy(
+            &incoming_backup,
+            local_backup_dir.join("retargeted-protected.db"),
+        )
+        .expect("copy retargeted snapshot into local backup directory");
+
+        let error = local
+            .restore_from_backup("retargeted-protected.db")
+            .expect_err("binary restore must not retarget a local protected API key");
+        assert_eq!(error.to_string(), "credential_conflict");
+        assert_eq!(
+            protected_tuple(&local, "protected-binding")?,
+            (vec![0x5a_u8; 32], "local-slot".to_string(), 1)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn binary_restore_rejects_a_delayed_route_retarget_trigger() -> Result<(), AppError> {
+        let temp = tempfile::tempdir().expect("create binary restore test root");
+        let local_dir = temp.path().join("local");
+        let incoming_dir = temp.path().join("incoming");
+        std::fs::create_dir_all(&local_dir).expect("create local database directory");
+        std::fs::create_dir_all(&incoming_dir).expect("create incoming database directory");
+
+        let local_path = local_dir.join(DATABASE_FILE);
+        let local = Database::init_at(&local_path)?;
+        insert_protected_credential_state(&local, "protected-binding", "local-slot", 1, false)?;
+
+        let incoming_path = incoming_dir.join(DATABASE_FILE);
+        let incoming = Database::init_at(&incoming_path)?;
+        insert_protected_credential_state(&incoming, "protected-binding", "local-slot", 1, false)?;
+        install_delayed_route_retarget_trigger(&incoming)?;
+        let incoming_backup = incoming
+            .backup_database_file()?
+            .expect("file database produces a backup");
+        let local_backup_dir = local_dir.join("backups");
+        std::fs::create_dir_all(&local_backup_dir).expect("create local backup directory");
+        std::fs::copy(
+            &incoming_backup,
+            local_backup_dir.join("trigger-protected.db"),
+        )
+        .expect("copy trigger snapshot into local backup directory");
+
+        let error = local
+            .restore_from_backup("trigger-protected.db")
+            .expect_err("binary restore must reject dormant schema code around a local key");
+        assert_eq!(error.to_string(), "credential_conflict");
+        Ok(())
+    }
+
+    #[test]
+    fn binary_restore_rejects_a_reserved_name_delayed_retarget_trigger() -> Result<(), AppError> {
+        let temp = tempfile::tempdir().expect("create binary restore test root");
+        let local_dir = temp.path().join("local");
+        let incoming_dir = temp.path().join("incoming");
+        std::fs::create_dir_all(&local_dir).expect("create local database directory");
+        std::fs::create_dir_all(&incoming_dir).expect("create incoming database directory");
+
+        let local_path = local_dir.join(DATABASE_FILE);
+        let local = Database::init_at(&local_path)?;
+        insert_protected_credential_state(&local, "protected-binding", "local-slot", 1, false)?;
+
+        let incoming_path = incoming_dir.join(DATABASE_FILE);
+        let incoming = Database::init_at(&incoming_path)?;
+        insert_protected_credential_state(&incoming, "protected-binding", "local-slot", 1, false)?;
+        install_reserved_name_route_retarget_trigger(&incoming)?;
+        let incoming_backup = incoming
+            .backup_database_file()?
+            .expect("file database produces a backup");
+        let local_backup_dir = local_dir.join("backups");
+        std::fs::create_dir_all(&local_backup_dir).expect("create local backup directory");
+        std::fs::copy(
+            &incoming_backup,
+            local_backup_dir.join("reserved-trigger-protected.db"),
+        )
+        .expect("copy reserved trigger snapshot into local backup directory");
+
+        let error = local
+            .restore_from_backup("reserved-trigger-protected.db")
+            .expect_err("binary restore must inspect reserved-name trigger rows too");
+        assert_eq!(error.to_string(), "credential_conflict");
+        Ok(())
     }
 
     #[test]

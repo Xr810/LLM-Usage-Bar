@@ -1359,8 +1359,61 @@ mod migration_v15_to_v16 {
     }
 
     #[test]
+    fn migration_v15_to_v16_rejects_duplicate_non_null_credential_slots() {
+        let conn = v15_usage_fixture();
+        insert_provider(&conn, "slot-provider-a", "subscription", Some("codex"));
+        insert_provider(
+            &conn,
+            "slot-provider-b",
+            "subscription",
+            Some("claude-code"),
+        );
+        conn.execute_batch(
+            "INSERT INTO usage_source_bindings (source, provider_id, updated_at)
+             VALUES ('codex', 'slot-provider-a', 10),
+                    ('claude', 'slot-provider-b', 10);",
+        )
+        .expect("seed binding evidence");
+        Database::apply_schema_migrations_on_conn_with_roots(&conn, &roots())
+            .expect("create complete v16 schema");
+
+        let binding_ids = conn
+            .prepare("SELECT id FROM agent_provider_bindings ORDER BY id")
+            .expect("prepare binding query")
+            .query_map([], |row| row.get::<_, String>(0))
+            .expect("query bindings")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect bindings");
+        assert_eq!(binding_ids.len(), 2);
+
+        conn.execute(
+            "UPDATE agent_provider_bindings
+             SET api_key_fingerprint = ?1,
+                 credential_slot = 'shared-keychain-slot',
+                 credential_version = 1
+             WHERE id = ?2",
+            params![vec![1_u8; 32], &binding_ids[0]],
+        )
+        .expect("assign first credential slot");
+        let error = conn
+            .execute(
+                "UPDATE agent_provider_bindings
+                 SET api_key_fingerprint = ?1,
+                     credential_slot = 'shared-keychain-slot',
+                     credential_version = 1
+                 WHERE id = ?2",
+                params![vec![2_u8; 32], &binding_ids[1]],
+            )
+            .expect_err("non-null credential slots must be globally unique");
+        assert!(error.to_string().contains("UNIQUE constraint failed"));
+    }
+
+    #[test]
     fn current_v16_validator_rejects_same_named_but_malformed_objects() {
         for corruption in [
+            "DROP INDEX IF EXISTS idx_agent_provider_bindings_credential_slot;
+             CREATE INDEX idx_agent_provider_bindings_credential_slot
+             ON agent_provider_bindings(provider_id);",
             "DROP INDEX idx_agent_provider_bindings_fingerprint;
              CREATE INDEX idx_agent_provider_bindings_fingerprint
              ON agent_provider_bindings(provider_id);",

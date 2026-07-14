@@ -107,11 +107,17 @@ pub async fn s3_sync_upload(state: State<'_, AppState>) -> Result<Value, String>
 #[tauri::command]
 pub async fn s3_sync_download(state: State<'_, AppState>) -> Result<Value, String> {
     let db = state.db.clone();
+    let credential_service = state.binding_credential_service.clone();
     let db_for_sync = db.clone();
     let mut settings = require_enabled_s3_settings()?;
     let _auto_sync_suppression = crate::services::s3_auto_sync::AutoSyncSuppressionGuard::new();
 
-    let sync_result = run_with_s3_lock(s3_sync_service::download(&db, &mut settings)).await;
+    let sync_result = credential_service
+        .run_exclusive_database_change(run_with_s3_lock(s3_sync_service::download(
+            &db,
+            &mut settings,
+        )))
+        .await;
     let mut result = map_sync_result(sync_result, |error| {
         persist_sync_error(&mut settings, error, "manual")
     })?;

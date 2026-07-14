@@ -9,6 +9,7 @@ mod codex_history_migration;
 mod codex_state_db;
 mod commands;
 mod config;
+pub mod credentials;
 mod database;
 mod deeplink;
 mod error;
@@ -714,7 +715,8 @@ pub fn run() {
                 }
             }
 
-            let app_state = AppState::new(db);
+            let credential_store = crate::credentials::production_credential_store();
+            let app_state = AppState::new_with_credential_store(db, credential_store);
             app_state.start_quota_scheduler();
 
             // 设置 AppHandle 用于代理故障转移时的 UI 更新
@@ -1257,6 +1259,18 @@ pub fn run() {
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let state = app_handle.state::<AppState>();
+
+                // Reconcile protected binding generations before any proxy route
+                // can be restored. Failures remain local and all lookups continue
+                // to fail closed.
+                if state
+                    .binding_credential_service
+                    .reconcile_startup()
+                    .await
+                    .is_err()
+                {
+                    log::error!("protected credential startup reconciliation failed");
+                }
 
                 // 检查是否有 Live 备份（表示上次异常退出时可能处于接管状态）
                 let has_backups = match state.db.has_any_live_backup().await {

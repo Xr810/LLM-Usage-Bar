@@ -4,6 +4,7 @@
 
 use crate::app_config::AppType;
 use crate::config::{get_claude_settings_path, read_json_file, write_json_file};
+use crate::credentials::{unavailable_credential_store, BindingCredentialService, CredentialStore};
 use crate::database::Database;
 use crate::provider::Provider;
 use crate::proxy::server::ProxyServer;
@@ -54,6 +55,7 @@ enum ClaudeTakeoverAuthPolicy {
 #[derive(Clone)]
 pub struct ProxyService {
     db: Arc<Database>,
+    binding_credential_service: Arc<BindingCredentialService>,
     server: Arc<RwLock<Option<ProxyServer>>>,
     /// AppHandle，用于传递给 ProxyServer 以支持故障转移时的 UI 更新
     app_handle: Arc<RwLock<Option<tauri::AppHandle>>>,
@@ -67,12 +69,26 @@ pub struct HotSwitchOutcome {
 
 impl ProxyService {
     pub fn new(db: Arc<Database>) -> Self {
+        Self::new_with_credential_store(db, unavailable_credential_store())
+    }
+
+    pub fn new_with_credential_store(
+        db: Arc<Database>,
+        credential_store: Arc<dyn CredentialStore>,
+    ) -> Self {
+        let binding_credential_service =
+            Arc::new(BindingCredentialService::new(db.clone(), credential_store));
         Self {
             db,
+            binding_credential_service,
             server: Arc::new(RwLock::new(None)),
             app_handle: Arc::new(RwLock::new(None)),
             switch_locks: SwitchLockManager::new(),
         }
+    }
+
+    pub(crate) fn binding_credential_service(&self) -> Arc<BindingCredentialService> {
+        self.binding_credential_service.clone()
     }
 
     #[cfg(test)]

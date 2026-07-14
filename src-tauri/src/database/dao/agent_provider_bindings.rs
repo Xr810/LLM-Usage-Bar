@@ -16,25 +16,25 @@ pub(crate) enum BindingAuthMode {
     Unsupported,
 }
 
-struct BindingRecord {
-    id: String,
-    agent_module_id: String,
-    provider_id: String,
-    enabled: bool,
-    fingerprint: Option<Vec<u8>>,
-    credential_slot: Option<String>,
-    credential_version: i64,
-    created_at: i64,
-    updated_at: i64,
-    provider_enabled: bool,
+pub(crate) struct BindingRecord {
+    pub(crate) id: String,
+    pub(crate) agent_module_id: String,
+    pub(crate) provider_id: String,
+    pub(crate) enabled: bool,
+    pub(crate) fingerprint: Option<Vec<u8>>,
+    pub(crate) credential_slot: Option<String>,
+    pub(crate) credential_version: i64,
+    pub(crate) created_at: i64,
+    pub(crate) updated_at: i64,
+    pub(crate) provider_enabled: bool,
     billing_kind: BillingKind,
     token_sources: Vec<TokenSource>,
-    route_app_type: Option<String>,
-    route_config: Option<Value>,
+    pub(crate) route_app_type: Option<String>,
+    pub(crate) route_config: Option<Value>,
     quota_config: Option<Value>,
     legacy_settings_config: Option<Value>,
     legacy_meta: Option<Value>,
-    agent_archived_at: Option<i64>,
+    pub(crate) agent_archived_at: Option<i64>,
 }
 
 fn public_error(code: &'static str) -> AppError {
@@ -76,7 +76,7 @@ fn parse_json<T: serde::de::DeserializeOwned>(
     .transpose()
 }
 
-fn binding_record_from_row(row: &Row<'_>) -> rusqlite::Result<BindingRecord> {
+pub(crate) fn binding_record_from_row(row: &Row<'_>) -> rusqlite::Result<BindingRecord> {
     let token_sources = serde_json::from_str(&row.get::<_, String>(11)?).map_err(|error| {
         rusqlite::Error::FromSqlConversionFailure(11, rusqlite::types::Type::Text, Box::new(error))
     })?;
@@ -102,7 +102,7 @@ fn binding_record_from_row(row: &Row<'_>) -> rusqlite::Result<BindingRecord> {
     })
 }
 
-const BINDING_RECORD_QUERY: &str =
+pub(crate) const BINDING_RECORD_QUERY: &str =
     "SELECT binding.id, binding.agent_module_id, binding.provider_id,
             binding.enabled, binding.api_key_fingerprint, binding.credential_slot,
             binding.credential_version, binding.created_at, binding.updated_at,
@@ -202,7 +202,7 @@ fn value_proves_managed_auth(value: &Value) -> bool {
     .any(|url| url.contains("githubcopilot.com") || url.contains("chatgpt.com/backend-api/codex"))
 }
 
-fn binding_auth_mode(record: &BindingRecord) -> BindingAuthMode {
+pub(crate) fn binding_auth_mode(record: &BindingRecord) -> BindingAuthMode {
     let has_session = record.token_sources.contains(&TokenSource::SessionLog);
     let has_proxy = record.token_sources.contains(&TokenSource::Proxy);
     let is_managed_auth = [
@@ -240,7 +240,11 @@ fn credential_status(
 ) -> BindingCredentialStatus {
     match auth_mode {
         BindingAuthMode::SessionOnly | BindingAuthMode::ManagedAuth => {
-            BindingCredentialStatus::NotRequired
+            if record.fingerprint.is_none() && record.credential_slot.is_none() {
+                BindingCredentialStatus::NotRequired
+            } else {
+                BindingCredentialStatus::Unavailable
+            }
         }
         BindingAuthMode::DirectApiKey => {
             if record.fingerprint.is_none() && record.credential_slot.is_none() {
@@ -402,7 +406,10 @@ fn validate_requested_enabled(record: &BindingRecord, enabled: bool) -> Result<(
             if record.fingerprint.is_none() {
                 Err(public_error("credential_required"))
             } else {
-                Err(public_error("credential_unavailable"))
+                // `enabled` is the requested state. Protected-store verification
+                // happens asynchronously in BindingCredentialService and controls
+                // `effective_enabled`; the synchronous DAO never opens Keychain.
+                Ok(())
             }
         }
         BindingAuthMode::ManagedAuth | BindingAuthMode::Unsupported => {
