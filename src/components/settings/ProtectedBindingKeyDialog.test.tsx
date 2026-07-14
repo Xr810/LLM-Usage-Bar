@@ -10,6 +10,7 @@ const binding: AgentProviderBindingView = {
   enabled: true,
   effectiveEnabled: true,
   credentialStatus: "missing",
+  canClearCredential: false,
   credentialVersion: 2,
   createdAt: 1,
   updatedAt: 1,

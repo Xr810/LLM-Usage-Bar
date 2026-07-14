@@ -600,6 +600,7 @@ fn binding_view(record: &BindingRecord) -> Result<AgentProviderBindingView, AppE
     let credential_status = credential_status(record, auth_mode);
     let credential_version = u64::try_from(record.credential_version)
         .map_err(|_| AppError::Database("negative credential version".to_string()))?;
+    let can_clear_credential = record.fingerprint.is_some() && record.credential_slot.is_some();
     // `effective_enabled` is proxy routability. Until Task 3 can verify the
     // protected credential, no binding is effectively routable.
     let effective_enabled = record.enabled
@@ -614,6 +615,7 @@ fn binding_view(record: &BindingRecord) -> Result<AgentProviderBindingView, AppE
         enabled: record.enabled,
         effective_enabled,
         credential_status,
+        can_clear_credential,
         credential_version,
         created_at: record.created_at,
         updated_at: record.updated_at,
@@ -763,6 +765,17 @@ fn validate_requested_enabled(record: &BindingRecord, enabled: bool) -> Result<(
 }
 
 impl Database {
+    pub(crate) fn agent_provider_binding_supports_direct_api_key(
+        &self,
+        binding_id: &str,
+    ) -> Result<bool, AppError> {
+        let conn = lock_conn!(self.conn);
+        Ok(matches!(
+            binding_auth_mode_for_id_on_conn(&conn, binding_id)?,
+            Some(BindingAuthMode::DirectApiKey)
+        ))
+    }
+
     pub fn list_agent_provider_bindings(
         &self,
         agent_module_id: Option<&str>,
@@ -1092,6 +1105,7 @@ mod tests {
             .find(|binding| binding.id == one.id)
             .unwrap();
         assert_eq!(view.credential_status, BindingCredentialStatus::Unavailable);
+        assert!(view.can_clear_credential);
         let json = serde_json::to_value(view).unwrap();
         let object = json.as_object().unwrap();
         for forbidden in [
@@ -1703,6 +1717,7 @@ mod tests {
         assert_eq!(value["agentModuleId"], "codex");
         assert_eq!(value["providerId"], "session");
         assert_eq!(value["credentialStatus"], "not_required");
+        assert_eq!(value["canClearCredential"], false);
         assert!(value.get("agent_module_id").is_none());
     }
 }

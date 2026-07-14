@@ -72,6 +72,7 @@
     "meteredOverview": "按量总览",
     "noSubscriptionHistory": "此 Agent 暂无订阅历史",
     "noMeteredHistory": "此 Agent 暂无按量历史",
+    "sharedAccount": "共享账号",
     "sharedAccountQuota": "共享账号额度",
     "providersInModule": "{{module}} 中的 Provider",
     "subscriptionModuleEmpty": "尚未为此模块添加订阅账号。",

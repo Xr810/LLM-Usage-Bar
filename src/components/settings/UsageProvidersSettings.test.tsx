@@ -26,6 +26,7 @@ vi.mock("@/lib/query/usageDashboard", () => ({
             enabled: true,
             effectiveEnabled: true,
             credentialStatus: "not_required",
+            canClearCredential: false,
             credentialVersion: 2,
             createdAt: 1,
             updatedAt: 1,

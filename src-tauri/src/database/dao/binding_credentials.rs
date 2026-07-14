@@ -77,6 +77,7 @@ impl CredentialBindingSnapshot {
         self,
         credential_status: BindingCredentialStatus,
     ) -> AgentProviderBindingView {
+        let can_clear_credential = self.fingerprint.is_some() && self.credential_slot.is_some();
         let effective_enabled = self.enabled
             && self.provider_enabled
             && self.agent_archived_at.is_none()
@@ -89,6 +90,7 @@ impl CredentialBindingSnapshot {
             enabled: self.enabled,
             effective_enabled,
             credential_status,
+            can_clear_credential,
             credential_version: self.credential_version,
             created_at: self.created_at,
             updated_at: self.updated_at,
@@ -230,11 +232,14 @@ impl Database {
         let conn = lock_conn!(self.conn);
         conn.query_row(
             "SELECT id, agent_module_id, provider_id, enabled,
-                    credential_version, created_at, updated_at
+                    api_key_fingerprint, credential_slot, credential_version,
+                    created_at, updated_at
              FROM agent_provider_bindings WHERE id = ?1",
             [binding_id],
             |row| {
-                let credential_version = row.get::<_, i64>(4)?;
+                let fingerprint = row.get::<_, Option<Vec<u8>>>(4)?;
+                let credential_slot = row.get::<_, Option<String>>(5)?;
+                let credential_version = row.get::<_, i64>(6)?;
                 Ok(AgentProviderBindingView {
                     id: row.get(0)?,
                     agent_module_id: row.get(1)?,
@@ -242,11 +247,12 @@ impl Database {
                     enabled: row.get(3)?,
                     effective_enabled: false,
                     credential_status: BindingCredentialStatus::Unavailable,
+                    can_clear_credential: fingerprint.is_some() && credential_slot.is_some(),
                     credential_version: u64::try_from(credential_version).map_err(|_| {
-                        rusqlite::Error::IntegralValueOutOfRange(4, credential_version)
+                        rusqlite::Error::IntegralValueOutOfRange(6, credential_version)
                     })?,
-                    created_at: row.get(5)?,
-                    updated_at: row.get(6)?,
+                    created_at: row.get(7)?,
+                    updated_at: row.get(8)?,
                 })
             },
         )
@@ -924,6 +930,26 @@ mod tests {
             .credential_binding_by_fingerprint(&fingerprint)
             .unwrap()
             .is_none());
+    }
+
+    #[test]
+    fn fail_closed_view_preserves_cleanup_capability_until_metadata_is_cleared() {
+        let db = Database::memory().unwrap();
+        insert_direct_provider(&db, "direct");
+        let binding_id = direct_binding_for_agent(&db, "codex", "direct");
+        let fingerprint = [19_u8; 32];
+        install_credential_metadata(&db, &binding_id, &fingerprint, "slot", 1, true);
+
+        let unavailable = db.credential_binding_fail_closed_view(&binding_id).unwrap();
+        assert!(unavailable.can_clear_credential);
+
+        let reservation = db
+            .reserve_credential_operation(&binding_id, 1, CredentialMutationKind::Clear, None)
+            .unwrap();
+        db.publish_credential_operation(&reservation, None).unwrap();
+
+        let cleared = db.credential_binding_fail_closed_view(&binding_id).unwrap();
+        assert!(!cleared.can_clear_credential);
     }
 
     #[test]

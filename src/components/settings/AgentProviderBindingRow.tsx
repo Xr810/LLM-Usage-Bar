@@ -128,28 +128,30 @@ export function AgentProviderBindingRow({
           </Button>
         ) : null}
         {binding.credentialStatus === "configured" ? (
-          <>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={isPending}
-              onClick={() => setKeyMode("replace")}
-            >
-              {t("dashboardAgents.replaceApiKey", {
-                defaultValue: "Replace API key",
-              })}
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={isPending}
-              onClick={() => setKeyMode("clear")}
-            >
-              {t("dashboardAgents.clearApiKey", {
-                defaultValue: "Clear API key",
-              })}
-            </Button>
-          </>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={isPending}
+            onClick={() => setKeyMode("replace")}
+          >
+            {t("dashboardAgents.replaceApiKey", {
+              defaultValue: "Replace API key",
+            })}
+          </Button>
+        ) : null}
+        {binding.credentialStatus === "configured" ||
+        (binding.credentialStatus === "unavailable" &&
+          binding.canClearCredential) ? (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={isPending}
+            onClick={() => setKeyMode("clear")}
+          >
+            {t("dashboardAgents.clearApiKey", {
+              defaultValue: "Clear API key",
+            })}
+          </Button>
         ) : null}
         <Button
           size="sm"

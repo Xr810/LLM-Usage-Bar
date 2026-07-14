@@ -72,6 +72,7 @@
     "meteredOverview": "Metered overview",
     "noSubscriptionHistory": "No subscription history for this Agent",
     "noMeteredHistory": "No metered history for this Agent",
+    "sharedAccount": "Shared account",
     "sharedAccountQuota": "Shared account quota",
     "providersInModule": "Providers in {{module}}",
     "subscriptionModuleEmpty": "No subscription account has been added to this module.",

@@ -25,7 +25,7 @@ worktree `.worktrees/agent-centric-usage-modules`.
 | 5. Trusted session attribution and Agent-safe dedup | completed | this task commit | session 9/9; ingestion 18/18; event DAO 11/11; session services 43/43; library 2176 passed / 2 ignored; Clippy and both reviews approved |
 | 6. Agent dashboard, events, diagnostics, commands | completed | this task commit | dashboard 11/11; commands 9/9; integration 4/4; quota 12/12; proxy E2E 16/16; library 2195 passed / 2 ignored; both reviews approved |
 | 7. Agent-centric frontend and Settings | completed | this task commit | frontend unit 92/509; typecheck, renderer build, format, and both reviews approved |
-| 8. Integration, security review, and full acceptance | pending | — | — |
+| 8. Integration, isolation review, and full acceptance | completed | this task commit | frontend 92/513; Rust library 2201 passed / 2 ignored; integration 141/141; format, typecheck, build, Clippy, and reviews approved |
 
 ## Review Notes
 
@@ -215,3 +215,37 @@ worktree `.worktrees/agent-centric-usage-modules`.
 - Final verification passes focused query 9/9, Agent page 6/6, Agent Settings 4/4,
   App 4/4, and full frontend 92 files / 509 tests. Typecheck, renderer build,
   Prettier, and `git diff --check` pass; no Rust or dependency files changed.
+
+## Task 8 Evidence
+
+- Local-only Claude, Codex, and Gemini proxy acceptance covers two distinct Agent
+  bindings where applicable. Each request maps to its exact immutable Agent owner,
+  and rebind, key rotation, binding deletion, and Agent archival leave prior event
+  rows unchanged.
+- Unknown, disabled, cleared, archived, store-missing, and mismatched bindings are
+  rejected locally before any upstream request. Public events, diagnostics, SQL
+  export, application logs, captured URI/body data, and the frontend DOM/form/query/
+  mutation snapshot omit every test binding value.
+- Public Provider DTOs now hydrate their nested bindings from the verified binding
+  service for list, save, and dashboard responses. Session-only multi-Agent
+  bindings remain non-shared because they are not effective proxy routes.
+- `canClearCredential` distinguishes an unavailable but removable protected item
+  from an unavailable binding with nothing to clear. The UI exposes only the valid
+  Clear action, and a failed compare-and-swap refreshes root queries while preserving
+  the original error.
+- Published setup URLs now work for Claude, Codex, and Gemini namespace paths.
+  Claude Desktop uses only its binding-key header, while managed and unsupported
+  auth modes retain status metadata without publishing unusable direct-key setup.
+- Persisted Agent selection survives initial query loading. Metered shared-account
+  labels, stateful fixtures, Provider counts, and compatibility-manifest locations
+  match the production contract.
+- Two independent Task 8 reviews approved after the Gemini exact-owner assertion,
+  Claude public-snapshot coverage, Portal-aware frontend snapshot, verified Provider
+  DTO hydration, setup-path, direct-auth capability, selection, shared-account, and
+  unavailable-credential findings were resolved.
+- Final frontend verification passes 92 files / 513 tests, typecheck, renderer build,
+  and formatting. Rust verification passes 2201 library tests with 2 ignored plus
+  141/141 integration tests; the local proxy target passes 20/20, and format plus
+  all-target Clippy with `-D warnings` pass.
+- The root checkout's user-owned Settings edits and `.pnpm-store/` remain unchanged
+  and outside this branch.

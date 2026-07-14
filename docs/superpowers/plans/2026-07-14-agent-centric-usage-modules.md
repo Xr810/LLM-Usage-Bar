@@ -326,6 +326,7 @@ pub struct AgentProviderBindingView {
     pub id: String, pub agent_module_id: String, pub provider_id: String,
     pub enabled: bool, pub effective_enabled: bool,
     pub credential_status: BindingCredentialStatus,
+    pub can_clear_credential: bool,
     pub credential_version: u64, pub created_at: i64, pub updated_at: i64,
 }
 ```
@@ -698,29 +699,29 @@ pnpm format:check
 
 Commit: `feat(ui): organize usage by agent`
 
-### Task 8: End-to-end security and regression acceptance
+### Task 8: End-to-end isolation and regression acceptance
 
 **Files:**
 
 - Modify as required by test findings only.
 - Create/update: isolated acceptance notes under `.superpowers/sdd/`.
 
-- [ ] Add real local-upstream acceptance for Claude, Codex, and Gemini protocols.
+- [x] Add real local-upstream acceptance for Claude, Codex, and Gemini protocols.
   For each, configure two binding keys where applicable, verify frozen Agent
   ownership, and assert no credential appears in captured upstream URI, app logs,
   request logs, command output JSON, diagnostics, or frontend snapshots. Live DB
   dump/export/sync/backup must contain no raw binding key introduced by the new
   credential service; a fingerprint is permitted only in private binding/index
   columns, and explicitly out-of-scope legacy Provider credentials may remain.
-- [ ] Prove unknown/disabled/cleared keys return locally with upstream hit count 0.
-- [ ] Prove rebind/rotate/delete operations do not alter historical event rows.
-- [ ] Run all focused suites, then the complete verification matrix outside the
+- [x] Prove unknown/disabled/cleared keys return locally with upstream hit count 0.
+- [x] Prove rebind/rotate/delete operations do not alter historical event rows.
+- [x] Run all focused suites, then the complete verification matrix outside the
   sandbox where local listeners require it.
-- [ ] Review every commit and the aggregate diff against this plan. Run
+- [x] Review every commit and the aggregate diff against this plan. Run
   `git diff --check`, inspect untracked files, and confirm the root checkout's
   unrelated Settings close-control edits were never copied or committed.
-- [ ] Request final code review. Resolve findings and rerun every affected gate.
-- [ ] Use `superpowers:finishing-a-development-branch` to present integration
+- [x] Request final code review. Resolve findings and rerun every affected gate.
+- [x] Use `superpowers:finishing-a-development-branch` to present integration
   options. Do not merge, push, or open a PR without the user's explicit choice.
 
 Final verification matrix:

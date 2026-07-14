@@ -112,6 +112,7 @@ pub struct AgentProviderBindingView {
     pub enabled: bool,
     pub effective_enabled: bool,
     pub credential_status: BindingCredentialStatus,
+    pub can_clear_credential: bool,
     pub credential_version: u64,
     pub created_at: i64,
     pub updated_at: i64,

@@ -245,7 +245,15 @@ export function useAgentProviderBindingCredentialActions() {
   const run = async <T>(operation: () => Promise<T>): Promise<T> => {
     setIsPending(true);
     try {
-      const result = await operation();
+      let result: T;
+      try {
+        result = await operation();
+      } catch (error) {
+        await queryClient
+          .invalidateQueries({ queryKey: usageDashboardKeys.all })
+          .catch(() => undefined);
+        throw error;
+      }
       await queryClient.invalidateQueries({
         queryKey: usageDashboardKeys.all,
       });

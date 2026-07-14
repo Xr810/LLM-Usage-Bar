@@ -121,7 +121,15 @@ pub async fn handle_messages(
     State(state): State<ProxyState>,
     request: axum::extract::Request,
 ) -> Result<axum::response::Response, ProxyError> {
-    handle_messages_for_app(state, request, AppType::Claude, "Claude", "claude", None).await
+    handle_messages_for_app(
+        state,
+        request,
+        AppType::Claude,
+        "Claude",
+        "claude",
+        Some("/claude"),
+    )
+    .await
 }
 
 pub async fn handle_claude_desktop_messages(
@@ -1628,10 +1636,13 @@ pub async fn handle_gemini(
     let mut headers = parts.headers;
     let extensions = parts.extensions;
     let mut uri = uri;
-    let mut endpoint = uri
+    let raw_endpoint = uri
         .path_and_query()
         .map(|pq| pq.as_str())
-        .unwrap_or(uri.path())
+        .unwrap_or(uri.path());
+    let mut endpoint = raw_endpoint
+        .strip_prefix("/gemini")
+        .unwrap_or(raw_endpoint)
         .to_string();
     let inbound = extract_binding_credentials(
         BindingAuthProtocol::Gemini,

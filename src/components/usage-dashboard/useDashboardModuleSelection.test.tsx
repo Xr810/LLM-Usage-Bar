@@ -53,6 +53,25 @@ describe("useAgentModuleSelection", () => {
     expect(result.current.selectedAgent?.id).toBe("claude-code");
   });
 
+  it("preserves a persisted Agent while the query is initially empty", async () => {
+    localStorage.setItem(agentModuleStorageKey, "claude-code");
+    const { result, rerender } = renderHook(
+      ({ agents }: { agents: AgentModuleView[] }) =>
+        useAgentModuleSelection(agents),
+      { initialProps: { agents: [] as AgentModuleView[] } },
+    );
+
+    expect(result.current.selectedAgent).toBeNull();
+    await waitFor(() =>
+      expect(localStorage.getItem(agentModuleStorageKey)).toBe("claude-code"),
+    );
+
+    rerender({
+      agents: [agent("codex", 1), agent("claude-code", 2)],
+    });
+    expect(result.current.selectedAgent?.id).toBe("claude-code");
+  });
+
   it("falls back after the selected Agent is hidden or deleted", async () => {
     localStorage.setItem(agentModuleStorageKey, "claude-code");
     const { result, rerender } = renderHook(

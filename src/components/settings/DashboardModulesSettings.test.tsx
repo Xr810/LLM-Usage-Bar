@@ -114,6 +114,7 @@ const bindingFixtures = [
     enabled: true,
     effectiveEnabled: false,
     credentialStatus: "configured",
+    canClearCredential: true,
     credentialVersion: 3,
     createdAt: 1,
     updatedAt: 1,
@@ -271,5 +272,52 @@ describe("AgentsSettings", () => {
       within(binding).getByRole("button", { name: "Clear API key" }),
     ).toBeInTheDocument();
     expect(within(binding).queryByText(/\*\*|••/)).toBeNull();
+  });
+
+  it("allows an unavailable protected credential to be cleared", async () => {
+    mocks.bindings = bindingFixtures.map((binding) => ({
+      ...binding,
+      credentialStatus: "unavailable",
+      canClearCredential: true,
+      credentialVersion: 7,
+    }));
+    render(<AgentsSettings />);
+
+    const binding = screen.getByTestId("agent-binding-binding-a");
+    expect(within(binding).getByText("Unavailable")).toBeInTheDocument();
+    expect(
+      within(binding).queryByRole("button", { name: "Replace API key" }),
+    ).toBeNull();
+    fireEvent.click(
+      within(binding).getByRole("button", { name: "Clear API key" }),
+    );
+    fireEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: "Clear API key",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(mocks.clearKey).toHaveBeenCalledWith("binding-a", 7),
+    );
+  });
+
+  it("offers no key action when an unavailable credential cannot be cleared", () => {
+    mocks.bindings = bindingFixtures.map((binding) => ({
+      ...binding,
+      credentialStatus: "unavailable",
+      canClearCredential: false,
+      credentialVersion: 7,
+    }));
+    render(<AgentsSettings />);
+
+    const binding = screen.getByTestId("agent-binding-binding-a");
+    expect(within(binding).getByText("Unavailable")).toBeInTheDocument();
+    expect(
+      within(binding).queryByRole("button", { name: "Clear API key" }),
+    ).toBeNull();
+    expect(
+      within(binding).queryByRole("button", { name: "Replace API key" }),
+    ).toBeNull();
   });
 });

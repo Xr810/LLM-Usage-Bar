@@ -90,6 +90,7 @@ const requiredKeys = [
   "usageDashboard.meteredOverview",
   "usageDashboard.noSubscriptionHistory",
   "usageDashboard.noMeteredHistory",
+  "usageDashboard.sharedAccount",
   "usageDashboard.sharedAccountQuota",
   "usageDashboard.inputTokens",
   "usageDashboard.outputTokens",

@@ -16,7 +16,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
-    Arc, Condvar, Mutex,
+    Arc, Condvar, Mutex, Once,
 };
 use std::time::Duration;
 use tokio::sync::{oneshot, Notify};
@@ -144,6 +144,47 @@ struct CapturedUpstreamRequest {
     headers: Vec<(String, String)>,
     uri: String,
     body: Value,
+}
+
+struct CapturingAppLogger;
+
+static CAPTURING_APP_LOGGER: CapturingAppLogger = CapturingAppLogger;
+static APP_LOGGER_INIT: Once = Once::new();
+static CAPTURED_APP_LOGS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+impl log::Log for CapturingAppLogger {
+    fn enabled(&self, _metadata: &log::Metadata<'_>) -> bool {
+        true
+    }
+
+    fn log(&self, record: &log::Record<'_>) {
+        CAPTURED_APP_LOGS
+            .lock()
+            .expect("captured app logs lock")
+            .push(record.args().to_string());
+    }
+
+    fn flush(&self) {}
+}
+
+fn ensure_app_log_capture() {
+    APP_LOGGER_INIT.call_once(|| {
+        log::set_logger(&CAPTURING_APP_LOGGER).expect("test logger should initialize once");
+        log::set_max_level(log::LevelFilter::Trace);
+    });
+}
+
+fn assert_app_logs_omit_binding_keys(binding_keys: &[&str]) {
+    let logs = CAPTURED_APP_LOGS
+        .lock()
+        .expect("captured app logs lock")
+        .join("\n");
+    for binding_key in binding_keys {
+        assert!(
+            !logs.contains(binding_key),
+            "app logs retained a binding key"
+        );
+    }
 }
 
 #[derive(Clone)]
@@ -358,9 +399,9 @@ async fn mock_messages(
                 "finishReason": "STOP"
             }],
             "usageMetadata": {
-                "promptTokenCount": 7,
-                "candidatesTokenCount": 3,
-                "totalTokenCount": 10
+                "promptTokenCount": if request_index == 0 { 7 } else { 11 },
+                "candidatesTokenCount": if request_index == 0 { 3 } else { 5 },
+                "totalTokenCount": if request_index == 0 { 10 } else { 16 }
             }
         }))
         .into_response();
@@ -569,6 +610,7 @@ async fn create_enabled_binding_for_provider(
     provider_id: &str,
     key: &str,
 ) -> AgentProviderBindingView {
+    ensure_app_log_capture();
     let binding = db
         .save_agent_provider_binding(&AgentProviderBindingInput {
             id: None,
@@ -651,6 +693,77 @@ async fn send_message_with_bearer_and_query(
         request = request.bearer_auth(bearer);
     }
     request.send().await.expect("send request through proxy")
+}
+
+#[tokio::test]
+async fn claude_setup_base_path_is_stripped_before_forwarding() {
+    const BINDING_KEY: &str = "claude-setup-binding-key";
+
+    let hits = Arc::new(AtomicUsize::new(0));
+    let captured = Arc::new(Mutex::new(Vec::new()));
+    let (upstream, upstream_shutdown) = start_mock_upstream(hits.clone(), captured.clone()).await;
+    let db = Arc::new(Database::memory().expect("in-memory database"));
+    db.save_usage_provider(&metered_provider(upstream))
+        .expect("save metered provider");
+    let store = Arc::new(MemoryCredentialStore::default());
+    let credentials = BindingCredentialService::new(db.clone(), store.clone());
+    create_enabled_binding(&db, &credentials, "claude-code", BINDING_KEY).await;
+
+    let (proxy, proxy_port) = start_proxy(db, store).await;
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .expect("build local client");
+    let response = client
+        .post(format!(
+            "http://127.0.0.1:{proxy_port}/claude/v1/messages?trace=setup"
+        ))
+        .bearer_auth(BINDING_KEY)
+        .json(&json!({
+            "model": "claude-sonnet-4-5-20250929",
+            "max_tokens": 16,
+            "stream": false,
+            "messages": [{"role": "user", "content": "hello"}]
+        }))
+        .send()
+        .await
+        .expect("send request through the Claude setup base path");
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_eq!(hits.load(Ordering::SeqCst), 1);
+    let requests = captured.lock().expect("captured requests lock").clone();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].uri, "/v1/messages?trace=setup");
+    assert_eq!(
+        captured_header(&requests[0], "x-api-key"),
+        Some(BINDING_KEY)
+    );
+
+    proxy.stop().await.expect("stop proxy");
+    let _ = upstream_shutdown.send(());
+}
+
+#[tokio::test]
+async fn codex_setup_base_path_serves_the_model_catalog() {
+    let db = Arc::new(Database::memory().expect("in-memory database"));
+    let store = Arc::new(MemoryCredentialStore::default());
+    let (proxy, proxy_port) = start_proxy(db, store).await;
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .expect("build local client");
+
+    let response = client
+        .get(format!("http://127.0.0.1:{proxy_port}/codex/v1/models"))
+        .send()
+        .await
+        .expect("read models through the Codex setup base path");
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let body: serde_json::Value = response.json().await.expect("parse model catalog");
+    assert!(body.get("models").is_some_and(serde_json::Value::is_array));
+
+    proxy.stop().await.expect("stop proxy");
 }
 
 #[tokio::test]
@@ -1208,7 +1321,7 @@ async fn split_gemini_stream_key_is_neither_exposed_cached_nor_ingested() {
 }
 
 #[tokio::test]
-async fn gemini_query_binding_is_stripped_and_frozen_to_the_gemini_agent() {
+async fn gemini_setup_base_path_query_binding_is_stripped_and_frozen_to_the_gemini_agent() {
     const BINDING_KEY: &str = "gemini-query-protected-binding-key";
 
     let hits = Arc::new(AtomicUsize::new(0));
@@ -1237,7 +1350,7 @@ async fn gemini_query_binding_is_stripped_and_frozen_to_the_gemini_agent() {
     let start_at = chrono::Utc::now().timestamp() - 2;
     let response = client
         .post(format!(
-            "http://127.0.0.1:{proxy_port}/v1beta/models/gemini-2.5-pro:generateContent?key={BINDING_KEY}&trace=safe"
+            "http://127.0.0.1:{proxy_port}/gemini/v1beta/models/gemini-2.5-pro:generateContent?key={BINDING_KEY}&trace=safe"
         ))
         .json(&json!({
             "contents": [{"role": "user", "parts": [{"text": "hello"}]}]
@@ -1345,6 +1458,35 @@ fn assert_generic_local_rejection(response_body: &str, rejected_key: &str) {
         assert!(
             !response_body.contains(internal_reason),
             "public rejection leaked internal reason {internal_reason}: {response_body}"
+        );
+    }
+}
+
+fn assert_public_snapshots_omit_binding_keys(
+    db: &Database,
+    start_at: i64,
+    end_at: i64,
+    binding_keys: &[&str],
+) {
+    let public_snapshot = json!({
+        "events": db
+            .list_usage_events("metered-e2e", start_at, end_at, 1, 20)
+            .expect("query public usage events"),
+        "diagnostics": db
+            .get_unassigned_usage_diagnostics()
+            .expect("query public diagnostics"),
+    })
+    .to_string();
+    let sql_snapshot = db.export_sql_string().expect("export database snapshot");
+
+    for binding_key in binding_keys {
+        assert!(
+            !public_snapshot.contains(binding_key),
+            "public snapshot retained a binding key"
+        );
+        assert!(
+            !sql_snapshot.contains(binding_key),
+            "database export retained a binding key"
         );
     }
 }
@@ -1496,6 +1638,223 @@ async fn two_agent_keys_share_a_provider_but_freeze_distinct_event_ownership() {
         Some(rebound_agent.id.as_str())
     );
     assert_eq!(replacement.provider_id, "metered-e2e");
+    assert_public_snapshots_omit_binding_keys(
+        &db,
+        start_at,
+        end_at,
+        &[
+            "claude-agent-protected-key",
+            "codex-agent-protected-key",
+            "rebound-agent-protected-key",
+        ],
+    );
+    assert_app_logs_omit_binding_keys(&[
+        "claude-agent-protected-key",
+        "codex-agent-protected-key",
+        "rebound-agent-protected-key",
+    ]);
+    proxy.stop().await.expect("stop proxy");
+    let _ = upstream_shutdown.send(());
+}
+
+#[tokio::test]
+async fn codex_two_binding_keys_freeze_distinct_agent_ownership() {
+    const CODEX_KEY: &str = "codex-two-key-acceptance";
+    const OPENCODE_KEY: &str = "opencode-two-key-acceptance";
+    const ROTATED_CODEX_KEY: &str = "codex-rotated-key-acceptance";
+
+    let hits = Arc::new(AtomicUsize::new(0));
+    let captured = Arc::new(Mutex::new(Vec::new()));
+    let (upstream, upstream_shutdown) = start_mock_upstream(hits.clone(), captured.clone()).await;
+    let db = Arc::new(Database::memory().expect("in-memory database"));
+    db.save_usage_provider(&metered_codex_provider(upstream))
+        .expect("save Codex provider");
+    let store = Arc::new(MemoryCredentialStore::default());
+    let credentials = BindingCredentialService::new(db.clone(), store.clone());
+    let codex_binding = create_enabled_binding(&db, &credentials, "codex", CODEX_KEY).await;
+    let opencode_binding =
+        create_enabled_binding(&db, &credentials, "opencode", OPENCODE_KEY).await;
+
+    let (proxy, proxy_port) = start_proxy(db.clone(), store).await;
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .expect("build local client");
+    let start_at = chrono::Utc::now().timestamp() - 2;
+
+    for key in [CODEX_KEY, OPENCODE_KEY] {
+        let response = client
+            .post(format!("http://127.0.0.1:{proxy_port}/v1/responses"))
+            .bearer_auth(key)
+            .json(&json!({
+                "model": "gpt-5",
+                "input": "hello",
+                "stream": false
+            }))
+            .send()
+            .await
+            .expect("send Codex request through proxy");
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+    }
+
+    let end_at = chrono::Utc::now().timestamp() + 10;
+    let events = wait_for_events(&db, start_at, end_at, 2).await;
+    let codex_event = events
+        .items
+        .iter()
+        .find(|event| event.upstream_correlation_id.as_deref() == Some("resp-e2e-0"))
+        .expect("Codex-owned event");
+    assert_eq!(codex_event.agent_module_id.as_deref(), Some("codex"));
+    let opencode_event = events
+        .items
+        .iter()
+        .find(|event| event.upstream_correlation_id.as_deref() == Some("resp-e2e-1"))
+        .expect("OpenCode-owned event");
+    assert_eq!(opencode_event.agent_module_id.as_deref(), Some("opencode"));
+    assert!(events
+        .items
+        .iter()
+        .all(|event| event.provider_id == "metered-e2e"));
+    let frozen_events = events.items.clone();
+
+    assert_eq!(hits.load(Ordering::SeqCst), 2);
+    let requests = captured.lock().expect("captured requests lock").clone();
+    assert_eq!(requests.len(), 2);
+    for (request, expected_key) in requests.iter().zip([CODEX_KEY, OPENCODE_KEY]) {
+        let expected_authorization = format!("Bearer {expected_key}");
+        assert_eq!(request.uri, "/v1/responses");
+        assert_eq!(
+            captured_header(request, "authorization"),
+            Some(expected_authorization.as_str())
+        );
+        assert!(captured_header(request, "x-api-key").is_none());
+        assert!(captured_header(request, "x-goog-api-key").is_none());
+        for binding_key in [CODEX_KEY, OPENCODE_KEY] {
+            assert!(!request.uri.contains(binding_key));
+            assert!(!request.body.to_string().contains(binding_key));
+        }
+    }
+
+    credentials
+        .replace_binding_api_key(
+            &codex_binding.id,
+            codex_binding.credential_version,
+            SecretString::new(ROTATED_CODEX_KEY.to_string()),
+        )
+        .await
+        .expect("rotate Codex binding key");
+    credentials
+        .delete_binding(&opencode_binding.id, opencode_binding.credential_version)
+        .await
+        .expect("delete OpenCode binding");
+
+    let preserved = db
+        .list_usage_events("metered-e2e", start_at, end_at, 1, 20)
+        .expect("query preserved Codex history");
+    assert_eq!(preserved.items.len(), frozen_events.len());
+    for frozen in &frozen_events {
+        assert_eq!(
+            preserved
+                .items
+                .iter()
+                .find(|event| event.event_id == frozen.event_id),
+            Some(frozen)
+        );
+    }
+    assert_public_snapshots_omit_binding_keys(
+        &db,
+        start_at,
+        end_at,
+        &[CODEX_KEY, OPENCODE_KEY, ROTATED_CODEX_KEY],
+    );
+    assert_app_logs_omit_binding_keys(&[CODEX_KEY, OPENCODE_KEY, ROTATED_CODEX_KEY]);
+
+    proxy.stop().await.expect("stop proxy");
+    let _ = upstream_shutdown.send(());
+}
+
+#[tokio::test]
+async fn gemini_two_binding_keys_freeze_distinct_agent_ownership() {
+    const HERMES_KEY: &str = "hermes-gemini-two-key-acceptance";
+    const OPENCLAW_KEY: &str = "openclaw-gemini-two-key-acceptance";
+
+    let hits = Arc::new(AtomicUsize::new(0));
+    let captured = Arc::new(Mutex::new(Vec::new()));
+    let (upstream, upstream_shutdown) = start_mock_upstream(hits.clone(), captured.clone()).await;
+    let db = Arc::new(Database::memory().expect("in-memory database"));
+    db.save_usage_provider(&metered_gemini_provider(upstream))
+        .expect("save Gemini provider");
+    let store = Arc::new(MemoryCredentialStore::default());
+    let credentials = BindingCredentialService::new(db.clone(), store.clone());
+    create_enabled_binding(&db, &credentials, "hermes", HERMES_KEY).await;
+    create_enabled_binding(&db, &credentials, "openclaw", OPENCLAW_KEY).await;
+
+    let (proxy, proxy_port) = start_proxy(db.clone(), store).await;
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .expect("build local client");
+    let start_at = chrono::Utc::now().timestamp() - 2;
+
+    for (key, trace) in [(HERMES_KEY, "hermes"), (OPENCLAW_KEY, "openclaw")] {
+        let response = client
+            .post(format!(
+                "http://127.0.0.1:{proxy_port}/v1beta/models/gemini-2.5-pro:generateContent?key={key}&trace={trace}"
+            ))
+            .json(&json!({
+                "contents": [{"role": "user", "parts": [{"text": "hello"}]}]
+            }))
+            .send()
+            .await
+            .expect("send Gemini request through proxy");
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+    }
+
+    let end_at = chrono::Utc::now().timestamp() + 10;
+    let events = wait_for_events(&db, start_at, end_at, 2).await;
+    let hermes_event = events
+        .items
+        .iter()
+        .find(|event| event.input_tokens == 7 && event.output_tokens == 3)
+        .expect("Hermes-owned Gemini event");
+    assert_eq!(hermes_event.agent_module_id.as_deref(), Some("hermes"));
+    let openclaw_event = events
+        .items
+        .iter()
+        .find(|event| event.input_tokens == 11 && event.output_tokens == 5)
+        .expect("OpenClaw-owned Gemini event");
+    assert_eq!(openclaw_event.agent_module_id.as_deref(), Some("openclaw"));
+    assert!(events
+        .items
+        .iter()
+        .all(|event| event.provider_id == "metered-e2e"));
+
+    assert_eq!(hits.load(Ordering::SeqCst), 2);
+    let requests = captured.lock().expect("captured requests lock").clone();
+    assert_eq!(requests.len(), 2);
+    for ((request, expected_key), trace) in requests
+        .iter()
+        .zip([HERMES_KEY, OPENCLAW_KEY])
+        .zip(["hermes", "openclaw"])
+    {
+        assert_eq!(
+            request.uri,
+            format!("/v1beta/models/gemini-2.5-pro:generateContent?trace={trace}")
+        );
+        assert_eq!(
+            captured_header(request, "x-goog-api-key"),
+            Some(expected_key)
+        );
+        assert!(captured_header(request, "authorization").is_none());
+        assert!(captured_header(request, "x-api-key").is_none());
+        for binding_key in [HERMES_KEY, OPENCLAW_KEY] {
+            assert!(!request.uri.contains(binding_key));
+            assert!(!request.body.to_string().contains(binding_key));
+        }
+    }
+    assert_public_snapshots_omit_binding_keys(&db, start_at, end_at, &[HERMES_KEY, OPENCLAW_KEY]);
+    assert_app_logs_omit_binding_keys(&[HERMES_KEY, OPENCLAW_KEY]);
+
     proxy.stop().await.expect("stop proxy");
     let _ = upstream_shutdown.send(());
 }

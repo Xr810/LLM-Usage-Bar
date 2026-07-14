@@ -126,18 +126,18 @@ pub fn get_unassigned_usage_diagnostics(
 }
 
 #[tauri::command]
-pub fn list_usage_providers(
+pub async fn list_usage_providers(
     state: State<'_, AppState>,
 ) -> Result<Vec<UsageProviderView>, AppError> {
-    list_usage_providers_test_hook(&state)
+    list_usage_providers_test_hook(&state).await
 }
 
 #[tauri::command]
-pub fn save_usage_provider(
+pub async fn save_usage_provider(
     state: State<'_, AppState>,
     input: UsageProviderInput,
 ) -> Result<UsageProviderView, AppError> {
-    save_usage_provider_test_hook(&state, input)
+    save_usage_provider_test_hook(&state, input).await
 }
 
 #[tauri::command]
@@ -418,27 +418,36 @@ pub async fn get_agent_proxy_setup_info_test_hook(
     let proxy_origin = reachable_proxy_origin(&status, &config)?;
     let routes = bindings
         .into_iter()
-        .map(|binding| {
+        .map(|binding| -> Result<AgentProxyRouteSetup, AppError> {
             let protocol = providers
                 .get(&binding.provider_id)
                 .and_then(|provider| provider.route_app_type.clone());
-            let local_base_url = protocol
-                .as_deref()
-                .and_then(|protocol| local_proxy_base_url(&proxy_origin, protocol));
-            let credential_placements = protocol
-                .as_deref()
-                .map(allowed_credential_placements)
-                .unwrap_or_default();
-            AgentProxyRouteSetup {
+            let publishes_direct_setup = state
+                .db
+                .agent_provider_binding_supports_direct_api_key(&binding.id)?;
+            let (local_base_url, credential_placements) = if publishes_direct_setup {
+                (
+                    protocol
+                        .as_deref()
+                        .and_then(|protocol| local_proxy_base_url(&proxy_origin, protocol)),
+                    protocol
+                        .as_deref()
+                        .map(allowed_credential_placements)
+                        .unwrap_or_default(),
+                )
+            } else {
+                (None, Vec::new())
+            };
+            Ok(AgentProxyRouteSetup {
                 binding_id: binding.id,
                 provider_id: binding.provider_id,
                 protocol,
                 local_base_url,
                 credential_placements,
                 credential_status: binding.credential_status,
-            }
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(AgentProxySetupInfo {
         agent_module_id: agent_module_id.to_string(),
         proxy_running: status.running,
@@ -453,17 +462,67 @@ pub fn get_unassigned_usage_diagnostics_test_hook(
     state.db.get_unassigned_usage_diagnostics()
 }
 
-pub fn list_usage_providers_test_hook(
+async fn verified_bindings_by_provider(
     state: &AppState,
-) -> Result<Vec<UsageProviderView>, AppError> {
-    state.db.list_usage_providers()
+) -> Result<BTreeMap<String, Vec<AgentProviderBindingView>>, AppError> {
+    let mut bindings_by_provider = BTreeMap::new();
+    for binding in state
+        .binding_credential_service
+        .list_agent_provider_bindings(None)
+        .await?
+    {
+        bindings_by_provider
+            .entry(binding.provider_id.clone())
+            .or_insert_with(Vec::new)
+            .push(binding);
+    }
+    Ok(bindings_by_provider)
 }
 
-pub fn save_usage_provider_test_hook(
+fn hydrate_provider_bindings(
+    provider: &mut UsageProviderView,
+    bindings_by_provider: &BTreeMap<String, Vec<AgentProviderBindingView>>,
+) {
+    provider.bindings = bindings_by_provider
+        .get(&provider.id)
+        .cloned()
+        .unwrap_or_default();
+}
+
+fn hydrate_dashboard_provider_bindings(
+    dashboard: &mut UsageDashboardView,
+    bindings_by_provider: &BTreeMap<String, Vec<AgentProviderBindingView>>,
+) {
+    for product in &mut dashboard.product_groups {
+        for usage in product
+            .subscription_providers
+            .iter_mut()
+            .chain(product.metered_providers.iter_mut())
+        {
+            hydrate_provider_bindings(&mut usage.provider, bindings_by_provider);
+        }
+    }
+}
+
+pub async fn list_usage_providers_test_hook(
+    state: &AppState,
+) -> Result<Vec<UsageProviderView>, AppError> {
+    let bindings_by_provider = verified_bindings_by_provider(state).await?;
+    let mut providers = state.db.list_usage_providers()?;
+    for provider in &mut providers {
+        hydrate_provider_bindings(provider, &bindings_by_provider);
+    }
+    Ok(providers)
+}
+
+pub async fn save_usage_provider_test_hook(
     state: &AppState,
     input: UsageProviderInput,
 ) -> Result<UsageProviderView, AppError> {
-    state.db.save_usage_provider(&input)
+    let mut provider = state.db.save_usage_provider(&input)?;
+    let bindings_by_provider = verified_bindings_by_provider(state).await?;
+    hydrate_provider_bindings(&mut provider, &bindings_by_provider);
+    Ok(provider)
 }
 
 pub fn set_usage_provider_enabled_test_hook(
@@ -496,25 +555,26 @@ pub async fn get_usage_dashboard_test_hook(
     agent_module_id: &str,
 ) -> Result<UsageDashboardView, AppError> {
     require_active_agent(state, agent_module_id)?;
+    let bindings_by_provider = verified_bindings_by_provider(state).await?;
     let mut effective_agents_by_provider: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for binding in state
-        .binding_credential_service
-        .list_agent_provider_bindings(None)
-        .await?
-        .into_iter()
+    for binding in bindings_by_provider
+        .values()
+        .flatten()
         .filter(|binding| binding.effective_enabled)
     {
         effective_agents_by_provider
-            .entry(binding.provider_id)
+            .entry(binding.provider_id.clone())
             .or_default()
-            .insert(binding.agent_module_id);
+            .insert(binding.agent_module_id.clone());
     }
     let shared_provider_ids = effective_agents_by_provider
         .into_iter()
         .filter_map(|(provider_id, agent_ids)| (agent_ids.len() > 1).then_some(provider_id));
-    UsageDashboardService::new(&state.db)
+    let mut dashboard = UsageDashboardService::new(&state.db)
         .with_shared_provider_ids(shared_provider_ids)
-        .get_dashboard(start_at, end_at, agent_module_id)
+        .get_dashboard(start_at, end_at, agent_module_id)?;
+    hydrate_dashboard_provider_bindings(&mut dashboard, &bindings_by_provider);
+    Ok(dashboard)
 }
 
 pub fn get_usage_events_test_hook(
@@ -623,7 +683,7 @@ fn allowed_credential_placements(protocol: &str) -> Vec<String> {
         "claude" => &["authorization", "x-api-key", "query:key"],
         "codex" => &["authorization", "query:key"],
         "gemini" => &["authorization", "x-goog-api-key", "query:key"],
-        "claude-desktop" => &["authorization", "x-api-key"],
+        "claude-desktop" => &["x-api-key"],
         _ => &[],
     };
     placements
@@ -709,6 +769,43 @@ mod tests {
             quota_interval_seconds: None,
             route_app_type: Some("claude".to_string()),
             route_config: Some(json!({"baseUrl": "https://upstream.example/secret-path"})),
+            quota_config: None,
+            enabled: true,
+        }
+    }
+
+    fn session_provider(id: &str) -> UsageProviderInput {
+        UsageProviderInput {
+            id: id.to_string(),
+            name: id.to_string(),
+            billing_kind: BillingKind::Subscription,
+            product_group_id: "product".to_string(),
+            token_sources: vec![TokenSource::SessionLog],
+            session_source_bindings: Some(vec!["claude".to_string(), "codex".to_string()]),
+            quota_source: None,
+            quota_interval_seconds: None,
+            route_app_type: None,
+            route_config: None,
+            quota_config: None,
+            enabled: true,
+        }
+    }
+
+    fn managed_provider(id: &str) -> UsageProviderInput {
+        UsageProviderInput {
+            id: id.to_string(),
+            name: id.to_string(),
+            billing_kind: BillingKind::Subscription,
+            product_group_id: "product".to_string(),
+            token_sources: vec![TokenSource::SessionLog, TokenSource::Proxy],
+            session_source_bindings: Some(vec!["codex".to_string()]),
+            quota_source: None,
+            quota_interval_seconds: None,
+            route_app_type: Some("codex".to_string()),
+            route_config: Some(json!({
+                "baseUrl": "https://chatgpt.com/backend-api",
+                "authMode": "oauth"
+            })),
             quota_config: None,
             enabled: true,
         }
@@ -844,6 +941,177 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn proxy_setup_omits_local_credentials_for_managed_bindings() {
+        let db = Arc::new(Database::memory().unwrap());
+        db.save_usage_provider(&managed_provider("managed-codex"))
+            .unwrap();
+        let state =
+            AppState::new_with_credential_store(db, Arc::new(MemoryCredentialStore::default()));
+        let binding = save_agent_provider_binding_test_hook(
+            &state,
+            AgentProviderBindingInput {
+                id: None,
+                agent_module_id: "codex".to_string(),
+                provider_id: "managed-codex".to_string(),
+                enabled: true,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            binding.credential_status,
+            BindingCredentialStatus::NotRequired
+        );
+
+        let setup = get_agent_proxy_setup_info_test_hook(&state, "codex")
+            .await
+            .unwrap();
+        assert_eq!(setup.routes.len(), 1);
+        assert_eq!(setup.routes[0].protocol.as_deref(), Some("codex"));
+        assert_eq!(setup.routes[0].local_base_url, None);
+        assert!(setup.routes[0].credential_placements.is_empty());
+    }
+
+    #[tokio::test]
+    async fn proxy_setup_publishes_only_direct_api_key_capabilities() {
+        let db = Arc::new(Database::memory().unwrap());
+        let mut direct = direct_provider("managed-with-leftover");
+        direct.route_app_type = Some("codex".to_string());
+        direct.route_config = Some(json!({
+            "baseUrl": "https://api.example/v1",
+            "authMode": "direct_api_key"
+        }));
+        db.save_usage_provider(&direct).unwrap();
+        let state =
+            AppState::new_with_credential_store(db, Arc::new(MemoryCredentialStore::default()));
+        let leftover = save_agent_provider_binding_test_hook(
+            &state,
+            AgentProviderBindingInput {
+                id: None,
+                agent_module_id: "codex".to_string(),
+                provider_id: direct.id.clone(),
+                enabled: false,
+            },
+        )
+        .await
+        .unwrap();
+        set_agent_provider_binding_api_key_test_hook(
+            &state,
+            &leftover.id,
+            leftover.credential_version,
+            SecretString::new("managed-leftover-key".to_string()),
+        )
+        .await
+        .unwrap();
+        state
+            .db
+            .save_usage_provider(&managed_provider(&direct.id))
+            .unwrap();
+
+        let mut unsupported = direct_provider("unsupported-route");
+        unsupported.route_app_type = Some("codex".to_string());
+        unsupported.route_config = Some(json!({
+            "baseUrl": "https://unsupported.example/v1",
+            "authMode": "basic"
+        }));
+        state.db.save_usage_provider(&unsupported).unwrap();
+        let unsupported_binding = save_agent_provider_binding_test_hook(
+            &state,
+            AgentProviderBindingInput {
+                id: None,
+                agent_module_id: "codex".to_string(),
+                provider_id: unsupported.id.clone(),
+                enabled: false,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            unsupported_binding.credential_status,
+            BindingCredentialStatus::Unavailable
+        );
+
+        let verified = list_agent_provider_bindings_test_hook(&state, Some("codex"))
+            .await
+            .unwrap();
+        assert!(verified
+            .iter()
+            .all(|binding| { binding.credential_status == BindingCredentialStatus::Unavailable }));
+
+        let setup = get_agent_proxy_setup_info_test_hook(&state, "codex")
+            .await
+            .unwrap();
+        for provider_id in [&direct.id, &unsupported.id] {
+            let route = setup
+                .routes
+                .iter()
+                .find(|route| &route.provider_id == provider_id)
+                .expect("setup route");
+            assert_eq!(route.protocol.as_deref(), Some("codex"));
+            assert_eq!(route.local_base_url, None);
+            assert!(route.credential_placements.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn provider_commands_embed_verified_binding_views() {
+        let db = Arc::new(Database::memory().unwrap());
+        db.save_usage_provider(&direct_provider("provider-view"))
+            .unwrap();
+        let state =
+            AppState::new_with_credential_store(db, Arc::new(MemoryCredentialStore::default()));
+        let binding = save_agent_provider_binding_test_hook(
+            &state,
+            AgentProviderBindingInput {
+                id: None,
+                agent_module_id: "codex".to_string(),
+                provider_id: "provider-view".to_string(),
+                enabled: false,
+            },
+        )
+        .await
+        .unwrap();
+        set_agent_provider_binding_api_key_test_hook(
+            &state,
+            &binding.id,
+            binding.credential_version,
+            SecretString::new("provider-view-protected-key".to_string()),
+        )
+        .await
+        .unwrap();
+        let verified = save_agent_provider_binding_test_hook(
+            &state,
+            AgentProviderBindingInput {
+                id: Some(binding.id),
+                agent_module_id: "codex".to_string(),
+                provider_id: "provider-view".to_string(),
+                enabled: true,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(verified.effective_enabled);
+
+        let listed = list_usage_providers_test_hook(&state).await.unwrap();
+        assert_eq!(listed[0].bindings, vec![verified.clone()]);
+
+        let mut edited = direct_provider("provider-view");
+        edited.name = "Provider view edited".to_string();
+        let saved = save_usage_provider_test_hook(&state, edited).await.unwrap();
+        assert_eq!(saved.bindings, vec![verified.clone()]);
+
+        let dashboard = get_usage_dashboard_test_hook(&state, 0, 100, "codex")
+            .await
+            .unwrap();
+        assert_eq!(
+            dashboard.product_groups[0].metered_providers[0]
+                .provider
+                .bindings,
+            vec![verified]
+        );
+    }
+
+    #[tokio::test]
     async fn proxy_setup_brackets_the_configured_ipv6_origin() {
         let state = AppState::new(Arc::new(Database::memory().unwrap()));
         let mut config = state.proxy_service.get_config().await.unwrap();
@@ -856,6 +1124,14 @@ mod tests {
             .unwrap();
 
         assert_eq!(setup.proxy_origin, "http://[::1]:43123");
+    }
+
+    #[test]
+    fn claude_desktop_binding_key_uses_only_x_api_key() {
+        assert_eq!(
+            allowed_credential_placements("claude-desktop"),
+            vec!["x-api-key".to_string()]
+        );
     }
 
     #[tokio::test]
@@ -1106,6 +1382,39 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn dashboard_does_not_mark_session_only_multi_agent_provider_shared() {
+        let db = Arc::new(Database::memory().unwrap());
+        db.save_usage_provider(&session_provider("shared-session"))
+            .unwrap();
+        let state =
+            AppState::new_with_credential_store(db, Arc::new(MemoryCredentialStore::default()));
+        for agent_module_id in ["codex", "claude-code"] {
+            let binding = save_agent_provider_binding_test_hook(
+                &state,
+                AgentProviderBindingInput {
+                    id: None,
+                    agent_module_id: agent_module_id.to_string(),
+                    provider_id: "shared-session".to_string(),
+                    enabled: true,
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                binding.credential_status,
+                BindingCredentialStatus::NotRequired
+            );
+            assert!(!binding.effective_enabled);
+        }
+
+        let dashboard = get_usage_dashboard_test_hook(&state, 0, 100, "codex")
+            .await
+            .unwrap();
+        let usage = &dashboard.product_groups[0].subscription_providers[0];
+        assert!(!usage.shared_account);
     }
 
     #[test]

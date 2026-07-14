@@ -58,9 +58,18 @@ export function MeteredProviderCard({
       <CardHeader className="pb-3">
         <div className="flex items-start justify-between gap-3">
           <CardTitle className="text-base">{usage.provider.name}</CardTitle>
-          <Badge variant="secondary">
-            {t("usageDashboard.metered", { defaultValue: "Metered" })}
-          </Badge>
+          <div className="flex flex-wrap justify-end gap-2">
+            {usage.sharedAccount ? (
+              <Badge variant="outline">
+                {t("usageDashboard.sharedAccount", {
+                  defaultValue: "Shared account",
+                })}
+              </Badge>
+            ) : null}
+            <Badge variant="secondary">
+              {t("usageDashboard.metered", { defaultValue: "Metered" })}
+            </Badge>
+          </div>
         </div>
         <div className="text-xs text-muted-foreground">{sourceText}</div>
       </CardHeader>

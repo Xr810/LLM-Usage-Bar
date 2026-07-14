@@ -72,6 +72,7 @@
     "meteredOverview": "按量總覽",
     "noSubscriptionHistory": "此 Agent 暫無訂閱歷史",
     "noMeteredHistory": "此 Agent 暫無按量歷史",
+    "sharedAccount": "共用帳號",
     "sharedAccountQuota": "共用帳號額度",
     "providersInModule": "{{module}} 中的 Provider",
     "subscriptionModuleEmpty": "尚未為此模組新增訂閱帳號。",

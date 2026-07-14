@@ -758,6 +758,7 @@ async fn clear_commits_fail_closed_before_retrying_orphan_cleanup() {
     let cleared = service.clear_binding_api_key(&binding.id, 1).await.unwrap();
     assert_eq!(cleared.credential_version, 2);
     assert_eq!(cleared.credential_status, BindingCredentialStatus::Missing);
+    assert!(!cleared.can_clear_credential);
     assert!(!cleared.enabled);
     assert_eq!(
         private_binding_state(&db, &binding.id),
@@ -813,6 +814,7 @@ async fn missing_or_mismatched_protected_item_is_unavailable_and_never_effective
         missing.credential_status,
         BindingCredentialStatus::Unavailable
     );
+    assert!(missing.can_clear_credential);
     assert!(!missing.effective_enabled);
     assert_eq!(
         service
@@ -833,6 +835,7 @@ async fn missing_or_mismatched_protected_item_is_unavailable_and_never_effective
         mismatched.credential_status,
         BindingCredentialStatus::Unavailable
     );
+    assert!(mismatched.can_clear_credential);
     assert!(!mismatched.effective_enabled);
 }
 
@@ -1194,17 +1197,19 @@ async fn credential_can_be_cleared_after_provider_switches_to_session_auth() {
         .list_agent_provider_bindings(Some("codex"))
         .await
         .unwrap();
+    let before_clear = before_clear
+        .iter()
+        .find(|view| view.id == binding.id)
+        .unwrap();
     assert_eq!(
-        before_clear
-            .iter()
-            .find(|view| view.id == binding.id)
-            .unwrap()
-            .credential_status,
+        before_clear.credential_status,
         BindingCredentialStatus::Unavailable
     );
+    assert!(before_clear.can_clear_credential);
 
     let cleared = service.clear_binding_api_key(&binding.id, 1).await.unwrap();
     assert_eq!(cleared.credential_version, 2);
+    assert!(!cleared.can_clear_credential);
     assert!(!cleared.enabled);
     assert_eq!(store.item_count(), 0);
     assert_eq!(journal_count(&db, &binding.id), 0);
@@ -1238,6 +1243,7 @@ async fn malformed_provider_metadata_cannot_block_credential_cleanup() {
         cleared.credential_status,
         BindingCredentialStatus::Unavailable
     );
+    assert!(!cleared.can_clear_credential);
     assert_eq!(store.item_count(), 1);
     assert_eq!(journal_count(&db, &binding.id), 1);
     service.reconcile_startup().await.unwrap();

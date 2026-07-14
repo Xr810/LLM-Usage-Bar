@@ -36,6 +36,7 @@ export interface AgentProviderBindingView {
   enabled: boolean;
   effectiveEnabled: boolean;
   credentialStatus: BindingCredentialStatus;
+  canClearCredential: boolean;
   credentialVersion: number;
   createdAt: number;
   updatedAt: number;

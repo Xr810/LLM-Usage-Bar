@@ -87,11 +87,13 @@ async fn nine_command_adapters_validate_and_never_serialize_provider_secrets() {
     let _home = ensure_test_home();
     let state = create_test_state().expect("create test state");
 
-    let saved = save_usage_provider_test_hook(&state, metered()).unwrap();
+    let saved = save_usage_provider_test_hook(&state, metered())
+        .await
+        .unwrap();
     assert!(!serde_json::to_string(&saved)
         .unwrap()
         .contains("route-secret"));
-    let providers = list_usage_providers_test_hook(&state).unwrap();
+    let providers = list_usage_providers_test_hook(&state).await.unwrap();
     assert_eq!(providers.len(), 1);
     assert!(!serde_json::to_string(&providers)
         .unwrap()
@@ -174,7 +176,9 @@ async fn nine_command_adapters_validate_and_never_serialize_provider_secrets() {
     assert!(refresh_provider_quota_test_hook(&state, "missing")
         .await
         .is_err());
-    let subscription_saved = save_usage_provider_test_hook(&state, subscription()).unwrap();
+    let subscription_saved = save_usage_provider_test_hook(&state, subscription())
+        .await
+        .unwrap();
     assert_eq!(subscription_saved.session_source_bindings, vec!["claude"]);
     assert!(!serde_json::to_string(&subscription_saved)
         .unwrap()

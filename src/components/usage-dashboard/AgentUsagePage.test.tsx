@@ -54,7 +54,7 @@ function usage(
 ): ProviderUsageView {
   return {
     provider: provider(id, billingKind),
-    sharedAccount: billingKind === "subscription",
+    sharedAccount: true,
     eventCount: billingKind === "subscription" ? 9 : 2,
     inputTokens: billingKind === "subscription" ? 999 : 100,
     outputTokens: 20,
@@ -109,6 +109,7 @@ describe("AgentUsagePage", () => {
     expect(screen.getByText("Official Subscription")).toBeInTheDocument();
     expect(screen.getByText("Azure API")).toBeInTheDocument();
     expect(screen.getByText("Shared account quota")).toBeInTheDocument();
+    expect(screen.getByText("Shared account")).toBeInTheDocument();
     expect(screen.getByTestId("metered-total-tokens")).toHaveTextContent("135");
     expect(screen.getByTestId("metered-request-count")).toHaveTextContent("2");
     expect(mocks.events).toHaveBeenCalledWith("codex", "metered", 10, 20, 1, 5);

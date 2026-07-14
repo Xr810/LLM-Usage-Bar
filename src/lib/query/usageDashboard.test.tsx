@@ -336,4 +336,28 @@ describe("usage dashboard mutation invalidation", () => {
       queryKey: usageDashboardKeys.all,
     });
   });
+
+  it("invalidates the root and preserves a protected-key conflict error", async () => {
+    const conflict = {
+      code: "credential_conflict",
+      message: "The credential changed before this request completed.",
+    };
+    invokeMock.mockRejectedValueOnce(conflict);
+    const client = new QueryClient();
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    const credential = renderHook(
+      () => useAgentProviderBindingCredentialActions(),
+      { wrapper: wrapper(client) },
+    );
+
+    await act(async () => {
+      await expect(
+        credential.result.current.clearApiKey("binding-a", 7),
+      ).rejects.toBe(conflict);
+    });
+
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: usageDashboardKeys.all,
+    });
+  });
 });

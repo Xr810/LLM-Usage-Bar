@@ -21,6 +21,7 @@ function provider(
         enabled: true,
         effectiveEnabled: true,
         credentialStatus: "configured",
+        canClearCredential: true,
         credentialVersion: 4,
         createdAt: 1,
         updatedAt: 1,

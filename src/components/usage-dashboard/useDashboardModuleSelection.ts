@@ -25,6 +25,9 @@ export function useAgentModuleSelection(agents: AgentModuleView[]) {
     null;
 
   useEffect(() => {
+    // React Query exposes an empty array before the first Agent response. Keep the
+    // persisted ID through that transient state so the later result can restore it.
+    if (agents.length === 0) return;
     const nextId = selectedAgent?.id ?? null;
     if (nextId !== selectedId) setSelectedId(nextId);
     if (typeof window === "undefined") return;
@@ -33,7 +36,7 @@ export function useAgentModuleSelection(agents: AgentModuleView[]) {
     } else {
       window.localStorage.removeItem(agentModuleStorageKey);
     }
-  }, [selectedAgent?.id, selectedId]);
+  }, [agents.length, selectedAgent?.id, selectedId]);
 
   const selectAgent = useCallback(
     (agentModuleId: string) => {

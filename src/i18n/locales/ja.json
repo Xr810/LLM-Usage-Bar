@@ -72,6 +72,7 @@
     "meteredOverview": "従量課金の概要",
     "noSubscriptionHistory": "この Agent のサブスクリプション履歴はありません",
     "noMeteredHistory": "この Agent の従量課金履歴はありません",
+    "sharedAccount": "共有アカウント",
     "sharedAccountQuota": "共有アカウントの上限",
     "providersInModule": "{{module}} の Provider",
     "subscriptionModuleEmpty": "このモジュールにはサブスクリプションアカウントが追加されていません。",

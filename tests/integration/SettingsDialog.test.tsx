@@ -10,7 +10,7 @@ const renderSettings = (open = true, defaultTab?: string) => {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
-  return render(
+  const view = render(
     <QueryClientProvider client={client}>
       <SettingsPage
         open={open}
@@ -19,6 +19,7 @@ const renderSettings = (open = true, defaultTab?: string) => {
       />
     </QueryClientProvider>,
   );
+  return { ...view, client };
 };
 
 describe("SettingsPage integration", () => {
@@ -28,6 +29,16 @@ describe("SettingsPage integration", () => {
 
     expect(await screen.findByDisplayValue("Research Agent")).toBeInTheDocument();
     expect(screen.getAllByText("Official Subscription")).not.toHaveLength(0);
+    expect(
+      within(screen.getByTestId("agent-settings-opencode")).getByText(
+        "2 Providers",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(
+        screen.getByTestId("agent-binding-binding-opencode-subscription"),
+      ).getByText("Effective: Disabled"),
+    ).toBeInTheDocument();
 
     await user.click(screen.getByRole("tab", { name: "Providers" }));
     expect(await screen.findByText("Official Subscription")).toBeInTheDocument();
@@ -49,7 +60,7 @@ describe("SettingsPage integration", () => {
 
   it("keeps Agent and protected-key mutations observable without retaining the key", async () => {
     const user = userEvent.setup();
-    renderSettings();
+    const view = renderSettings();
     await screen.findByDisplayValue("Research Agent");
 
     await user.type(screen.getByLabelText("Custom Agent name"), "MSW Custom");
@@ -68,7 +79,8 @@ describe("SettingsPage integration", () => {
 
     const dialog = screen.getByRole("dialog");
     const input = within(dialog).getByLabelText("API key");
-    await user.type(input, "transient-msw-key");
+    const bindingKey = "transient-msw-key";
+    await user.type(input, bindingKey);
     await user.click(within(dialog).getByRole("button", { name: "Set API key" }));
 
     await waitFor(() =>
@@ -78,7 +90,31 @@ describe("SettingsPage integration", () => {
         ),
       ).toBeInTheDocument(),
     );
-    expect(screen.queryByDisplayValue("transient-msw-key")).toBeNull();
+    expect(screen.queryByDisplayValue(bindingKey)).toBeNull();
+
+    const frontendSnapshot = JSON.stringify({
+      dom: view.baseElement.innerHTML,
+      formValues: Array.from(
+        view.baseElement.querySelectorAll<
+          HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement
+        >("input, textarea, select"),
+        (element) => element.value,
+      ),
+      queries: view.client
+        .getQueryCache()
+        .getAll()
+        .map((query) => query.state.data),
+      mutations: view.client
+        .getMutationCache()
+        .getAll()
+        .map((mutation) => ({
+          data: mutation.state.data,
+          error: mutation.state.error,
+          variables: mutation.state.variables,
+          context: mutation.state.context,
+        })),
+    });
+    expect(frontendSnapshot).not.toContain(bindingKey);
   });
 
   it.each(["general", "advanced", "mcp", "about", "unknown", "modules"])(

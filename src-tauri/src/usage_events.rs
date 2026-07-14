@@ -105,9 +105,6 @@ pub fn notify_dashboard_invalidated() {
     }
 }
 
-#[cfg(test)]
-fn dashboard_invalidation_payload() {}
-
 /// Emit a diagnostic-only ingestion failure event without exposing credentials,
 /// upstream payloads, or raw database errors to the renderer.
 pub fn notify_ingestion_error(provider_id: &str, request_id: &str) {
@@ -132,8 +129,8 @@ fn ingestion_error_payload(provider_id: &str, request_id: &str) -> UsageIngestio
 #[cfg(test)]
 mod tests {
     use super::{
-        dashboard_invalidation_payload, ingestion_error_payload, DASHBOARD_EMIT_SCHEDULED,
-        EVENT_USAGE_DASHBOARD_INVALIDATED, LOG_EMIT_SCHEDULED,
+        ingestion_error_payload, DASHBOARD_EMIT_SCHEDULED, EVENT_USAGE_DASHBOARD_INVALIDATED,
+        LOG_EMIT_SCHEDULED,
     };
 
     #[test]
@@ -156,10 +153,7 @@ mod tests {
             EVENT_USAGE_DASHBOARD_INVALIDATED,
             "usage-dashboard-invalidated"
         );
-        assert_eq!(
-            serde_json::to_value(dashboard_invalidation_payload()).unwrap(),
-            serde_json::Value::Null
-        );
+        assert_eq!(serde_json::to_value(()).unwrap(), serde_json::Value::Null);
     }
 
     #[test]

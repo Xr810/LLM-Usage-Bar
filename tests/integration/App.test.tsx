@@ -26,6 +26,7 @@ describe("App usage-dashboard acceptance with Tauri MSW", () => {
     ).not.toHaveLength(0);
     expect(screen.getByText("25% used")).toBeInTheDocument();
     expect(screen.getByText("Azure API")).toBeInTheDocument();
+    expect(screen.getByText("Shared account")).toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Metered usage" })).toBeNull();
 
     const customAgent = await screen.findByRole("tab", {
@@ -41,6 +42,7 @@ describe("App usage-dashboard acceptance with Tauri MSW", () => {
       await screen.findByText("Research Subscription"),
     ).toBeInTheDocument();
     expect(screen.getByText("OpenRouter")).toBeInTheDocument();
+    expect(screen.queryByText("Shared account")).toBeNull();
     expect(screen.queryByText("Official Subscription")).toBeNull();
     expect(screen.queryByText("Azure API")).toBeNull();
     expect(screen.getAllByText("Recent requests")).toHaveLength(1);

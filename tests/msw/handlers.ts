@@ -73,7 +73,7 @@ const initialAgentModulesFixture: AgentModuleView[] = [
     visible: true,
     isFixed: true,
     archivedAt: null,
-    providerCount: 1,
+    providerCount: 2,
   },
   {
     id: "openclaw",
@@ -100,7 +100,7 @@ const initialAgentModulesFixture: AgentModuleView[] = [
     visible: true,
     isFixed: false,
     archivedAt: null,
-    providerCount: 1,
+    providerCount: 2,
   },
 ];
 
@@ -118,8 +118,9 @@ const initialUsageProvidersFixture: UsageProviderView[] = [
         agentModuleId: "codex",
         providerId: "subscription-official",
         enabled: true,
-        effectiveEnabled: true,
+        effectiveEnabled: false,
         credentialStatus: "not_required",
+        canClearCredential: false,
         credentialVersion: 0,
         createdAt: 1,
         updatedAt: 1,
@@ -148,8 +149,9 @@ const initialUsageProvidersFixture: UsageProviderView[] = [
         agentModuleId: "claude-code",
         providerId: "subscription-claude",
         enabled: true,
-        effectiveEnabled: true,
+        effectiveEnabled: false,
         credentialStatus: "not_required",
+        canClearCredential: false,
         credentialVersion: 0,
         createdAt: 2,
         updatedAt: 2,
@@ -178,8 +180,9 @@ const initialUsageProvidersFixture: UsageProviderView[] = [
         agentModuleId: "opencode",
         providerId: "subscription-kimi",
         enabled: true,
-        effectiveEnabled: true,
+        effectiveEnabled: false,
         credentialStatus: "not_required",
+        canClearCredential: false,
         credentialVersion: 0,
         createdAt: 3,
         updatedAt: 3,
@@ -208,8 +211,9 @@ const initialUsageProvidersFixture: UsageProviderView[] = [
         agentModuleId: "custom-research",
         providerId: "subscription-research",
         enabled: true,
-        effectiveEnabled: true,
+        effectiveEnabled: false,
         credentialStatus: "not_required",
+        canClearCredential: false,
         credentialVersion: 0,
         createdAt: 4,
         updatedAt: 4,
@@ -240,6 +244,7 @@ const initialUsageProvidersFixture: UsageProviderView[] = [
         enabled: true,
         effectiveEnabled: true,
         credentialStatus: "configured",
+        canClearCredential: true,
         credentialVersion: 1,
         createdAt: 5,
         updatedAt: 5,
@@ -251,6 +256,7 @@ const initialUsageProvidersFixture: UsageProviderView[] = [
         enabled: true,
         effectiveEnabled: true,
         credentialStatus: "configured",
+        canClearCredential: true,
         credentialVersion: 1,
         createdAt: 5,
         updatedAt: 5,
@@ -281,6 +287,7 @@ const initialUsageProvidersFixture: UsageProviderView[] = [
         enabled: true,
         effectiveEnabled: true,
         credentialStatus: "configured",
+        canClearCredential: true,
         credentialVersion: 1,
         createdAt: 6,
         updatedAt: 6,
@@ -292,6 +299,7 @@ const initialUsageProvidersFixture: UsageProviderView[] = [
         enabled: false,
         effectiveEnabled: false,
         credentialStatus: "missing",
+        canClearCredential: false,
         credentialVersion: 0,
         createdAt: 6,
         updatedAt: 6,
@@ -322,6 +330,7 @@ export const resetUsageDashboardState = () => {
   usageProvidersFixture = cloneUsageFixture(initialUsageProvidersFixture);
   nextAgentId = 1;
   nextBindingId = 1;
+  recomputeAgentBindingState();
 };
 
 const usageProvider = (id: string) => {
@@ -358,8 +367,7 @@ const recomputeAgentBindingState = () => {
         binding.enabled &&
         provider.enabled &&
         Boolean(activeAgent(binding.agentModuleId)) &&
-        (binding.credentialStatus === "configured" ||
-          binding.credentialStatus === "not_required"),
+        binding.credentialStatus === "configured",
     }));
   }
   for (const agent of agentModulesFixture) {
@@ -368,6 +376,16 @@ const recomputeAgentBindingState = () => {
     ).length;
   }
 };
+
+const sharedAccountForProvider = (providerId: string) =>
+  new Set(
+    usageProvider(providerId).bindings
+      .filter(
+        (binding) =>
+          binding.effectiveEnabled && Boolean(activeAgent(binding.agentModuleId)),
+      )
+      .map((binding) => binding.agentModuleId),
+  ).size > 1;
 
 const rejectUsageRequest = (message: string) =>
   HttpResponse.json(message, { status: 400 });
@@ -378,7 +396,7 @@ const subscriptionUsage = (
   inputTokens: number,
 ) => ({
   provider: usageProvider(providerId),
-  sharedAccount: false,
+  sharedAccount: sharedAccountForProvider(providerId),
   eventCount: 1,
   inputTokens,
   outputTokens: 10,
@@ -404,7 +422,7 @@ const meteredUsage = (
   totalCostUsd: string | null,
 ) => ({
   provider: usageProvider(providerId),
-  sharedAccount: true,
+  sharedAccount: sharedAccountForProvider(providerId),
   eventCount: 1,
   inputTokens,
   outputTokens: 10,
@@ -722,6 +740,7 @@ export const handlers = [
         effectiveEnabled: false,
         credentialStatus:
           provider.billingKind === "subscription" ? "not_required" : "missing",
+        canClearCredential: false,
         credentialVersion: 0,
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -778,7 +797,9 @@ export const handlers = [
       const current = location.provider.bindings[location.index];
       const saved: AgentProviderBindingView = {
         ...current,
+        enabled: credentialStatus === "configured" ? current.enabled : false,
         credentialStatus,
+        canClearCredential: credentialStatus === "configured",
         credentialVersion: current.credentialVersion + 1,
         updatedAt: current.updatedAt + 1,
       };
