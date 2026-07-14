@@ -8,8 +8,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { DashboardModulesSettings } from "./DashboardModulesSettings";
+import { AgentsSettings } from "./DashboardModulesSettings";
 import { ProxyRoutingSettings } from "./ProxyRoutingSettings";
+import { UsageDiagnosticsPanel } from "./UsageDiagnosticsPanel";
 import { UsageProvidersSettings } from "./UsageProvidersSettings";
 
 interface SettingsDialogProps {
@@ -19,12 +20,13 @@ interface SettingsDialogProps {
   defaultTab?: string;
 }
 
-type SettingsTab = "modules" | "providers" | "proxy";
+type SettingsTab = "agents" | "providers" | "proxy" | "diagnostics";
 
 function resolveSettingsTab(tab?: string): SettingsTab {
-  return tab === "providers" || tab === "proxy" || tab === "modules"
-    ? tab
-    : "modules";
+  if (tab === "providers" || tab === "proxy" || tab === "diagnostics") {
+    return tab;
+  }
+  return "agents";
 }
 
 export function SettingsPage({
@@ -51,7 +53,7 @@ export function SettingsPage({
           <DialogDescription>
             {t("settings.usageConfigurationDescription", {
               defaultValue:
-                "Manage usage modules, Provider identities, and proxy forwarding.",
+                "Manage Agents, Provider identities, local proxy setup, and usage diagnostics.",
             })}
           </DialogDescription>
         </DialogHeader>
@@ -67,28 +69,34 @@ export function SettingsPage({
             })}
             className="w-full flex-shrink-0 justify-start overflow-x-auto"
           >
-            <TabsTrigger value="modules">
-              {t("settings.usageModules", { defaultValue: "Usage modules" })}
+            <TabsTrigger value="agents">
+              {t("settings.agents", { defaultValue: "Agents" })}
             </TabsTrigger>
             <TabsTrigger value="providers">
-              {t("settings.provider", { defaultValue: "Provider" })}
+              {t("settings.providers", { defaultValue: "Providers" })}
             </TabsTrigger>
             <TabsTrigger value="proxy">
-              {t("settings.proxyRouting", {
-                defaultValue: "Proxy & routing",
+              {t("settings.proxySetup", {
+                defaultValue: "Proxy setup",
               })}
+            </TabsTrigger>
+            <TabsTrigger value="diagnostics">
+              {t("settings.diagnostics", { defaultValue: "Diagnostics" })}
             </TabsTrigger>
           </TabsList>
 
           <div className="min-h-0 flex-1 overflow-y-auto">
-            <TabsContent value="modules">
-              <DashboardModulesSettings />
+            <TabsContent value="agents">
+              <AgentsSettings />
             </TabsContent>
             <TabsContent value="providers">
               <UsageProvidersSettings />
             </TabsContent>
             <TabsContent value="proxy">
               <ProxyRoutingSettings />
+            </TabsContent>
+            <TabsContent value="diagnostics">
+              <UsageDiagnosticsPanel />
             </TabsContent>
           </div>
         </Tabs>

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { SettingsPage } from "@/components/settings/SettingsPage";
@@ -22,74 +22,101 @@ const renderSettings = (open = true, defaultTab?: string) => {
 };
 
 describe("SettingsPage integration", () => {
-  it("loads three isolated configuration sections through Tauri MSW", async () => {
+  it("loads four isolated Agent-centric sections through Tauri MSW", async () => {
     const user = userEvent.setup();
     renderSettings();
 
-    expect(
-      await screen.findByDisplayValue("Personal usage"),
-    ).toBeInTheDocument();
-    expect(screen.queryByText("Official Subscription")).toBeNull();
-    expect(screen.queryByText("Proxy forwarding targets")).toBeNull();
+    expect(await screen.findByDisplayValue("Research Agent")).toBeInTheDocument();
+    expect(screen.getAllByText("Official Subscription")).not.toHaveLength(0);
 
-    await user.click(screen.getByRole("tab", { name: "Provider" }));
-    expect(
-      await screen.findByText("Official Subscription"),
-    ).toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "Providers" }));
+    expect(await screen.findByText("Official Subscription")).toBeInTheDocument();
     expect(screen.getByText("Azure API")).toBeInTheDocument();
     expect(screen.getByText("OpenRouter")).toBeInTheDocument();
-    expect(screen.queryByText("Proxy forwarding targets")).toBeNull();
 
-    await user.click(screen.getByRole("tab", { name: "Proxy & routing" }));
-    expect(
-      await screen.findByText("Proxy forwarding targets"),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        "These targets decide where requests are forwarded. They are not a dashboard filter.",
-      ),
-    ).toBeInTheDocument();
-    expect(screen.queryByText("Official Subscription")).toBeNull();
-    expect(
-      screen.getByRole("button", { name: /^(Start|Stop) proxy$/ }),
-    ).toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "Proxy setup" }));
+    expect(await screen.findByText("Codex setup")).toBeInTheDocument();
+    expect(screen.getByText("http://127.0.0.1:15800")).toBeInTheDocument();
+    expect(screen.queryByText("https://azure.example.com")).toBeNull();
+    expect(screen.getByRole("button", { name: /^(Start|Stop) proxy$/ })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: "Diagnostics" }));
+    expect(await screen.findByText("legacy-provider")).toBeInTheDocument();
+    expect(screen.getByText("custom-archived")).toBeInTheDocument();
+    expect(screen.getByText("cross_agent")).toBeInTheDocument();
+    expect(screen.queryByText("requestId", { exact: false })).toBeNull();
   });
 
-  it.each(["general", "advanced", "mcp", "about", "unknown"])(
-    "maps historical or unknown tab %s to Usage modules",
+  it("keeps Agent and protected-key mutations observable without retaining the key", async () => {
+    const user = userEvent.setup();
+    renderSettings();
+    await screen.findByDisplayValue("Research Agent");
+
+    await user.type(screen.getByLabelText("Custom Agent name"), "MSW Custom");
+    await user.click(screen.getByRole("button", { name: "Create Custom Agent" }));
+    expect(await screen.findByDisplayValue("MSW Custom")).toBeInTheDocument();
+
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Add Provider for Hermes" }),
+      "openrouter-api",
+    );
+    await user.click(screen.getByRole("button", { name: "Add binding for Hermes" }));
+
+    const binding = await screen.findByTestId("agent-binding-binding-msw-1");
+    expect(within(binding).getByText("Missing")).toBeInTheDocument();
+    await user.click(within(binding).getByRole("button", { name: "Set API key" }));
+
+    const dialog = screen.getByRole("dialog");
+    const input = within(dialog).getByLabelText("API key");
+    await user.type(input, "transient-msw-key");
+    await user.click(within(dialog).getByRole("button", { name: "Set API key" }));
+
+    await waitFor(() =>
+      expect(
+        within(screen.getByTestId("agent-binding-binding-msw-1")).getByText(
+          "Configured",
+        ),
+      ).toBeInTheDocument(),
+    );
+    expect(screen.queryByDisplayValue("transient-msw-key")).toBeNull();
+  });
+
+  it.each(["general", "advanced", "mcp", "about", "unknown", "modules"])(
+    "maps historical or unknown tab %s to Agents",
     async (defaultTab) => {
       renderSettings(true, defaultTab);
-      expect(
-        await screen.findByDisplayValue("Personal usage"),
-      ).toBeInTheDocument();
-      expect(
-        screen.getByRole("tab", { name: "Usage modules" }),
-      ).toHaveAttribute("aria-selected", "true");
+      expect(await screen.findByDisplayValue("Research Agent")).toBeInTheDocument();
+      expect(screen.getByRole("tab", { name: "Agents" })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
     },
   );
 
-  it("honors Provider and Proxy defaults", async () => {
+  it("honors Provider, Proxy, and Diagnostics defaults", async () => {
     const providerView = renderSettings(true, "providers");
-    expect(
-      await screen.findByText("Official Subscription"),
-    ).toBeInTheDocument();
+    expect(await screen.findByText("Official Subscription")).toBeInTheDocument();
     providerView.unmount();
 
-    renderSettings(true, "proxy");
-    expect(
-      await screen.findByText("Proxy forwarding targets"),
-    ).toBeInTheDocument();
+    const proxyView = renderSettings(true, "proxy");
+    expect(await screen.findByText("Codex setup")).toBeInTheDocument();
+    proxyView.unmount();
+
+    renderSettings(true, "diagnostics");
+    expect(await screen.findByText("legacy-provider")).toBeInTheDocument();
   });
 
   it("does not start configuration queries while closed", () => {
-    const modules = vi.spyOn(usageDashboardApi, "listDashboardModules");
+    const agents = vi.spyOn(usageDashboardApi, "listAgentModules");
     const providers = vi.spyOn(usageDashboardApi, "listProviders");
+    const bindings = vi.spyOn(usageDashboardApi, "listAgentProviderBindings");
     const proxy = vi.spyOn(proxyApi, "isProxyRunning");
 
     renderSettings(false);
 
-    expect(modules).not.toHaveBeenCalled();
+    expect(agents).not.toHaveBeenCalled();
     expect(providers).not.toHaveBeenCalled();
+    expect(bindings).not.toHaveBeenCalled();
     expect(proxy).not.toHaveBeenCalled();
   });
 });

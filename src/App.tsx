@@ -5,20 +5,20 @@ import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { SettingsPage } from "@/components/settings/SettingsPage";
 import { UsageDashboardPage } from "@/components/usage-dashboard/UsageDashboardPage";
-import { DashboardModuleSwitcher } from "@/components/usage-dashboard/DashboardModuleSwitcher";
-import { useDashboardModuleSelection } from "@/components/usage-dashboard/useDashboardModuleSelection";
+import { AgentSwitcher } from "@/components/usage-dashboard/DashboardModuleSwitcher";
+import { useAgentModuleSelection } from "@/components/usage-dashboard/useDashboardModuleSelection";
 import { useTranslation } from "react-i18next";
 import { useSettingsQuery } from "@/lib/query";
-import { useDashboardModules } from "@/lib/query/usageDashboard";
+import { useAgentModules } from "@/lib/query/usageDashboard";
 import { isMac } from "@/lib/platform";
 
 export default function App() {
   const { t } = useTranslation();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const { data: settings } = useSettingsQuery();
-  const modules = useDashboardModules();
-  const { selectedModule, selectModule } = useDashboardModuleSelection(
-    modules.data ?? [],
+  const agents = useAgentModules();
+  const { selectedAgent, selectAgent } = useAgentModuleSelection(
+    agents.data ?? [],
   );
   const useAppWindowControls = settings?.useAppWindowControls ?? false;
 
@@ -50,10 +50,10 @@ export default function App() {
         <h1 className="text-lg font-semibold">
           {t("app.title", { defaultValue: "LLM Usage Bar" })}
         </h1>
-        <DashboardModuleSwitcher
-          modules={modules.data ?? []}
-          selectedModuleId={selectedModule?.id ?? ""}
-          onSelect={selectModule}
+        <AgentSwitcher
+          agents={agents.data ?? []}
+          selectedAgentId={selectedAgent?.id ?? ""}
+          onSelect={selectAgent}
         />
         <div
           className="flex items-center gap-1"
@@ -108,35 +108,35 @@ export default function App() {
       </header>
 
       <main className="min-h-0 flex-1 overflow-y-auto px-6 pt-5">
-        {modules.error ? (
+        {agents.error ? (
           <Alert variant="destructive">
             <AlertDescription className="flex items-center justify-between gap-3">
               <span>
-                {modules.error instanceof Error
-                  ? modules.error.message
-                  : String(modules.error)}
+                {agents.error instanceof Error
+                  ? agents.error.message
+                  : String(agents.error)}
               </span>
               <Button
                 size="sm"
                 variant="outline"
-                onClick={() => void modules.refetch()}
+                onClick={() => void agents.refetch()}
               >
                 {t("common.retry", { defaultValue: "Retry" })}
               </Button>
             </AlertDescription>
           </Alert>
-        ) : modules.isLoading ? (
+        ) : agents.isLoading ? (
           <div>{t("common.loading", { defaultValue: "Loading" })}</div>
-        ) : selectedModule ? (
+        ) : selectedAgent ? (
           <UsageDashboardPage
-            selectedModule={selectedModule}
+            selectedAgent={selectedAgent}
             onOpenSettings={() => setSettingsOpen(true)}
           />
         ) : (
           <div className="rounded-lg border border-dashed p-8 text-center">
             <p className="text-sm text-muted-foreground">
-              {t("dashboardModules.noneVisible", {
-                defaultValue: "No visible usage modules",
+              {t("dashboardAgents.noneVisible", {
+                defaultValue: "No visible Agents",
               })}
             </p>
             <Button
@@ -144,8 +144,8 @@ export default function App() {
               size="sm"
               onClick={() => setSettingsOpen(true)}
             >
-              {t("dashboardModules.manage", {
-                defaultValue: "Manage usage modules",
+              {t("dashboardAgents.manage", {
+                defaultValue: "Manage Agents",
               })}
             </Button>
           </div>
@@ -155,7 +155,7 @@ export default function App() {
       <SettingsPage
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
-        defaultTab="modules"
+        defaultTab="agents"
       />
     </div>
   );

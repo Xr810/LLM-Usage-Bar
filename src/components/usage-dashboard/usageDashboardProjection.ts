@@ -1,33 +1,24 @@
 import type {
+  AgentModuleView,
   CostSourceCounts,
-  DashboardModuleView,
   ProviderUsageView,
   QuotaFetchState,
   QuotaStatusView,
   UsageDashboardView,
 } from "@/types/usageDashboard";
 
-export type ApiCostStatus =
+export type MeteredCostStatus =
   "complete" | "estimated" | "partial" | "unavailable";
 
-export interface SubscriptionModuleProjection {
-  kind: "subscription";
-  module: DashboardModuleView;
-  providers: ProviderUsageView[];
+export interface AgentUsageProjection {
+  agent: AgentModuleView;
+  subscriptionProviders: ProviderUsageView[];
+  meteredProviders: ProviderUsageView[];
+  meteredTotalTokens: number;
+  meteredRequestCount: number;
+  meteredTotalCostUsd: string | null;
+  meteredCostStatus: MeteredCostStatus;
 }
-
-export interface ApiModuleProjection {
-  kind: "api";
-  module: DashboardModuleView;
-  providers: ProviderUsageView[];
-  totalTokens: number;
-  requestCount: number;
-  totalCostUsd: string | null;
-  costStatus: ApiCostStatus;
-}
-
-export type DashboardModuleProjection =
-  SubscriptionModuleProjection | ApiModuleProjection;
 
 function addCounts(
   left: CostSourceCounts,
@@ -97,12 +88,14 @@ function mergeProviderRows(rows: ProviderUsageView[]): ProviderUsageView[] {
       });
       continue;
     }
+
     const provider =
       row.provider.updatedAt >= current.provider.updatedAt
         ? row.provider
         : current.provider;
     merged.set(row.provider.id, {
       provider,
+      sharedAccount: current.sharedAccount || row.sharedAccount,
       eventCount: current.eventCount + row.eventCount,
       inputTokens: current.inputTokens + row.inputTokens,
       outputTokens: current.outputTokens + row.outputTokens,
@@ -128,46 +121,37 @@ function mergeProviderRows(rows: ProviderUsageView[]): ProviderUsageView[] {
   return [...merged.values()];
 }
 
-export function projectDashboardModule(
-  module: DashboardModuleView,
+export function projectAgentDashboard(
+  agent: AgentModuleView,
   dashboard: UsageDashboardView,
-): DashboardModuleProjection {
-  const rows = dashboard.productGroups.flatMap((group) => [
-    ...group.subscriptionProviders,
-    ...group.meteredProviders,
-  ]);
-  const merged = mergeProviderRows(rows);
+): AgentUsageProjection | null {
+  if (dashboard.agentModuleId !== agent.id) return null;
 
-  if (module.kind === "subscription") {
-    return {
-      kind: "subscription",
-      module,
-      providers: merged.filter(
-        (usage) =>
-          usage.provider.enabled &&
-          usage.provider.billingKind === "subscription" &&
-          usage.provider.dashboardModuleId === module.id,
-      ),
-    };
-  }
-
-  const providers = merged.filter(
-    (usage) =>
-      usage.provider.enabled && usage.provider.billingKind === "metered",
+  const providers = mergeProviderRows(
+    dashboard.productGroups.flatMap((group) => [
+      ...group.subscriptionProviders,
+      ...group.meteredProviders,
+    ]),
   );
-  const knownCosts = providers
+  const subscriptionProviders = providers.filter(
+    (usage) => usage.provider.billingKind === "subscription",
+  );
+  const meteredProviders = providers.filter(
+    (usage) => usage.provider.billingKind === "metered",
+  );
+  const knownCosts = meteredProviders
     .map((usage) => usage.totalCostUsd)
     .filter((value): value is string => value != null);
-  const totalCostUsd = addDecimalStrings(knownCosts);
-  const hasUnavailable = providers.some(
+  const meteredTotalCostUsd = addDecimalStrings(knownCosts);
+  const hasUnavailable = meteredProviders.some(
     (usage) =>
       usage.totalCostUsd == null || usage.costSourceCounts.unavailable > 0,
   );
-  const hasEstimated = providers.some(
+  const hasEstimated = meteredProviders.some(
     (usage) => usage.costSourceCounts.estimated > 0,
   );
-  const costStatus: ApiCostStatus =
-    totalCostUsd == null
+  const meteredCostStatus: MeteredCostStatus =
+    meteredTotalCostUsd == null
       ? "unavailable"
       : hasUnavailable
         ? "partial"
@@ -176,10 +160,10 @@ export function projectDashboardModule(
           : "complete";
 
   return {
-    kind: "api",
-    module,
-    providers,
-    totalTokens: providers.reduce(
+    agent,
+    subscriptionProviders,
+    meteredProviders,
+    meteredTotalTokens: meteredProviders.reduce(
       (sum, usage) =>
         sum +
         usage.inputTokens +
@@ -188,8 +172,11 @@ export function projectDashboardModule(
         usage.cacheCreationTokens,
       0,
     ),
-    requestCount: providers.reduce((sum, usage) => sum + usage.eventCount, 0),
-    totalCostUsd,
-    costStatus,
+    meteredRequestCount: meteredProviders.reduce(
+      (sum, usage) => sum + usage.eventCount,
+      0,
+    ),
+    meteredTotalCostUsd,
+    meteredCostStatus,
   };
 }

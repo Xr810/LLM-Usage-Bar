@@ -1,102 +1,110 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import type { DashboardModuleView } from "@/types/usageDashboard";
-import { DashboardModuleSwitcher } from "./DashboardModuleSwitcher";
+import type { AgentModuleView } from "@/types/usageDashboard";
+import { AgentSwitcher } from "./DashboardModuleSwitcher";
 
-function dashboardModule(
+function agent(
   id: string,
   name: string,
   sortOrder: number,
   visible = true,
-): DashboardModuleView {
+  isFixed = true,
+): AgentModuleView {
   return {
     id,
     name,
-    kind: id === "api-id" ? "api" : "subscription",
     sortOrder,
     visible,
-    isSystem: id === "api-id",
+    isFixed,
+    archivedAt: null,
     providerCount: 0,
   };
 }
 
-describe("DashboardModuleSwitcher", () => {
-  it("renders any number of visible modules in backend order with tab semantics", () => {
+describe("AgentSwitcher", () => {
+  it("renders visible Agents in backend order without a synthetic API Agent", () => {
+    const archivedAgent = agent(
+      "archived-agent",
+      "Archived Agent",
+      0,
+      true,
+      false,
+    );
+    archivedAgent.archivedAt = 1_000;
     render(
-      <DashboardModuleSwitcher
-        modules={[
-          dashboardModule("fifth-id", "Fifth", 5),
-          dashboardModule("second-id", "Second", 2),
-          dashboardModule("hidden-id", "Hidden", 0, false),
-          dashboardModule("first-id", "First", 1),
-          dashboardModule("api-id", "Fourth", 4),
-          dashboardModule("third-id", "Third", 3),
+      <AgentSwitcher
+        agents={[
+          archivedAgent,
+          agent("hermes", "Hermes", 5),
+          agent("claude-code", "Claude Code", 2),
+          agent("hidden", "Hidden", 0, false, false),
+          agent("codex", "Codex", 1),
+          agent("opencode", "OpenCode", 3),
+          agent("openclaw", "OpenClaw", 4),
+          agent("custom-research", "Research Agent", 6, true, false),
         ]}
-        selectedModuleId="first-id"
+        selectedAgentId="codex"
         onSelect={vi.fn()}
       />,
     );
 
     expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
-      "First",
-      "Second",
-      "Third",
-      "Fourth",
-      "Fifth",
+      "Codex",
+      "Claude Code",
+      "OpenCode",
+      "OpenClaw",
+      "Hermes",
+      "Research Agent",
     ]);
     expect(screen.queryByRole("tab", { name: "Hidden" })).toBeNull();
-    expect(screen.getByRole("tab", { name: "First" })).toHaveAttribute(
+    expect(screen.queryByRole("tab", { name: "Archived Agent" })).toBeNull();
+    expect(screen.queryByRole("tab", { name: /API/i })).toBeNull();
+    expect(screen.getByRole("tab", { name: "Codex" })).toHaveAttribute(
       "aria-selected",
       "true",
     );
-    expect(screen.getByRole("tablist")).toHaveAccessibleName(
-      "Dashboard modules",
-    );
+    expect(screen.getByRole("tablist")).toHaveAccessibleName("Agents");
   });
 
-  it("activates the next stable ID with ArrowRight and supports direct selection", async () => {
+  it("supports keyboard and direct selection by stable Agent ID", async () => {
     const onSelect = vi.fn();
     const user = userEvent.setup();
     render(
-      <DashboardModuleSwitcher
-        modules={[
-          dashboardModule("first-id", "First", 1),
-          dashboardModule("second-id", "Second", 2),
-          dashboardModule("third-id", "Third", 3),
+      <AgentSwitcher
+        agents={[
+          agent("codex", "Codex", 1),
+          agent("claude-code", "Claude Code", 2),
+          agent("opencode", "OpenCode", 3),
         ]}
-        selectedModuleId="first-id"
+        selectedAgentId="codex"
         onSelect={onSelect}
       />,
     );
 
-    await user.click(screen.getByRole("tab", { name: "First" }));
+    await user.click(screen.getByRole("tab", { name: "Codex" }));
     await user.keyboard("{ArrowRight}");
-    expect(onSelect).toHaveBeenCalledWith("second-id");
+    expect(onSelect).toHaveBeenCalledWith("claude-code");
 
-    await user.click(screen.getByRole("tab", { name: "Third" }));
-    expect(onSelect).toHaveBeenCalledWith("third-id");
+    await user.click(screen.getByRole("tab", { name: "OpenCode" }));
+    expect(onSelect).toHaveBeenCalledWith("opencode");
   });
 
-  it("provides a More menu when many modules overflow", async () => {
+  it("provides a More menu when many Agents overflow", async () => {
     const onSelect = vi.fn();
     const user = userEvent.setup();
     render(
-      <DashboardModuleSwitcher
-        modules={Array.from({ length: 6 }, (_, index) =>
-          dashboardModule(
-            `module-${index + 1}`,
-            `Module ${index + 1}`,
-            index + 1,
-          ),
+      <AgentSwitcher
+        agents={Array.from({ length: 6 }, (_, index) =>
+          agent(`agent-${index + 1}`, `Agent ${index + 1}`, index + 1),
         )}
-        selectedModuleId="module-1"
+        selectedAgentId="agent-1"
         onSelect={onSelect}
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: "More modules" }));
-    await user.click(screen.getByRole("menuitem", { name: "Module 6" }));
-    expect(onSelect).toHaveBeenCalledWith("module-6");
+    await user.click(screen.getByRole("button", { name: "More Agents" }));
+    await user.click(screen.getByRole("menuitem", { name: "Agent 6" }));
+    expect(onSelect).toHaveBeenCalledWith("agent-6");
   });
 });

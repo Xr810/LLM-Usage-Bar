@@ -6,202 +6,270 @@ import {
   within,
 } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { DashboardModulesSettings } from "./DashboardModulesSettings";
+import { AgentsSettings } from "./DashboardModulesSettings";
 
 const mocks = vi.hoisted(() => ({
-  modules: [] as Array<Record<string, unknown>>,
-  save: vi.fn(),
-  reorder: vi.fn(),
+  agents: [] as Array<Record<string, unknown>>,
+  providers: [] as Array<Record<string, unknown>>,
+  bindings: [] as Array<Record<string, unknown>>,
+  saveAgent: vi.fn(),
+  reorderAgents: vi.fn(),
   setVisibility: vi.fn(),
-  deleteModule: vi.fn(),
+  deleteAgent: vi.fn(),
+  saveBinding: vi.fn(),
+  deleteBinding: vi.fn(),
+  setKey: vi.fn(),
+  replaceKey: vi.fn(),
+  clearKey: vi.fn(),
 }));
 
 vi.mock("@/lib/query/usageDashboard", () => ({
-  useDashboardModules: () => ({
-    data: mocks.modules,
+  useAgentModules: () => ({
+    data: mocks.agents,
     isLoading: false,
     error: null,
   }),
-  useSaveDashboardModule: () => ({
-    mutateAsync: mocks.save,
+  useUsageProviders: () => ({
+    data: mocks.providers,
+    isLoading: false,
+    error: null,
+  }),
+  useAgentProviderBindings: () => ({
+    data: mocks.bindings,
+    isLoading: false,
+    error: null,
+  }),
+  useSaveAgentModule: () => ({
+    mutateAsync: mocks.saveAgent,
     isPending: false,
   }),
-  useReorderDashboardModules: () => ({
-    mutateAsync: mocks.reorder,
+  useReorderAgentModules: () => ({
+    mutateAsync: mocks.reorderAgents,
     isPending: false,
   }),
-  useSetDashboardModuleVisibility: () => ({
+  useSetAgentModuleVisibility: () => ({
     mutateAsync: mocks.setVisibility,
     isPending: false,
   }),
-  useDeleteDashboardModule: () => ({
-    mutateAsync: mocks.deleteModule,
+  useDeleteAgentModule: () => ({
+    mutateAsync: mocks.deleteAgent,
+    isPending: false,
+  }),
+  useSaveAgentProviderBinding: () => ({
+    mutateAsync: mocks.saveBinding,
+    isPending: false,
+  }),
+  useDeleteAgentProviderBinding: () => ({
+    mutateAsync: mocks.deleteBinding,
+    isPending: false,
+  }),
+  useAgentProviderBindingCredentialActions: () => ({
+    setApiKey: mocks.setKey,
+    replaceApiKey: mocks.replaceKey,
+    clearApiKey: mocks.clearKey,
     isPending: false,
   }),
 }));
 
-vi.mock("@/components/ConfirmDialog", () => ({
-  ConfirmDialog: ({
-    isOpen,
-    title,
-    onConfirm,
-  }: {
-    isOpen: boolean;
-    title: string;
-    onConfirm: (checked: boolean) => void;
-  }) =>
-    isOpen ? (
-      <button type="button" onClick={() => onConfirm(false)}>
-        Confirm {title}
-      </button>
-    ) : null,
-}));
-
-const moduleFixtures = [
+const agentFixtures = [
   {
-    id: "api",
-    name: "API",
-    kind: "api",
-    sortOrder: 3,
-    visible: true,
-    isSystem: true,
-    providerCount: 2,
-  },
-  {
-    id: "personal",
-    name: "Personal",
-    kind: "subscription",
+    id: "codex",
+    name: "Codex",
     sortOrder: 1,
     visible: true,
-    isSystem: false,
+    isFixed: true,
+    archivedAt: null,
     providerCount: 1,
   },
   {
-    id: "work",
-    name: "Work",
-    kind: "subscription",
+    id: "claude-code",
+    name: "Claude Code",
     sortOrder: 2,
     visible: true,
-    isSystem: false,
+    isFixed: true,
+    archivedAt: null,
     providerCount: 0,
+  },
+  {
+    id: "custom-research",
+    name: "Research Agent",
+    sortOrder: 3,
+    visible: true,
+    isFixed: false,
+    archivedAt: null,
+    providerCount: 2,
   },
 ];
 
-describe("DashboardModulesSettings", () => {
+const providerFixtures = [
+  { id: "provider-a", name: "Provider A", enabled: true },
+  { id: "provider-b", name: "Provider B", enabled: true },
+];
+
+const bindingFixtures = [
+  {
+    id: "binding-a",
+    agentModuleId: "codex",
+    providerId: "provider-a",
+    enabled: true,
+    effectiveEnabled: false,
+    credentialStatus: "configured",
+    credentialVersion: 3,
+    createdAt: 1,
+    updatedAt: 1,
+  },
+];
+
+describe("AgentsSettings", () => {
   beforeEach(() => {
-    mocks.modules = moduleFixtures.map((module) => ({ ...module }));
-    mocks.save.mockReset().mockResolvedValue(undefined);
-    mocks.reorder.mockReset().mockResolvedValue(undefined);
-    mocks.setVisibility.mockReset().mockResolvedValue(undefined);
-    mocks.deleteModule.mockReset().mockResolvedValue(undefined);
+    mocks.agents = agentFixtures.map((agent) => ({ ...agent }));
+    mocks.providers = providerFixtures.map((provider) => ({ ...provider }));
+    mocks.bindings = bindingFixtures.map((binding) => ({ ...binding }));
+    for (const mock of [
+      mocks.saveAgent,
+      mocks.reorderAgents,
+      mocks.setVisibility,
+      mocks.deleteAgent,
+      mocks.saveBinding,
+      mocks.deleteBinding,
+      mocks.setKey,
+      mocks.replaceKey,
+      mocks.clearKey,
+    ]) {
+      mock.mockReset().mockResolvedValue(undefined);
+    }
   });
 
-  it("orders modules and shows type, visibility, and Provider counts", () => {
-    render(<DashboardModulesSettings />);
+  it("keeps fixed Agent identity immutable while allowing reorder and hide", async () => {
+    render(<AgentsSettings />);
 
+    const fixed = screen.getByTestId("agent-settings-codex");
+    expect(within(fixed).getByText("Fixed Agent")).toBeInTheDocument();
+    expect(within(fixed).queryByLabelText("Name for Codex")).toBeNull();
     expect(
-      screen.getByText(
-        "Reordering changes dashboard navigation only. Hiding removes a module from navigation and may move the dashboard to another visible module. Neither action changes Provider identity or historical usage.",
-      ),
-    ).toBeInTheDocument();
-    const rows = screen.getAllByTestId(/^dashboard-module-/);
-    expect(rows.map((row) => row.dataset.testid)).toEqual([
-      "dashboard-module-personal",
-      "dashboard-module-work",
-      "dashboard-module-api",
-    ]);
-    expect(within(rows[0]).getByText("1 Provider")).toBeInTheDocument();
-    expect(within(rows[1]).getByText("0 Providers")).toBeInTheDocument();
-    expect(within(rows[2]).getByText("API module")).toBeInTheDocument();
-    expect(
-      within(rows[2]).queryByRole("button", { name: "Delete API" }),
+      within(fixed).queryByRole("button", { name: "Delete Codex" }),
     ).toBeNull();
-    expect(within(rows[2]).queryByRole("combobox")).toBeNull();
-  });
 
-  it("creates, renames, reorders, and hides modules with stable IDs", async () => {
-    render(<DashboardModulesSettings />);
-
-    fireEvent.change(screen.getByLabelText("New module name"), {
-      target: { value: "Gemini" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Create module" }));
+    fireEvent.click(
+      within(fixed).getByRole("button", { name: "Move Codex down" }),
+    );
     await waitFor(() =>
-      expect(mocks.save).toHaveBeenCalledWith({
-        id: null,
-        name: "Gemini",
-        kind: "subscription",
-        sortOrder: 4,
-        visible: true,
-      }),
+      expect(mocks.reorderAgents).toHaveBeenCalledWith([
+        "claude-code",
+        "codex",
+        "custom-research",
+      ]),
     );
 
-    fireEvent.change(screen.getByLabelText("Name for Work"), {
-      target: { value: "Team" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Save Work" }));
-    await waitFor(() =>
-      expect(mocks.save).toHaveBeenCalledWith({
-        id: "work",
-        name: "Team",
-        kind: "subscription",
-        sortOrder: 2,
-        visible: true,
-      }),
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "Move Work up" }));
-    await waitFor(() =>
-      expect(mocks.reorder).toHaveBeenCalledWith(["work", "personal", "api"]),
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "Hide Work" }));
+    fireEvent.click(within(fixed).getByRole("button", { name: "Hide Codex" }));
     await waitFor(() =>
       expect(mocks.setVisibility).toHaveBeenCalledWith({
-        moduleId: "work",
+        agentModuleId: "codex",
         visible: false,
       }),
     );
   });
 
-  it("blocks populated and system deletion, then confirms empty deletion", async () => {
-    render(<DashboardModulesSettings />);
+  it("explicitly creates, renames, and deletes Custom Agents regardless of Provider count", async () => {
+    render(<AgentsSettings />);
 
-    const populated = screen.getByTestId("dashboard-module-personal");
-    expect(
-      within(populated).getByText(
-        "Move or disable its Providers before deleting.",
-      ),
-    ).toBeInTheDocument();
-    expect(
-      within(populated).getByRole("button", { name: "Delete Personal" }),
-    ).toBeDisabled();
-    expect(
-      within(screen.getByTestId("dashboard-module-api")).queryByRole("button", {
-        name: "Delete API",
-      }),
-    ).toBeNull();
-
-    fireEvent.click(screen.getByRole("button", { name: "Delete Work" }));
+    fireEvent.change(screen.getByLabelText("Custom Agent name"), {
+      target: { value: "Sidekick" },
+    });
     fireEvent.click(
-      screen.getByRole("button", { name: "Confirm Delete Work" }),
+      screen.getByRole("button", { name: "Create Custom Agent" }),
     );
     await waitFor(() =>
-      expect(mocks.deleteModule).toHaveBeenCalledWith("work"),
+      expect(mocks.saveAgent).toHaveBeenCalledWith({
+        id: null,
+        name: "Sidekick",
+        sortOrder: 4,
+        visible: true,
+      }),
+    );
+
+    const custom = screen.getByTestId("agent-settings-custom-research");
+    fireEvent.change(within(custom).getByLabelText("Name for Research Agent"), {
+      target: { value: "Research Team" },
+    });
+    fireEvent.click(
+      within(custom).getByRole("button", { name: "Save Research Agent" }),
+    );
+    await waitFor(() =>
+      expect(mocks.saveAgent).toHaveBeenCalledWith({
+        id: "custom-research",
+        name: "Research Team",
+        sortOrder: 3,
+        visible: true,
+      }),
+    );
+
+    const deleteButton = within(custom).getByRole("button", {
+      name: "Delete Research Agent",
+    });
+    expect(deleteButton).toBeEnabled();
+    fireEvent.click(deleteButton);
+    await waitFor(() =>
+      expect(mocks.deleteAgent).toHaveBeenCalledWith("custom-research"),
     );
   });
 
-  it("surfaces an authoritative backend rejection", async () => {
-    mocks.deleteModule.mockRejectedValueOnce(new Error("module is not empty"));
-    render(<DashboardModulesSettings />);
+  it("adds bindings disabled, saves complete stable toggles, and deletes by credential version", async () => {
+    render(<AgentsSettings />);
+    const fixed = screen.getByTestId("agent-settings-codex");
 
-    fireEvent.click(screen.getByRole("button", { name: "Delete Work" }));
+    expect(within(fixed).getByText("Requested: Enabled")).toBeInTheDocument();
+    expect(within(fixed).getByText("Effective: Disabled")).toBeInTheDocument();
+
     fireEvent.click(
-      screen.getByRole("button", { name: "Confirm Delete Work" }),
+      within(fixed).getByRole("button", { name: "Disable Provider A" }),
+    );
+    await waitFor(() =>
+      expect(mocks.saveBinding).toHaveBeenCalledWith({
+        id: "binding-a",
+        agentModuleId: "codex",
+        providerId: "provider-a",
+        enabled: false,
+      }),
     );
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "module is not empty",
+    fireEvent.change(within(fixed).getByLabelText("Add Provider for Codex"), {
+      target: { value: "provider-b" },
+    });
+    fireEvent.click(
+      within(fixed).getByRole("button", { name: "Add binding for Codex" }),
     );
+    await waitFor(() =>
+      expect(mocks.saveBinding).toHaveBeenCalledWith({
+        id: null,
+        agentModuleId: "codex",
+        providerId: "provider-b",
+        enabled: false,
+      }),
+    );
+
+    fireEvent.click(
+      within(fixed).getByRole("button", { name: "Delete Provider A binding" }),
+    );
+    await waitFor(() =>
+      expect(mocks.deleteBinding).toHaveBeenCalledWith({
+        bindingId: "binding-a",
+        expectedVersion: 3,
+      }),
+    );
+  });
+
+  it("opens only the allowed public credential actions", () => {
+    render(<AgentsSettings />);
+    const binding = screen.getByTestId("agent-binding-binding-a");
+
+    expect(within(binding).getByText("Configured")).toBeInTheDocument();
+    expect(
+      within(binding).getByRole("button", { name: "Replace API key" }),
+    ).toBeInTheDocument();
+    expect(
+      within(binding).getByRole("button", { name: "Clear API key" }),
+    ).toBeInTheDocument();
+    expect(within(binding).queryByText(/\*\*|••/)).toBeNull();
   });
 });

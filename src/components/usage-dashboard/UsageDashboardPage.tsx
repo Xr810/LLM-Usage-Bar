@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -11,18 +11,17 @@ import {
 } from "@/lib/query/usageDashboard";
 import { resolveUsageRange } from "@/lib/usageRange";
 import type { UsageRangeSelection } from "@/types/usage";
-import type { DashboardModuleView } from "@/types/usageDashboard";
-import { ApiUsagePage } from "./ApiUsagePage";
-import { SubscriptionModulePage } from "./SubscriptionModulePage";
-import { projectDashboardModule } from "./usageDashboardProjection";
+import type { AgentModuleView } from "@/types/usageDashboard";
+import { AgentUsagePage } from "./AgentUsagePage";
+import { projectAgentDashboard } from "./usageDashboardProjection";
 
 interface UsageDashboardPageProps {
-  selectedModule?: DashboardModuleView | null;
+  selectedAgent?: AgentModuleView | null;
   onOpenSettings?: () => void;
 }
 
 export function UsageDashboardPage({
-  selectedModule = null,
+  selectedAgent = null,
   onOpenSettings,
 }: UsageDashboardPageProps) {
   const { t } = useTranslation();
@@ -38,36 +37,58 @@ export function UsageDashboardPage({
   });
   const [warnings, setWarnings] = useState<string[]>([]);
   const [errors, setErrors] = useState<string[]>([]);
+  const selectedAgentId = selectedAgent?.id ?? "";
+  const [feedbackAgentId, setFeedbackAgentId] = useState(selectedAgentId);
+  const activeAgentId = useRef(selectedAgentId);
+  useEffect(() => {
+    activeAgentId.current = selectedAgentId;
+    setWarnings([]);
+    setErrors([]);
+    setFeedbackAgentId(selectedAgentId);
+  }, [selectedAgentId]);
   const range = useMemo(
     () => resolveUsageRange(selection, rangeClockMs),
     [rangeClockMs, selection],
   );
-  const dashboard = useUsageDashboard(range.startDate, range.endDate);
+  const dashboard = useUsageDashboard(
+    selectedAgent?.id ?? "",
+    range.startDate,
+    range.endDate,
+  );
   const refreshQuota = useRefreshProviderQuota();
   const syncSession = useSyncProviderSessionUsage();
   const projection = useMemo(
     () =>
-      selectedModule && dashboard.data
-        ? projectDashboardModule(selectedModule, dashboard.data)
+      selectedAgent && dashboard.data
+        ? projectAgentDashboard(selectedAgent, dashboard.data)
         : null,
-    [dashboard.data, selectedModule],
+    [dashboard.data, selectedAgent],
   );
 
   const errorText = (cause: unknown) =>
     cause instanceof Error ? cause.message : String(cause);
   const run = async (operation: () => Promise<unknown>) => {
+    const operationAgentId = selectedAgentId;
     try {
       await operation();
     } catch (cause) {
+      if (activeAgentId.current !== operationAgentId) return;
+      setFeedbackAgentId(operationAgentId);
       setErrors((current) => [...current, errorText(cause)]);
     }
   };
   const sync = async (providerId: string) => {
+    const operationAgentId = selectedAgentId;
     try {
       const result = await syncSession.mutateAsync(providerId);
+      if (activeAgentId.current !== operationAgentId) return;
+      setFeedbackAgentId(operationAgentId);
       setWarnings(result.warnings ?? []);
       setErrors(result.errors ?? []);
     } catch (cause) {
+      if (activeAgentId.current !== operationAgentId) return;
+      setFeedbackAgentId(operationAgentId);
+      setWarnings([]);
       setErrors([errorText(cause)]);
     }
   };
@@ -103,12 +124,18 @@ export function UsageDashboardPage({
         />
       </div>
 
-      {[...(dashboard.data?.warnings ?? []), ...warnings].map((warning) => (
+      {[
+        ...(dashboard.data?.warnings ?? []),
+        ...(feedbackAgentId === selectedAgentId ? warnings : []),
+      ].map((warning) => (
         <Alert key={warning}>
           <AlertDescription>{warning}</AlertDescription>
         </Alert>
       ))}
-      {[...queryErrors, ...errors].map((message, index) => (
+      {[
+        ...queryErrors,
+        ...(feedbackAgentId === selectedAgentId ? errors : []),
+      ].map((message, index) => (
         <Alert
           key={`${message}-${index}`}
           variant="destructive"
@@ -120,16 +147,17 @@ export function UsageDashboardPage({
 
       {dashboard.isLoading ? (
         <div>{t("common.loading", { defaultValue: "Loading" })}</div>
-      ) : !selectedModule ? (
+      ) : !selectedAgent ? (
         <div className="rounded-lg border border-dashed p-8 text-center text-muted-foreground">
-          {t("dashboardModules.selectModule", {
-            defaultValue: "Select a usage module",
+          {t("dashboardAgents.selectAgent", {
+            defaultValue: "Select an Agent",
           })}
         </div>
-      ) : projection?.kind === "subscription" ? (
-        <SubscriptionModulePage
-          module={projection.module}
-          providers={projection.providers}
+      ) : projection ? (
+        <AgentUsagePage
+          projection={projection}
+          startAt={range.startDate}
+          endAt={range.endDate}
           onOpenSettings={onOpenSettings}
           onRefreshQuota={(providerId) =>
             run(() => refreshQuota.mutateAsync(providerId))
@@ -137,13 +165,6 @@ export function UsageDashboardPage({
           onSyncSessions={sync}
           isRefreshingQuota={refreshQuota.isPending}
           isSyncingSessions={syncSession.isPending}
-        />
-      ) : projection?.kind === "api" ? (
-        <ApiUsagePage
-          projection={projection}
-          startAt={range.startDate}
-          endAt={range.endDate}
-          onOpenSettings={onOpenSettings}
         />
       ) : null}
     </div>

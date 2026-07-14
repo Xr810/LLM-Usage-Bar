@@ -1,10 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
-  DashboardModuleInput,
-  DashboardModuleView,
+  AgentModuleInput,
+  AgentModuleView,
+  AgentProviderBindingInput,
+  AgentProviderBindingView,
+  AgentProxySetupInfo,
   ProviderSessionSyncResult,
   QuotaRefreshResult,
-  RouteBinding,
+  UnassignedUsageDiagnostics,
   UsageDashboardView,
   UsageEventPage,
   UsageProviderInput,
@@ -12,52 +15,91 @@ import type {
 } from "@/types/usageDashboard";
 
 export const usageDashboardApi = {
-  listDashboardModules: (): Promise<DashboardModuleView[]> =>
+  listAgentModules: (): Promise<AgentModuleView[]> =>
     invoke("list_dashboard_modules"),
-  saveDashboardModule: (
-    input: DashboardModuleInput,
-  ): Promise<DashboardModuleView> => invoke("save_dashboard_module", { input }),
-  reorderDashboardModules: (
-    moduleIds: string[],
-  ): Promise<DashboardModuleView[]> =>
+  saveAgentModule: (input: AgentModuleInput): Promise<AgentModuleView> =>
+    invoke("save_dashboard_module", { input }),
+  reorderAgentModules: (moduleIds: string[]): Promise<AgentModuleView[]> =>
     invoke("reorder_dashboard_modules", { moduleIds }),
-  setDashboardModuleVisibility: (
+  setAgentModuleVisibility: (
     moduleId: string,
     visible: boolean,
-  ): Promise<DashboardModuleView> =>
+  ): Promise<AgentModuleView> =>
     invoke("set_dashboard_module_visibility", { moduleId, visible }),
-  deleteDashboardModule: (moduleId: string): Promise<void> =>
+  deleteAgentModule: (moduleId: string): Promise<void> =>
     invoke("delete_dashboard_module", { moduleId }),
+
+  listAgentProviderBindings: (
+    agentModuleId?: string,
+  ): Promise<AgentProviderBindingView[]> =>
+    invoke("list_agent_provider_bindings", { agentModuleId }),
+  saveAgentProviderBinding: (
+    input: AgentProviderBindingInput,
+  ): Promise<AgentProviderBindingView> =>
+    invoke("save_agent_provider_binding", { input }),
+  deleteAgentProviderBinding: (
+    bindingId: string,
+    expectedVersion: number,
+  ): Promise<void> =>
+    invoke("delete_agent_provider_binding", { bindingId, expectedVersion }),
+  setAgentProviderBindingApiKey: (
+    bindingId: string,
+    expectedVersion: number,
+    apiKey: string,
+  ): Promise<AgentProviderBindingView> =>
+    invoke("set_agent_provider_binding_api_key", {
+      bindingId,
+      expectedVersion,
+      apiKey,
+    }),
+  replaceAgentProviderBindingApiKey: (
+    bindingId: string,
+    expectedVersion: number,
+    apiKey: string,
+  ): Promise<AgentProviderBindingView> =>
+    invoke("replace_agent_provider_binding_api_key", {
+      bindingId,
+      expectedVersion,
+      apiKey,
+    }),
+  clearAgentProviderBindingApiKey: (
+    bindingId: string,
+    expectedVersion: number,
+  ): Promise<AgentProviderBindingView> =>
+    invoke("clear_agent_provider_binding_api_key", {
+      bindingId,
+      expectedVersion,
+    }),
+  getAgentProxySetupInfo: (
+    agentModuleId: string,
+  ): Promise<AgentProxySetupInfo> =>
+    invoke("get_agent_proxy_setup_info", { agentModuleId }),
+  getUnassignedUsageDiagnostics: (): Promise<UnassignedUsageDiagnostics> =>
+    invoke("get_unassigned_usage_diagnostics"),
+
   listProviders: (): Promise<UsageProviderView[]> =>
     invoke("list_usage_providers"),
   saveProvider: (input: UsageProviderInput): Promise<UsageProviderView> =>
     invoke("save_usage_provider", { input }),
   setProviderEnabled: (providerId: string, enabled: boolean): Promise<void> =>
     invoke("set_usage_provider_enabled", { providerId, enabled }),
-  getRouteBindings: (): Promise<RouteBinding[]> => invoke("get_route_bindings"),
-  setRouteBinding: (
-    protocol: string,
-    providerId: string,
-  ): Promise<RouteBinding> =>
-    invoke("set_route_binding", { protocol, providerId }),
+
   getDashboard: (
+    agentModuleId: string,
     startAt: number,
     endAt: number,
-    productGroupId?: string,
   ): Promise<UsageDashboardView> =>
-    invoke("get_usage_dashboard", {
-      startAt,
-      endAt,
-      productGroupId,
-    }),
+    invoke("get_usage_dashboard", { agentModuleId, startAt, endAt }),
   getEvents: (
-    providerId: string,
+    agentModuleId: string,
+    providerId: string | undefined,
     startAt: number,
     endAt: number,
     page: number,
     pageSize: number,
   ): Promise<UsageEventPage> =>
     invoke("get_usage_events", {
+      agentModuleId,
       providerId,
       startAt,
       endAt,

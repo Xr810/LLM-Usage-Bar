@@ -6,16 +6,25 @@ import { useUsageEvents } from "@/lib/query/usageDashboard";
 import { useTranslation } from "react-i18next";
 
 export function MeteredProviderCard({
+  agentModuleId,
   usage,
   startAt,
   endAt,
 }: {
+  agentModuleId: string;
   usage: ProviderUsageView;
   startAt: number;
   endAt: number;
 }) {
   const { t } = useTranslation();
-  const events = useUsageEvents(usage.provider.id, startAt, endAt, 1, 5);
+  const events = useUsageEvents(
+    agentModuleId,
+    usage.provider.id,
+    startAt,
+    endAt,
+    1,
+    5,
+  );
   const totalTokens =
     usage.inputTokens +
     usage.outputTokens +

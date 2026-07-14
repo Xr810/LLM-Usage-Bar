@@ -145,9 +145,20 @@ export function SubscriptionProviderCard({
       <CardHeader className="pb-3">
         <div className="flex items-start justify-between gap-3">
           <CardTitle className="text-base">{usage.provider.name}</CardTitle>
-          <Badge variant="secondary">
-            {t("usageDashboard.subscription", { defaultValue: "Subscription" })}
-          </Badge>
+          <div className="flex flex-wrap justify-end gap-2">
+            {usage.sharedAccount ? (
+              <Badge variant="outline">
+                {t("usageDashboard.sharedAccountQuota", {
+                  defaultValue: "Shared account quota",
+                })}
+              </Badge>
+            ) : null}
+            <Badge variant="secondary">
+              {t("usageDashboard.subscription", {
+                defaultValue: "Subscription",
+              })}
+            </Badge>
+          </div>
         </div>
         <div className="text-xs text-muted-foreground">
           {sourceText}

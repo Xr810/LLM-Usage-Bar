@@ -7,7 +7,7 @@ import { usageDashboardKeys } from "@/lib/query/usageDashboard";
 import { emitTauriEvent } from "../msw/tauriMocks";
 
 describe("useUsageEventBridge", () => {
-  it("invalidates v13 dashboard and event queries when usage is recorded", async () => {
+  it("treats the payload-free dashboard invalidation as a global cache event", async () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
@@ -18,17 +18,14 @@ describe("useUsageEventBridge", () => {
 
     renderHook(() => useUsageEventBridge(), { wrapper });
     await waitFor(() => {
-      emitTauriEvent("usage-log-recorded", { providerId: "metered-api" });
+      emitTauriEvent("usage-dashboard-invalidated");
       expect(invalidate).toHaveBeenCalledWith({
-        queryKey: usageDashboardKeys.dashboards(),
+        queryKey: usageDashboardKeys.all,
       });
-    });
-    expect(invalidate).toHaveBeenCalledWith({
-      queryKey: usageDashboardKeys.eventsAll(),
     });
   });
 
-  it("advances the live range clock before invalidating usage queries", async () => {
+  it("advances the live range before invalidating and unregisters on cleanup", async () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
@@ -47,16 +44,16 @@ describe("useUsageEventBridge", () => {
       wrapper,
     });
     await waitFor(() => {
-      emitTauriEvent("usage-log-recorded", { providerId: "metered-api" });
+      emitTauriEvent("usage-dashboard-invalidated");
       expect(onUsageRecorded).toHaveBeenCalledTimes(1);
     });
 
     expect(calls[0]).toBe("clock");
     expect(invalidate).toHaveBeenCalledWith({
-      queryKey: usageDashboardKeys.dashboards(),
+      queryKey: usageDashboardKeys.all,
     });
     unmount();
-    emitTauriEvent("usage-log-recorded", { providerId: "metered-api" });
+    emitTauriEvent("usage-dashboard-invalidated");
     expect(onUsageRecorded).toHaveBeenCalledTimes(1);
   });
 });

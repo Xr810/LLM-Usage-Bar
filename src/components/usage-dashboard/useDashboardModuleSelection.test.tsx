@@ -1,114 +1,118 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it } from "vitest";
-import type { DashboardModuleView } from "@/types/usageDashboard";
-import { useDashboardModuleSelection } from "./useDashboardModuleSelection";
+import type { AgentModuleView } from "@/types/usageDashboard";
+import {
+  agentModuleStorageKey,
+  useAgentModuleSelection,
+} from "./useDashboardModuleSelection";
 
-const storageKey = "llm-usage-bar:last-dashboard-module-id";
-
-function dashboardModule(
+function agent(
   id: string,
   sortOrder: number,
-  overrides: Partial<DashboardModuleView> = {},
-): DashboardModuleView {
+  overrides: Partial<AgentModuleView> = {},
+): AgentModuleView {
   return {
     id,
     name: `Display ${id}`,
-    kind: "subscription",
     sortOrder,
     visible: true,
-    isSystem: false,
+    isFixed: true,
+    archivedAt: null,
     providerCount: 0,
     ...overrides,
   };
 }
 
-describe("useDashboardModuleSelection", () => {
+describe("useAgentModuleSelection", () => {
   beforeEach(() => localStorage.clear());
 
-  it("selects the first visible module by sort order and persists changes by stable ID", async () => {
-    const modules = [
-      dashboardModule("second-id", 2),
-      dashboardModule("hidden-id", 0, { visible: false }),
-      dashboardModule("first-id", 1),
+  it("selects the first visible Agent and persists stable IDs", async () => {
+    const agents = [
+      agent("claude-code", 2),
+      agent("hidden", 0, { visible: false }),
+      agent("codex", 1),
     ];
-    const { result } = renderHook(() => useDashboardModuleSelection(modules));
+    const { result } = renderHook(() => useAgentModuleSelection(agents));
 
-    expect(result.current.selectedModule?.id).toBe("first-id");
+    expect(result.current.selectedAgent?.id).toBe("codex");
     await waitFor(() =>
-      expect(localStorage.getItem(storageKey)).toBe("first-id"),
+      expect(localStorage.getItem(agentModuleStorageKey)).toBe("codex"),
     );
 
-    act(() => result.current.selectModule("second-id"));
-    expect(result.current.selectedModule?.id).toBe("second-id");
-    expect(localStorage.getItem(storageKey)).toBe("second-id");
+    act(() => result.current.selectAgent("claude-code"));
+    expect(result.current.selectedAgent?.id).toBe("claude-code");
+    expect(localStorage.getItem(agentModuleStorageKey)).toBe("claude-code");
   });
 
-  it("restores a visible persisted stable ID", () => {
-    localStorage.setItem(storageKey, "second-id");
+  it("restores a visible persisted Agent", () => {
+    localStorage.setItem(agentModuleStorageKey, "claude-code");
     const { result } = renderHook(() =>
-      useDashboardModuleSelection([
-        dashboardModule("first-id", 1),
-        dashboardModule("second-id", 2),
-      ]),
+      useAgentModuleSelection([agent("codex", 1), agent("claude-code", 2)]),
     );
 
-    expect(result.current.selectedModule?.id).toBe("second-id");
+    expect(result.current.selectedAgent?.id).toBe("claude-code");
   });
 
-  it("falls back after the current module is hidden or deleted", async () => {
-    localStorage.setItem(storageKey, "second-id");
+  it("falls back after the selected Agent is hidden or deleted", async () => {
+    localStorage.setItem(agentModuleStorageKey, "claude-code");
     const { result, rerender } = renderHook(
-      ({ modules }: { modules: DashboardModuleView[] }) =>
-        useDashboardModuleSelection(modules),
+      ({ agents }: { agents: AgentModuleView[] }) =>
+        useAgentModuleSelection(agents),
       {
         initialProps: {
-          modules: [
-            dashboardModule("first-id", 1),
-            dashboardModule("second-id", 2),
-          ],
+          agents: [agent("codex", 1), agent("claude-code", 2)],
         },
       },
     );
-    expect(result.current.selectedModule?.id).toBe("second-id");
+    expect(result.current.selectedAgent?.id).toBe("claude-code");
 
     rerender({
-      modules: [
-        dashboardModule("first-id", 1),
-        dashboardModule("second-id", 2, { visible: false }),
-      ],
+      agents: [agent("codex", 1), agent("claude-code", 2, { visible: false })],
     });
 
-    expect(result.current.selectedModule?.id).toBe("first-id");
+    expect(result.current.selectedAgent?.id).toBe("codex");
     await waitFor(() =>
-      expect(localStorage.getItem(storageKey)).toBe("first-id"),
+      expect(localStorage.getItem(agentModuleStorageKey)).toBe("codex"),
     );
   });
 
-  it("selects the API module when it is the only visible module", () => {
-    const api = dashboardModule("api-stable-id", 10, {
-      name: "Anything metered",
-      kind: "api",
-      isSystem: true,
-    });
+  it("ignores selection attempts for hidden or unknown Agents", () => {
     const { result } = renderHook(() =>
-      useDashboardModuleSelection([
-        dashboardModule("subscription-id", 1, { visible: false }),
-        api,
+      useAgentModuleSelection([
+        agent("codex", 1),
+        agent("hidden", 2, { visible: false }),
       ]),
     );
 
-    expect(result.current.selectedModule).toEqual(api);
+    act(() => result.current.selectAgent("hidden"));
+    act(() => result.current.selectAgent("api"));
+    expect(result.current.selectedAgent?.id).toBe("codex");
   });
 
-  it("returns null and clears persistence when no module is visible", async () => {
-    localStorage.setItem(storageKey, "hidden-id");
+  it("excludes archived Agents even when a stale view marks them visible", () => {
+    localStorage.setItem(agentModuleStorageKey, "archived-agent");
     const { result } = renderHook(() =>
-      useDashboardModuleSelection([
-        dashboardModule("hidden-id", 1, { visible: false }),
+      useAgentModuleSelection([
+        agent("codex", 1),
+        agent("archived-agent", 0, { archivedAt: 1_000 }),
       ]),
     );
 
-    expect(result.current.selectedModule).toBeNull();
-    await waitFor(() => expect(localStorage.getItem(storageKey)).toBeNull());
+    expect(result.current.visibleAgents.map((item) => item.id)).toEqual([
+      "codex",
+    ]);
+    expect(result.current.selectedAgent?.id).toBe("codex");
+  });
+
+  it("returns null and clears persistence when no Agent is visible", async () => {
+    localStorage.setItem(agentModuleStorageKey, "hidden");
+    const { result } = renderHook(() =>
+      useAgentModuleSelection([agent("hidden", 1, { visible: false })]),
+    );
+
+    expect(result.current.selectedAgent).toBeNull();
+    await waitFor(() =>
+      expect(localStorage.getItem(agentModuleStorageKey)).toBeNull(),
+    );
   });
 });

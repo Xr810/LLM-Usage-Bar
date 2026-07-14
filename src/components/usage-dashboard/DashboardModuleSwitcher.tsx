@@ -9,75 +9,73 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import type { DashboardModuleView } from "@/types/usageDashboard";
+import type { AgentModuleView } from "@/types/usageDashboard";
 
-interface DashboardModuleSwitcherProps {
-  modules: DashboardModuleView[];
-  selectedModuleId: string;
-  onSelect: (moduleId: string) => void;
+interface AgentSwitcherProps {
+  agents: AgentModuleView[];
+  selectedAgentId: string;
+  onSelect: (agentModuleId: string) => void;
 }
 
-export function DashboardModuleSwitcher({
-  modules,
-  selectedModuleId,
+export function AgentSwitcher({
+  agents,
+  selectedAgentId,
   onSelect,
-}: DashboardModuleSwitcherProps) {
+}: AgentSwitcherProps) {
   const { t } = useTranslation();
-  const visibleModules = useMemo(
+  const visibleAgents = useMemo(
     () =>
-      [...modules]
-        .filter((module) => module.visible)
+      [...agents]
+        .filter((agent) => agent.visible && agent.archivedAt == null)
         .sort((left, right) => left.sortOrder - right.sortOrder),
-    [modules],
+    [agents],
   );
 
-  if (!visibleModules.length) return null;
+  if (!visibleAgents.length) return null;
 
   return (
     <div className="flex min-w-0 items-center justify-center gap-2">
       <div className="min-w-0 overflow-x-auto">
-        <Tabs value={selectedModuleId} onValueChange={onSelect}>
+        <Tabs value={selectedAgentId} onValueChange={onSelect}>
           <TabsList
-            aria-label={t("dashboardModules.navigation", {
-              defaultValue: "Dashboard modules",
+            aria-label={t("dashboardAgents.navigation", {
+              defaultValue: "Agents",
             })}
             className="w-max max-w-none justify-start"
           >
-            {visibleModules.map((module) => (
+            {visibleAgents.map((agent) => (
               <TabsTrigger
-                key={module.id}
-                value={module.id}
+                key={agent.id}
+                value={agent.id}
                 className="min-w-0 whitespace-nowrap"
               >
-                {module.name}
+                {agent.name}
               </TabsTrigger>
             ))}
           </TabsList>
         </Tabs>
       </div>
-      {visibleModules.length > 4 ? (
+      {visibleAgents.length > 4 ? (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
               size="sm"
               variant="outline"
-              aria-label={t("dashboardModules.more", {
-                defaultValue: "More modules",
+              aria-label={t("dashboardAgents.more", {
+                defaultValue: "More Agents",
               })}
             >
               <MoreHorizontal className="h-4 w-4" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            {visibleModules.map((module) => (
+            {visibleAgents.map((agent) => (
               <DropdownMenuItem
-                key={module.id}
-                aria-current={
-                  module.id === selectedModuleId ? "page" : undefined
-                }
-                onSelect={() => onSelect(module.id)}
+                key={agent.id}
+                aria-current={agent.id === selectedAgentId ? "page" : undefined}
+                onSelect={() => onSelect(agent.id)}
               >
-                {module.name}
+                {agent.name}
               </DropdownMenuItem>
             ))}
           </DropdownMenuContent>

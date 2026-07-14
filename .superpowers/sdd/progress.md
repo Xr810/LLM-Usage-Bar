@@ -24,7 +24,7 @@ worktree `.worktrees/agent-centric-usage-modules`.
 | 4. Credential-routed proxy and frozen event attribution | completed | this task commit | credentials 84/84; response guard 35/35; proxy E2E 16/16; library 2160 passed / 2 ignored; Clippy and both reviews approved |
 | 5. Trusted session attribution and Agent-safe dedup | completed | this task commit | session 9/9; ingestion 18/18; event DAO 11/11; session services 43/43; library 2176 passed / 2 ignored; Clippy and both reviews approved |
 | 6. Agent dashboard, events, diagnostics, commands | completed | this task commit | dashboard 11/11; commands 9/9; integration 4/4; quota 12/12; proxy E2E 16/16; library 2195 passed / 2 ignored; both reviews approved |
-| 7. Agent-centric frontend and Settings | pending | — | — |
+| 7. Agent-centric frontend and Settings | completed | this task commit | frontend unit 92/509; typecheck, renderer build, format, and both reviews approved |
 | 8. Integration, security review, and full acceptance | pending | — | — |
 
 ## Review Notes
@@ -187,3 +187,31 @@ worktree `.worktrees/agent-centric-usage-modules`.
   suite passes 2195 with 2 ignored and 0 failed.
 - Independent query/aggregation and lifecycle/security reviews approved the final
   tree with no remaining Critical or Important findings.
+
+## Task 7 Evidence
+
+- RED first proved the old dashboard/events invoke contract omitted the required
+  Agent ID. Subsequent focused REDs covered Agent navigation, unified projection,
+  Settings bindings/keys/setup/diagnostics, Provider/Proxy cleanup, four locales,
+  and stateful integration fixtures.
+- Runtime navigation is now the five fixed Agents plus Custom Agents, with no
+  synthetic global API tab. Dashboard/event queries isolate every Agent in both
+  wire inputs and cache keys, reject mismatched ownership, and globally invalidate
+  after all usage mutations and the payload-free backend event.
+- One Agent page preserves historical, disabled, and unbound Provider cards while
+  showing subscription and metered sections together. Provider rows deduplicate by
+  ID, shared-account quota is explicit, and metered totals/events remain Agent
+  scoped.
+- Settings owns explicit Agent-Provider bindings, protected key Set/Replace/Clear,
+  safe read-only proxy instructions, and aggregate diagnostics. Provider saves
+  mutate metadata only; proxy controls remain explicit; no Agent configuration or
+  legacy route binding is changed by selection.
+- Raw binding keys bypass React Query caches, exist only in the transient password
+  input and immediate invoke, and clear on every close/success/failure path. The
+  dialog freezes its opening credential version so concurrent updates fail CAS.
+- Independent review findings for prior-Agent async feedback, archived navigation,
+  `not_required`, `claude-desktop`, and unbound historical MSW events were resolved
+  with focused RED/GREEN coverage. No Critical or Important findings remain.
+- Final verification passes focused query 9/9, Agent page 6/6, Agent Settings 4/4,
+  App 4/4, and full frontend 92 files / 509 tests. Typecheck, renderer build,
+  Prettier, and `git diff --check` pass; no Rust or dependency files changed.

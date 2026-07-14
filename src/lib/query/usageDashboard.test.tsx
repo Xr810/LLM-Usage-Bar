@@ -5,17 +5,23 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { usageDashboardApi } from "@/lib/api/usageDashboard";
 import {
   usageDashboardKeys,
-  useDashboardModules,
-  useDeleteDashboardModule,
+  useAgentProviderBindingCredentialActions,
+  useDeleteAgentModule,
+  useDeleteAgentProviderBinding,
   useRefreshProviderQuota,
-  useReorderDashboardModules,
-  useSaveDashboardModule,
+  useReorderAgentModules,
+  useSaveAgentModule,
+  useSaveAgentProviderBinding,
   useSaveUsageProvider,
-  useSetDashboardModuleVisibility,
-  useSetRouteBinding,
+  useSetAgentModuleVisibility,
+  useSetUsageProviderEnabled,
+  useSyncProviderSessionUsage,
+  useUsageDashboard,
+  useUsageEvents,
 } from "@/lib/query/usageDashboard";
 import type {
-  DashboardModuleInput,
+  AgentModuleInput,
+  AgentProviderBindingInput,
   UsageProviderInput,
 } from "@/types/usageDashboard";
 
@@ -25,7 +31,7 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
 }));
 
-const input: UsageProviderInput = {
+const providerInput: UsageProviderInput = {
   id: "provider-a",
   name: "Provider A",
   billingKind: "metered",
@@ -35,17 +41,23 @@ const input: UsageProviderInput = {
   quotaSource: null,
   quotaIntervalSeconds: null,
   routeAppType: "claude",
-  routeConfig: { baseUrl: "https://example.com", apiKey: "secret" },
+  routeConfig: { baseUrl: "https://example.com" },
   quotaConfig: null,
   enabled: true,
 };
 
-const moduleInput: DashboardModuleInput = {
+const agentInput: AgentModuleInput = {
   id: null,
-  name: "Gemini",
-  kind: "subscription",
-  sortOrder: 4,
+  name: "Custom research agent",
+  sortOrder: 5,
   visible: true,
+};
+
+const bindingInput: AgentProviderBindingInput = {
+  id: "binding-a",
+  agentModuleId: "codex",
+  providerId: "provider-a",
+  enabled: false,
 };
 
 describe("usageDashboardApi wire contract", () => {
@@ -53,33 +65,19 @@ describe("usageDashboardApi wire contract", () => {
     invokeMock.mockReset().mockResolvedValue(undefined);
   });
 
-  it("sends exact camelCase payloads for all nine commands", async () => {
-    await usageDashboardApi.listProviders();
-    await usageDashboardApi.saveProvider(input);
-    await usageDashboardApi.setProviderEnabled("provider-a", false);
-    await usageDashboardApi.getRouteBindings();
-    await usageDashboardApi.setRouteBinding("claude", "provider-a");
-    await usageDashboardApi.getDashboard(10, 20, "claude");
-    await usageDashboardApi.getEvents("provider-a", 10, 20, 2, 50);
-    await usageDashboardApi.refreshQuota("provider-a");
-    await usageDashboardApi.syncSessionUsage("provider-a");
+  it("includes the selected Agent ID in dashboard and event requests", async () => {
+    await usageDashboardApi.getDashboard("codex", 10, 20);
+    await usageDashboardApi.getEvents("codex", "provider-a", 10, 20, 2, 50);
 
     expect(invokeMock.mock.calls).toEqual([
-      ["list_usage_providers"],
-      ["save_usage_provider", { input }],
-      [
-        "set_usage_provider_enabled",
-        { providerId: "provider-a", enabled: false },
-      ],
-      ["get_route_bindings"],
-      ["set_route_binding", { protocol: "claude", providerId: "provider-a" }],
       [
         "get_usage_dashboard",
-        { startAt: 10, endAt: 20, productGroupId: "claude" },
+        { agentModuleId: "codex", startAt: 10, endAt: 20 },
       ],
       [
         "get_usage_events",
         {
+          agentModuleId: "codex",
           providerId: "provider-a",
           startAt: 10,
           endAt: 20,
@@ -87,54 +85,111 @@ describe("usageDashboardApi wire contract", () => {
           pageSize: 50,
         },
       ],
-      ["refresh_provider_quota", { providerId: "provider-a" }],
-      ["sync_provider_session_usage", { providerId: "provider-a" }],
     ]);
   });
 
-  it("builds deterministic keys from every range filter and page value", () => {
-    expect(usageDashboardKeys.dashboard(10, 20, "claude")).toEqual([
+  it("uses Agent names for the five compatibility module commands", async () => {
+    await usageDashboardApi.listAgentModules();
+    await usageDashboardApi.saveAgentModule(agentInput);
+    await usageDashboardApi.reorderAgentModules(["codex", "claude-code"]);
+    await usageDashboardApi.setAgentModuleVisibility("codex", false);
+    await usageDashboardApi.deleteAgentModule("custom-research");
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["list_dashboard_modules"],
+      ["save_dashboard_module", { input: agentInput }],
+      ["reorder_dashboard_modules", { moduleIds: ["codex", "claude-code"] }],
+      [
+        "set_dashboard_module_visibility",
+        { moduleId: "codex", visible: false },
+      ],
+      ["delete_dashboard_module", { moduleId: "custom-research" }],
+    ]);
+  });
+
+  it("invokes every binding, protected-key, setup, and diagnostics command exactly", async () => {
+    await usageDashboardApi.listAgentProviderBindings("codex");
+    await usageDashboardApi.saveAgentProviderBinding(bindingInput);
+    await usageDashboardApi.deleteAgentProviderBinding("binding-a", 2);
+    await usageDashboardApi.setAgentProviderBindingApiKey(
+      "binding-a",
+      2,
+      "set-test-key",
+    );
+    await usageDashboardApi.replaceAgentProviderBindingApiKey(
+      "binding-a",
+      3,
+      "replace-test-key",
+    );
+    await usageDashboardApi.clearAgentProviderBindingApiKey("binding-a", 4);
+    await usageDashboardApi.getAgentProxySetupInfo("codex");
+    await usageDashboardApi.getUnassignedUsageDiagnostics();
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["list_agent_provider_bindings", { agentModuleId: "codex" }],
+      ["save_agent_provider_binding", { input: bindingInput }],
+      [
+        "delete_agent_provider_binding",
+        { bindingId: "binding-a", expectedVersion: 2 },
+      ],
+      [
+        "set_agent_provider_binding_api_key",
+        {
+          bindingId: "binding-a",
+          expectedVersion: 2,
+          apiKey: "set-test-key",
+        },
+      ],
+      [
+        "replace_agent_provider_binding_api_key",
+        {
+          bindingId: "binding-a",
+          expectedVersion: 3,
+          apiKey: "replace-test-key",
+        },
+      ],
+      [
+        "clear_agent_provider_binding_api_key",
+        { bindingId: "binding-a", expectedVersion: 4 },
+      ],
+      ["get_agent_proxy_setup_info", { agentModuleId: "codex" }],
+      ["get_unassigned_usage_diagnostics"],
+    ]);
+  });
+
+  it("keeps Provider saves independent from Agent binding membership", async () => {
+    await usageDashboardApi.saveProvider(providerInput);
+    expect(invokeMock).toHaveBeenCalledWith("save_usage_provider", {
+      input: providerInput,
+    });
+    expect(providerInput).not.toHaveProperty("dashboardModuleId");
+  });
+});
+
+describe("Agent-scoped usage query keys", () => {
+  it("includes Agent, optional Provider, range, and pagination dimensions", () => {
+    expect(usageDashboardKeys.dashboard("codex", 10, 20)).toEqual([
       "usage-dashboard",
       "dashboard",
+      "codex",
       10,
       20,
-      "claude",
     ]);
-    expect(usageDashboardKeys.events("provider-a", 10, 20, 2, 50)).toEqual([
+    expect(
+      usageDashboardKeys.events("codex", "provider-a", 10, 20, 2, 50),
+    ).toEqual([
       "usage-dashboard",
       "events",
+      "codex",
       "provider-a",
       10,
       20,
       2,
       50,
     ]);
-  });
-
-  it("sends exact camelCase payloads for dashboard module commands", async () => {
-    await usageDashboardApi.listDashboardModules();
-    await usageDashboardApi.saveDashboardModule(moduleInput);
-    await usageDashboardApi.reorderDashboardModules(["codex", "api"]);
-    await usageDashboardApi.setDashboardModuleVisibility("codex", false);
-    await usageDashboardApi.deleteDashboardModule("gemini");
-
-    expect(invokeMock.mock.calls).toEqual([
-      ["list_dashboard_modules"],
-      ["save_dashboard_module", { input: moduleInput }],
-      ["reorder_dashboard_modules", { moduleIds: ["codex", "api"] }],
-      [
-        "set_dashboard_module_visibility",
-        { moduleId: "codex", visible: false },
-      ],
-      ["delete_dashboard_module", { moduleId: "gemini" }],
-    ]);
-  });
-
-  it("uses a stable modules query key", () => {
-    expect(usageDashboardKeys.modules()).toEqual([
-      "usage-dashboard",
-      "modules",
-    ]);
+    expect(
+      usageDashboardKeys.events("claude-code", undefined, 10, 20, 1, 25),
+    ).not.toEqual(usageDashboardKeys.events("codex", undefined, 10, 20, 1, 25));
   });
 });
 
@@ -144,107 +199,141 @@ function wrapper(client: QueryClient) {
   );
 }
 
-describe("usage dashboard mutation invalidation", () => {
-  beforeEach(() => invokeMock.mockReset().mockResolvedValue({}));
+describe("Agent cache isolation", () => {
+  beforeEach(() => invokeMock.mockReset());
 
-  it("invalidates providers, bindings and dashboard after provider and route edits", async () => {
-    const client = new QueryClient({
-      defaultOptions: { mutations: { retry: false } },
+  it("rejects a dashboard response owned by another Agent", async () => {
+    invokeMock.mockResolvedValue({
+      agentModuleId: "claude-code",
+      startAt: 10,
+      endAt: 20,
+      productGroups: [],
+      warnings: [],
     });
-    const invalidate = vi.spyOn(client, "invalidateQueries");
-    const save = renderHook(() => useSaveUsageProvider(), {
-      wrapper: wrapper(client),
-    });
-    const route = renderHook(() => useSetRouteBinding(), {
-      wrapper: wrapper(client),
-    });
-
-    await act(async () => save.result.current.mutateAsync(input));
-    await act(async () =>
-      route.result.current.mutateAsync({
-        protocol: "claude",
-        providerId: "provider-a",
-      }),
-    );
-
-    expect(invalidate).toHaveBeenCalledWith({
-      queryKey: usageDashboardKeys.providers(),
-    });
-    expect(invalidate).toHaveBeenCalledWith({
-      queryKey: usageDashboardKeys.bindings(),
-    });
-    expect(invalidate).toHaveBeenCalledWith({
-      queryKey: usageDashboardKeys.dashboards(),
-    });
-  });
-
-  it("invalidates the provider and dashboard after quota refresh", async () => {
-    const client = new QueryClient({
-      defaultOptions: { mutations: { retry: false } },
-    });
-    const invalidate = vi.spyOn(client, "invalidateQueries");
-    const refresh = renderHook(() => useRefreshProviderQuota(), {
-      wrapper: wrapper(client),
-    });
-
-    await act(async () => refresh.result.current.mutateAsync("provider-a"));
-
-    expect(invalidate).toHaveBeenCalledWith({
-      queryKey: usageDashboardKeys.provider("provider-a"),
-    });
-    expect(invalidate).toHaveBeenCalledWith({
-      queryKey: usageDashboardKeys.dashboards(),
-    });
-  });
-
-  it("loads dashboard modules through the modules query key", async () => {
-    invokeMock.mockResolvedValueOnce([]);
     const client = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
-    const modules = renderHook(() => useDashboardModules(), {
+    const dashboard = renderHook(() => useUsageDashboard("codex", 10, 20), {
       wrapper: wrapper(client),
     });
 
-    await waitFor(() => expect(modules.result.current.isSuccess).toBe(true));
-    expect(invokeMock).toHaveBeenCalledWith("list_dashboard_modules");
-    expect(client.getQueryState(["usage-dashboard", "modules"])).toBeDefined();
+    await waitFor(() => expect(dashboard.result.current.isError).toBe(true));
+    expect(dashboard.result.current.data).toBeUndefined();
   });
 
-  it("invalidates modules, providers and dashboards after module mutations", async () => {
+  it("rejects event rows owned by another Agent", async () => {
+    invokeMock.mockResolvedValue({
+      items: [{ eventId: "wrong", agentModuleId: "claude-code" }],
+      total: 1,
+      page: 1,
+      pageSize: 5,
+    });
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const events = renderHook(
+      () => useUsageEvents("codex", "provider-a", 10, 20, 1, 5),
+      { wrapper: wrapper(client) },
+    );
+
+    await waitFor(() => expect(events.result.current.isError).toBe(true));
+    expect(events.result.current.data).toBeUndefined();
+  });
+});
+
+describe("usage dashboard mutation invalidation", () => {
+  beforeEach(() => invokeMock.mockReset().mockResolvedValue({}));
+
+  it("invalidates the global root after every successful normal mutation", async () => {
     const client = new QueryClient({
       defaultOptions: { mutations: { retry: false } },
     });
     const invalidate = vi.spyOn(client, "invalidateQueries");
-    const save = renderHook(() => useSaveDashboardModule(), {
+    const saveAgent = renderHook(() => useSaveAgentModule(), {
       wrapper: wrapper(client),
     });
-    const reorder = renderHook(() => useReorderDashboardModules(), {
+    const reorder = renderHook(() => useReorderAgentModules(), {
       wrapper: wrapper(client),
     });
-    const visibility = renderHook(() => useSetDashboardModuleVisibility(), {
+    const visibility = renderHook(() => useSetAgentModuleVisibility(), {
       wrapper: wrapper(client),
     });
-    const remove = renderHook(() => useDeleteDashboardModule(), {
+    const deleteAgent = renderHook(() => useDeleteAgentModule(), {
+      wrapper: wrapper(client),
+    });
+    const saveProvider = renderHook(() => useSaveUsageProvider(), {
+      wrapper: wrapper(client),
+    });
+    const providerEnabled = renderHook(() => useSetUsageProviderEnabled(), {
+      wrapper: wrapper(client),
+    });
+    const saveBinding = renderHook(() => useSaveAgentProviderBinding(), {
+      wrapper: wrapper(client),
+    });
+    const deleteBinding = renderHook(() => useDeleteAgentProviderBinding(), {
+      wrapper: wrapper(client),
+    });
+    const quota = renderHook(() => useRefreshProviderQuota(), {
+      wrapper: wrapper(client),
+    });
+    const session = renderHook(() => useSyncProviderSessionUsage(), {
       wrapper: wrapper(client),
     });
 
-    await act(async () => save.result.current.mutateAsync(moduleInput));
-    await act(async () => reorder.result.current.mutateAsync(["codex", "api"]));
+    await act(async () => saveAgent.result.current.mutateAsync(agentInput));
+    await act(async () =>
+      reorder.result.current.mutateAsync(["codex", "claude-code"]),
+    );
     await act(async () =>
       visibility.result.current.mutateAsync({
-        moduleId: "codex",
+        agentModuleId: "codex",
         visible: false,
       }),
     );
-    await act(async () => remove.result.current.mutateAsync("gemini"));
+    await act(async () =>
+      deleteAgent.result.current.mutateAsync("custom-research"),
+    );
+    await act(async () =>
+      saveProvider.result.current.mutateAsync(providerInput),
+    );
+    await act(async () =>
+      providerEnabled.result.current.mutateAsync({
+        providerId: "provider-a",
+        enabled: false,
+      }),
+    );
+    await act(async () => saveBinding.result.current.mutateAsync(bindingInput));
+    await act(async () =>
+      deleteBinding.result.current.mutateAsync({
+        bindingId: "binding-a",
+        expectedVersion: 2,
+      }),
+    );
+    await act(async () => quota.result.current.mutateAsync("provider-a"));
+    await act(async () => session.result.current.mutateAsync("provider-a"));
 
-    for (const queryKey of [
-      ["usage-dashboard", "modules"],
-      usageDashboardKeys.providers(),
-      usageDashboardKeys.dashboards(),
-    ]) {
-      expect(invalidate).toHaveBeenCalledWith({ queryKey });
+    expect(invalidate).toHaveBeenCalledTimes(10);
+    for (const [options] of invalidate.mock.calls) {
+      expect(options).toEqual({ queryKey: usageDashboardKeys.all });
     }
+  });
+
+  it("keeps protected keys out of MutationCache and invalidates root on success", async () => {
+    const client = new QueryClient();
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    const credential = renderHook(
+      () => useAgentProviderBindingCredentialActions(),
+      { wrapper: wrapper(client) },
+    );
+
+    await act(async () =>
+      credential.result.current.setApiKey("binding-a", 2, "transient-test-key"),
+    );
+
+    expect(client.getMutationCache().getAll()).toHaveLength(0);
+    expect(client.getQueryCache().getAll()).toHaveLength(0);
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: usageDashboardKeys.all,
+    });
   });
 });

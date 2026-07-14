@@ -1,6 +1,14 @@
 import { http, HttpResponse } from "msw";
 import type { AppId } from "@/lib/api/types";
 import type { McpServer, Provider, Settings } from "@/types";
+import type {
+  AgentModuleInput,
+  AgentModuleView,
+  AgentProviderBindingInput,
+  AgentProviderBindingView,
+  UsageProviderInput,
+  UsageProviderView,
+} from "@/types/usageDashboard";
 import {
   addProvider,
   deleteProvider,
@@ -39,55 +47,64 @@ const withJson = async <T>(request: Request): Promise<T> => {
 
 const success = <T>(payload: T) => HttpResponse.json(payload as any);
 
-const dashboardModulesFixture = [
+const initialAgentModulesFixture: AgentModuleView[] = [
   {
-    id: "module-subscription",
-    name: "Personal usage",
-    kind: "subscription",
+    id: "codex",
+    name: "Codex",
     sortOrder: 1,
     visible: true,
-    isSystem: false,
-    providerCount: 1,
-  },
-  {
-    id: "module-claude",
-    name: "Claude Code",
-    kind: "subscription",
-    sortOrder: 2,
-    visible: true,
-    isSystem: false,
-    providerCount: 1,
-  },
-  {
-    id: "module-kimi",
-    name: "Kimi Coding Plan",
-    kind: "subscription",
-    sortOrder: 3,
-    visible: true,
-    isSystem: false,
-    providerCount: 1,
-  },
-  {
-    id: "module-api",
-    name: "Metered usage",
-    kind: "api",
-    sortOrder: 4,
-    visible: true,
-    isSystem: true,
+    isFixed: true,
+    archivedAt: null,
     providerCount: 2,
   },
   {
-    id: "module-renamed",
-    name: "Renamed research plan",
-    kind: "subscription",
-    sortOrder: 5,
+    id: "claude-code",
+    name: "Claude Code",
+    sortOrder: 2,
     visible: true,
-    isSystem: false,
+    isFixed: true,
+    archivedAt: null,
+    providerCount: 2,
+  },
+  {
+    id: "opencode",
+    name: "OpenCode",
+    sortOrder: 3,
+    visible: true,
+    isFixed: true,
+    archivedAt: null,
     providerCount: 1,
   },
-] as const;
+  {
+    id: "openclaw",
+    name: "OpenClaw",
+    sortOrder: 4,
+    visible: true,
+    isFixed: true,
+    archivedAt: null,
+    providerCount: 0,
+  },
+  {
+    id: "hermes",
+    name: "Hermes",
+    sortOrder: 5,
+    visible: true,
+    isFixed: true,
+    archivedAt: null,
+    providerCount: 0,
+  },
+  {
+    id: "custom-research",
+    name: "Research Agent",
+    sortOrder: 6,
+    visible: true,
+    isFixed: false,
+    archivedAt: null,
+    providerCount: 1,
+  },
+];
 
-const usageProvidersFixture = [
+const initialUsageProvidersFixture: UsageProviderView[] = [
   {
     id: "subscription-official",
     name: "Official Subscription",
@@ -95,6 +112,19 @@ const usageProvidersFixture = [
     productGroupId: "codex",
     tokenSources: ["session_log"],
     sessionSourceBindings: ["codex"],
+    bindings: [
+      {
+        id: "binding-codex-subscription",
+        agentModuleId: "codex",
+        providerId: "subscription-official",
+        enabled: true,
+        effectiveEnabled: true,
+        credentialStatus: "not_required",
+        credentialVersion: 0,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ],
     quotaSource: "codex",
     quotaIntervalSeconds: 300,
     routeAppType: null,
@@ -104,7 +134,6 @@ const usageProvidersFixture = [
     updatedAt: 1,
     routeBaseUrl: null,
     hasRouteCredentials: false,
-    dashboardModuleId: "module-subscription",
   },
   {
     id: "subscription-claude",
@@ -113,6 +142,19 @@ const usageProvidersFixture = [
     productGroupId: "claude",
     tokenSources: ["session_log"],
     sessionSourceBindings: ["claude"],
+    bindings: [
+      {
+        id: "binding-claude-subscription",
+        agentModuleId: "claude-code",
+        providerId: "subscription-claude",
+        enabled: true,
+        effectiveEnabled: true,
+        credentialStatus: "not_required",
+        credentialVersion: 0,
+        createdAt: 2,
+        updatedAt: 2,
+      },
+    ],
     quotaSource: "claude",
     quotaIntervalSeconds: 300,
     routeAppType: null,
@@ -122,7 +164,6 @@ const usageProvidersFixture = [
     updatedAt: 2,
     routeBaseUrl: null,
     hasRouteCredentials: false,
-    dashboardModuleId: "module-claude",
   },
   {
     id: "subscription-kimi",
@@ -131,6 +172,19 @@ const usageProvidersFixture = [
     productGroupId: "kimi",
     tokenSources: ["session_log"],
     sessionSourceBindings: [],
+    bindings: [
+      {
+        id: "binding-opencode-subscription",
+        agentModuleId: "opencode",
+        providerId: "subscription-kimi",
+        enabled: true,
+        effectiveEnabled: true,
+        credentialStatus: "not_required",
+        credentialVersion: 0,
+        createdAt: 3,
+        updatedAt: 3,
+      },
+    ],
     quotaSource: "coding_plan",
     quotaIntervalSeconds: 300,
     routeAppType: null,
@@ -140,7 +194,6 @@ const usageProvidersFixture = [
     updatedAt: 3,
     routeBaseUrl: null,
     hasRouteCredentials: false,
-    dashboardModuleId: "module-kimi",
   },
   {
     id: "subscription-research",
@@ -149,6 +202,19 @@ const usageProvidersFixture = [
     productGroupId: "research",
     tokenSources: ["session_log"],
     sessionSourceBindings: [],
+    bindings: [
+      {
+        id: "binding-custom-subscription",
+        agentModuleId: "custom-research",
+        providerId: "subscription-research",
+        enabled: true,
+        effectiveEnabled: true,
+        credentialStatus: "not_required",
+        credentialVersion: 0,
+        createdAt: 4,
+        updatedAt: 4,
+      },
+    ],
     quotaSource: null,
     quotaIntervalSeconds: 0,
     routeAppType: null,
@@ -158,7 +224,6 @@ const usageProvidersFixture = [
     updatedAt: 4,
     routeBaseUrl: null,
     hasRouteCredentials: false,
-    dashboardModuleId: "module-renamed",
   },
   {
     id: "azure-api",
@@ -167,6 +232,30 @@ const usageProvidersFixture = [
     productGroupId: "claude",
     tokenSources: ["proxy"],
     sessionSourceBindings: [],
+    bindings: [
+      {
+        id: "binding-codex-azure",
+        agentModuleId: "codex",
+        providerId: "azure-api",
+        enabled: true,
+        effectiveEnabled: true,
+        credentialStatus: "configured",
+        credentialVersion: 1,
+        createdAt: 5,
+        updatedAt: 5,
+      },
+      {
+        id: "binding-claude-azure",
+        agentModuleId: "claude-code",
+        providerId: "azure-api",
+        enabled: true,
+        effectiveEnabled: true,
+        credentialStatus: "configured",
+        credentialVersion: 1,
+        createdAt: 5,
+        updatedAt: 5,
+      },
+    ],
     quotaSource: null,
     quotaIntervalSeconds: null,
     routeAppType: "claude",
@@ -176,7 +265,6 @@ const usageProvidersFixture = [
     updatedAt: 5,
     routeBaseUrl: "https://azure.example.com",
     hasRouteCredentials: true,
-    dashboardModuleId: null,
   },
   {
     id: "openrouter-api",
@@ -185,6 +273,30 @@ const usageProvidersFixture = [
     productGroupId: "research",
     tokenSources: ["proxy"],
     sessionSourceBindings: [],
+    bindings: [
+      {
+        id: "binding-opencode-openrouter",
+        agentModuleId: "opencode",
+        providerId: "openrouter-api",
+        enabled: true,
+        effectiveEnabled: true,
+        credentialStatus: "configured",
+        credentialVersion: 1,
+        createdAt: 6,
+        updatedAt: 6,
+      },
+      {
+        id: "binding-custom-openrouter",
+        agentModuleId: "custom-research",
+        providerId: "openrouter-api",
+        enabled: false,
+        effectiveEnabled: false,
+        credentialStatus: "missing",
+        credentialVersion: 0,
+        createdAt: 6,
+        updatedAt: 6,
+      },
+    ],
     quotaSource: null,
     quotaIntervalSeconds: null,
     routeAppType: "codex",
@@ -194,9 +306,23 @@ const usageProvidersFixture = [
     updatedAt: 6,
     routeBaseUrl: "https://openrouter.ai/api/v1",
     hasRouteCredentials: true,
-    dashboardModuleId: null,
   },
-] as const;
+];
+
+const cloneUsageFixture = <T>(value: T): T =>
+  JSON.parse(JSON.stringify(value)) as T;
+
+let agentModulesFixture = cloneUsageFixture(initialAgentModulesFixture);
+let usageProvidersFixture = cloneUsageFixture(initialUsageProvidersFixture);
+let nextAgentId = 1;
+let nextBindingId = 1;
+
+export const resetUsageDashboardState = () => {
+  agentModulesFixture = cloneUsageFixture(initialAgentModulesFixture);
+  usageProvidersFixture = cloneUsageFixture(initialUsageProvidersFixture);
+  nextAgentId = 1;
+  nextBindingId = 1;
+};
 
 const usageProvider = (id: string) => {
   const provider = usageProvidersFixture.find(
@@ -206,190 +332,607 @@ const usageProvider = (id: string) => {
   return provider;
 };
 
+const activeAgent = (id: string) =>
+  agentModulesFixture.find(
+    (agent) => agent.id === id && agent.archivedAt == null,
+  );
+
+const allAgentBindings = () =>
+  usageProvidersFixture.flatMap((provider) => provider.bindings);
+
+const bindingLocation = (bindingId: string) => {
+  for (const provider of usageProvidersFixture) {
+    const index = provider.bindings.findIndex(
+      (binding) => binding.id === bindingId,
+    );
+    if (index >= 0) return { provider, index };
+  }
+  return null;
+};
+
+const recomputeAgentBindingState = () => {
+  for (const provider of usageProvidersFixture) {
+    provider.bindings = provider.bindings.map((binding) => ({
+      ...binding,
+      effectiveEnabled:
+        binding.enabled &&
+        provider.enabled &&
+        Boolean(activeAgent(binding.agentModuleId)) &&
+        (binding.credentialStatus === "configured" ||
+          binding.credentialStatus === "not_required"),
+    }));
+  }
+  for (const agent of agentModulesFixture) {
+    agent.providerCount = allAgentBindings().filter(
+      (binding) => binding.agentModuleId === agent.id,
+    ).length;
+  }
+};
+
+const rejectUsageRequest = (message: string) =>
+  HttpResponse.json(message, { status: 400 });
+
+const subscriptionUsage = (
+  providerId: string,
+  endAt: number,
+  inputTokens: number,
+) => ({
+  provider: usageProvider(providerId),
+  sharedAccount: false,
+  eventCount: 1,
+  inputTokens,
+  outputTokens: 10,
+  cacheReadTokens: 5,
+  cacheCreationTokens: 0,
+  totalCostUsd: null,
+  costSourceCounts: { upstream: 0, estimated: 0, unavailable: 1 },
+  quota: {
+    snapshotId: `quota-${providerId}`,
+    fetchedAt: endAt,
+    fiveHourUtilizationPercent: "25",
+    fiveHourResetsAt: null,
+    sevenDayUtilizationPercent: "40",
+    sevenDayResetsAt: null,
+    manualResetsRemaining: 1,
+  },
+  quotaFetchState: null,
+});
+
+const meteredUsage = (
+  providerId: string,
+  inputTokens: number,
+  totalCostUsd: string | null,
+) => ({
+  provider: usageProvider(providerId),
+  sharedAccount: true,
+  eventCount: 1,
+  inputTokens,
+  outputTokens: 10,
+  cacheReadTokens: 0,
+  cacheCreationTokens: 0,
+  totalCostUsd,
+  costSourceCounts:
+    totalCostUsd == null
+      ? { upstream: 0, estimated: 0, unavailable: 1 }
+      : { upstream: 1, estimated: 0, unavailable: 0 },
+  quota: null,
+  quotaFetchState: null,
+});
+
+const usageProductGroup = (
+  productGroupId: string,
+  subscriptionProviders: ReturnType<typeof subscriptionUsage>[],
+  meteredProviders: ReturnType<typeof meteredUsage>[],
+) => ({
+  productGroupId,
+  inputTokens: [...subscriptionProviders, ...meteredProviders].reduce(
+    (sum, row) => sum + row.inputTokens,
+    0,
+  ),
+  outputTokens: [...subscriptionProviders, ...meteredProviders].reduce(
+    (sum, row) => sum + row.outputTokens,
+    0,
+  ),
+  cacheReadTokens: [...subscriptionProviders, ...meteredProviders].reduce(
+    (sum, row) => sum + row.cacheReadTokens,
+    0,
+  ),
+  cacheCreationTokens: 0,
+  totalCostUsd:
+    meteredProviders.find((row) => row.totalCostUsd != null)?.totalCostUsd ??
+    null,
+  costSourceCounts: {
+    upstream: meteredProviders.filter((row) => row.totalCostUsd != null).length,
+    estimated: 0,
+    unavailable:
+      subscriptionProviders.length +
+      meteredProviders.filter((row) => row.totalCostUsd == null).length,
+  },
+  tokenSources: [
+    ...(subscriptionProviders.length ? ["session_log"] : []),
+    ...(meteredProviders.length ? ["proxy"] : []),
+  ],
+  subscriptionProviders,
+  meteredProviders,
+});
+
+const dashboardGroupsForAgent = (agentModuleId: string, endAt: number) => {
+  switch (agentModuleId) {
+    case "codex":
+      return [
+        usageProductGroup(
+          "codex",
+          [subscriptionUsage("subscription-official", endAt, 60)],
+          [meteredUsage("azure-api", 50, "1.25")],
+        ),
+      ];
+    case "claude-code":
+      return [
+        usageProductGroup(
+          "claude",
+          [subscriptionUsage("subscription-claude", endAt, 25)],
+          [meteredUsage("azure-api", 35, "0.75")],
+        ),
+      ];
+    case "opencode":
+      return [
+        usageProductGroup(
+          "opencode",
+          [subscriptionUsage("subscription-kimi", endAt, 30)],
+          [meteredUsage("openrouter-api", 20, null)],
+        ),
+      ];
+    case "custom-research":
+      return [
+        usageProductGroup(
+          "research",
+          [subscriptionUsage("subscription-research", endAt, 15)],
+          // Historical rows remain visible even when the current binding is disabled.
+          [meteredUsage("openrouter-api", 20, null)],
+        ),
+      ];
+    default:
+      return [];
+  }
+};
+
 export const handlers = [
   http.post(`${TAURI_ENDPOINT}/list_dashboard_modules`, () =>
-    success(dashboardModulesFixture),
+    success(agentModulesFixture),
+  ),
+  http.post(`${TAURI_ENDPOINT}/save_dashboard_module`, async ({ request }) => {
+    const { input } = await withJson<{ input: AgentModuleInput }>(request);
+    if (!input || !input.name?.trim()) {
+      return rejectUsageRequest("invalid_agent_input");
+    }
+    if (input.id) {
+      const agent = activeAgent(input.id);
+      if (!agent) return rejectUsageRequest("agent_not_found");
+      if (agent.isFixed && input.name.trim() !== agent.name) {
+        return rejectUsageRequest("fixed_agent_immutable");
+      }
+      Object.assign(agent, {
+        name: input.name.trim(),
+        sortOrder: input.sortOrder,
+        visible: input.visible,
+      });
+      return success(agent);
+    }
+    const agent: AgentModuleView = {
+      id: `custom-msw-${nextAgentId++}`,
+      name: input.name.trim(),
+      sortOrder: input.sortOrder,
+      visible: input.visible,
+      isFixed: false,
+      archivedAt: null,
+      providerCount: 0,
+    };
+    agentModulesFixture.push(agent);
+    return success(agent);
+  }),
+  http.post(
+    `${TAURI_ENDPOINT}/reorder_dashboard_modules`,
+    async ({ request }) => {
+      const { moduleIds } = await withJson<{ moduleIds: string[] }>(request);
+      const activeIds = agentModulesFixture
+        .filter((agent) => agent.archivedAt == null)
+        .map((agent) => agent.id);
+      if (
+        !Array.isArray(moduleIds) ||
+        moduleIds.length !== activeIds.length ||
+        activeIds.some((id) => !moduleIds.includes(id))
+      ) {
+        return rejectUsageRequest("invalid_agent_order");
+      }
+      moduleIds.forEach((id, index) => {
+        const agent = activeAgent(id);
+        if (agent) agent.sortOrder = index + 1;
+      });
+      return success(
+        agentModulesFixture
+          .filter((agent) => agent.archivedAt == null)
+          .sort((left, right) => left.sortOrder - right.sortOrder),
+      );
+    },
+  ),
+  http.post(
+    `${TAURI_ENDPOINT}/set_dashboard_module_visibility`,
+    async ({ request }) => {
+      const { moduleId, visible } = await withJson<{
+        moduleId: string;
+        visible: boolean;
+      }>(request);
+      const agent = activeAgent(moduleId);
+      if (!agent || typeof visible !== "boolean") {
+        return rejectUsageRequest("invalid_agent_visibility");
+      }
+      agent.visible = visible;
+      return success(agent);
+    },
+  ),
+  http.post(
+    `${TAURI_ENDPOINT}/delete_dashboard_module`,
+    async ({ request }) => {
+      const { moduleId } = await withJson<{ moduleId: string }>(request);
+      const agent = activeAgent(moduleId);
+      if (!agent || agent.isFixed) {
+        return rejectUsageRequest("agent_delete_not_allowed");
+      }
+      agent.archivedAt = 1_000;
+      agent.visible = false;
+      recomputeAgentBindingState();
+      return success(null);
+    },
   ),
   http.post(`${TAURI_ENDPOINT}/list_usage_providers`, () =>
     success(usageProvidersFixture),
   ),
-  http.post(`${TAURI_ENDPOINT}/get_route_bindings`, () =>
-    success([
-      { protocol: "claude", providerId: "azure-api", updatedAt: 5 },
-      { protocol: "codex", providerId: "openrouter-api", updatedAt: 6 },
-    ]),
+  http.post(`${TAURI_ENDPOINT}/save_usage_provider`, async ({ request }) => {
+    const { input } = await withJson<{ input: UsageProviderInput }>(request);
+    if (
+      !input?.id?.trim() ||
+      !input.name?.trim() ||
+      !input.productGroupId?.trim()
+    ) {
+      return rejectUsageRequest("invalid_provider_input");
+    }
+    const existing = usageProvidersFixture.find(
+      (provider) => provider.id === input.id,
+    );
+    const routeBaseUrl =
+      typeof input.routeConfig?.baseUrl === "string"
+        ? input.routeConfig.baseUrl
+        : (existing?.routeBaseUrl ?? null);
+    const saved: UsageProviderView = {
+      id: input.id,
+      name: input.name,
+      billingKind: input.billingKind,
+      productGroupId: input.productGroupId,
+      tokenSources: [...input.tokenSources],
+      sessionSourceBindings:
+        input.sessionSourceBindings ?? existing?.sessionSourceBindings ?? [],
+      bindings: existing?.bindings ?? [],
+      quotaSource: input.quotaSource ?? null,
+      quotaIntervalSeconds: input.quotaIntervalSeconds ?? null,
+      routeAppType: input.routeAppType ?? null,
+      enabled: input.enabled,
+      needsReview: false,
+      createdAt: existing?.createdAt ?? 1_000,
+      updatedAt: (existing?.updatedAt ?? 999) + 1,
+      routeBaseUrl,
+      hasRouteCredentials:
+        input.routeConfig == null
+          ? (existing?.hasRouteCredentials ?? false)
+          : typeof input.routeConfig.apiKey === "string",
+    };
+    if (existing) {
+      usageProvidersFixture.splice(
+        usageProvidersFixture.indexOf(existing),
+        1,
+        saved,
+      );
+    } else {
+      usageProvidersFixture.push(saved);
+    }
+    recomputeAgentBindingState();
+    return success(saved);
+  }),
+  http.post(
+    `${TAURI_ENDPOINT}/set_usage_provider_enabled`,
+    async ({ request }) => {
+      const { providerId, enabled } = await withJson<{
+        providerId: string;
+        enabled: boolean;
+      }>(request);
+      const provider = usageProvidersFixture.find(
+        (candidate) => candidate.id === providerId,
+      );
+      if (!provider || typeof enabled !== "boolean") {
+        return rejectUsageRequest("invalid_provider_enabled");
+      }
+      provider.enabled = enabled;
+      provider.updatedAt += 1;
+      recomputeAgentBindingState();
+      return success(null);
+    },
+  ),
+  http.post(
+    `${TAURI_ENDPOINT}/list_agent_provider_bindings`,
+    async ({ request }) => {
+      const { agentModuleId } = await withJson<{
+        agentModuleId?: string;
+      }>(request);
+      return success(
+        allAgentBindings().filter(
+          (binding) =>
+            agentModuleId == null || binding.agentModuleId === agentModuleId,
+        ),
+      );
+    },
+  ),
+  http.post(
+    `${TAURI_ENDPOINT}/save_agent_provider_binding`,
+    async ({ request }) => {
+      const { input } = await withJson<{ input: AgentProviderBindingInput }>(
+        request,
+      );
+      if (
+        !input ||
+        !activeAgent(input.agentModuleId) ||
+        !usageProvidersFixture.some(
+          (provider) => provider.id === input.providerId,
+        )
+      ) {
+        return rejectUsageRequest("invalid_agent_provider_binding");
+      }
+      const provider = usageProvider(input.providerId);
+      if (input.id) {
+        const location = bindingLocation(input.id);
+        if (
+          !location ||
+          location.provider.id !== input.providerId ||
+          location.provider.bindings[location.index].agentModuleId !==
+            input.agentModuleId
+        ) {
+          return rejectUsageRequest("binding_identity_mismatch");
+        }
+        const current = location.provider.bindings[location.index];
+        const saved: AgentProviderBindingView = {
+          ...current,
+          enabled: input.enabled,
+          updatedAt: current.updatedAt + 1,
+        };
+        location.provider.bindings[location.index] = saved;
+        recomputeAgentBindingState();
+        return success(location.provider.bindings[location.index]);
+      }
+      if (
+        provider.bindings.some(
+          (binding) => binding.agentModuleId === input.agentModuleId,
+        )
+      ) {
+        return rejectUsageRequest("duplicate_agent_provider_binding");
+      }
+      const timestamp = 1_000 + nextBindingId;
+      const saved: AgentProviderBindingView = {
+        id: `binding-msw-${nextBindingId++}`,
+        agentModuleId: input.agentModuleId,
+        providerId: input.providerId,
+        enabled: input.enabled,
+        effectiveEnabled: false,
+        credentialStatus:
+          provider.billingKind === "subscription" ? "not_required" : "missing",
+        credentialVersion: 0,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      };
+      provider.bindings.push(saved);
+      recomputeAgentBindingState();
+      return success(
+        provider.bindings.find((binding) => binding.id === saved.id)!,
+      );
+    },
+  ),
+  http.post(
+    `${TAURI_ENDPOINT}/delete_agent_provider_binding`,
+    async ({ request }) => {
+      const { bindingId, expectedVersion } = await withJson<{
+        bindingId: string;
+        expectedVersion: number;
+      }>(request);
+      const location = bindingLocation(bindingId);
+      if (
+        !location ||
+        location.provider.bindings[location.index].credentialVersion !==
+          expectedVersion
+      ) {
+        return rejectUsageRequest("binding_version_mismatch");
+      }
+      location.provider.bindings.splice(location.index, 1);
+      recomputeAgentBindingState();
+      return success(null);
+    },
+  ),
+  ...(
+    [
+      ["set_agent_provider_binding_api_key", "configured"],
+      ["replace_agent_provider_binding_api_key", "configured"],
+      ["clear_agent_provider_binding_api_key", "missing"],
+    ] as const
+  ).map(([command, credentialStatus]) =>
+    http.post(`${TAURI_ENDPOINT}/${command}`, async ({ request }) => {
+      const { bindingId, expectedVersion, apiKey } = await withJson<{
+        bindingId: string;
+        expectedVersion: number;
+        apiKey?: string;
+      }>(request);
+      const location = bindingLocation(bindingId);
+      if (
+        !location ||
+        location.provider.bindings[location.index].credentialVersion !==
+          expectedVersion ||
+        (credentialStatus === "configured" && !apiKey)
+      ) {
+        return rejectUsageRequest("binding_credential_update_rejected");
+      }
+      const current = location.provider.bindings[location.index];
+      const saved: AgentProviderBindingView = {
+        ...current,
+        credentialStatus,
+        credentialVersion: current.credentialVersion + 1,
+        updatedAt: current.updatedAt + 1,
+      };
+      location.provider.bindings[location.index] = saved;
+      recomputeAgentBindingState();
+      return success(location.provider.bindings[location.index]);
+    }),
+  ),
+  http.post(
+    `${TAURI_ENDPOINT}/get_agent_proxy_setup_info`,
+    async ({ request }) => {
+      const { agentModuleId } = await withJson<{ agentModuleId: string }>(
+        request,
+      );
+      if (!activeAgent(agentModuleId)) {
+        return rejectUsageRequest("agent_not_found");
+      }
+      const proxyOrigin = "http://127.0.0.1:15800";
+      return success({
+        agentModuleId,
+        proxyRunning: false,
+        proxyOrigin,
+        routes: usageProvidersFixture.flatMap((provider) =>
+          provider.bindings
+            .filter((binding) => binding.agentModuleId === agentModuleId)
+            .map((binding) => ({
+              bindingId: binding.id,
+              providerId: provider.id,
+              protocol: provider.routeAppType,
+              localBaseUrl: provider.routeAppType
+                ? `${proxyOrigin}/${agentModuleId}/${provider.routeAppType}`
+                : null,
+              credentialPlacements:
+                provider.routeAppType === "claude"
+                  ? ["x-api-key"]
+                  : provider.routeAppType === "codex"
+                    ? ["Authorization"]
+                    : provider.routeAppType === "gemini"
+                      ? ["x-goog-api-key"]
+                      : [],
+              credentialStatus: binding.credentialStatus,
+            })),
+        ),
+      });
+    },
+  ),
+  http.post(`${TAURI_ENDPOINT}/get_unassigned_usage_diagnostics`, () =>
+    success({
+      unassignedEventCount: 4,
+      unassignedGroups: [
+        {
+          providerId: "legacy-provider",
+          source: "proxy",
+          eventCount: 4,
+          firstOccurredAt: 10,
+          lastOccurredAt: 20,
+        },
+      ],
+      archivedAgentHistory: [
+        {
+          agentModuleId: "custom-archived",
+          eventCount: 3,
+          firstOccurredAt: 30,
+          lastOccurredAt: 40,
+        },
+      ],
+      invalidLinkSummaries: [
+        {
+          reason: "cross_agent",
+          linkCount: 2,
+          firstCreatedAt: 50,
+          lastCreatedAt: 60,
+        },
+      ],
+    }),
+  ),
+  http.post(`${TAURI_ENDPOINT}/refresh_provider_quota`, async ({ request }) => {
+    const { providerId } = await withJson<{ providerId: string }>(request);
+    usageProvider(providerId);
+    return success({
+      snapshot: {
+        snapshotId: `quota-refreshed-${providerId}`,
+        fetchedAt: 1_000,
+        fiveHourUtilizationPercent: "26",
+        fiveHourResetsAt: null,
+        sevenDayUtilizationPercent: "41",
+        sevenDayResetsAt: null,
+        manualResetsRemaining: 1,
+      },
+      fetchState: {
+        providerId,
+        lastAttemptAt: 1_000,
+        lastSuccessAt: 1_000,
+        lastError: null,
+        stale: false,
+      },
+    });
+  }),
+  http.post(
+    `${TAURI_ENDPOINT}/sync_provider_session_usage`,
+    async ({ request }) => {
+      const { providerId } = await withJson<{ providerId: string }>(request);
+      usageProvider(providerId);
+      return success({
+        imported: 1,
+        skipped: 0,
+        filesScanned: 1,
+        errors: [],
+        warnings: [],
+      });
+    },
   ),
   http.post(`${TAURI_ENDPOINT}/get_usage_dashboard`, async ({ request }) => {
-    const { startAt, endAt } = await withJson<{
+    const { agentModuleId, startAt, endAt } = await withJson<{
+      agentModuleId: string;
       startAt: number;
       endAt: number;
     }>(request);
+    if (
+      !activeAgent(agentModuleId) ||
+      typeof startAt !== "number" ||
+      typeof endAt !== "number"
+    ) {
+      return HttpResponse.json("invalid_agent_dashboard_request", {
+        status: 400,
+      });
+    }
     return success({
+      agentModuleId,
       startAt,
       endAt,
       warnings: [],
-      productGroups: [
-        {
-          productGroupId: "codex",
-          inputTokens: 60,
-          outputTokens: 10,
-          cacheReadTokens: 0,
-          cacheCreationTokens: 0,
-          totalCostUsd: null,
-          costSourceCounts: { upstream: 0, estimated: 0, unavailable: 1 },
-          tokenSources: ["session_log"],
-          subscriptionProviders: [
-            {
-              provider: usageProvider("subscription-official"),
-              eventCount: 1,
-              inputTokens: 60,
-              outputTokens: 10,
-              cacheReadTokens: 0,
-              cacheCreationTokens: 0,
-              totalCostUsd: null,
-              costSourceCounts: { upstream: 0, estimated: 0, unavailable: 1 },
-              quota: {
-                snapshotId: "quota-1",
-                fetchedAt: endAt,
-                fiveHourUtilizationPercent: "25",
-                fiveHourResetsAt: null,
-                sevenDayUtilizationPercent: "40",
-                sevenDayResetsAt: null,
-                manualResetsRemaining: 1,
-              },
-              quotaFetchState: null,
-            },
-          ],
-          meteredProviders: [],
-        },
-        {
-          productGroupId: "claude",
-          inputTokens: 75,
-          outputTokens: 20,
-          cacheReadTokens: 5,
-          cacheCreationTokens: 0,
-          totalCostUsd: "1.25",
-          costSourceCounts: { upstream: 1, estimated: 0, unavailable: 1 },
-          tokenSources: ["session_log", "proxy"],
-          subscriptionProviders: [
-            {
-              provider: usageProvider("subscription-claude"),
-              eventCount: 1,
-              inputTokens: 25,
-              outputTokens: 10,
-              cacheReadTokens: 5,
-              cacheCreationTokens: 0,
-              totalCostUsd: null,
-              costSourceCounts: { upstream: 0, estimated: 0, unavailable: 1 },
-              quota: {
-                snapshotId: "quota-claude",
-                fetchedAt: endAt,
-                fiveHourUtilizationPercent: "35",
-                fiveHourResetsAt: null,
-                sevenDayUtilizationPercent: "55",
-                sevenDayResetsAt: null,
-                manualResetsRemaining: null,
-              },
-              quotaFetchState: null,
-            },
-          ],
-          meteredProviders: [
-            {
-              provider: usageProvider("azure-api"),
-              eventCount: 1,
-              inputTokens: 50,
-              outputTokens: 10,
-              cacheReadTokens: 0,
-              cacheCreationTokens: 0,
-              totalCostUsd: "1.25",
-              costSourceCounts: { upstream: 1, estimated: 0, unavailable: 0 },
-              quota: null,
-              quotaFetchState: null,
-            },
-          ],
-        },
-        {
-          productGroupId: "kimi",
-          inputTokens: 30,
-          outputTokens: 5,
-          cacheReadTokens: 0,
-          cacheCreationTokens: 0,
-          totalCostUsd: null,
-          costSourceCounts: { upstream: 0, estimated: 0, unavailable: 1 },
-          tokenSources: ["session_log"],
-          subscriptionProviders: [
-            {
-              provider: usageProvider("subscription-kimi"),
-              eventCount: 1,
-              inputTokens: 30,
-              outputTokens: 5,
-              cacheReadTokens: 0,
-              cacheCreationTokens: 0,
-              totalCostUsd: null,
-              costSourceCounts: { upstream: 0, estimated: 0, unavailable: 1 },
-              quota: {
-                snapshotId: "quota-kimi",
-                fetchedAt: endAt,
-                fiveHourUtilizationPercent: "15",
-                fiveHourResetsAt: null,
-                sevenDayUtilizationPercent: "20",
-                sevenDayResetsAt: null,
-                manualResetsRemaining: 2,
-              },
-              quotaFetchState: null,
-            },
-          ],
-          meteredProviders: [],
-        },
-        {
-          productGroupId: "research",
-          inputTokens: 35,
-          outputTokens: 10,
-          cacheReadTokens: 0,
-          cacheCreationTokens: 0,
-          totalCostUsd: null,
-          costSourceCounts: { upstream: 0, estimated: 0, unavailable: 2 },
-          tokenSources: ["session_log", "proxy"],
-          subscriptionProviders: [
-            {
-              provider: usageProvider("subscription-research"),
-              eventCount: 1,
-              inputTokens: 15,
-              outputTokens: 5,
-              cacheReadTokens: 0,
-              cacheCreationTokens: 0,
-              totalCostUsd: null,
-              costSourceCounts: { upstream: 0, estimated: 0, unavailable: 1 },
-              quota: null,
-              quotaFetchState: null,
-            },
-          ],
-          meteredProviders: [
-            {
-              provider: usageProvider("openrouter-api"),
-              eventCount: 1,
-              inputTokens: 20,
-              outputTokens: 5,
-              cacheReadTokens: 0,
-              cacheCreationTokens: 0,
-              totalCostUsd: null,
-              costSourceCounts: { upstream: 0, estimated: 0, unavailable: 1 },
-              quota: null,
-              quotaFetchState: null,
-            },
-          ],
-        },
-      ],
+      productGroups: dashboardGroupsForAgent(agentModuleId, endAt),
     });
   }),
   http.post(`${TAURI_ENDPOINT}/get_usage_events`, async ({ request }) => {
-    const { providerId } = await withJson<{ providerId: string }>(request);
+    const { agentModuleId, providerId } = await withJson<{
+      agentModuleId: string;
+      providerId?: string;
+    }>(request);
+    if (
+      !activeAgent(agentModuleId) ||
+      (providerId &&
+        !usageProvidersFixture.some((provider) => provider.id === providerId))
+    ) {
+      return HttpResponse.json("invalid_agent_event_request", { status: 400 });
+    }
     const event =
       providerId === "azure-api"
         ? {
-            eventId: "event-azure",
+            eventId: `event-${agentModuleId}-azure`,
             source: "proxy",
             providerId,
+            agentModuleId,
             productGroupId: "claude",
             occurredAt: 5,
             model: "claude-sonnet-4",
@@ -411,9 +954,10 @@ export const handlers = [
           }
         : providerId === "openrouter-api"
           ? {
-              eventId: "event-openrouter",
+              eventId: `event-${agentModuleId}-openrouter`,
               source: "proxy",
               providerId,
+              agentModuleId,
               productGroupId: "research",
               occurredAt: 6,
               model: "gpt-4.1",

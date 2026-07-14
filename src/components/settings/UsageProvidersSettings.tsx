@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import {
@@ -10,36 +10,20 @@ import {
 } from "@/components/ui/card";
 import { UsageProviderDialog } from "@/components/usage-dashboard/UsageProviderDialog";
 import {
-  useDashboardModules,
-  useSaveDashboardModule,
   useSaveUsageProvider,
   useSetUsageProviderEnabled,
   useUsageProviders,
 } from "@/lib/query/usageDashboard";
-import type {
-  DashboardModuleView,
-  UsageProviderView,
-} from "@/types/usageDashboard";
+import type { UsageProviderView } from "@/types/usageDashboard";
 
 export function UsageProvidersSettings() {
   const { t } = useTranslation();
   const providersQuery = useUsageProviders();
-  const modulesQuery = useDashboardModules();
   const saveProvider = useSaveUsageProvider();
   const setEnabled = useSetUsageProviderEnabled();
-  const saveModule = useSaveDashboardModule();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<UsageProviderView | null>(null);
   const [error, setError] = useState<string | null>(null);
-
-  const modules = useMemo(
-    () =>
-      [...(modulesQuery.data ?? [])].sort((a, b) => a.sortOrder - b.sortOrder),
-    [modulesQuery.data],
-  );
-  const subscriptionModules = modules.filter(
-    (module) => module.kind === "subscription",
-  );
 
   const run = async (operation: () => Promise<unknown>) => {
     setError(null);
@@ -50,22 +34,13 @@ export function UsageProvidersSettings() {
     }
   };
 
-  const createModule = async (name: string): Promise<DashboardModuleView> =>
-    saveModule.mutateAsync({
-      id: null,
-      name,
-      kind: "subscription",
-      sortOrder:
-        modules.reduce(
-          (maximum, module) => Math.max(maximum, module.sortOrder),
-          0,
-        ) + 1,
-      visible: true,
-    });
-
-  const queryErrors = [providersQuery.error, modulesQuery.error]
-    .filter((cause) => cause != null)
-    .map((cause) => (cause instanceof Error ? cause.message : String(cause)));
+  const queryErrors = providersQuery.error
+    ? [
+        providersQuery.error instanceof Error
+          ? providersQuery.error.message
+          : String(providersQuery.error),
+      ]
+    : [];
 
   return (
     <div className="space-y-4 pb-6">
@@ -78,7 +53,7 @@ export function UsageProvidersSettings() {
             <CardDescription>
               {t("usageDashboard.providersSettingsDescription", {
                 defaultValue:
-                  "Manage billing identity, data sources, subscription membership, and credentials.",
+                  "Manage Provider billing identity and data-source metadata. Agent membership is managed only from Agents.",
               })}
             </CardDescription>
           </div>
@@ -186,10 +161,8 @@ export function UsageProvidersSettings() {
           if (!nextOpen) setEditing(null);
         }}
         provider={editing}
-        dashboardModules={subscriptionModules}
-        onCreateModule={createModule}
         onSave={(input) => saveProvider.mutateAsync(input)}
-        isPending={saveProvider.isPending || saveModule.isPending}
+        isPending={saveProvider.isPending}
       />
     </div>
   );

@@ -3,6 +3,7 @@ import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import App from "@/App";
+import { usageDashboardApi } from "@/lib/api/usageDashboard";
 
 const renderApp = () => {
   const client = new QueryClient({
@@ -16,7 +17,7 @@ const renderApp = () => {
 };
 
 describe("App usage-dashboard acceptance with Tauri MSW", () => {
-  it("loads five backend-defined modules and keeps Provider data isolated", async () => {
+  it("loads backend-defined Agents with unified Provider data and isolated history", async () => {
     const user = userEvent.setup();
     renderApp();
 
@@ -24,42 +25,47 @@ describe("App usage-dashboard acceptance with Tauri MSW", () => {
       await screen.findAllByText("Official Subscription"),
     ).not.toHaveLength(0);
     expect(screen.getByText("25% used")).toBeInTheDocument();
-    expect(screen.queryByText("Azure API")).toBeNull();
+    expect(screen.getByText("Azure API")).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Metered usage" })).toBeNull();
 
-    const renamedModule = await screen.findByRole("tab", {
-      name: "Renamed research plan",
+    const customAgent = await screen.findByRole("tab", {
+      name: "Research Agent",
     });
-    expect(screen.getAllByRole("tab")).toHaveLength(5);
-    await user.click(renamedModule);
+    expect(screen.getAllByRole("tab")).toHaveLength(6);
+    await usageDashboardApi.deleteAgentProviderBinding(
+      "binding-custom-openrouter",
+      0,
+    );
+    await user.click(customAgent);
     expect(
       await screen.findByText("Research Subscription"),
     ).toBeInTheDocument();
+    expect(screen.getByText("OpenRouter")).toBeInTheDocument();
     expect(screen.queryByText("Official Subscription")).toBeNull();
     expect(screen.queryByText("Azure API")).toBeNull();
-
-    await user.click(screen.getByRole("tab", { name: "Metered usage" }));
-    expect(await screen.findByText("Azure API")).toBeInTheDocument();
-    expect(screen.getByText("OpenRouter")).toBeInTheDocument();
-    expect(screen.queryByText("Research Subscription")).toBeNull();
-    expect(screen.getAllByText("Recent requests")).toHaveLength(2);
-    expect(await screen.findByText("claude-sonnet-4")).toBeInTheDocument();
+    expect(screen.getAllByText("Recent requests")).toHaveLength(1);
+    expect(await screen.findByText("gpt-4.1")).toBeInTheDocument();
 
     expect(screen.queryByRole("button", { name: "Add Provider" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Start proxy" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Create module" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Create Custom Agent" }),
+    ).toBeNull();
 
     await user.click(screen.getByRole("button", { name: "Settings" }));
     expect(
-      await screen.findByRole("button", { name: "Create module" }),
+      await screen.findByRole("button", { name: "Create Custom Agent" }),
     ).toBeInTheDocument();
-    await user.click(screen.getByRole("tab", { name: "Provider" }));
+    await user.click(screen.getByRole("tab", { name: "Providers" }));
     expect(
       screen.getByRole("button", { name: "Add Provider" }),
     ).toBeInTheDocument();
-    await user.click(screen.getByRole("tab", { name: "Proxy & routing" }));
+    await user.click(screen.getByRole("tab", { name: "Proxy setup" }));
     expect(
       screen.getByRole("button", { name: "Start proxy" }),
     ).toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "Diagnostics" }));
+    expect(await screen.findByText("legacy-provider")).toBeInTheDocument();
   });
 
   it("renders one safe notice when the startup boundary is outside Tauri", async () => {

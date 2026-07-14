@@ -6,7 +6,7 @@ const mocks = vi.hoisted(() => ({
   running: false,
   start: vi.fn(),
   stop: vi.fn(),
-  setBinding: vi.fn(),
+  selectedAgentIds: [] as string[],
 }));
 
 vi.mock("@/lib/query/proxy", () => ({
@@ -26,50 +26,48 @@ vi.mock("@/lib/query/proxy", () => ({
 }));
 
 vi.mock("@/lib/query/usageDashboard", () => ({
-  useUsageProviders: () => ({
-    data: [{ id: "metered", name: "Metered API" }],
+  useAgentModules: () => ({
+    data: [
+      {
+        id: "codex",
+        name: "Codex",
+        sortOrder: 0,
+        visible: true,
+        isFixed: true,
+      },
+      {
+        id: "claude-code",
+        name: "Claude Code",
+        sortOrder: 1,
+        visible: true,
+        isFixed: true,
+      },
+    ],
     isLoading: false,
     error: null,
   }),
-  useRouteBindings: () => ({
-    data: [{ protocol: "codex", providerId: "metered", updatedAt: 1 }],
-    isLoading: false,
-    error: null,
-  }),
-  useSetRouteBinding: () => ({
-    mutateAsync: mocks.setBinding,
-    isPending: false,
-  }),
-}));
-
-vi.mock("@/components/usage-dashboard/RouteBindingsPanel", () => ({
-  RouteBindingsPanel: ({
-    title,
-    description,
-    providers,
-    bindings,
-    onSave,
-  }: {
-    title: string;
-    description: string;
-    providers: Array<{ id: string }>;
-    bindings: Array<{ protocol: string }>;
-    onSave: (protocol: string, providerId: string) => Promise<unknown>;
-  }) => (
-    <div>
-      <h3>{title}</h3>
-      <p>{description}</p>
-      <span>
-        Providers {providers.map((provider) => provider.id).join(",")}
-      </span>
-      <span>
-        Bindings {bindings.map((binding) => binding.protocol).join(",")}
-      </span>
-      <button type="button" onClick={() => void onSave("codex", "metered")}>
-        Save Codex target
-      </button>
-    </div>
-  ),
+  useAgentProxySetupInfo: (agentModuleId: string) => {
+    mocks.selectedAgentIds.push(agentModuleId);
+    return {
+      data: {
+        agentModuleId,
+        proxyRunning: mocks.running,
+        proxyOrigin: "http://127.0.0.1:15721",
+        routes: [
+          {
+            bindingId: `binding-${agentModuleId}`,
+            providerId: "metered",
+            protocol: agentModuleId === "claude-code" ? "claude" : "codex",
+            localBaseUrl: `http://127.0.0.1:15721/${agentModuleId}`,
+            credentialPlacements: ["x-api-key"],
+            credentialStatus: "configured",
+          },
+        ],
+      },
+      isLoading: false,
+      error: null,
+    };
+  },
 }));
 
 describe("ProxyRoutingSettings", () => {
@@ -77,45 +75,43 @@ describe("ProxyRoutingSettings", () => {
     mocks.running = false;
     mocks.start.mockReset().mockResolvedValue(undefined);
     mocks.stop.mockReset().mockResolvedValue(undefined);
-    mocks.setBinding.mockReset().mockResolvedValue(undefined);
+    mocks.selectedAgentIds.length = 0;
   });
 
-  it("starts a stopped proxy and explains forwarding targets", async () => {
+  it("switches the read-only Agent setup without proxy or config mutations", async () => {
     render(<ProxyRoutingSettings />);
 
     expect(screen.getByText("Proxy stopped")).toBeInTheDocument();
-    expect(screen.getByText("Proxy forwarding targets")).toBeInTheDocument();
+    expect(screen.getByText("Codex setup")).toBeInTheDocument();
     expect(
-      screen.getByText(
-        "These targets decide where requests are forwarded. They are not a dashboard filter.",
-      ),
+      screen.getByText("The app does not edit Agent configuration."),
     ).toBeInTheDocument();
-    expect(screen.getByText("Providers metered")).toBeInTheDocument();
-    expect(screen.getByText("Bindings codex")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole("combobox", { name: "Agent" }), {
+      target: { value: "claude-code" },
+    });
+
+    expect(await screen.findByText("Claude Code setup")).toBeInTheDocument();
+    expect(screen.getAllByText("x-api-key", { exact: false })).not.toHaveLength(
+      0,
+    );
+    expect(
+      screen.getByText("gateway token", { exact: false }),
+    ).toBeInTheDocument();
+    expect(mocks.start).not.toHaveBeenCalled();
+    expect(mocks.stop).not.toHaveBeenCalled();
+  });
+
+  it("keeps start and stop as explicit user controls", async () => {
+    const { rerender } = render(<ProxyRoutingSettings />);
 
     fireEvent.click(screen.getByRole("button", { name: "Start proxy" }));
     await waitFor(() => expect(mocks.start).toHaveBeenCalledOnce());
-  });
 
-  it("stops a running proxy", async () => {
     mocks.running = true;
-    render(<ProxyRoutingSettings />);
-
-    expect(screen.getByText("Proxy running")).toBeInTheDocument();
+    rerender(<ProxyRoutingSettings />);
     fireEvent.click(screen.getByRole("button", { name: "Stop proxy" }));
     await waitFor(() => expect(mocks.stop).toHaveBeenCalledOnce());
-  });
-
-  it("saves RouteBindings through the settings-only mutation", async () => {
-    render(<ProxyRoutingSettings />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Save Codex target" }));
-    await waitFor(() =>
-      expect(mocks.setBinding).toHaveBeenCalledWith({
-        protocol: "codex",
-        providerId: "metered",
-      }),
-    );
   });
 
   it("surfaces proxy control failures", async () => {

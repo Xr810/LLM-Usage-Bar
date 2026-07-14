@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import {
@@ -8,27 +8,40 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { RouteBindingsPanel } from "@/components/usage-dashboard/RouteBindingsPanel";
+import { Label } from "@/components/ui/label";
 import {
   useIsProxyRunning,
   useStartProxyServer,
   useStopProxyServer,
 } from "@/lib/query/proxy";
-import {
-  useRouteBindings,
-  useSetRouteBinding,
-  useUsageProviders,
-} from "@/lib/query/usageDashboard";
+import { useAgentModules } from "@/lib/query/usageDashboard";
+import { AgentProxySetupPanel } from "./AgentProxySetupPanel";
 
 export function ProxyRoutingSettings() {
   const { t } = useTranslation();
   const proxyRunning = useIsProxyRunning();
   const startProxy = useStartProxyServer();
   const stopProxy = useStopProxyServer();
-  const providers = useUsageProviders();
-  const bindings = useRouteBindings();
-  const setBinding = useSetRouteBinding();
+  const agentsQuery = useAgentModules();
+  const [selectedAgentId, setSelectedAgentId] = useState("");
   const [error, setError] = useState<string | null>(null);
+
+  const agents = useMemo(
+    () =>
+      [...(agentsQuery.data ?? [])]
+        .filter((agent) => agent.archivedAt == null)
+        .sort((a, b) => a.sortOrder - b.sortOrder),
+    [agentsQuery.data],
+  );
+
+  useEffect(() => {
+    if (!agents.some((agent) => agent.id === selectedAgentId)) {
+      setSelectedAgentId(agents[0]?.id ?? "");
+    }
+  }, [agents, selectedAgentId]);
+
+  const selectedAgent = agents.find((agent) => agent.id === selectedAgentId);
+  const proxyPending = startProxy.isPending || stopProxy.isPending;
 
   const run = async (operation: () => Promise<unknown>) => {
     setError(null);
@@ -39,17 +52,9 @@ export function ProxyRoutingSettings() {
     }
   };
 
-  const queryErrors = [proxyRunning.error, providers.error, bindings.error]
+  const queryErrors = [proxyRunning.error, agentsQuery.error]
     .filter((cause) => cause != null)
     .map((cause) => (cause instanceof Error ? cause.message : String(cause)));
-  const proxyPending = startProxy.isPending || stopProxy.isPending;
-  const forwardingTitle = t("usageDashboard.proxyForwardingTargets", {
-    defaultValue: "Proxy forwarding targets",
-  });
-  const forwardingDescription = t("usageDashboard.proxyForwardingDescription", {
-    defaultValue:
-      "These targets decide where requests are forwarded. They are not a dashboard filter.",
-  });
 
   return (
     <div className="space-y-4 pb-6">
@@ -106,18 +111,24 @@ export function ProxyRoutingSettings() {
         </div>
       ))}
 
-      <RouteBindingsPanel
-        title={forwardingTitle}
-        description={forwardingDescription}
-        providers={providers.data ?? []}
-        bindings={bindings.data ?? []}
-        onSave={(protocol, providerId) =>
-          setBinding.mutateAsync({ protocol, providerId })
-        }
-        isPending={
-          providers.isLoading || bindings.isLoading || setBinding.isPending
-        }
-      />
+      <Label className="block space-y-1">
+        <span>{t("agentProxySetup.agent", { defaultValue: "Agent" })}</span>
+        <select
+          aria-label={t("agentProxySetup.agent", { defaultValue: "Agent" })}
+          className="h-9 w-full rounded-md border border-input bg-background px-3"
+          value={selectedAgent?.id ?? ""}
+          disabled={agentsQuery.isLoading || agents.length === 0}
+          onChange={(event) => setSelectedAgentId(event.target.value)}
+        >
+          {agents.map((agent) => (
+            <option key={agent.id} value={agent.id}>
+              {agent.name}
+            </option>
+          ))}
+        </select>
+      </Label>
+
+      {selectedAgent ? <AgentProxySetupPanel agent={selectedAgent} /> : null}
     </div>
   );
 }

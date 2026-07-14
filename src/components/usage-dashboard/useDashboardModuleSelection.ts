@@ -1,51 +1,50 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { DashboardModuleView } from "@/types/usageDashboard";
+import type { AgentModuleView } from "@/types/usageDashboard";
 
-export const dashboardModuleStorageKey =
-  "llm-usage-bar:last-dashboard-module-id";
+export const agentModuleStorageKey = "llm-usage-bar:last-agent-module-id";
 
-function readStoredModuleId(): string | null {
+function readStoredAgentId(): string | null {
   if (typeof window === "undefined") return null;
-  return window.localStorage.getItem(dashboardModuleStorageKey);
+  return window.localStorage.getItem(agentModuleStorageKey);
 }
 
-export function useDashboardModuleSelection(modules: DashboardModuleView[]) {
-  const visibleModules = useMemo(
+export function useAgentModuleSelection(agents: AgentModuleView[]) {
+  const visibleAgents = useMemo(
     () =>
-      [...modules]
-        .filter((module) => module.visible)
+      [...agents]
+        .filter((agent) => agent.visible && agent.archivedAt == null)
         .sort((left, right) => left.sortOrder - right.sortOrder),
-    [modules],
+    [agents],
   );
   const [selectedId, setSelectedId] = useState<string | null>(
-    readStoredModuleId,
+    readStoredAgentId,
   );
-  const selectedModule =
-    visibleModules.find((module) => module.id === selectedId) ??
-    visibleModules[0] ??
+  const selectedAgent =
+    visibleAgents.find((agent) => agent.id === selectedId) ??
+    visibleAgents[0] ??
     null;
 
   useEffect(() => {
-    const nextId = selectedModule?.id ?? null;
+    const nextId = selectedAgent?.id ?? null;
     if (nextId !== selectedId) setSelectedId(nextId);
     if (typeof window === "undefined") return;
     if (nextId) {
-      window.localStorage.setItem(dashboardModuleStorageKey, nextId);
+      window.localStorage.setItem(agentModuleStorageKey, nextId);
     } else {
-      window.localStorage.removeItem(dashboardModuleStorageKey);
+      window.localStorage.removeItem(agentModuleStorageKey);
     }
-  }, [selectedId, selectedModule?.id]);
+  }, [selectedAgent?.id, selectedId]);
 
-  const selectModule = useCallback(
-    (moduleId: string) => {
-      if (!visibleModules.some((module) => module.id === moduleId)) return;
-      setSelectedId(moduleId);
+  const selectAgent = useCallback(
+    (agentModuleId: string) => {
+      if (!visibleAgents.some((agent) => agent.id === agentModuleId)) return;
+      setSelectedId(agentModuleId);
       if (typeof window !== "undefined") {
-        window.localStorage.setItem(dashboardModuleStorageKey, moduleId);
+        window.localStorage.setItem(agentModuleStorageKey, agentModuleId);
       }
     },
-    [visibleModules],
+    [visibleAgents],
   );
 
-  return { selectedModule, selectModule, visibleModules };
+  return { selectedAgent, selectAgent, visibleAgents };
 }

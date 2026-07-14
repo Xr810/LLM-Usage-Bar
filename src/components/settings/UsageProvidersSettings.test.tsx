@@ -5,8 +5,7 @@ import { UsageProvidersSettings } from "./UsageProvidersSettings";
 const mocks = vi.hoisted(() => ({
   saveProvider: vi.fn(),
   setEnabled: vi.fn(),
-  saveModule: vi.fn(),
-  quickCreated: vi.fn(),
+  bindingMutation: vi.fn(),
 }));
 
 vi.mock("@/lib/query/usageDashboard", () => ({
@@ -19,6 +18,19 @@ vi.mock("@/lib/query/usageDashboard", () => ({
         productGroupId: "codex",
         tokenSources: ["session_log"],
         sessionSourceBindings: ["codex"],
+        bindings: [
+          {
+            id: "binding-codex",
+            agentModuleId: "codex",
+            providerId: "subscription",
+            enabled: true,
+            effectiveEnabled: true,
+            credentialStatus: "not_required",
+            credentialVersion: 2,
+            createdAt: 1,
+            updatedAt: 1,
+          },
+        ],
         quotaSource: "codex",
         quotaIntervalSeconds: 300,
         routeAppType: null,
@@ -28,7 +40,6 @@ vi.mock("@/lib/query/usageDashboard", () => ({
         updatedAt: 1,
         routeBaseUrl: null,
         hasRouteCredentials: false,
-        dashboardModuleId: "personal",
       },
       {
         id: "metered",
@@ -37,6 +48,7 @@ vi.mock("@/lib/query/usageDashboard", () => ({
         productGroupId: "api",
         tokenSources: ["proxy"],
         sessionSourceBindings: [],
+        bindings: [],
         quotaSource: null,
         quotaIntervalSeconds: null,
         routeAppType: "codex",
@@ -45,32 +57,7 @@ vi.mock("@/lib/query/usageDashboard", () => ({
         createdAt: 1,
         updatedAt: 1,
         routeBaseUrl: "https://example.com",
-        hasRouteCredentials: true,
-        dashboardModuleId: null,
-      },
-    ],
-    isLoading: false,
-    error: null,
-  }),
-  useDashboardModules: () => ({
-    data: [
-      {
-        id: "personal",
-        name: "Personal",
-        kind: "subscription",
-        sortOrder: 1,
-        visible: true,
-        isSystem: false,
-        providerCount: 1,
-      },
-      {
-        id: "api",
-        name: "API",
-        kind: "api",
-        sortOrder: 2,
-        visible: true,
-        isSystem: true,
-        providerCount: 1,
+        hasRouteCredentials: false,
       },
     ],
     isLoading: false,
@@ -84,8 +71,8 @@ vi.mock("@/lib/query/usageDashboard", () => ({
     mutateAsync: mocks.setEnabled,
     isPending: false,
   }),
-  useSaveDashboardModule: () => ({
-    mutateAsync: mocks.saveModule,
+  useSaveAgentProviderBinding: () => ({
+    mutateAsync: mocks.bindingMutation,
     isPending: false,
   }),
 }));
@@ -94,30 +81,16 @@ vi.mock("@/components/usage-dashboard/UsageProviderDialog", () => ({
   UsageProviderDialog: ({
     open,
     provider,
-    dashboardModules,
-    onCreateModule,
     onSave,
   }: {
     open: boolean;
-    provider?: { id: string } | null;
-    dashboardModules: Array<{ id: string }>;
-    onCreateModule: (name: string) => Promise<{ id: string }>;
+    provider?: { id: string; bindings: Array<{ id: string }> } | null;
     onSave: (input: Record<string, unknown>) => Promise<unknown>;
   }) =>
     open ? (
       <div data-testid="provider-dialog">
         <span>Editing {provider?.id ?? "new"}</span>
-        <span>
-          Modules {dashboardModules.map((module) => module.id).join(",")}
-        </span>
-        <button
-          type="button"
-          onClick={() =>
-            void onCreateModule("Quick plan").then(mocks.quickCreated)
-          }
-        >
-          Quick create
-        </button>
+        <span>Preserved bindings {provider?.bindings.length ?? 0}</span>
         <button
           type="button"
           onClick={() =>
@@ -134,16 +107,7 @@ describe("UsageProvidersSettings", () => {
   beforeEach(() => {
     mocks.saveProvider.mockReset().mockResolvedValue(undefined);
     mocks.setEnabled.mockReset().mockResolvedValue(undefined);
-    mocks.saveModule.mockReset().mockResolvedValue({
-      id: "quick-plan",
-      name: "Quick plan",
-      kind: "subscription",
-      sortOrder: 3,
-      visible: true,
-      isSystem: false,
-      providerCount: 0,
-    });
-    mocks.quickCreated.mockReset();
+    mocks.bindingMutation.mockReset().mockResolvedValue(undefined);
   });
 
   it("lists Providers and supports edit and enable state changes", async () => {
@@ -151,12 +115,12 @@ describe("UsageProvidersSettings", () => {
 
     expect(screen.getByText("Official Subscription")).toBeInTheDocument();
     expect(screen.getByText("Metered API")).toBeInTheDocument();
-    expect(screen.queryByTestId("provider-dialog")).toBeNull();
 
     fireEvent.click(
       screen.getByRole("button", { name: "Edit Official Subscription" }),
     );
     expect(screen.getByText("Editing subscription")).toBeInTheDocument();
+    expect(screen.getByText("Preserved bindings 1")).toBeInTheDocument();
 
     fireEvent.click(
       screen.getByRole("button", { name: "Disable Official Subscription" }),
@@ -169,28 +133,11 @@ describe("UsageProvidersSettings", () => {
     );
   });
 
-  it("wires Add Provider, quick module creation, and Provider save", async () => {
+  it("saves Provider metadata without any binding mutation", async () => {
     render(<UsageProvidersSettings />);
 
     fireEvent.click(screen.getByRole("button", { name: "Add Provider" }));
     expect(screen.getByText("Editing new")).toBeInTheDocument();
-    expect(screen.getByText("Modules personal")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Quick create" }));
-    await waitFor(() =>
-      expect(mocks.saveModule).toHaveBeenCalledWith({
-        id: null,
-        name: "Quick plan",
-        kind: "subscription",
-        sortOrder: 3,
-        visible: true,
-      }),
-    );
-    await waitFor(() =>
-      expect(mocks.quickCreated).toHaveBeenCalledWith(
-        expect.objectContaining({ id: "quick-plan" }),
-      ),
-    );
 
     fireEvent.click(
       screen.getByRole("button", { name: "Save mocked Provider" }),
@@ -201,6 +148,7 @@ describe("UsageProvidersSettings", () => {
         enabled: true,
       }),
     );
+    expect(mocks.bindingMutation).not.toHaveBeenCalled();
   });
 
   it("surfaces Provider mutation failures", async () => {

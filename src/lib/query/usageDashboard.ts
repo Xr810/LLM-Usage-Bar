@@ -1,37 +1,50 @@
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { usageDashboardApi } from "@/lib/api/usageDashboard";
 import type {
-  DashboardModuleInput,
+  AgentModuleInput,
+  AgentProviderBindingInput,
   UsageProviderInput,
 } from "@/types/usageDashboard";
 
 export const usageDashboardKeys = {
   all: ["usage-dashboard"] as const,
-  modules: () => [...usageDashboardKeys.all, "modules"] as const,
+  agents: () => [...usageDashboardKeys.all, "agents"] as const,
   providers: () => [...usageDashboardKeys.all, "providers"] as const,
   provider: (providerId: string) =>
     [...usageDashboardKeys.providers(), providerId] as const,
-  bindings: () => [...usageDashboardKeys.all, "bindings"] as const,
+  bindingsRoot: () => [...usageDashboardKeys.all, "agent-bindings"] as const,
+  bindings: (agentModuleId?: string) =>
+    [...usageDashboardKeys.bindingsRoot(), agentModuleId ?? null] as const,
+  setupRoot: () => [...usageDashboardKeys.all, "proxy-setup"] as const,
+  setup: (agentModuleId: string) =>
+    [...usageDashboardKeys.setupRoot(), agentModuleId] as const,
+  diagnostics: () => [...usageDashboardKeys.all, "diagnostics"] as const,
   dashboards: () => [...usageDashboardKeys.all, "dashboard"] as const,
-  dashboard: (startAt: number, endAt: number, productGroupId?: string) =>
+  dashboard: (agentModuleId: string, startAt: number, endAt: number) =>
     [
       ...usageDashboardKeys.dashboards(),
+      agentModuleId,
       startAt,
       endAt,
-      productGroupId ?? null,
     ] as const,
-  eventsRoot: (providerId: string) =>
-    [...usageDashboardKeys.all, "events", providerId] as const,
   eventsAll: () => [...usageDashboardKeys.all, "events"] as const,
+  eventsRoot: (agentModuleId: string, providerId?: string) =>
+    [
+      ...usageDashboardKeys.eventsAll(),
+      agentModuleId,
+      providerId ?? null,
+    ] as const,
   events: (
-    providerId: string,
+    agentModuleId: string,
+    providerId: string | undefined,
     startAt: number,
     endAt: number,
     page: number,
     pageSize: number,
   ) =>
     [
-      ...usageDashboardKeys.eventsRoot(providerId),
+      ...usageDashboardKeys.eventsRoot(agentModuleId, providerId),
       startAt,
       endAt,
       page,
@@ -39,10 +52,10 @@ export const usageDashboardKeys = {
     ] as const,
 };
 
-export function useDashboardModules() {
+export function useAgentModules() {
   return useQuery({
-    queryKey: usageDashboardKeys.modules(),
-    queryFn: usageDashboardApi.listDashboardModules,
+    queryKey: usageDashboardKeys.agents(),
+    queryFn: usageDashboardApi.listAgentModules,
   });
 }
 
@@ -53,28 +66,53 @@ export function useUsageProviders() {
   });
 }
 
-export function useRouteBindings() {
+export function useAgentProviderBindings(agentModuleId?: string) {
   return useQuery({
-    queryKey: usageDashboardKeys.bindings(),
-    queryFn: usageDashboardApi.getRouteBindings,
+    queryKey: usageDashboardKeys.bindings(agentModuleId),
+    queryFn: () => usageDashboardApi.listAgentProviderBindings(agentModuleId),
+  });
+}
+
+export function useAgentProxySetupInfo(agentModuleId: string) {
+  return useQuery({
+    queryKey: usageDashboardKeys.setup(agentModuleId),
+    queryFn: () => usageDashboardApi.getAgentProxySetupInfo(agentModuleId),
+    enabled: Boolean(agentModuleId),
+  });
+}
+
+export function useUnassignedUsageDiagnostics() {
+  return useQuery({
+    queryKey: usageDashboardKeys.diagnostics(),
+    queryFn: usageDashboardApi.getUnassignedUsageDiagnostics,
   });
 }
 
 export function useUsageDashboard(
+  agentModuleId: string,
   startAt: number,
   endAt: number,
-  productGroupId?: string,
 ) {
   return useQuery({
-    queryKey: usageDashboardKeys.dashboard(startAt, endAt, productGroupId),
-    queryFn: () =>
-      usageDashboardApi.getDashboard(startAt, endAt, productGroupId),
-    enabled: startAt < endAt,
+    queryKey: usageDashboardKeys.dashboard(agentModuleId, startAt, endAt),
+    queryFn: async () => {
+      const dashboard = await usageDashboardApi.getDashboard(
+        agentModuleId,
+        startAt,
+        endAt,
+      );
+      if (dashboard.agentModuleId !== agentModuleId) {
+        throw new Error("usage_dashboard_agent_mismatch");
+      }
+      return dashboard;
+    },
+    enabled: Boolean(agentModuleId) && startAt < endAt,
   });
 }
 
 export function useUsageEvents(
-  providerId: string,
+  agentModuleId: string,
+  providerId: string | undefined,
   startAt: number,
   endAt: number,
   page: number,
@@ -82,73 +120,80 @@ export function useUsageEvents(
 ) {
   return useQuery({
     queryKey: usageDashboardKeys.events(
+      agentModuleId,
       providerId,
       startAt,
       endAt,
       page,
       pageSize,
     ),
-    queryFn: () =>
-      usageDashboardApi.getEvents(providerId, startAt, endAt, page, pageSize),
-    enabled: Boolean(providerId) && startAt < endAt,
+    queryFn: async () => {
+      const events = await usageDashboardApi.getEvents(
+        agentModuleId,
+        providerId,
+        startAt,
+        endAt,
+        page,
+        pageSize,
+      );
+      if (events.items.some((event) => event.agentModuleId !== agentModuleId)) {
+        throw new Error("usage_event_agent_mismatch");
+      }
+      return events;
+    },
+    enabled: Boolean(agentModuleId) && startAt < endAt,
   });
 }
 
-function useInvalidateConfiguration() {
+function useInvalidateUsageDashboard() {
   const queryClient = useQueryClient();
-  return () => {
-    queryClient.invalidateQueries({ queryKey: usageDashboardKeys.modules() });
-    queryClient.invalidateQueries({ queryKey: usageDashboardKeys.providers() });
-    queryClient.invalidateQueries({ queryKey: usageDashboardKeys.bindings() });
-    queryClient.invalidateQueries({
-      queryKey: usageDashboardKeys.dashboards(),
-    });
-  };
+  return () =>
+    queryClient.invalidateQueries({ queryKey: usageDashboardKeys.all });
 }
 
-export function useSaveDashboardModule() {
-  const invalidate = useInvalidateConfiguration();
+export function useSaveAgentModule() {
+  const invalidate = useInvalidateUsageDashboard();
   return useMutation({
-    mutationFn: (input: DashboardModuleInput) =>
-      usageDashboardApi.saveDashboardModule(input),
+    mutationFn: (input: AgentModuleInput) =>
+      usageDashboardApi.saveAgentModule(input),
     onSuccess: invalidate,
   });
 }
 
-export function useReorderDashboardModules() {
-  const invalidate = useInvalidateConfiguration();
+export function useReorderAgentModules() {
+  const invalidate = useInvalidateUsageDashboard();
   return useMutation({
     mutationFn: (moduleIds: string[]) =>
-      usageDashboardApi.reorderDashboardModules(moduleIds),
+      usageDashboardApi.reorderAgentModules(moduleIds),
     onSuccess: invalidate,
   });
 }
 
-export function useSetDashboardModuleVisibility() {
-  const invalidate = useInvalidateConfiguration();
+export function useSetAgentModuleVisibility() {
+  const invalidate = useInvalidateUsageDashboard();
   return useMutation({
     mutationFn: ({
-      moduleId,
+      agentModuleId,
       visible,
     }: {
-      moduleId: string;
+      agentModuleId: string;
       visible: boolean;
-    }) => usageDashboardApi.setDashboardModuleVisibility(moduleId, visible),
+    }) => usageDashboardApi.setAgentModuleVisibility(agentModuleId, visible),
     onSuccess: invalidate,
   });
 }
 
-export function useDeleteDashboardModule() {
-  const invalidate = useInvalidateConfiguration();
+export function useDeleteAgentModule() {
+  const invalidate = useInvalidateUsageDashboard();
   return useMutation({
-    mutationFn: (moduleId: string) =>
-      usageDashboardApi.deleteDashboardModule(moduleId),
+    mutationFn: (agentModuleId: string) =>
+      usageDashboardApi.deleteAgentModule(agentModuleId),
     onSuccess: invalidate,
   });
 }
 
 export function useSaveUsageProvider() {
-  const invalidate = useInvalidateConfiguration();
+  const invalidate = useInvalidateUsageDashboard();
   return useMutation({
     mutationFn: (input: UsageProviderInput) =>
       usageDashboardApi.saveProvider(input),
@@ -157,7 +202,7 @@ export function useSaveUsageProvider() {
 }
 
 export function useSetUsageProviderEnabled() {
-  const invalidate = useInvalidateConfiguration();
+  const invalidate = useInvalidateUsageDashboard();
   return useMutation({
     mutationFn: ({
       providerId,
@@ -170,61 +215,92 @@ export function useSetUsageProviderEnabled() {
   });
 }
 
-export function useSetRouteBinding() {
-  const queryClient = useQueryClient();
+export function useSaveAgentProviderBinding() {
+  const invalidate = useInvalidateUsageDashboard();
   return useMutation({
-    mutationFn: ({
-      protocol,
-      providerId,
-    }: {
-      protocol: string;
-      providerId: string;
-    }) => usageDashboardApi.setRouteBinding(protocol, providerId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: usageDashboardKeys.providers(),
-      });
-      queryClient.invalidateQueries({
-        queryKey: usageDashboardKeys.bindings(),
-      });
-      queryClient.invalidateQueries({
-        queryKey: usageDashboardKeys.dashboards(),
-      });
-    },
+    mutationFn: (input: AgentProviderBindingInput) =>
+      usageDashboardApi.saveAgentProviderBinding(input),
+    onSuccess: invalidate,
   });
 }
 
-export function useRefreshProviderQuota() {
+export function useDeleteAgentProviderBinding() {
+  const invalidate = useInvalidateUsageDashboard();
+  return useMutation({
+    mutationFn: ({
+      bindingId,
+      expectedVersion,
+    }: {
+      bindingId: string;
+      expectedVersion: number;
+    }) =>
+      usageDashboardApi.deleteAgentProviderBinding(bindingId, expectedVersion),
+    onSuccess: invalidate,
+  });
+}
+
+export function useAgentProviderBindingCredentialActions() {
   const queryClient = useQueryClient();
+  const [isPending, setIsPending] = useState(false);
+  const run = async <T>(operation: () => Promise<T>): Promise<T> => {
+    setIsPending(true);
+    try {
+      const result = await operation();
+      await queryClient.invalidateQueries({
+        queryKey: usageDashboardKeys.all,
+      });
+      return result;
+    } finally {
+      setIsPending(false);
+    }
+  };
+
+  return {
+    isPending,
+    setApiKey: (bindingId: string, expectedVersion: number, apiKey: string) =>
+      run(() =>
+        usageDashboardApi.setAgentProviderBindingApiKey(
+          bindingId,
+          expectedVersion,
+          apiKey,
+        ),
+      ),
+    replaceApiKey: (
+      bindingId: string,
+      expectedVersion: number,
+      apiKey: string,
+    ) =>
+      run(() =>
+        usageDashboardApi.replaceAgentProviderBindingApiKey(
+          bindingId,
+          expectedVersion,
+          apiKey,
+        ),
+      ),
+    clearApiKey: (bindingId: string, expectedVersion: number) =>
+      run(() =>
+        usageDashboardApi.clearAgentProviderBindingApiKey(
+          bindingId,
+          expectedVersion,
+        ),
+      ),
+  };
+}
+
+export function useRefreshProviderQuota() {
+  const invalidate = useInvalidateUsageDashboard();
   return useMutation({
     mutationFn: (providerId: string) =>
       usageDashboardApi.refreshQuota(providerId),
-    onSuccess: (_, providerId) => {
-      queryClient.invalidateQueries({
-        queryKey: usageDashboardKeys.provider(providerId),
-      });
-      queryClient.invalidateQueries({
-        queryKey: usageDashboardKeys.dashboards(),
-      });
-    },
+    onSuccess: invalidate,
   });
 }
 
 export function useSyncProviderSessionUsage() {
-  const queryClient = useQueryClient();
+  const invalidate = useInvalidateUsageDashboard();
   return useMutation({
     mutationFn: (providerId: string) =>
       usageDashboardApi.syncSessionUsage(providerId),
-    onSuccess: (_, providerId) => {
-      queryClient.invalidateQueries({
-        queryKey: usageDashboardKeys.provider(providerId),
-      });
-      queryClient.invalidateQueries({
-        queryKey: usageDashboardKeys.dashboards(),
-      });
-      queryClient.invalidateQueries({
-        queryKey: usageDashboardKeys.eventsRoot(providerId),
-      });
-    },
+    onSuccess: invalidate,
   });
 }

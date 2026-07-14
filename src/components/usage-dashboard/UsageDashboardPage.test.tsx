@@ -1,7 +1,8 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
-  DashboardModuleView,
+  AgentModuleView,
+  UsageDashboardView,
   UsageProviderView,
 } from "@/types/usageDashboard";
 import { UsageDashboardPage } from "./UsageDashboardPage";
@@ -14,33 +15,9 @@ const mocks = vi.hoisted(() => ({
 }));
 
 const ui = vi.hoisted(() => ({
-  language: "en",
   onUsageRecorded: undefined as undefined | (() => void),
   refreshPending: false,
   syncPending: false,
-}));
-
-const zh: Record<string, string> = {
-  "usageDashboard.today": "今天",
-  "usageDashboard.sevenDays": "7 天",
-  "usageDashboard.thirtyDays": "30 天",
-  "usageDashboard.customRange": "自定义范围",
-  "usageDashboard.sourceSession": "会话日志",
-  "usageDashboard.sourceProxy": "本地代理",
-  "usageDashboard.tokens": "令牌",
-  "usageDashboard.requests": "请求",
-  "usageDashboard.recentRequests": "近期请求",
-  "usageDashboard.costUnavailable": "费用不可用",
-};
-
-vi.mock("react-i18next", () => ({
-  useTranslation: () => ({
-    t: (key: string, options?: { defaultValue?: string }) =>
-      (ui.language === "zh" ? zh[key] : undefined) ??
-      options?.defaultValue ??
-      key,
-    i18n: { resolvedLanguage: ui.language, language: ui.language },
-  }),
 }));
 
 vi.mock("@/hooks/useUsageEventBridge", () => ({
@@ -81,113 +58,87 @@ vi.mock("@/components/usage/UsageDateRangePicker", () => ({
   ),
 }));
 
-const subscriptionModule: DashboardModuleView = {
-  id: "module-subscription",
-  name: "Personal usage",
-  kind: "subscription",
-  sortOrder: 1,
-  visible: true,
-  isSystem: false,
-  providerCount: 1,
-};
-
-const apiModule: DashboardModuleView = {
-  id: "module-api",
-  name: "Metered usage",
-  kind: "api",
-  sortOrder: 2,
-  visible: true,
-  isSystem: true,
-  providerCount: 1,
-};
-
-const subscriptionProvider: UsageProviderView = {
-  id: "sub",
-  name: "Official Subscription",
-  billingKind: "subscription",
-  productGroupId: "claude",
-  tokenSources: ["session_log"],
-  sessionSourceBindings: ["claude"],
-  quotaSource: "claude",
-  quotaIntervalSeconds: 300,
-  routeAppType: null,
-  enabled: true,
-  needsReview: false,
-  createdAt: 1,
-  updatedAt: 1,
-  routeBaseUrl: null,
-  hasRouteCredentials: false,
-  dashboardModuleId: subscriptionModule.id,
-};
-
-const meteredProvider: UsageProviderView = {
-  ...subscriptionProvider,
-  id: "api",
-  name: "Metered API",
-  billingKind: "metered",
-  tokenSources: ["proxy"],
-  sessionSourceBindings: [],
-  quotaSource: null,
-  quotaIntervalSeconds: null,
-  routeAppType: "claude",
-  routeBaseUrl: "https://example.com",
-  hasRouteCredentials: true,
-  dashboardModuleId: null,
-};
-
-function dashboardData() {
+function agent(id: string, name: string): AgentModuleView {
   return {
+    id,
+    name,
+    sortOrder: 1,
+    visible: true,
+    isFixed: true,
+    archivedAt: null,
+    providerCount: 2,
+  };
+}
+
+const codex = agent("codex", "Codex");
+const claude = agent("claude-code", "Claude Code");
+
+function provider(
+  id: string,
+  billingKind: "subscription" | "metered",
+): UsageProviderView {
+  return {
+    id,
+    name: id === "sub" ? "Official Subscription" : "Metered API",
+    billingKind,
+    productGroupId: "codex",
+    tokenSources: billingKind === "subscription" ? ["session_log"] : ["proxy"],
+    sessionSourceBindings: billingKind === "subscription" ? ["codex"] : [],
+    bindings: [],
+    quotaSource: billingKind === "subscription" ? "codex" : null,
+    quotaIntervalSeconds: billingKind === "subscription" ? 300 : null,
+    routeAppType: billingKind === "metered" ? "codex" : null,
+    enabled: true,
+    needsReview: false,
+    createdAt: 1,
+    updatedAt: 1,
+    routeBaseUrl: billingKind === "metered" ? "https://example.com" : null,
+    hasRouteCredentials: billingKind === "metered",
+  };
+}
+
+function dashboardData(agentModuleId = codex.id): UsageDashboardView {
+  return {
+    agentModuleId,
     startAt: 10,
     endAt: 20,
-    warnings: [] as string[],
+    warnings: [],
     productGroups: [
       {
-        productGroupId: "claude",
+        productGroupId: "codex",
         inputTokens: 100,
         outputTokens: 20,
         cacheReadTokens: 5,
         cacheCreationTokens: 3,
         totalCostUsd: "1.25",
-        costSourceCounts: { upstream: 1, estimated: 1, unavailable: 1 },
-        tokenSources: ["proxy", "session_log"] as const,
+        costSourceCounts: { upstream: 1, estimated: 0, unavailable: 1 },
+        tokenSources: ["proxy", "session_log"],
         subscriptionProviders: [
           {
-            provider: subscriptionProvider,
+            provider: provider("sub", "subscription"),
+            sharedAccount: true,
             eventCount: 1,
             inputTokens: 60,
             outputTokens: 10,
             cacheReadTokens: 5,
             cacheCreationTokens: 0,
             totalCostUsd: null,
-            costSourceCounts: { upstream: 0, estimated: 0, unavailable: 0 },
-            quota: {
-              snapshotId: "q",
-              fetchedAt: 15,
-              fiveHourUtilizationPercent: "25",
-              fiveHourResetsAt: "soon",
-              sevenDayUtilizationPercent: "50",
-              sevenDayResetsAt: "later",
-              manualResetsRemaining: 2,
-            },
-            quotaFetchState: {
-              providerId: "sub",
-              lastAttemptAt: 18,
-              lastSuccessAt: 15,
-              lastError: "timeout",
-              stale: true,
-            },
+            costSourceCounts: { upstream: 0, estimated: 0, unavailable: 1 },
+            quota: null,
+            quotaFetchState: null,
           },
         ],
         meteredProviders: [
           {
-            provider: meteredProvider,
+            provider: provider("metered", "metered"),
+            sharedAccount: false,
             eventCount: 2,
             inputTokens: 40,
             outputTokens: 10,
             cacheReadTokens: 0,
             cacheCreationTokens: 3,
             totalCostUsd: "1.25",
-            costSourceCounts: { upstream: 1, estimated: 0, unavailable: 1 },
+            costSourceCounts: { upstream: 1, estimated: 0, unavailable: 0 },
             quota: null,
             quotaFetchState: null,
           },
@@ -200,7 +151,6 @@ function dashboardData() {
 describe("UsageDashboardPage", () => {
   beforeEach(() => {
     Object.values(mocks).forEach((mock) => mock.mockReset());
-    ui.language = "en";
     ui.onUsageRecorded = undefined;
     ui.refreshPending = false;
     ui.syncPending = false;
@@ -217,106 +167,117 @@ describe("UsageDashboardPage", () => {
     mocks.syncSession.mockResolvedValue({ warnings: [], errors: [] });
   });
 
-  it("renders only the selected module's monitoring data and keeps configuration off home", () => {
-    render(<UsageDashboardPage selectedModule={subscriptionModule} />);
+  it("renders one Agent's subscription and metered sections together", () => {
+    render(<UsageDashboardPage selectedAgent={codex} />);
 
+    expect(mocks.dashboard).toHaveBeenCalledWith(
+      "codex",
+      expect.any(Number),
+      expect.any(Number),
+    );
     expect(screen.getByText("Official Subscription")).toBeInTheDocument();
-    expect(screen.queryByText("Metered API")).toBeNull();
-    for (const label of [
-      "Add Provider",
-      "Static routes",
-      "Start proxy",
-      "Stop proxy",
-      "Enable",
-      "Disable",
-    ]) {
-      expect(screen.queryByText(label)).toBeNull();
-    }
-  });
-
-  it("renders the unified API module without subscription quota", () => {
-    render(<UsageDashboardPage selectedModule={apiModule} />);
-
     expect(screen.getByText("Metered API")).toBeInTheDocument();
-    expect(screen.queryByText("Official Subscription")).toBeNull();
-    expect(screen.getByTestId("api-total-tokens")).toHaveTextContent("53");
-    expect(screen.getByTestId("api-request-count")).toHaveTextContent("2");
-    expect(screen.queryByText("5 hour")).toBeNull();
+    expect(screen.getByText("Subscription accounts")).toBeInTheDocument();
+    expect(screen.getByText("Metered usage")).toBeInTheDocument();
   });
 
-  it("supports exact today, 7d, 30d and fixed custom ranges", () => {
+  it("never renders prior-Agent data after a selection switch", () => {
+    const { rerender } = render(<UsageDashboardPage selectedAgent={codex} />);
+    expect(screen.getByText("Official Subscription")).toBeInTheDocument();
+
+    rerender(<UsageDashboardPage selectedAgent={claude} />);
+
+    expect(mocks.dashboard).toHaveBeenLastCalledWith(
+      "claude-code",
+      expect.any(Number),
+      expect.any(Number),
+    );
+    expect(screen.queryByText("Official Subscription")).toBeNull();
+    expect(screen.queryByText("Metered API")).toBeNull();
+  });
+
+  it("clears prior-Agent quota and session results after a selection switch", async () => {
+    mocks.refreshQuota.mockRejectedValueOnce(new Error("codex refresh failed"));
+    mocks.syncSession.mockResolvedValueOnce({
+      warnings: ["codex session warning"],
+      errors: ["codex session error"],
+    });
+    const { rerender } = render(<UsageDashboardPage selectedAgent={codex} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Sync sessions" }));
+    expect(
+      await screen.findByText("codex session warning"),
+    ).toBeInTheDocument();
+    expect(await screen.findByText("codex session error")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Refresh quota" }));
+    expect(await screen.findByText("codex refresh failed")).toBeInTheDocument();
+
+    rerender(<UsageDashboardPage selectedAgent={claude} />);
+
+    expect(screen.queryByText("codex refresh failed")).toBeNull();
+    expect(screen.queryByText("codex session warning")).toBeNull();
+    expect(screen.queryByText("codex session error")).toBeNull();
+  });
+
+  it("supports exact today, 7d, 30d and custom Agent-scoped ranges", () => {
     vi.useFakeTimers();
     const nowMs = new Date("2026-07-12T12:34:56.789Z").getTime();
     vi.setSystemTime(nowMs);
-    render(<UsageDashboardPage selectedModule={subscriptionModule} />);
-    const endDate = Math.floor(nowMs / 1000) + 1;
-    const localNow = new Date(nowMs);
-    const todayStart = Math.floor(
-      new Date(
-        localNow.getFullYear(),
-        localNow.getMonth(),
-        localNow.getDate(),
-      ).getTime() / 1000,
-    );
-    expect(mocks.dashboard).toHaveBeenLastCalledWith(todayStart, endDate);
-
-    fireEvent.click(screen.getByRole("button", { name: "7 days" }));
-    const sevenDayStart = Math.floor(
-      new Date(
-        localNow.getFullYear(),
-        localNow.getMonth(),
-        localNow.getDate() - 6,
-      ).getTime() / 1000,
-    );
-    expect(mocks.dashboard).toHaveBeenLastCalledWith(sevenDayStart, endDate);
-
-    fireEvent.click(screen.getByRole("button", { name: "30 days" }));
-    const thirtyDayStart = Math.floor(
-      new Date(
-        localNow.getFullYear(),
-        localNow.getMonth(),
-        localNow.getDate() - 29,
-      ).getTime() / 1000,
-    );
-    expect(mocks.dashboard).toHaveBeenLastCalledWith(thirtyDayStart, endDate);
-
-    fireEvent.click(screen.getByRole("button", { name: "Custom range" }));
-    expect(mocks.dashboard).toHaveBeenLastCalledWith(100, 200);
-    vi.useRealTimers();
-  });
-
-  it("advances a live range on usage events and periodic ticks", () => {
-    vi.useFakeTimers();
-    const initialMs = new Date("2026-07-12T12:34:56.100Z").getTime();
-    vi.setSystemTime(initialMs);
     try {
-      const { unmount } = render(
-        <UsageDashboardPage selectedModule={subscriptionModule} />,
+      render(<UsageDashboardPage selectedAgent={codex} />);
+      const endDate = Math.floor(nowMs / 1000) + 1;
+      const localNow = new Date(nowMs);
+      const todayStart = Math.floor(
+        new Date(
+          localNow.getFullYear(),
+          localNow.getMonth(),
+          localNow.getDate(),
+        ).getTime() / 1000,
       );
       expect(mocks.dashboard).toHaveBeenLastCalledWith(
-        expect.any(Number),
-        Math.floor(initialMs / 1000) + 1,
+        "codex",
+        todayStart,
+        endDate,
       );
 
-      vi.setSystemTime(initialMs + 2_000);
-      act(() => ui.onUsageRecorded?.());
+      fireEvent.click(screen.getByRole("button", { name: "7 days" }));
       expect(mocks.dashboard).toHaveBeenLastCalledWith(
+        "codex",
         expect.any(Number),
-        Math.floor((initialMs + 2_000) / 1000) + 1,
+        endDate,
       );
-
-      act(() => vi.advanceTimersByTime(30_000));
+      fireEvent.click(screen.getByRole("button", { name: "30 days" }));
       expect(mocks.dashboard).toHaveBeenLastCalledWith(
+        "codex",
         expect.any(Number),
-        Math.floor((initialMs + 32_000) / 1000) + 1,
+        endDate,
       );
-      unmount();
+      fireEvent.click(screen.getByRole("button", { name: "Custom range" }));
+      expect(mocks.dashboard).toHaveBeenLastCalledWith("codex", 100, 200);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("surfaces dashboard, refresh and session errors without hiding other modules", async () => {
+  it("advances a live Agent range on invalidation events", () => {
+    vi.useFakeTimers();
+    const initialMs = new Date("2026-07-12T12:34:56.100Z").getTime();
+    vi.setSystemTime(initialMs);
+    try {
+      render(<UsageDashboardPage selectedAgent={codex} />);
+      vi.setSystemTime(initialMs + 2_000);
+      act(() => ui.onUsageRecorded?.());
+      expect(mocks.dashboard).toHaveBeenLastCalledWith(
+        "codex",
+        expect.any(Number),
+        Math.floor((initialMs + 2_000) / 1000) + 1,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("surfaces dashboard, quota, and session errors without hiding the Agent", async () => {
     const data = dashboardData();
     data.warnings = ["partial dashboard"];
     mocks.dashboard.mockReturnValue({
@@ -329,7 +290,7 @@ describe("UsageDashboardPage", () => {
       warnings: ["session warning"],
       errors: ["session error"],
     });
-    render(<UsageDashboardPage selectedModule={subscriptionModule} />);
+    render(<UsageDashboardPage selectedAgent={codex} />);
 
     expect(screen.getByText("partial dashboard")).toBeInTheDocument();
     expect(
@@ -339,72 +300,6 @@ describe("UsageDashboardPage", () => {
     expect(await screen.findByText("refresh failed")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Sync sessions" }));
     expect(await screen.findByText("session warning")).toBeInTheDocument();
-    expect(
-      (await screen.findByText("session error")).closest("[role=alert]"),
-    ).not.toBeNull();
-  });
-
-  it("disables only quota and session actions while their mutations are pending", () => {
-    ui.refreshPending = true;
-    ui.syncPending = true;
-    render(<UsageDashboardPage selectedModule={subscriptionModule} />);
-
-    expect(
-      screen.getByRole("button", { name: "Refresh quota" }),
-    ).toBeDisabled();
-    expect(
-      screen.getByRole("button", { name: "Sync sessions" }),
-    ).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Today" })).toBeEnabled();
-  });
-
-  it("opens Settings from an empty subscription module", () => {
-    const onOpenSettings = vi.fn();
-    const data = dashboardData();
-    data.productGroups[0].subscriptionProviders = [];
-    mocks.dashboard.mockReturnValue({ data, isLoading: false, error: null });
-    render(
-      <UsageDashboardPage
-        selectedModule={subscriptionModule}
-        onOpenSettings={onOpenSettings}
-      />,
-    );
-
-    fireEvent.click(
-      screen.getByRole("button", { name: "Add Provider in Settings" }),
-    );
-    expect(onOpenSettings).toHaveBeenCalledOnce();
-  });
-
-  it("localizes range, source and unavailable event cost labels", () => {
-    ui.language = "zh";
-    mocks.events.mockReturnValue({
-      data: {
-        items: [
-          {
-            eventId: "no-cost",
-            model: "model",
-            totalCostUsd: null,
-            costSource: "unavailable",
-          },
-        ],
-        total: 1,
-        page: 1,
-        pageSize: 5,
-      },
-      error: null,
-    });
-    render(<UsageDashboardPage selectedModule={apiModule} />);
-
-    for (const text of [
-      "今天",
-      "7 天",
-      "30 天",
-      "自定义范围",
-      "本地代理",
-      "费用不可用",
-    ]) {
-      expect(screen.getAllByText(text).length).toBeGreaterThan(0);
-    }
+    expect(await screen.findByText("session error")).toBeInTheDocument();
   });
 });

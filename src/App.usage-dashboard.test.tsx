@@ -28,114 +28,75 @@ function renderApp() {
   );
 }
 
-const legacyLabels = [
-  "Quick switching",
-  "Failover",
-  "Preset marketplace",
-  "MCP",
-  "Skills",
-  "OpenClaw",
-  "WebDAV",
-  "S3",
-];
-
-describe("usage dashboard main path", () => {
+describe("Agent usage dashboard main path", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    localStorage.clear();
     Object.values(windowMocks).forEach((mock) => mock.mockReset());
   });
 
-  it("renders one monitoring module at a time and no home configuration controls", async () => {
-    const user = userEvent.setup();
+  it("renders the five fixed Agents plus Custom without a global API tab", async () => {
     renderApp();
 
     expect(
-      await screen.findAllByText("Official Subscription"),
-    ).not.toHaveLength(0);
-    expect(screen.queryByText("Metered API")).toBeNull();
-    expect(screen.queryByText("Static routes")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Start proxy" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Add Provider" })).toBeNull();
+      (await screen.findAllByRole("tab")).map((tab) => tab.textContent),
+    ).toEqual([
+      "Codex",
+      "Claude Code",
+      "OpenCode",
+      "OpenClaw",
+      "Hermes",
+      "Research Agent",
+    ]);
+    expect(screen.queryByRole("tab", { name: /API/i })).toBeNull();
+    expect(screen.queryByRole("tab", { name: "Metered usage" })).toBeNull();
+    expect(screen.getByRole("tablist", { name: "Agents" })).toBeInTheDocument();
+    expect(
+      await screen.findByText("Official Subscription"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Azure API")).toBeInTheDocument();
+  });
 
-    await user.click(screen.getByRole("tab", { name: "Metered usage" }));
-    expect(await screen.findByText("Azure API")).toBeInTheDocument();
-    expect(screen.getByText("OpenRouter")).toBeInTheDocument();
-    expect(screen.queryByText("Official Subscription")).toBeNull();
-    for (const label of legacyLabels) {
-      expect(
-        screen.queryByText(label, { exact: false }),
-      ).not.toBeInTheDocument();
+  it("treats Agent tab changes as pure selection with zero mutations", async () => {
+    const user = userEvent.setup();
+    const mutations = [
+      vi.spyOn(usageDashboardApi, "saveAgentModule"),
+      vi.spyOn(usageDashboardApi, "setAgentModuleVisibility"),
+      vi.spyOn(usageDashboardApi, "deleteAgentModule"),
+      vi.spyOn(usageDashboardApi, "saveProvider"),
+      vi.spyOn(usageDashboardApi, "setProviderEnabled"),
+      vi.spyOn(usageDashboardApi, "saveAgentProviderBinding"),
+      vi.spyOn(usageDashboardApi, "deleteAgentProviderBinding"),
+      vi.spyOn(usageDashboardApi, "setAgentProviderBindingApiKey"),
+      vi.spyOn(usageDashboardApi, "replaceAgentProviderBindingApiKey"),
+      vi.spyOn(usageDashboardApi, "clearAgentProviderBindingApiKey"),
+      vi.spyOn(proxyApi, "startProxyServer"),
+      vi.spyOn(proxyApi, "stopProxyWithRestore"),
+    ];
+    renderApp();
+
+    const codex = await screen.findByRole("tab", { name: "Codex" });
+    const claude = screen.getByRole("tab", { name: "Claude Code" });
+    expect(codex).toHaveAttribute("aria-selected", "true");
+
+    await user.click(claude);
+    expect(claude).toHaveAttribute("aria-selected", "true");
+    for (const mutation of mutations) {
+      expect(mutation).not.toHaveBeenCalled();
     }
   });
 
-  it("renders backend dashboard modules in the header without changing configuration", async () => {
+  it("selects a Custom Agent by stable ID without adding frontend routes", async () => {
     const user = userEvent.setup();
-    const saveProvider = vi.spyOn(usageDashboardApi, "saveProvider");
-    const setProviderEnabled = vi.spyOn(
-      usageDashboardApi,
-      "setProviderEnabled",
+    renderApp();
+
+    const custom = await screen.findByRole("tab", { name: "Research Agent" });
+    await user.click(custom);
+
+    expect(custom).toHaveAttribute("aria-selected", "true");
+    expect(localStorage.getItem("llm-usage-bar:last-agent-module-id")).toBe(
+      "custom-research",
     );
-    const setRouteBinding = vi.spyOn(usageDashboardApi, "setRouteBinding");
-    const startProxy = vi.spyOn(proxyApi, "startProxyServer");
-    renderApp();
-
-    const personal = await screen.findByRole("tab", {
-      name: "Personal usage",
-    });
-    const metered = screen.getByRole("tab", { name: "Metered usage" });
-    expect(personal).toHaveAttribute("aria-selected", "true");
-    expect(
-      screen
-        .getByRole("tablist", { name: "Dashboard modules" })
-        .compareDocumentPosition(
-          screen.getByRole("button", { name: "Settings" }),
-        ) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
-
-    await user.click(metered);
-    expect(metered).toHaveAttribute("aria-selected", "true");
-    expect(saveProvider).not.toHaveBeenCalled();
-    expect(setProviderEnabled).not.toHaveBeenCalled();
-    expect(setRouteBinding).not.toHaveBeenCalled();
-    expect(startProxy).not.toHaveBeenCalled();
-  });
-
-  it("renders a fifth renamed module without a frontend code change", async () => {
-    const user = userEvent.setup();
-    renderApp();
-
-    const fifth = await screen.findByRole("tab", {
-      name: "Renamed research plan",
-    });
-    expect(screen.getAllByRole("tab")).toHaveLength(5);
-    await user.click(fifth);
-
-    expect(
-      await screen.findByText("Research Subscription"),
-    ).toBeInTheDocument();
-    expect(screen.queryByText("Official Subscription")).toBeNull();
-    expect(screen.queryByText("Azure API")).toBeNull();
-  });
-
-  it("preserves the selected dashboard module after Settings closes", async () => {
-    const user = userEvent.setup();
-    renderApp();
-
-    const metered = await screen.findByRole("tab", { name: "Metered usage" });
-    await user.click(metered);
-    expect(metered).toHaveAttribute("aria-selected", "true");
-
-    await user.click(screen.getByRole("button", { name: "Settings" }));
-    expect(
-      await screen.findByRole("heading", { name: "Settings" }),
-    ).toBeInTheDocument();
-    await user.keyboard("{Escape}");
-
-    await waitFor(() =>
-      expect(screen.queryByRole("heading", { name: "Settings" })).toBeNull(),
-    );
-    expect(metered).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByText("Azure API")).toBeInTheDocument();
   });
 
   it("keeps a draggable title area and gates native window controls by settings", async () => {

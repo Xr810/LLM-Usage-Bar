@@ -38,7 +38,7 @@ const ensureListenerSet = (event: string) => {
   return listeners.get(event)!;
 };
 
-export const emitTauriEvent = (event: string, payload: unknown) => {
+export const emitTauriEvent = (event: string, payload?: unknown) => {
   const handlers = listeners.get(event);
   handlers?.forEach((handler) => handler({ payload }));
 };

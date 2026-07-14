@@ -2,24 +2,59 @@ export type BillingKind = "subscription" | "metered";
 export type TokenSource = "proxy" | "session_log";
 export type SessionSource = "claude" | "codex";
 export type CostSource = "upstream" | "estimated" | "unavailable";
-export type DashboardModuleKind = "subscription" | "api";
+export type BindingCredentialStatus =
+  "not_required" | "missing" | "configured" | "unavailable";
 
-export interface DashboardModuleView {
+export interface AgentModuleView {
   id: string;
   name: string;
-  kind: DashboardModuleKind;
   sortOrder: number;
   visible: boolean;
-  isSystem: boolean;
+  isFixed: boolean;
+  archivedAt: number | null;
   providerCount: number;
 }
 
-export interface DashboardModuleInput {
+export interface AgentModuleInput {
   id: string | null;
   name: string;
-  kind: DashboardModuleKind;
   sortOrder: number;
   visible: boolean;
+}
+
+export interface AgentProviderBindingInput {
+  id: string | null;
+  agentModuleId: string;
+  providerId: string;
+  enabled: boolean;
+}
+
+export interface AgentProviderBindingView {
+  id: string;
+  agentModuleId: string;
+  providerId: string;
+  enabled: boolean;
+  effectiveEnabled: boolean;
+  credentialStatus: BindingCredentialStatus;
+  credentialVersion: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface AgentProxyRouteSetup {
+  bindingId: string;
+  providerId: string;
+  protocol: string | null;
+  localBaseUrl: string | null;
+  credentialPlacements: string[];
+  credentialStatus: BindingCredentialStatus;
+}
+
+export interface AgentProxySetupInfo {
+  agentModuleId: string;
+  proxyRunning: boolean;
+  proxyOrigin: string;
+  routes: AgentProxyRouteSetup[];
 }
 
 export interface UsageProviderInput {
@@ -34,7 +69,6 @@ export interface UsageProviderInput {
   routeAppType?: string | null;
   routeConfig?: Record<string, unknown> | null;
   quotaConfig?: Record<string, unknown> | null;
-  dashboardModuleId?: string | null;
   enabled: boolean;
 }
 
@@ -45,6 +79,7 @@ export interface UsageProviderView {
   productGroupId: string;
   tokenSources: TokenSource[];
   sessionSourceBindings: SessionSource[];
+  bindings: AgentProviderBindingView[];
   quotaSource: string | null;
   quotaIntervalSeconds: number | null;
   routeAppType: string | null;
@@ -54,13 +89,6 @@ export interface UsageProviderView {
   updatedAt: number;
   routeBaseUrl: string | null;
   hasRouteCredentials: boolean;
-  dashboardModuleId: string | null;
-}
-
-export interface RouteBinding {
-  protocol: string;
-  providerId: string;
-  updatedAt: number;
 }
 
 export interface CostSourceCounts {
@@ -89,6 +117,7 @@ export interface QuotaFetchState {
 
 export interface ProviderUsageView {
   provider: UsageProviderView;
+  sharedAccount: boolean;
   eventCount: number;
   inputTokens: number;
   outputTokens: number;
@@ -114,6 +143,7 @@ export interface ProductUsageView {
 }
 
 export interface UsageDashboardView {
+  agentModuleId: string;
   startAt: number;
   endAt: number;
   productGroups: ProductUsageView[];
@@ -124,6 +154,7 @@ export interface UsageEvent {
   eventId: string;
   source: TokenSource;
   providerId: string;
+  agentModuleId: string | null;
   productGroupId: string;
   occurredAt: number;
   model: string;
@@ -149,6 +180,35 @@ export interface UsageEventPage {
   total: number;
   page: number;
   pageSize: number;
+}
+
+export interface UnassignedUsageGroup {
+  providerId: string;
+  source: TokenSource;
+  eventCount: number;
+  firstOccurredAt: number;
+  lastOccurredAt: number;
+}
+
+export interface ArchivedAgentUsageSummary {
+  agentModuleId: string;
+  eventCount: number;
+  firstOccurredAt: number;
+  lastOccurredAt: number;
+}
+
+export interface InvalidUsageLinkSummary {
+  reason: string;
+  linkCount: number;
+  firstCreatedAt: number;
+  lastCreatedAt: number;
+}
+
+export interface UnassignedUsageDiagnostics {
+  unassignedEventCount: number;
+  unassignedGroups: UnassignedUsageGroup[];
+  archivedAgentHistory: ArchivedAgentUsageSummary[];
+  invalidLinkSummaries: InvalidUsageLinkSummary[];
 }
 
 export interface QuotaRefreshResult {

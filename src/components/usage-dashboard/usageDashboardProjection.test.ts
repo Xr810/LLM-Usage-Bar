@@ -1,30 +1,20 @@
 import { describe, expect, it } from "vitest";
 import type {
-  DashboardModuleView,
+  AgentModuleView,
   ProviderUsageView,
   UsageDashboardView,
   UsageProviderView,
 } from "@/types/usageDashboard";
-import { projectDashboardModule } from "./usageDashboardProjection";
+import { projectAgentDashboard } from "./usageDashboardProjection";
 
-const subscriptionModule: DashboardModuleView = {
-  id: "module-subscription",
-  name: "Arbitrary subscription label",
-  kind: "subscription",
+const agent: AgentModuleView = {
+  id: "codex",
+  name: "Codex",
   sortOrder: 1,
   visible: true,
-  isSystem: false,
-  providerCount: 1,
-};
-
-const apiModule: DashboardModuleView = {
-  id: "module-api",
-  name: "Arbitrary API label",
-  kind: "api",
-  sortOrder: 2,
-  visible: true,
-  isSystem: true,
-  providerCount: 2,
+  isFixed: true,
+  archivedAt: null,
+  providerCount: 3,
 };
 
 function provider(
@@ -39,6 +29,7 @@ function provider(
     productGroupId: "current-product",
     tokenSources: billingKind === "metered" ? ["proxy"] : ["session_log"],
     sessionSourceBindings: [],
+    bindings: [],
     quotaSource: billingKind === "subscription" ? "codex" : null,
     quotaIntervalSeconds: billingKind === "subscription" ? 300 : null,
     routeAppType: billingKind === "metered" ? "codex" : null,
@@ -48,8 +39,6 @@ function provider(
     updatedAt: 1,
     routeBaseUrl: billingKind === "metered" ? "https://example.com" : null,
     hasRouteCredentials: billingKind === "metered",
-    dashboardModuleId:
-      billingKind === "subscription" ? subscriptionModule.id : null,
     ...overrides,
   };
 }
@@ -60,6 +49,7 @@ function usage(
 ): ProviderUsageView {
   return {
     provider: value,
+    sharedAccount: false,
     eventCount: 1,
     inputTokens: 10,
     outputTokens: 2,
@@ -75,12 +65,6 @@ function usage(
     quotaFetchState: null,
     ...overrides,
   };
-}
-
-function dashboard(
-  groups: UsageDashboardView["productGroups"],
-): UsageDashboardView {
-  return { startAt: 1, endAt: 2, warnings: [], productGroups: groups };
 }
 
 function productGroup(
@@ -102,15 +86,32 @@ function productGroup(
   };
 }
 
-describe("projectDashboardModule", () => {
-  it("merges historical product groups by stable Provider ID and keeps newest quota state", () => {
-    const oldProvider = provider("shared", "subscription", { updatedAt: 1 });
+function dashboard(
+  groups: UsageDashboardView["productGroups"],
+  agentModuleId = agent.id,
+): UsageDashboardView {
+  return {
+    agentModuleId,
+    startAt: 1,
+    endAt: 2,
+    warnings: [],
+    productGroups: groups,
+  };
+}
+
+describe("projectAgentDashboard", () => {
+  it("merges historical Provider rows once, ORs shared-account, and attaches newest quota once", () => {
+    const oldProvider = provider("shared", "subscription", {
+      enabled: false,
+      updatedAt: 1,
+    });
     const currentProvider = provider("shared", "subscription", {
       productGroupId: "renamed-product",
+      enabled: false,
       updatedAt: 2,
     });
-    const result = projectDashboardModule(
-      subscriptionModule,
+    const result = projectAgentDashboard(
+      agent,
       dashboard([
         productGroup("old-product", [
           usage(oldProvider, {
@@ -119,6 +120,7 @@ describe("projectDashboardModule", () => {
             outputTokens: 20,
             cacheReadTokens: 30,
             cacheCreationTokens: 40,
+            sharedAccount: false,
             quota: {
               snapshotId: "old",
               fetchedAt: 10,
@@ -127,13 +129,6 @@ describe("projectDashboardModule", () => {
               sevenDayUtilizationPercent: null,
               sevenDayResetsAt: null,
               manualResetsRemaining: null,
-            },
-            quotaFetchState: {
-              providerId: "shared",
-              lastAttemptAt: 10,
-              lastSuccessAt: 10,
-              lastError: null,
-              stale: false,
             },
           }),
         ]),
@@ -144,6 +139,7 @@ describe("projectDashboardModule", () => {
             outputTokens: 2,
             cacheReadTokens: 3,
             cacheCreationTokens: 4,
+            sharedAccount: true,
             quota: {
               snapshotId: "new",
               fetchedAt: 20,
@@ -153,54 +149,50 @@ describe("projectDashboardModule", () => {
               sevenDayResetsAt: null,
               manualResetsRemaining: 2,
             },
-            quotaFetchState: {
-              providerId: "shared",
-              lastAttemptAt: 20,
-              lastSuccessAt: 20,
-              lastError: null,
-              stale: false,
-            },
           }),
         ]),
       ]),
     );
 
-    expect(result.kind).toBe("subscription");
-    expect(result.providers).toHaveLength(1);
-    expect(result.providers[0]).toMatchObject({
+    expect(result?.subscriptionProviders).toHaveLength(1);
+    expect(result?.subscriptionProviders[0]).toMatchObject({
+      sharedAccount: true,
       eventCount: 5,
       inputTokens: 11,
       outputTokens: 22,
       cacheReadTokens: 33,
       cacheCreationTokens: 44,
       quota: { snapshotId: "new" },
-      quotaFetchState: { lastAttemptAt: 20 },
-      provider: { id: "shared", productGroupId: "renamed-product" },
+      provider: {
+        id: "shared",
+        productGroupId: "renamed-product",
+        enabled: false,
+      },
     });
   });
 
-  it("uses module ID membership for subscriptions and never the display name", () => {
-    const included = usage(provider("included", "subscription"));
-    const wrongModule = usage(
-      provider("wrong-module", "subscription", {
-        name: subscriptionModule.name,
-        dashboardModuleId: "different-stable-id",
+  it("preserves historical, disabled, and currently unbound Provider cards", () => {
+    const historical = usage(
+      provider("historical", "subscription", {
+        enabled: false,
+        bindings: [],
       }),
     );
-    const disabled = usage(
-      provider("disabled", "subscription", { enabled: false }),
-    );
-    const result = projectDashboardModule(
-      subscriptionModule,
-      dashboard([productGroup("group", [included, wrongModule, disabled])]),
+    const result = projectAgentDashboard(
+      agent,
+      dashboard([productGroup("history", [historical])]),
     );
 
-    expect(result.providers.map((row) => row.provider.id)).toEqual([
-      "included",
-    ]);
+    expect(result?.subscriptionProviders.map((row) => row.provider.id)).toEqual(
+      ["historical"],
+    );
   });
 
-  it("sums metered decimal strings exactly and excludes subscription totals", () => {
+  it("shows subscription and metered Providers together but totals metered rows only", () => {
+    const subscription = usage(provider("sub", "subscription"), {
+      inputTokens: 999,
+      totalCostUsd: "999",
+    });
     const first = usage(provider("api-a", "metered"), {
       totalCostUsd: "0.1",
       inputTokens: 10,
@@ -210,25 +202,37 @@ describe("projectDashboardModule", () => {
       inputTokens: 20,
       costSourceCounts: { upstream: 0, estimated: 1, unavailable: 0 },
     });
-    const subscription = usage(provider("sub", "subscription"), {
-      inputTokens: 999,
-      totalCostUsd: "999",
-    });
-    const result = projectDashboardModule(
-      apiModule,
+    const result = projectAgentDashboard(
+      agent,
       dashboard([productGroup("group", [subscription], [first, second])]),
     );
 
     expect(result).toMatchObject({
-      kind: "api",
-      totalCostUsd: "0.3",
-      totalTokens: 48,
-      requestCount: 2,
-      costStatus: "estimated",
+      subscriptionProviders: [{ provider: { id: "sub" } }],
+      meteredProviders: [
+        { provider: { id: "api-a" } },
+        { provider: { id: "api-b" } },
+      ],
+      meteredTotalCostUsd: "0.3",
+      meteredTotalTokens: 48,
+      meteredRequestCount: 2,
+      meteredCostStatus: "estimated",
     });
   });
 
-  it("keeps explicit zero known and marks mixed missing costs as partial", () => {
+  it("returns no projection for a response owned by another Agent", () => {
+    const result = projectAgentDashboard(
+      agent,
+      dashboard(
+        [productGroup("group", [], [usage(provider("wrong", "metered"))])],
+        "claude-code",
+      ),
+    );
+
+    expect(result).toBeNull();
+  });
+
+  it("keeps known zero and marks mixed missing metered cost as partial", () => {
     const knownZero = usage(provider("known-zero", "metered"), {
       totalCostUsd: "0",
     });
@@ -236,37 +240,14 @@ describe("projectDashboardModule", () => {
       totalCostUsd: null,
       costSourceCounts: { upstream: 0, estimated: 0, unavailable: 1 },
     });
-    const result = projectDashboardModule(
-      apiModule,
+    const result = projectAgentDashboard(
+      agent,
       dashboard([productGroup("group", [], [knownZero, unknown])]),
     );
 
     expect(result).toMatchObject({
-      totalCostUsd: "0",
-      costStatus: "partial",
-    });
-  });
-
-  it("reports unavailable when every metered cost is unknown", () => {
-    const result = projectDashboardModule(
-      apiModule,
-      dashboard([
-        productGroup(
-          "group",
-          [],
-          [
-            usage(provider("unknown", "metered"), {
-              totalCostUsd: null,
-              costSourceCounts: { upstream: 0, estimated: 0, unavailable: 1 },
-            }),
-          ],
-        ),
-      ]),
-    );
-
-    expect(result).toMatchObject({
-      totalCostUsd: null,
-      costStatus: "unavailable",
+      meteredTotalCostUsd: "0",
+      meteredCostStatus: "partial",
     });
   });
 });
