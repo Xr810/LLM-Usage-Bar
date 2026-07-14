@@ -33,6 +33,7 @@ mod schema;
 mod tests;
 
 // DAO 类型导出供外部使用
+pub(crate) use dao::agent_modules::AgentModuleDeleteOutcome;
 pub(crate) use dao::agent_provider_bindings::{
     resolve_direct_api_format, resolve_direct_credential_placement, BindingAuthMode,
     DirectCredentialPlacement,

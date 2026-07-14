@@ -11,6 +11,7 @@ use std::str::FromStr;
 
 pub struct UsageDashboardService<'a> {
     db: &'a Database,
+    shared_provider_ids: BTreeSet<String>,
 }
 
 #[derive(Default)]
@@ -29,36 +30,84 @@ struct ProductAccumulator {
 
 impl<'a> UsageDashboardService<'a> {
     pub fn new(db: &'a Database) -> Self {
-        Self { db }
+        Self {
+            db,
+            shared_provider_ids: BTreeSet::new(),
+        }
+    }
+
+    pub fn with_shared_provider_ids(
+        mut self,
+        provider_ids: impl IntoIterator<Item = String>,
+    ) -> Self {
+        self.shared_provider_ids = provider_ids.into_iter().collect();
+        self
     }
 
     pub fn get_dashboard(
         &self,
         start_at: i64,
         end_at: i64,
-        product_group_id: Option<&str>,
+        agent_module_id: &str,
     ) -> Result<UsageDashboardView, AppError> {
         if start_at >= end_at {
             return Err(AppError::Message(
                 "start_at must be before end_at".to_string(),
             ));
         }
+        let agent = self
+            .db
+            .get_agent_module_including_archived(agent_module_id)?
+            .filter(|agent| agent.archived_at.is_none())
+            .ok_or_else(|| AppError::Message("invalid_agent_module".to_string()))?;
+        debug_assert_eq!(agent.id, agent_module_id);
+
+        let providers = self
+            .db
+            .list_usage_providers()?
+            .into_iter()
+            .map(|provider| (provider.id.clone(), provider))
+            .collect::<BTreeMap<_, _>>();
+        let mut active_provider_ids = BTreeSet::new();
+        let mut provider_ids = self.event_provider_ids(agent_module_id, start_at, end_at)?;
+        for binding in self
+            .db
+            .list_agent_provider_bindings(Some(agent_module_id))?
+        {
+            if binding.enabled
+                && providers
+                    .get(&binding.provider_id)
+                    .is_some_and(|provider| provider.enabled)
+            {
+                active_provider_ids.insert(binding.provider_id.clone());
+                provider_ids.insert(binding.provider_id);
+            }
+        }
 
         let mut products: BTreeMap<String, ProductAccumulator> = BTreeMap::new();
-        for provider in self.db.list_usage_providers()? {
-            let mut groups = self.event_product_groups(&provider.id, start_at, end_at)?;
-            groups.insert(provider.product_group_id.clone());
+        for provider_id in std::mem::take(&mut provider_ids) {
+            let Some(provider) = providers.get(&provider_id) else {
+                continue;
+            };
+            let mut groups =
+                self.event_product_groups(&provider.id, agent_module_id, start_at, end_at)?;
+            if active_provider_ids.contains(&provider.id) {
+                groups.insert(provider.product_group_id.clone());
+            }
+            let quota_group_id = if groups.contains(&provider.product_group_id) {
+                Some(provider.product_group_id.clone())
+            } else {
+                groups.first().cloned()
+            };
             for group_id in groups {
-                if product_group_id.is_some_and(|filter| filter != group_id) {
-                    continue;
-                }
                 let is_current_group = group_id == provider.product_group_id;
                 let usage = self.aggregate_provider(
-                    &provider,
+                    provider,
                     &group_id,
+                    agent_module_id,
                     start_at,
                     end_at,
-                    is_current_group,
+                    quota_group_id.as_deref() == Some(group_id.as_str()),
                 )?;
                 if usage.event_count == 0 && !is_current_group {
                     continue;
@@ -124,6 +173,7 @@ impl<'a> UsageDashboardService<'a> {
             .collect();
 
         Ok(UsageDashboardView {
+            agent_module_id: agent_module_id.to_string(),
             start_at,
             end_at,
             product_groups,
@@ -135,6 +185,7 @@ impl<'a> UsageDashboardService<'a> {
         &self,
         provider: &UsageProviderView,
         product_group_id: &str,
+        agent_module_id: &str,
         start_at: i64,
         end_at: i64,
         include_quota: bool,
@@ -151,14 +202,31 @@ impl<'a> UsageDashboardService<'a> {
              WHERE event.provider_id = ?1
                AND event.product_group_id = ?2
                AND event.occurred_at >= ?3 AND event.occurred_at < ?4
+               AND event.agent_module_id = ?5
                AND NOT EXISTS (
-                   SELECT 1 FROM usage_event_links AS link
-                   WHERE link.duplicate_event_id = event.event_id
+                   SELECT 1
+                   FROM usage_event_links AS link
+                   JOIN usage_events AS canonical
+                     ON canonical.event_id = link.canonical_event_id
+                   JOIN usage_events AS duplicate
+                     ON duplicate.event_id = link.duplicate_event_id
+                   WHERE duplicate.event_id = event.event_id
+                     AND canonical.source = 'proxy'
+                     AND duplicate.source = 'session_log'
+                     AND canonical.provider_id = duplicate.provider_id
+                     AND canonical.agent_module_id IS NOT NULL
+                     AND canonical.agent_module_id = duplicate.agent_module_id
                )
              ORDER BY event.occurred_at, event.event_id",
         )?;
         let rows = statement.query_map(
-            params![provider.id, product_group_id, start_at, end_at],
+            params![
+                provider.id,
+                product_group_id,
+                start_at,
+                end_at,
+                agent_module_id
+            ],
             |row| {
                 Ok((
                     row.get::<_, i64>(0)?,
@@ -229,6 +297,7 @@ impl<'a> UsageDashboardService<'a> {
 
         Ok(ProviderUsageView {
             provider: provider.clone(),
+            shared_account: self.shared_provider_ids.contains(&provider.id),
             event_count,
             input_tokens,
             output_tokens,
@@ -244,6 +313,7 @@ impl<'a> UsageDashboardService<'a> {
     fn event_product_groups(
         &self,
         provider_id: &str,
+        agent_module_id: &str,
         start_at: i64,
         end_at: i64,
     ) -> Result<BTreeSet<String>, AppError> {
@@ -257,16 +327,54 @@ impl<'a> UsageDashboardService<'a> {
              FROM usage_events AS event
              WHERE event.provider_id = ?1
                AND event.occurred_at >= ?2 AND event.occurred_at < ?3
+               AND event.agent_module_id = ?4
                AND NOT EXISTS (
-                   SELECT 1 FROM usage_event_links AS link
-                   WHERE link.duplicate_event_id = event.event_id
+                   SELECT 1
+                   FROM usage_event_links AS link
+                   JOIN usage_events AS canonical
+                     ON canonical.event_id = link.canonical_event_id
+                   JOIN usage_events AS duplicate
+                     ON duplicate.event_id = link.duplicate_event_id
+                   WHERE duplicate.event_id = event.event_id
+                     AND canonical.source = 'proxy'
+                     AND duplicate.source = 'session_log'
+                     AND canonical.provider_id = duplicate.provider_id
+                     AND canonical.agent_module_id IS NOT NULL
+                     AND canonical.agent_module_id = duplicate.agent_module_id
                )
              ORDER BY event.product_group_id",
         )?;
         let groups = statement
-            .query_map(params![provider_id, start_at, end_at], |row| row.get(0))?
+            .query_map(
+                params![provider_id, start_at, end_at, agent_module_id],
+                |row| row.get(0),
+            )?
             .collect::<Result<BTreeSet<_>, _>>()?;
         Ok(groups)
+    }
+
+    fn event_provider_ids(
+        &self,
+        agent_module_id: &str,
+        start_at: i64,
+        end_at: i64,
+    ) -> Result<BTreeSet<String>, AppError> {
+        let conn = self
+            .db
+            .conn
+            .lock()
+            .map_err(|error| AppError::Database(format!("Mutex lock failed: {error}")))?;
+        let mut statement = conn.prepare(
+            "SELECT DISTINCT provider_id
+             FROM usage_events
+             WHERE agent_module_id = ?1
+               AND occurred_at >= ?2 AND occurred_at < ?3
+             ORDER BY provider_id",
+        )?;
+        let provider_ids = statement
+            .query_map(params![agent_module_id, start_at, end_at], |row| row.get(0))?
+            .collect::<Result<BTreeSet<_>, _>>()?;
+        Ok(provider_ids)
     }
 }
 
@@ -304,9 +412,10 @@ mod tests {
     use crate::database::Database;
     use crate::usage::dashboard::UsageDashboardService;
     use crate::usage::domain::{
-        BillingKind, CostSource, QuotaSnapshot, TokenSource, UsageEvent, UsageEventLink,
-        UsageProviderInput,
+        AgentProviderBindingInput, BillingKind, CostSource, QuotaSnapshot, TokenSource, UsageEvent,
+        UsageEventLink, UsageProviderInput,
     };
+    use rusqlite::params;
     use rust_decimal::Decimal;
     use serde_json::json;
 
@@ -393,7 +502,7 @@ mod tests {
         );
         linked.request_id = Some("stable".to_string());
         linked.agent_module_id = Some("claude-code".to_string());
-        let similar_a = event(
+        let mut similar_a = event(
             "similar-a",
             "metered",
             "product",
@@ -402,7 +511,8 @@ mod tests {
             102,
             Some("0.30"),
         );
-        let similar_b = event(
+        similar_a.agent_module_id = Some("claude-code".to_string());
+        let mut similar_b = event(
             "similar-b",
             "metered",
             "product",
@@ -411,6 +521,7 @@ mod tests {
             102,
             None,
         );
+        similar_b.agent_module_id = Some("claude-code".to_string());
         for value in [&proxy, &linked, &similar_a, &similar_b] {
             db.insert_usage_event(value).unwrap();
         }
@@ -437,7 +548,7 @@ mod tests {
         .unwrap();
 
         let dashboard = UsageDashboardService::new(&db)
-            .get_dashboard(100, 200, None)
+            .get_dashboard(100, 200, "claude-code")
             .unwrap();
         assert_eq!(dashboard.product_groups.len(), 1);
         let product = &dashboard.product_groups[0];
@@ -475,7 +586,7 @@ mod tests {
     }
 
     #[test]
-    fn dashboard_range_and_product_filter_are_exact() {
+    fn dashboard_range_is_half_open_for_the_requested_agent() {
         let db = Database::memory().unwrap();
         db.save_usage_provider(&provider("a", BillingKind::Metered, "one"))
             .unwrap();
@@ -487,7 +598,7 @@ mod tests {
             ("end", "a", "one", 20),
             ("other", "b", "two", 15),
         ] {
-            db.insert_usage_event(&event(
+            let mut owned = event(
                 id,
                 provider_id,
                 product,
@@ -495,18 +606,23 @@ mod tests {
                 CostSource::Unavailable,
                 at,
                 None,
-            ))
-            .unwrap();
+            );
+            owned.agent_module_id = Some("codex".to_string());
+            db.insert_usage_event(&owned).unwrap();
         }
 
         let dashboard = UsageDashboardService::new(&db)
-            .get_dashboard(10, 20, Some("one"))
+            .get_dashboard(10, 20, "codex")
             .unwrap();
-        assert_eq!(dashboard.product_groups.len(), 1);
-        assert_eq!(dashboard.product_groups[0].product_group_id, "one");
-        assert_eq!(dashboard.product_groups[0].input_tokens, 10);
+        assert_eq!(dashboard.product_groups.len(), 2);
+        let one = dashboard
+            .product_groups
+            .iter()
+            .find(|product| product.product_group_id == "one")
+            .unwrap();
+        assert_eq!(one.input_tokens, 10);
         assert!(UsageDashboardService::new(&db)
-            .get_dashboard(20, 20, None)
+            .get_dashboard(20, 20, "codex")
             .unwrap_err()
             .to_string()
             .contains("start_at must be before end_at"));
@@ -515,13 +631,21 @@ mod tests {
     #[test]
     fn subscription_fetch_failure_is_visible_without_a_successful_snapshot() {
         let db = Database::memory().unwrap();
-        db.save_usage_provider(&provider("sub", BillingKind::Subscription, "product"))
-            .unwrap();
+        let mut subscription = provider("sub", BillingKind::Subscription, "product");
+        subscription.token_sources = vec![TokenSource::SessionLog];
+        db.save_usage_provider(&subscription).unwrap();
         db.record_quota_failure("sub", 50, "credentials unavailable")
             .unwrap();
+        db.save_agent_provider_binding(&AgentProviderBindingInput {
+            id: None,
+            agent_module_id: "codex".to_string(),
+            provider_id: "sub".to_string(),
+            enabled: true,
+        })
+        .unwrap();
 
         let dashboard = UsageDashboardService::new(&db)
-            .get_dashboard(0, 100, None)
+            .get_dashboard(0, 100, "codex")
             .unwrap();
         let subscription = &dashboard.product_groups[0].subscription_providers[0];
         assert!(subscription.quota.is_none());
@@ -538,7 +662,7 @@ mod tests {
         let db = Database::memory().unwrap();
         db.save_usage_provider(&provider("metered", BillingKind::Metered, "old-product"))
             .unwrap();
-        db.insert_usage_event(&event(
+        let mut historical = event(
             "historical",
             "metered",
             "old-product",
@@ -546,24 +670,73 @@ mod tests {
             CostSource::Upstream,
             50,
             Some("0.5"),
-        ))
-        .unwrap();
+        );
+        historical.agent_module_id = Some("codex".to_string());
+        db.insert_usage_event(&historical).unwrap();
         db.save_usage_provider(&provider("metered", BillingKind::Metered, "new-product"))
             .unwrap();
 
         let old = UsageDashboardService::new(&db)
-            .get_dashboard(0, 100, Some("old-product"))
+            .get_dashboard(0, 100, "codex")
             .unwrap();
         assert_eq!(old.product_groups.len(), 1);
+        assert_eq!(old.product_groups[0].product_group_id, "old-product");
         assert_eq!(old.product_groups[0].input_tokens, 10);
         assert_eq!(old.product_groups[0].metered_providers[0].event_count, 1);
+    }
 
-        let new = UsageDashboardService::new(&db)
-            .get_dashboard(0, 100, Some("new-product"))
+    #[test]
+    fn historical_only_subscription_provider_still_attaches_quota_once() {
+        let db = Database::memory().unwrap();
+        db.save_usage_provider(&provider(
+            "historical-subscription",
+            BillingKind::Subscription,
+            "old-product",
+        ))
+        .unwrap();
+        let mut historical = event(
+            "historical-subscription-event",
+            "historical-subscription",
+            "old-product",
+            TokenSource::SessionLog,
+            CostSource::Unavailable,
+            50,
+            None,
+        );
+        historical.agent_module_id = Some("codex".to_string());
+        db.insert_usage_event(&historical).unwrap();
+        db.append_quota_success(&QuotaSnapshot {
+            snapshot_id: "historical-subscription-quota".to_string(),
+            provider_id: "historical-subscription".to_string(),
+            fetched_at: 60,
+            five_hour_utilization_percent: Some("20".to_string()),
+            five_hour_resets_at: None,
+            seven_day_utilization_percent: Some("40".to_string()),
+            seven_day_resets_at: None,
+            manual_resets_remaining: None,
+            raw_payload: json!({"private": "not-public"}),
+            created_at: 60,
+        })
+        .unwrap();
+        db.save_usage_provider(&provider(
+            "historical-subscription",
+            BillingKind::Subscription,
+            "new-product",
+        ))
+        .unwrap();
+
+        let dashboard = UsageDashboardService::new(&db)
+            .get_dashboard(0, 100, "codex")
             .unwrap();
-        assert_eq!(new.product_groups.len(), 1);
-        assert_eq!(new.product_groups[0].input_tokens, 0);
-        assert_eq!(new.product_groups[0].metered_providers[0].event_count, 0);
+        let cards = dashboard
+            .product_groups
+            .iter()
+            .flat_map(|product| product.subscription_providers.iter())
+            .collect::<Vec<_>>();
+
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0].provider.id, "historical-subscription");
+        assert_eq!(cards.iter().filter(|card| card.quota.is_some()).count(), 1);
     }
 
     #[test]
@@ -573,7 +746,7 @@ mod tests {
             .unwrap();
         let maximum = Decimal::MAX.to_string();
         for (id, cost) in [("maximum", maximum.as_str()), ("one", "1")] {
-            db.insert_usage_event(&event(
+            let mut usage_event = event(
                 id,
                 "metered",
                 "product",
@@ -581,12 +754,13 @@ mod tests {
                 CostSource::Upstream,
                 50,
                 Some(cost),
-            ))
-            .unwrap();
+            );
+            usage_event.agent_module_id = Some("codex".to_string());
+            db.insert_usage_event(&usage_event).unwrap();
         }
 
         let error = UsageDashboardService::new(&db)
-            .get_dashboard(0, 100, None)
+            .get_dashboard(0, 100, "codex")
             .unwrap_err();
         assert!(error.to_string().contains("usage cost aggregate overflow"));
     }
@@ -599,7 +773,7 @@ mod tests {
                 .unwrap();
         }
         let maximum = Decimal::MAX.to_string();
-        db.insert_usage_event(&event(
+        let mut maximum_event = event(
             "maximum",
             "first",
             "product",
@@ -607,9 +781,10 @@ mod tests {
             CostSource::Upstream,
             50,
             Some(&maximum),
-        ))
-        .unwrap();
-        db.insert_usage_event(&event(
+        );
+        maximum_event.agent_module_id = Some("codex".to_string());
+        db.insert_usage_event(&maximum_event).unwrap();
+        let mut one_event = event(
             "one",
             "second",
             "product",
@@ -617,12 +792,288 @@ mod tests {
             CostSource::Upstream,
             50,
             Some("1"),
-        ))
-        .unwrap();
+        );
+        one_event.agent_module_id = Some("codex".to_string());
+        db.insert_usage_event(&one_event).unwrap();
 
         let error = UsageDashboardService::new(&db)
-            .get_dashboard(0, 100, None)
+            .get_dashboard(0, 100, "codex")
             .unwrap_err();
         assert!(error.to_string().contains("usage cost aggregate overflow"));
+    }
+
+    #[test]
+    fn dashboard_totals_include_only_the_requested_agents_immutable_events() {
+        let db = Database::memory().unwrap();
+        db.save_usage_provider(&provider("metered", BillingKind::Metered, "codex"))
+            .unwrap();
+
+        for (event_id, agent_module_id) in [
+            ("codex-event", Some("codex")),
+            ("other-agent-event", Some("claude-code")),
+            ("unassigned-event", None),
+        ] {
+            let mut usage_event = event(
+                event_id,
+                "metered",
+                "codex",
+                TokenSource::Proxy,
+                CostSource::Unavailable,
+                50,
+                None,
+            );
+            usage_event.agent_module_id = agent_module_id.map(str::to_string);
+            db.insert_usage_event(&usage_event).unwrap();
+        }
+
+        let dashboard = UsageDashboardService::new(&db)
+            .get_dashboard(0, 100, "codex")
+            .unwrap();
+
+        assert_eq!(dashboard.product_groups.len(), 1);
+        assert_eq!(dashboard.product_groups[0].input_tokens, 10);
+        assert_eq!(
+            dashboard.product_groups[0].metered_providers[0].event_count,
+            1
+        );
+    }
+
+    #[test]
+    fn dashboard_provider_membership_is_active_bindings_union_agent_history() {
+        let db = Database::memory().unwrap();
+        for provider_id in ["active", "historical", "unrelated"] {
+            let mut input = provider(provider_id, BillingKind::Subscription, "product");
+            input.token_sources = vec![TokenSource::SessionLog];
+            db.save_usage_provider(&input).unwrap();
+        }
+        db.save_agent_provider_binding(&AgentProviderBindingInput {
+            id: None,
+            agent_module_id: "codex".to_string(),
+            provider_id: "active".to_string(),
+            enabled: true,
+        })
+        .unwrap();
+
+        let mut historical = event(
+            "historical-event",
+            "historical",
+            "product",
+            TokenSource::SessionLog,
+            CostSource::Unavailable,
+            50,
+            None,
+        );
+        historical.agent_module_id = Some("codex".to_string());
+        db.insert_usage_event(&historical).unwrap();
+
+        let dashboard = UsageDashboardService::new(&db)
+            .get_dashboard(0, 100, "codex")
+            .unwrap();
+        let providers = dashboard.product_groups[0]
+            .subscription_providers
+            .iter()
+            .map(|usage| usage.provider.id.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(providers, vec!["active", "historical"]);
+    }
+
+    #[test]
+    fn only_fully_valid_legacy_links_suppress_requested_agent_usage() {
+        let db = Database::memory().unwrap();
+        for provider_id in ["metered", "other-provider"] {
+            db.save_usage_provider(&provider(provider_id, BillingKind::Metered, "product"))
+                .unwrap();
+        }
+        let owned_event = |event_id: &str,
+                           provider_id: &str,
+                           source: TokenSource,
+                           agent_module_id: Option<&str>,
+                           occurred_at: i64| {
+            let mut usage_event = event(
+                event_id,
+                provider_id,
+                "product",
+                source,
+                CostSource::Unavailable,
+                occurred_at,
+                None,
+            );
+            usage_event.agent_module_id = agent_module_id.map(str::to_string);
+            usage_event
+        };
+        for usage_event in [
+            owned_event(
+                "valid-proxy",
+                "metered",
+                TokenSource::Proxy,
+                Some("codex"),
+                10,
+            ),
+            owned_event(
+                "valid-session",
+                "metered",
+                TokenSource::SessionLog,
+                Some("codex"),
+                11,
+            ),
+            owned_event(
+                "cross-agent-proxy",
+                "metered",
+                TokenSource::Proxy,
+                Some("claude-code"),
+                20,
+            ),
+            owned_event(
+                "cross-agent-session",
+                "metered",
+                TokenSource::SessionLog,
+                Some("codex"),
+                21,
+            ),
+            owned_event(
+                "cross-provider-proxy",
+                "other-provider",
+                TokenSource::Proxy,
+                Some("codex"),
+                30,
+            ),
+            owned_event(
+                "cross-provider-session",
+                "metered",
+                TokenSource::SessionLog,
+                Some("codex"),
+                31,
+            ),
+            owned_event("null-agent-proxy", "metered", TokenSource::Proxy, None, 40),
+            owned_event(
+                "null-agent-session",
+                "metered",
+                TokenSource::SessionLog,
+                Some("codex"),
+                41,
+            ),
+            owned_event(
+                "reverse-session",
+                "metered",
+                TokenSource::SessionLog,
+                Some("codex"),
+                50,
+            ),
+            owned_event(
+                "reverse-proxy",
+                "metered",
+                TokenSource::Proxy,
+                Some("codex"),
+                51,
+            ),
+            owned_event(
+                "missing-endpoint-session",
+                "metered",
+                TokenSource::SessionLog,
+                Some("codex"),
+                61,
+            ),
+        ] {
+            db.insert_usage_event(&usage_event).unwrap();
+        }
+        db.insert_usage_event_link(&UsageEventLink {
+            canonical_event_id: "valid-proxy".to_string(),
+            duplicate_event_id: "valid-session".to_string(),
+            link_kind: "request_id".to_string(),
+            link_value: "valid".to_string(),
+            created_at: 12,
+        })
+        .unwrap();
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+            for (canonical_event_id, duplicate_event_id, created_at) in [
+                ("cross-agent-proxy", "cross-agent-session", 22),
+                ("cross-provider-proxy", "cross-provider-session", 32),
+                ("null-agent-proxy", "null-agent-session", 42),
+                ("reverse-session", "reverse-proxy", 52),
+                ("missing-canonical", "missing-endpoint-session", 62),
+            ] {
+                conn.execute(
+                    "INSERT INTO usage_event_links (
+                         canonical_event_id, duplicate_event_id,
+                         link_kind, link_value, created_at
+                     ) VALUES (?1, ?2, 'request_id', ?3, ?4)",
+                    params![
+                        canonical_event_id,
+                        duplicate_event_id,
+                        format!("legacy-{created_at}"),
+                        created_at
+                    ],
+                )
+                .unwrap();
+            }
+            conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        }
+
+        let dashboard = UsageDashboardService::new(&db)
+            .get_dashboard(0, 100, "codex")
+            .unwrap();
+        let usage = dashboard.product_groups[0]
+            .metered_providers
+            .iter()
+            .find(|usage| usage.provider.id == "metered")
+            .unwrap();
+        assert_eq!(usage.event_count, 7);
+        assert_eq!(usage.input_tokens, 70);
+
+        let detail = db
+            .list_agent_usage_events("codex", Some("metered"), 0, 100, 1, 20)
+            .unwrap();
+        assert_eq!(detail.total, 8, "linked duplicates remain in event detail");
+
+        let diagnostics = db.get_unassigned_usage_diagnostics().unwrap();
+        assert_eq!(diagnostics.invalid_link_summaries.len(), 4);
+        for (reason, count) in [
+            ("agent_missing_or_mismatch", 2),
+            ("invalid_source_direction", 1),
+            ("missing_endpoint", 1),
+            ("provider_mismatch", 1),
+        ] {
+            assert_eq!(
+                diagnostics
+                    .invalid_link_summaries
+                    .iter()
+                    .find(|summary| summary.reason == reason)
+                    .unwrap()
+                    .link_count,
+                count
+            );
+        }
+    }
+
+    #[test]
+    fn public_agent_dashboard_identifies_owner_and_shared_account_state() {
+        let db = Database::memory().unwrap();
+        db.save_usage_provider(&provider("metered", BillingKind::Metered, "product"))
+            .unwrap();
+        let mut owned = event(
+            "owned",
+            "metered",
+            "product",
+            TokenSource::Proxy,
+            CostSource::Unavailable,
+            50,
+            None,
+        );
+        owned.agent_module_id = Some("codex".to_string());
+        db.insert_usage_event(&owned).unwrap();
+
+        let dashboard = UsageDashboardService::new(&db)
+            .get_dashboard(0, 100, "codex")
+            .unwrap();
+        let public = serde_json::to_value(dashboard).unwrap();
+
+        assert_eq!(public["agentModuleId"], json!("codex"));
+        assert_eq!(
+            public["productGroups"][0]["meteredProviders"][0]["sharedAccount"],
+            json!(false)
+        );
     }
 }

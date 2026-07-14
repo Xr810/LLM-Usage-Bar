@@ -69,8 +69,10 @@ use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 pub use usage::domain::{
     AgentModuleInput, AgentModuleView, AgentProviderBindingInput, AgentProviderBindingView,
-    BillingKind, BindingCredentialStatus, CostSource, CostSourceCounts, ProductUsageView,
-    ProviderUsageView, QuotaFetchState, QuotaSnapshot, QuotaStatusView, RouteBinding, TokenSource,
+    AgentProxyRouteSetup, AgentProxySetupInfo, ArchivedAgentUsageSummary, BillingKind,
+    BindingCredentialStatus, CostSource, CostSourceCounts, InvalidUsageLinkSummary,
+    ProductUsageView, ProviderUsageView, QuotaFetchState, QuotaSnapshot, QuotaStatusView,
+    RouteBinding, TokenSource, UnassignedUsageDiagnostics, UnassignedUsageGroup,
     UsageDashboardView, UsageEvent, UsageEventLink, UsageEventPage, UsageProviderInput,
     UsageProviderView, UsageSourceBinding,
 };
@@ -1435,6 +1437,14 @@ pub fn run() {
             commands::reorder_dashboard_modules,
             commands::set_dashboard_module_visibility,
             commands::delete_dashboard_module,
+            commands::list_agent_provider_bindings,
+            commands::save_agent_provider_binding,
+            commands::delete_agent_provider_binding,
+            commands::set_agent_provider_binding_api_key,
+            commands::replace_agent_provider_binding_api_key,
+            commands::clear_agent_provider_binding_api_key,
+            commands::get_agent_proxy_setup_info,
+            commands::get_unassigned_usage_diagnostics,
             commands::list_usage_providers,
             commands::save_usage_provider,
             commands::set_usage_provider_enabled,

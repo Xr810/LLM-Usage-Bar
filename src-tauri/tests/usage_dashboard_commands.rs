@@ -1,9 +1,12 @@
 use llm_usage_bar_lib::{
-    get_route_bindings_test_hook, get_usage_dashboard_test_hook, get_usage_events_test_hook,
-    list_usage_providers_test_hook, refresh_provider_quota_test_hook,
+    get_route_bindings_test_hook, get_unassigned_usage_diagnostics_test_hook,
+    get_usage_dashboard_test_hook, get_usage_events_test_hook,
+    list_agent_provider_bindings_test_hook, list_usage_providers_test_hook,
+    refresh_provider_quota_test_hook, save_agent_provider_binding_test_hook,
     save_usage_provider_test_hook, set_route_binding_test_hook,
-    set_usage_provider_enabled_test_hook, sync_provider_session_usage_test_hook, BillingKind,
-    CostSource, TokenSource, UsageEvent, UsageProviderInput,
+    set_usage_provider_enabled_test_hook, sync_provider_session_usage_test_hook,
+    AgentProviderBindingInput, BillingKind, CostSource, TokenSource, UsageEvent,
+    UsageProviderInput,
 };
 use serde_json::json;
 
@@ -107,11 +110,15 @@ async fn nine_command_adapters_validate_and_never_serialize_provider_secrets() {
         .unwrap()
         .contains("route-secret"));
 
-    let empty_dashboard = get_usage_dashboard_test_hook(&state, 0, 100, None).unwrap();
-    assert_eq!(empty_dashboard.product_groups[0].input_tokens, 0);
+    let empty_dashboard = get_usage_dashboard_test_hook(&state, 0, 100, "claude-code")
+        .await
+        .unwrap();
+    assert!(empty_dashboard.product_groups.is_empty());
 
     state.db.insert_usage_event(&event()).unwrap();
-    let dashboard = get_usage_dashboard_test_hook(&state, 0, 100, None).unwrap();
+    let dashboard = get_usage_dashboard_test_hook(&state, 0, 100, "claude-code")
+        .await
+        .unwrap();
     assert_eq!(dashboard.product_groups.len(), 1);
     assert_eq!(dashboard.product_groups[0].input_tokens, 10);
     assert_eq!(
@@ -123,22 +130,46 @@ async fn nine_command_adapters_validate_and_never_serialize_provider_secrets() {
         .contains("route-secret"));
 
     for (page, page_size) in [(0, 10), (1, 0), (1, 201)] {
-        assert!(get_usage_events_test_hook(&state, "metered", 0, 100, page, page_size).is_err());
+        assert!(get_usage_events_test_hook(
+            &state,
+            "claude-code",
+            Some("metered"),
+            0,
+            100,
+            page,
+            page_size
+        )
+        .is_err());
     }
-    assert!(get_usage_events_test_hook(&state, "missing", 0, 100, 1, 10).is_err());
-    let events = get_usage_events_test_hook(&state, "metered", 0, 100, 1, 10).unwrap();
+    assert!(
+        get_usage_events_test_hook(&state, "claude-code", Some("missing"), 0, 100, 1, 10).is_err()
+    );
+    let events =
+        get_usage_events_test_hook(&state, "claude-code", Some("metered"), 0, 100, 1, 10).unwrap();
     assert_eq!(events.total, 1);
     assert_eq!(events.items[0].event_id, "event");
     assert!(!serde_json::to_string(&events)
         .unwrap()
         .contains("route-secret"));
     assert_eq!(
-        get_usage_events_test_hook(&state, "metered", 51, 100, 1, 10)
+        get_usage_events_test_hook(&state, "claude-code", Some("metered"), 51, 100, 1, 10,)
             .unwrap()
             .total,
         0
     );
-    assert!(get_usage_dashboard_test_hook(&state, 100, 100, None).is_err());
+    assert!(
+        get_usage_dashboard_test_hook(&state, 100, 100, "claude-code")
+            .await
+            .is_err()
+    );
+
+    let mut unassigned = event();
+    unassigned.event_id = "unassigned".to_string();
+    unassigned.agent_module_id = None;
+    state.db.insert_usage_event(&unassigned).unwrap();
+    let diagnostics = get_unassigned_usage_diagnostics_test_hook(&state).unwrap();
+    assert_eq!(diagnostics.unassigned_event_count, 1);
+    assert_eq!(diagnostics.unassigned_groups[0].provider_id, "metered");
 
     assert!(refresh_provider_quota_test_hook(&state, "missing")
         .await
@@ -151,7 +182,29 @@ async fn nine_command_adapters_validate_and_never_serialize_provider_secrets() {
     assert!(refresh_provider_quota_test_hook(&state, "subscription")
         .await
         .is_err());
-    let failed_quota_dashboard = get_usage_dashboard_test_hook(&state, 0, 100, None).unwrap();
+    let subscription_binding = save_agent_provider_binding_test_hook(
+        &state,
+        AgentProviderBindingInput {
+            id: None,
+            agent_module_id: "claude-code".to_string(),
+            provider_id: "subscription".to_string(),
+            enabled: true,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        list_agent_provider_bindings_test_hook(&state, Some("claude-code"))
+            .await
+            .unwrap()
+            .iter()
+            .filter(|binding| binding.id == subscription_binding.id)
+            .count(),
+        1
+    );
+    let failed_quota_dashboard = get_usage_dashboard_test_hook(&state, 0, 100, "claude-code")
+        .await
+        .unwrap();
     let subscription = &failed_quota_dashboard.product_groups[0].subscription_providers[0];
     assert!(subscription.quota.is_none());
     assert!(subscription
@@ -206,5 +259,38 @@ fn all_five_agent_compatibility_commands_are_registered_once() {
             1,
             "{command} must be registered exactly once"
         );
+    }
+}
+
+#[test]
+fn all_task_six_agent_commands_and_legacy_routes_are_registered_once() {
+    let source = include_str!("../src/lib.rs");
+    for command in [
+        "list_dashboard_modules",
+        "save_dashboard_module",
+        "reorder_dashboard_modules",
+        "set_dashboard_module_visibility",
+        "delete_dashboard_module",
+        "list_agent_provider_bindings",
+        "save_agent_provider_binding",
+        "delete_agent_provider_binding",
+        "set_agent_provider_binding_api_key",
+        "replace_agent_provider_binding_api_key",
+        "clear_agent_provider_binding_api_key",
+        "get_agent_proxy_setup_info",
+        "get_unassigned_usage_diagnostics",
+        "get_usage_dashboard",
+        "get_usage_events",
+    ] {
+        let registration = format!("commands::{command},");
+        assert_eq!(
+            source.matches(&registration).count(),
+            1,
+            "{command} must be registered exactly once"
+        );
+    }
+    for legacy in ["get_route_bindings", "set_route_binding"] {
+        let registration = format!("commands::{legacy},");
+        assert_eq!(source.matches(&registration).count(), 1);
     }
 }

@@ -117,6 +117,26 @@ pub struct AgentProviderBindingView {
     pub updated_at: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentProxyRouteSetup {
+    pub binding_id: String,
+    pub provider_id: String,
+    pub protocol: Option<String>,
+    pub local_base_url: Option<String>,
+    pub credential_placements: Vec<String>,
+    pub credential_status: BindingCredentialStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentProxySetupInfo {
+    pub agent_module_id: String,
+    pub proxy_running: bool,
+    pub proxy_origin: String,
+    pub routes: Vec<AgentProxyRouteSetup>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageProviderInput {
@@ -280,8 +300,45 @@ pub struct QuotaFetchState {
 pub struct UsageEventPage {
     pub items: Vec<UsageEvent>,
     pub total: u64,
-    pub page: u32,
-    pub page_size: u32,
+    pub page: u64,
+    pub page_size: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnassignedUsageGroup {
+    pub provider_id: String,
+    pub source: TokenSource,
+    pub event_count: u64,
+    pub first_occurred_at: i64,
+    pub last_occurred_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchivedAgentUsageSummary {
+    pub agent_module_id: String,
+    pub event_count: u64,
+    pub first_occurred_at: i64,
+    pub last_occurred_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvalidUsageLinkSummary {
+    pub reason: String,
+    pub link_count: u64,
+    pub first_created_at: i64,
+    pub last_created_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnassignedUsageDiagnostics {
+    pub unassigned_event_count: u64,
+    pub unassigned_groups: Vec<UnassignedUsageGroup>,
+    pub archived_agent_history: Vec<ArchivedAgentUsageSummary>,
+    pub invalid_link_summaries: Vec<InvalidUsageLinkSummary>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -308,6 +365,7 @@ pub struct QuotaStatusView {
 #[serde(rename_all = "camelCase")]
 pub struct ProviderUsageView {
     pub provider: UsageProviderView,
+    pub shared_account: bool,
     pub event_count: u64,
     pub input_tokens: u64,
     pub output_tokens: u64,
@@ -337,6 +395,7 @@ pub struct ProductUsageView {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageDashboardView {
+    pub agent_module_id: String,
     pub start_at: i64,
     pub end_at: i64,
     pub product_groups: Vec<ProductUsageView>,

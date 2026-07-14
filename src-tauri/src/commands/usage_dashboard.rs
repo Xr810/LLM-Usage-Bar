@@ -1,12 +1,17 @@
+use crate::credentials::SecretString;
+use crate::database::AgentModuleDeleteOutcome;
 use crate::error::AppError;
+use crate::proxy::{ProxyConfig, ProxyStatus};
 use crate::store::AppState;
 use crate::usage::dashboard::UsageDashboardService;
 use crate::usage::domain::{
-    AgentModuleInput, AgentModuleView, RouteBinding, UsageDashboardView, UsageEventPage,
-    UsageProviderInput, UsageProviderView,
+    AgentModuleInput, AgentModuleView, AgentProviderBindingInput, AgentProviderBindingView,
+    AgentProxyRouteSetup, AgentProxySetupInfo, RouteBinding, UnassignedUsageDiagnostics,
+    UsageDashboardView, UsageEventPage, UsageProviderInput, UsageProviderView,
 };
 use crate::usage::quota::QuotaRefreshResult;
 use crate::usage::session::ProviderSessionSyncResult;
+use std::collections::{BTreeMap, BTreeSet};
 use tauri::State;
 
 #[tauri::command]
@@ -42,11 +47,82 @@ pub fn set_dashboard_module_visibility(
 }
 
 #[tauri::command]
-pub fn delete_dashboard_module(
+pub async fn delete_dashboard_module(
     state: State<'_, AppState>,
     module_id: String,
 ) -> Result<(), AppError> {
-    delete_dashboard_module_test_hook(&state, &module_id)
+    delete_dashboard_module_test_hook(&state, &module_id).await
+}
+
+#[tauri::command]
+pub async fn list_agent_provider_bindings(
+    state: State<'_, AppState>,
+    agent_module_id: Option<String>,
+) -> Result<Vec<AgentProviderBindingView>, AppError> {
+    list_agent_provider_bindings_test_hook(&state, agent_module_id.as_deref()).await
+}
+
+#[tauri::command]
+pub async fn save_agent_provider_binding(
+    state: State<'_, AppState>,
+    input: AgentProviderBindingInput,
+) -> Result<AgentProviderBindingView, AppError> {
+    save_agent_provider_binding_test_hook(&state, input).await
+}
+
+#[tauri::command]
+pub async fn delete_agent_provider_binding(
+    state: State<'_, AppState>,
+    binding_id: String,
+    expected_version: u64,
+) -> Result<(), AppError> {
+    delete_agent_provider_binding_test_hook(&state, &binding_id, expected_version).await
+}
+
+#[tauri::command]
+pub async fn set_agent_provider_binding_api_key(
+    state: State<'_, AppState>,
+    binding_id: String,
+    expected_version: u64,
+    api_key: SecretString,
+) -> Result<AgentProviderBindingView, AppError> {
+    set_agent_provider_binding_api_key_test_hook(&state, &binding_id, expected_version, api_key)
+        .await
+}
+
+#[tauri::command]
+pub async fn replace_agent_provider_binding_api_key(
+    state: State<'_, AppState>,
+    binding_id: String,
+    expected_version: u64,
+    api_key: SecretString,
+) -> Result<AgentProviderBindingView, AppError> {
+    replace_agent_provider_binding_api_key_test_hook(&state, &binding_id, expected_version, api_key)
+        .await
+}
+
+#[tauri::command]
+pub async fn clear_agent_provider_binding_api_key(
+    state: State<'_, AppState>,
+    binding_id: String,
+    expected_version: u64,
+) -> Result<AgentProviderBindingView, AppError> {
+    clear_agent_provider_binding_api_key_test_hook(&state, &binding_id, expected_version).await
+}
+
+#[tauri::command]
+pub async fn get_agent_proxy_setup_info(
+    state: State<'_, AppState>,
+    agent_module_id: String,
+) -> Result<AgentProxySetupInfo, AppError> {
+    get_agent_proxy_setup_info_test_hook(&state, &agent_module_id).await
+}
+
+#[tauri::command]
+pub fn get_unassigned_usage_diagnostics(
+    state: State<'_, AppState>,
+) -> Result<UnassignedUsageDiagnostics, AppError> {
+    get_unassigned_usage_diagnostics_test_hook(&state)
 }
 
 #[tauri::command]
@@ -88,25 +164,34 @@ pub fn set_route_binding(
 }
 
 #[tauri::command]
-pub fn get_usage_dashboard(
+pub async fn get_usage_dashboard(
     state: State<'_, AppState>,
     start_at: i64,
     end_at: i64,
-    product_group_id: Option<String>,
+    agent_module_id: String,
 ) -> Result<UsageDashboardView, AppError> {
-    get_usage_dashboard_test_hook(&state, start_at, end_at, product_group_id.as_deref())
+    get_usage_dashboard_test_hook(&state, start_at, end_at, &agent_module_id).await
 }
 
 #[tauri::command]
 pub fn get_usage_events(
     state: State<'_, AppState>,
-    provider_id: String,
+    agent_module_id: String,
+    provider_id: Option<String>,
     start_at: i64,
     end_at: i64,
-    page: u32,
-    page_size: u32,
+    page: u64,
+    page_size: u64,
 ) -> Result<UsageEventPage, AppError> {
-    get_usage_events_test_hook(&state, &provider_id, start_at, end_at, page, page_size)
+    get_usage_events_test_hook(
+        &state,
+        &agent_module_id,
+        provider_id.as_deref(),
+        start_at,
+        end_at,
+        page,
+        page_size,
+    )
 }
 
 #[tauri::command]
@@ -155,11 +240,217 @@ pub fn set_dashboard_module_visibility_test_hook(
     state.db.set_dashboard_module_visibility(module_id, visible)
 }
 
-pub fn delete_dashboard_module_test_hook(
+pub async fn delete_dashboard_module_test_hook(
     state: &AppState,
     module_id: &str,
 ) -> Result<(), AppError> {
-    state.db.delete_dashboard_module(module_id)
+    let module = state
+        .db
+        .get_agent_module_including_archived(module_id)?
+        .filter(|module| !module.is_fixed)
+        .ok_or_else(|| AppError::Message("invalid_agent_module".to_string()))?;
+    if module.archived_at.is_some() {
+        state.binding_credential_service.reconcile_startup().await?;
+    }
+    let mut bindings_by_id = state
+        .binding_credential_service
+        .list_agent_provider_bindings(Some(module_id))
+        .await?
+        .into_iter()
+        .map(|binding| (binding.id.clone(), binding))
+        .collect::<BTreeMap<_, _>>();
+    let binding_ids = if module.archived_at.is_some() {
+        bindings_by_id.keys().cloned().collect::<Vec<_>>()
+    } else {
+        match state.db.delete_agent_module(module_id)? {
+            AgentModuleDeleteOutcome::HardDeleted => Vec::new(),
+            AgentModuleDeleteOutcome::Archived { binding_ids } => binding_ids,
+        }
+    };
+
+    let mut first_error = None;
+    if binding_ids
+        .iter()
+        .any(|binding_id| !bindings_by_id.contains_key(binding_id))
+    {
+        match state
+            .binding_credential_service
+            .list_agent_provider_bindings(Some(module_id))
+            .await
+        {
+            Ok(bindings) => {
+                for binding in bindings {
+                    bindings_by_id.insert(binding.id.clone(), binding);
+                }
+            }
+            Err(error) => {
+                first_error = Some(error);
+            }
+        }
+    }
+    for binding_id in binding_ids {
+        let Some(binding) = bindings_by_id.get(&binding_id) else {
+            first_error
+                .get_or_insert_with(|| AppError::Message("credential_unavailable".to_string()));
+            continue;
+        };
+        if let Err(error) = state
+            .binding_credential_service
+            .delete_binding(&binding.id, binding.credential_version)
+            .await
+        {
+            first_error.get_or_insert(error);
+        }
+    }
+    if let Some(error) = first_error {
+        return Err(error);
+    }
+    crate::usage_events::notify_dashboard_invalidated();
+    Ok(())
+}
+
+pub async fn list_agent_provider_bindings_test_hook(
+    state: &AppState,
+    agent_module_id: Option<&str>,
+) -> Result<Vec<AgentProviderBindingView>, AppError> {
+    state
+        .binding_credential_service
+        .list_agent_provider_bindings(agent_module_id)
+        .await
+}
+
+pub async fn save_agent_provider_binding_test_hook(
+    state: &AppState,
+    input: AgentProviderBindingInput,
+) -> Result<AgentProviderBindingView, AppError> {
+    let agent_module_id = input.agent_module_id.clone();
+    let saved = state.db.save_agent_provider_binding(&input)?;
+    let view = state
+        .binding_credential_service
+        .list_agent_provider_bindings(Some(&agent_module_id))
+        .await?
+        .into_iter()
+        .find(|binding| binding.id == saved.id)
+        .ok_or_else(|| AppError::Message("binding_not_found".to_string()))?;
+    crate::usage_events::notify_dashboard_invalidated();
+    Ok(view)
+}
+
+pub async fn delete_agent_provider_binding_test_hook(
+    state: &AppState,
+    binding_id: &str,
+    expected_version: u64,
+) -> Result<(), AppError> {
+    state
+        .binding_credential_service
+        .delete_binding(binding_id, expected_version)
+        .await?;
+    crate::usage_events::notify_dashboard_invalidated();
+    Ok(())
+}
+
+pub async fn set_agent_provider_binding_api_key_test_hook(
+    state: &AppState,
+    binding_id: &str,
+    expected_version: u64,
+    api_key: SecretString,
+) -> Result<AgentProviderBindingView, AppError> {
+    let view = state
+        .binding_credential_service
+        .set_binding_api_key(binding_id, expected_version, api_key)
+        .await?;
+    crate::usage_events::notify_dashboard_invalidated();
+    Ok(view)
+}
+
+pub async fn replace_agent_provider_binding_api_key_test_hook(
+    state: &AppState,
+    binding_id: &str,
+    expected_version: u64,
+    api_key: SecretString,
+) -> Result<AgentProviderBindingView, AppError> {
+    let view = state
+        .binding_credential_service
+        .replace_binding_api_key(binding_id, expected_version, api_key)
+        .await?;
+    crate::usage_events::notify_dashboard_invalidated();
+    Ok(view)
+}
+
+pub async fn clear_agent_provider_binding_api_key_test_hook(
+    state: &AppState,
+    binding_id: &str,
+    expected_version: u64,
+) -> Result<AgentProviderBindingView, AppError> {
+    let view = state
+        .binding_credential_service
+        .clear_binding_api_key(binding_id, expected_version)
+        .await?;
+    crate::usage_events::notify_dashboard_invalidated();
+    Ok(view)
+}
+
+pub async fn get_agent_proxy_setup_info_test_hook(
+    state: &AppState,
+    agent_module_id: &str,
+) -> Result<AgentProxySetupInfo, AppError> {
+    require_active_agent(state, agent_module_id)?;
+    let bindings = state
+        .binding_credential_service
+        .list_agent_provider_bindings(Some(agent_module_id))
+        .await?;
+    let providers = state
+        .db
+        .list_usage_providers()?
+        .into_iter()
+        .map(|provider| (provider.id.clone(), provider))
+        .collect::<BTreeMap<_, _>>();
+    let status = state
+        .proxy_service
+        .get_status()
+        .await
+        .map_err(|_| AppError::Message("proxy_status_unavailable".to_string()))?;
+    let config = state
+        .proxy_service
+        .get_config()
+        .await
+        .map_err(|_| AppError::Message("proxy_status_unavailable".to_string()))?;
+    let proxy_origin = reachable_proxy_origin(&status, &config)?;
+    let routes = bindings
+        .into_iter()
+        .map(|binding| {
+            let protocol = providers
+                .get(&binding.provider_id)
+                .and_then(|provider| provider.route_app_type.clone());
+            let local_base_url = protocol
+                .as_deref()
+                .and_then(|protocol| local_proxy_base_url(&proxy_origin, protocol));
+            let credential_placements = protocol
+                .as_deref()
+                .map(allowed_credential_placements)
+                .unwrap_or_default();
+            AgentProxyRouteSetup {
+                binding_id: binding.id,
+                provider_id: binding.provider_id,
+                protocol,
+                local_base_url,
+                credential_placements,
+                credential_status: binding.credential_status,
+            }
+        })
+        .collect();
+    Ok(AgentProxySetupInfo {
+        agent_module_id: agent_module_id.to_string(),
+        proxy_running: status.running,
+        proxy_origin,
+        routes,
+    })
+}
+
+pub fn get_unassigned_usage_diagnostics_test_hook(
+    state: &AppState,
+) -> Result<UnassignedUsageDiagnostics, AppError> {
+    state.db.get_unassigned_usage_diagnostics()
 }
 
 pub fn list_usage_providers_test_hook(
@@ -198,22 +489,42 @@ pub fn set_route_binding_test_hook(
     state.db.set_route_binding(protocol, provider_id)
 }
 
-pub fn get_usage_dashboard_test_hook(
+pub async fn get_usage_dashboard_test_hook(
     state: &AppState,
     start_at: i64,
     end_at: i64,
-    product_group_id: Option<&str>,
+    agent_module_id: &str,
 ) -> Result<UsageDashboardView, AppError> {
-    UsageDashboardService::new(&state.db).get_dashboard(start_at, end_at, product_group_id)
+    require_active_agent(state, agent_module_id)?;
+    let mut effective_agents_by_provider: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for binding in state
+        .binding_credential_service
+        .list_agent_provider_bindings(None)
+        .await?
+        .into_iter()
+        .filter(|binding| binding.effective_enabled)
+    {
+        effective_agents_by_provider
+            .entry(binding.provider_id)
+            .or_default()
+            .insert(binding.agent_module_id);
+    }
+    let shared_provider_ids = effective_agents_by_provider
+        .into_iter()
+        .filter_map(|(provider_id, agent_ids)| (agent_ids.len() > 1).then_some(provider_id));
+    UsageDashboardService::new(&state.db)
+        .with_shared_provider_ids(shared_provider_ids)
+        .get_dashboard(start_at, end_at, agent_module_id)
 }
 
 pub fn get_usage_events_test_hook(
     state: &AppState,
-    provider_id: &str,
+    agent_module_id: &str,
+    provider_id: Option<&str>,
     start_at: i64,
     end_at: i64,
-    page: u32,
-    page_size: u32,
+    page: u64,
+    page_size: u64,
 ) -> Result<UsageEventPage, AppError> {
     validate_range(start_at, end_at)?;
     if !(1..=200).contains(&page_size) || page == 0 {
@@ -221,12 +532,20 @@ pub fn get_usage_events_test_hook(
             "page must be at least 1 and page_size must be between 1 and 200".to_string(),
         ));
     }
-    if state.db.get_usage_provider(provider_id)?.is_none() {
-        return Err(AppError::Message("usage provider not found".to_string()));
+    require_active_agent(state, agent_module_id)?;
+    if let Some(provider_id) = provider_id {
+        if state.db.get_usage_provider(provider_id)?.is_none() {
+            return Err(AppError::Message("usage provider not found".to_string()));
+        }
     }
-    state
-        .db
-        .list_usage_events(provider_id, start_at, end_at, page, page_size)
+    state.db.list_agent_usage_events(
+        agent_module_id,
+        provider_id,
+        start_at,
+        end_at,
+        page,
+        page_size,
+    )
 }
 
 pub async fn refresh_provider_quota_test_hook(
@@ -252,15 +571,151 @@ fn validate_range(start_at: i64, end_at: i64) -> Result<(), AppError> {
     Ok(())
 }
 
+fn require_active_agent(state: &AppState, agent_module_id: &str) -> Result<(), AppError> {
+    state
+        .db
+        .get_agent_module_including_archived(agent_module_id)?
+        .filter(|agent| agent.archived_at.is_none())
+        .map(|_| ())
+        .ok_or_else(|| AppError::Message("invalid_agent_module".to_string()))
+}
+
+fn reachable_proxy_origin(status: &ProxyStatus, config: &ProxyConfig) -> Result<String, AppError> {
+    let (address, port) = if status.running {
+        let address = if !status.address.trim().is_empty() {
+            status.address.as_str()
+        } else {
+            config.listen_address.as_str()
+        };
+        (address, status.port)
+    } else {
+        (config.listen_address.as_str(), config.listen_port)
+    };
+    if port == 0 {
+        return Err(AppError::Message("proxy_status_unavailable".to_string()));
+    }
+    let connect_host = match address {
+        "0.0.0.0" => "127.0.0.1",
+        "::" => "::1",
+        address => address,
+    };
+    let connect_host = if connect_host.contains(':') && !connect_host.starts_with('[') {
+        format!("[{connect_host}]")
+    } else {
+        connect_host.to_string()
+    };
+    Ok(format!("http://{connect_host}:{port}"))
+}
+
+fn local_proxy_base_url(proxy_origin: &str, protocol: &str) -> Option<String> {
+    let path = match protocol {
+        "claude" => "/claude",
+        "codex" => "/codex/v1",
+        "gemini" => "/gemini",
+        "claude-desktop" => "/claude-desktop",
+        _ => return None,
+    };
+    Some(format!("{}{path}", proxy_origin.trim_end_matches('/')))
+}
+
+fn allowed_credential_placements(protocol: &str) -> Vec<String> {
+    let placements: &[&str] = match protocol {
+        "claude" => &["authorization", "x-api-key", "query:key"],
+        "codex" => &["authorization", "query:key"],
+        "gemini" => &["authorization", "x-goog-api-key", "query:key"],
+        "claude-desktop" => &["authorization", "x-api-key"],
+        _ => &[],
+    };
+    placements
+        .iter()
+        .map(|placement| (*placement).to_string())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::credentials::{CredentialStore, CredentialStoreError, SecretString};
     use crate::database::Database;
-    use crate::usage::domain::AgentModuleInput;
-    use std::sync::Arc;
+    use crate::usage::domain::{
+        AgentModuleInput, AgentProviderBindingInput, BillingKind, BindingCredentialStatus,
+        CostSource, TokenSource, UsageEvent, UsageProviderInput,
+    };
+    use serde_json::json;
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
 
-    #[test]
-    fn dashboard_module_command_hooks_cover_the_full_crud_contract() {
+    #[derive(Default)]
+    struct MemoryCredentialStore {
+        items: Mutex<HashMap<String, Vec<u8>>>,
+        delete_attempts: AtomicUsize,
+        delete_failures_remaining: AtomicUsize,
+    }
+
+    impl CredentialStore for MemoryCredentialStore {
+        fn put(&self, slot: &str, secret: &[u8]) -> Result<(), CredentialStoreError> {
+            self.items
+                .lock()
+                .unwrap()
+                .insert(slot.to_string(), secret.to_vec());
+            Ok(())
+        }
+
+        fn get(&self, slot: &str) -> Result<Option<Vec<u8>>, CredentialStoreError> {
+            Ok(self.items.lock().unwrap().get(slot).cloned())
+        }
+
+        fn delete(&self, slot: &str) -> Result<(), CredentialStoreError> {
+            self.delete_attempts.fetch_add(1, Ordering::SeqCst);
+            if self
+                .delete_failures_remaining
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                    remaining.checked_sub(1)
+                })
+                .is_ok()
+            {
+                return Err(CredentialStoreError::OperationFailed);
+            }
+            self.items.lock().unwrap().remove(slot);
+            Ok(())
+        }
+    }
+
+    impl MemoryCredentialStore {
+        fn item_count(&self) -> usize {
+            self.items.lock().unwrap().len()
+        }
+
+        fn fail_next_deletes(&self, count: usize) {
+            self.delete_failures_remaining
+                .store(count, Ordering::SeqCst);
+        }
+
+        fn delete_attempt_count(&self) -> usize {
+            self.delete_attempts.load(Ordering::SeqCst)
+        }
+    }
+
+    fn direct_provider(id: &str) -> UsageProviderInput {
+        UsageProviderInput {
+            id: id.to_string(),
+            name: id.to_string(),
+            billing_kind: BillingKind::Metered,
+            product_group_id: "product".to_string(),
+            token_sources: vec![TokenSource::Proxy],
+            session_source_bindings: None,
+            quota_source: None,
+            quota_interval_seconds: None,
+            route_app_type: Some("claude".to_string()),
+            route_config: Some(json!({"baseUrl": "https://upstream.example/secret-path"})),
+            quota_config: None,
+            enabled: true,
+        }
+    }
+
+    #[tokio::test]
+    async fn dashboard_module_command_hooks_cover_the_full_crud_contract() {
         let state = AppState::new(Arc::new(Database::memory().unwrap()));
         let defaults = list_dashboard_modules_test_hook(&state).unwrap();
         assert_eq!(defaults.len(), 5);
@@ -290,7 +745,397 @@ mod tests {
         let hidden = set_dashboard_module_visibility_test_hook(&state, &created.id, false).unwrap();
         assert!(!hidden.visible);
 
-        delete_dashboard_module_test_hook(&state, &created.id).unwrap();
+        delete_dashboard_module_test_hook(&state, &created.id)
+            .await
+            .unwrap();
         assert_eq!(list_dashboard_modules_test_hook(&state).unwrap().len(), 5);
+    }
+
+    #[tokio::test]
+    async fn binding_command_hooks_cover_secret_free_key_lifecycle_and_proxy_setup() {
+        let db = Arc::new(Database::memory().unwrap());
+        db.save_usage_provider(&direct_provider("direct")).unwrap();
+        let store = Arc::new(MemoryCredentialStore::default());
+        let state = AppState::new_with_credential_store(db, store);
+
+        let binding = save_agent_provider_binding_test_hook(
+            &state,
+            AgentProviderBindingInput {
+                id: None,
+                agent_module_id: "codex".to_string(),
+                provider_id: "direct".to_string(),
+                enabled: false,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(binding.credential_version, 0);
+        assert_eq!(binding.credential_status, BindingCredentialStatus::Missing);
+        assert_eq!(
+            list_agent_provider_bindings_test_hook(&state, Some("codex"))
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+
+        let first_secret = "task-six-first-secret-value";
+        let configured = set_agent_provider_binding_api_key_test_hook(
+            &state,
+            &binding.id,
+            0,
+            SecretString::new(first_secret.to_string()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(configured.credential_version, 1);
+        assert_eq!(
+            configured.credential_status,
+            BindingCredentialStatus::Configured
+        );
+
+        let setup = get_agent_proxy_setup_info_test_hook(&state, "codex")
+            .await
+            .unwrap();
+        assert_eq!(setup.agent_module_id, "codex");
+        assert_eq!(setup.routes.len(), 1);
+        assert_eq!(setup.routes[0].provider_id, "direct");
+        assert!(setup.routes[0]
+            .credential_placements
+            .contains(&"authorization".to_string()));
+        let setup_json = serde_json::to_string(&setup).unwrap();
+        assert!(!setup_json.contains(first_secret));
+        assert!(!setup_json.contains("upstream.example"));
+        assert!(!setup_json.contains("secret-path"));
+
+        let second_secret = "task-six-second-secret-value";
+        let replaced = replace_agent_provider_binding_api_key_test_hook(
+            &state,
+            &binding.id,
+            1,
+            SecretString::new(second_secret.to_string()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(replaced.credential_version, 2);
+        let cleared = clear_agent_provider_binding_api_key_test_hook(&state, &binding.id, 2)
+            .await
+            .unwrap();
+        assert_eq!(cleared.credential_version, 3);
+        assert_eq!(cleared.credential_status, BindingCredentialStatus::Missing);
+
+        delete_agent_provider_binding_test_hook(&state, &binding.id, 3)
+            .await
+            .unwrap();
+        assert!(
+            list_agent_provider_bindings_test_hook(&state, Some("codex"))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        for public in [
+            serde_json::to_string(&configured).unwrap(),
+            serde_json::to_string(&replaced).unwrap(),
+            serde_json::to_string(&cleared).unwrap(),
+        ] {
+            assert!(!public.contains(first_secret));
+            assert!(!public.contains(second_secret));
+        }
+    }
+
+    #[tokio::test]
+    async fn proxy_setup_brackets_the_configured_ipv6_origin() {
+        let state = AppState::new(Arc::new(Database::memory().unwrap()));
+        let mut config = state.proxy_service.get_config().await.unwrap();
+        config.listen_address = "::1".to_string();
+        config.listen_port = 43_123;
+        state.proxy_service.update_config(&config).await.unwrap();
+
+        let setup = get_agent_proxy_setup_info_test_hook(&state, "codex")
+            .await
+            .unwrap();
+
+        assert_eq!(setup.proxy_origin, "http://[::1]:43123");
+    }
+
+    #[tokio::test]
+    async fn proxy_setup_rejects_an_unresolved_ephemeral_port() {
+        let state = AppState::new(Arc::new(Database::memory().unwrap()));
+        let mut config = state.proxy_service.get_config().await.unwrap();
+        config.listen_port = 0;
+        state.proxy_service.update_config(&config).await.unwrap();
+
+        let error = get_agent_proxy_setup_info_test_hook(&state, "codex")
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.to_string(), "proxy_status_unavailable");
+    }
+
+    #[tokio::test]
+    async fn deleting_custom_agent_archives_history_and_cleans_protected_bindings() {
+        let db = Arc::new(Database::memory().unwrap());
+        db.save_usage_provider(&direct_provider("direct-delete"))
+            .unwrap();
+        let custom = db
+            .save_agent_module(&AgentModuleInput {
+                id: None,
+                name: "Delete Me".to_string(),
+                sort_order: 20,
+                visible: true,
+            })
+            .unwrap();
+        let store = Arc::new(MemoryCredentialStore::default());
+        let state = AppState::new_with_credential_store(db, store.clone());
+        let binding = save_agent_provider_binding_test_hook(
+            &state,
+            AgentProviderBindingInput {
+                id: None,
+                agent_module_id: custom.id.clone(),
+                provider_id: "direct-delete".to_string(),
+                enabled: false,
+            },
+        )
+        .await
+        .unwrap();
+        set_agent_provider_binding_api_key_test_hook(
+            &state,
+            &binding.id,
+            0,
+            SecretString::new("delete-agent-protected-secret".to_string()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(store.item_count(), 1);
+
+        delete_dashboard_module_test_hook(&state, &custom.id)
+            .await
+            .unwrap();
+
+        assert!(state
+            .db
+            .get_agent_module_including_archived(&custom.id)
+            .unwrap()
+            .unwrap()
+            .archived_at
+            .is_some());
+        assert!(
+            list_agent_provider_bindings_test_hook(&state, Some(&custom.id))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(store.item_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn deleting_custom_agent_attempts_every_binding_cleanup_after_one_failure() {
+        let db = Arc::new(Database::memory().unwrap());
+        for provider_id in ["delete-first", "delete-second"] {
+            db.save_usage_provider(&direct_provider(provider_id))
+                .unwrap();
+        }
+        let custom = db
+            .save_agent_module(&AgentModuleInput {
+                id: None,
+                name: "Delete Every Binding".to_string(),
+                sort_order: 20,
+                visible: true,
+            })
+            .unwrap();
+        let store = Arc::new(MemoryCredentialStore::default());
+        let state = AppState::new_with_credential_store(db, store.clone());
+        for (provider_id, secret) in [
+            ("delete-first", "delete-first-protected-secret"),
+            ("delete-second", "delete-second-protected-secret"),
+        ] {
+            let binding = save_agent_provider_binding_test_hook(
+                &state,
+                AgentProviderBindingInput {
+                    id: None,
+                    agent_module_id: custom.id.clone(),
+                    provider_id: provider_id.to_string(),
+                    enabled: false,
+                },
+            )
+            .await
+            .unwrap();
+            set_agent_provider_binding_api_key_test_hook(
+                &state,
+                &binding.id,
+                0,
+                SecretString::new(secret.to_string()),
+            )
+            .await
+            .unwrap();
+        }
+        assert_eq!(store.item_count(), 2);
+        store.fail_next_deletes(1);
+
+        let error = delete_dashboard_module_test_hook(&state, &custom.id)
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.to_string(), "credential_unavailable");
+        assert_eq!(
+            store.delete_attempt_count(),
+            2,
+            "one cleanup failure must not skip the remaining archived binding"
+        );
+        assert_eq!(
+            list_agent_provider_bindings_test_hook(&state, Some(&custom.id))
+                .await
+                .unwrap()
+                .len(),
+            1,
+            "the failed cleanup remains journaled while the later binding is removed"
+        );
+        assert_eq!(store.item_count(), 1);
+
+        delete_dashboard_module_test_hook(&state, &custom.id)
+            .await
+            .unwrap();
+        assert!(
+            list_agent_provider_bindings_test_hook(&state, Some(&custom.id))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(store.item_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn dashboard_marks_verified_multi_agent_provider_shared_without_duplicate_usage() {
+        let db = Arc::new(Database::memory().unwrap());
+        let mut shared_provider = direct_provider("shared-direct");
+        shared_provider.billing_kind = BillingKind::Subscription;
+        db.save_usage_provider(&shared_provider).unwrap();
+        let state = AppState::new_with_credential_store(
+            db.clone(),
+            Arc::new(MemoryCredentialStore::default()),
+        );
+        for (agent_module_id, key) in [
+            ("codex", "shared-codex-protected-key"),
+            ("claude-code", "shared-claude-protected-key"),
+        ] {
+            let binding = save_agent_provider_binding_test_hook(
+                &state,
+                AgentProviderBindingInput {
+                    id: None,
+                    agent_module_id: agent_module_id.to_string(),
+                    provider_id: "shared-direct".to_string(),
+                    enabled: false,
+                },
+            )
+            .await
+            .unwrap();
+            set_agent_provider_binding_api_key_test_hook(
+                &state,
+                &binding.id,
+                0,
+                SecretString::new(key.to_string()),
+            )
+            .await
+            .unwrap();
+            let enabled = save_agent_provider_binding_test_hook(
+                &state,
+                AgentProviderBindingInput {
+                    id: Some(binding.id),
+                    agent_module_id: agent_module_id.to_string(),
+                    provider_id: "shared-direct".to_string(),
+                    enabled: true,
+                },
+            )
+            .await
+            .unwrap();
+            assert!(enabled.effective_enabled);
+        }
+        db.insert_usage_event(&UsageEvent {
+            event_id: "shared-codex-event".to_string(),
+            source: TokenSource::Proxy,
+            provider_id: "shared-direct".to_string(),
+            agent_module_id: Some("codex".to_string()),
+            product_group_id: "product".to_string(),
+            occurred_at: 50,
+            model: "model".to_string(),
+            input_tokens: 10,
+            output_tokens: 2,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+            request_id: None,
+            session_id: None,
+            upstream_correlation_id: None,
+            input_cost_usd: None,
+            output_cost_usd: None,
+            cache_read_cost_usd: None,
+            cache_creation_cost_usd: None,
+            total_cost_usd: None,
+            cost_source: CostSource::Unavailable,
+            legacy_request_id: None,
+            created_at: 50,
+        })
+        .unwrap();
+        db.append_quota_success(&crate::usage::domain::QuotaSnapshot {
+            snapshot_id: "shared-direct-quota".to_string(),
+            provider_id: "shared-direct".to_string(),
+            fetched_at: 60,
+            five_hour_utilization_percent: Some("25".to_string()),
+            five_hour_resets_at: None,
+            seven_day_utilization_percent: Some("50".to_string()),
+            seven_day_resets_at: None,
+            manual_resets_remaining: None,
+            raw_payload: json!({"private": "never-public"}),
+            created_at: 60,
+        })
+        .unwrap();
+
+        let dashboard = get_usage_dashboard_test_hook(&state, 0, 100, "codex")
+            .await
+            .unwrap();
+        let usage = &dashboard.product_groups[0].subscription_providers[0];
+        assert!(usage.shared_account);
+        assert_eq!(usage.event_count, 1);
+        assert_eq!(usage.input_tokens, 10);
+        assert!(usage.quota.is_some());
+        assert_eq!(
+            dashboard
+                .product_groups
+                .iter()
+                .flat_map(|product| product.subscription_providers.iter())
+                .filter(|provider| provider.quota.is_some())
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn every_binding_and_key_mutation_hook_invalidates_the_global_dashboard() {
+        let source = include_str!("usage_dashboard.rs");
+        let production = source.split("#[cfg(test)]").next().unwrap();
+        let notifier = ["crate::usage_events::notify_", "dashboard_invalidated();"].concat();
+        assert_eq!(
+            production.matches(&notifier).count(),
+            6,
+            "module cleanup, save/delete, and set/replace/clear must notify exactly once"
+        );
+    }
+
+    #[test]
+    fn every_successful_custom_agent_delete_reaches_invalidation() {
+        let source = include_str!("usage_dashboard.rs");
+        let delete_hook = source
+            .split("pub async fn delete_dashboard_module_test_hook")
+            .nth(1)
+            .unwrap()
+            .split("pub async fn list_agent_provider_bindings_test_hook")
+            .next()
+            .unwrap();
+
+        assert!(
+            !delete_hook.contains("return Ok(())"),
+            "hard-delete must not bypass the common successful-exit invalidation"
+        );
+        assert!(delete_hook
+            .contains("crate::usage_events::notify_dashboard_invalidated();\n    Ok(())"));
     }
 }

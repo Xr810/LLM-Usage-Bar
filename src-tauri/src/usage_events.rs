@@ -21,6 +21,7 @@ use serde::Serialize;
 /// 前端监听的事件名
 pub const EVENT_USAGE_LOG_RECORDED: &str = "usage-log-recorded";
 pub const EVENT_USAGE_INGESTION_ERROR: &str = "usage-ingestion-error";
+pub const EVENT_USAGE_DASHBOARD_INVALIDATED: &str = "usage-dashboard-invalidated";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -36,7 +37,8 @@ const DEBOUNCE_WINDOW: Duration = Duration::from_millis(200);
 static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
 
 /// 防抖标记：true 表示已有调度任务在等待 emit，后续通知合并到该任务。
-static EMIT_SCHEDULED: AtomicBool = AtomicBool::new(false);
+static LOG_EMIT_SCHEDULED: AtomicBool = AtomicBool::new(false);
+static DASHBOARD_EMIT_SCHEDULED: AtomicBool = AtomicBool::new(false);
 
 /// 在应用 setup 阶段调用一次，注入 AppHandle。
 ///
@@ -60,23 +62,51 @@ pub fn notify_log_recorded() {
         return;
     };
 
-    // 已有调度任务：本次通知被合并到既有任务里，无需再起线程。
-    if EMIT_SCHEDULED.swap(true, Ordering::AcqRel) {
+    schedule_debounced_unit_event(
+        handle.clone(),
+        EVENT_USAGE_DASHBOARD_INVALIDATED,
+        &DASHBOARD_EMIT_SCHEDULED,
+    );
+    schedule_debounced_unit_event(
+        handle.clone(),
+        EVENT_USAGE_LOG_RECORDED,
+        &LOG_EMIT_SCHEDULED,
+    );
+}
+
+fn schedule_debounced_unit_event(
+    handle: AppHandle,
+    event_name: &'static str,
+    scheduled: &'static AtomicBool,
+) {
+    if scheduled.swap(true, Ordering::AcqRel) {
         return;
     }
 
-    let handle = handle.clone();
     std::thread::spawn(move || {
         std::thread::sleep(DEBOUNCE_WINDOW);
-        // 必须先清标志再 emit：万一 emit 期间又有新通知进来，
-        // 下一轮防抖窗口会重新调度，不会丢失。
-        EMIT_SCHEDULED.store(false, Ordering::Release);
+        scheduled.store(false, Ordering::Release);
 
-        if let Err(e) = handle.emit(EVENT_USAGE_LOG_RECORDED, ()) {
-            log::warn!("emit {EVENT_USAGE_LOG_RECORDED} 失败: {e}");
+        if let Err(error) = handle.emit(event_name, ()) {
+            log::warn!("emit {event_name} 失败: {error}");
         }
     });
 }
+
+/// Notify every Agent dashboard immediately after a successful metadata or
+/// protected-credential mutation. The payload is deliberately unit so no
+/// binding, Provider, or credential-derived identifier can escape in events.
+pub fn notify_dashboard_invalidated() {
+    let Some(handle) = APP_HANDLE.get() else {
+        return;
+    };
+    if let Err(error) = handle.emit(EVENT_USAGE_DASHBOARD_INVALIDATED, ()) {
+        log::warn!("emit {EVENT_USAGE_DASHBOARD_INVALIDATED} 失败: {error}");
+    }
+}
+
+#[cfg(test)]
+fn dashboard_invalidation_payload() {}
 
 /// Emit a diagnostic-only ingestion failure event without exposing credentials,
 /// upstream payloads, or raw database errors to the renderer.
@@ -91,47 +121,59 @@ pub fn notify_ingestion_error(provider_id: &str, request_id: &str) {
 }
 
 fn ingestion_error_payload(provider_id: &str, request_id: &str) -> UsageIngestionErrorPayload {
+    let _ = (provider_id, request_id);
     UsageIngestionErrorPayload {
-        provider_id: redact_identifier(provider_id),
-        request_id: redact_identifier(request_id),
+        provider_id: "redacted".to_string(),
+        request_id: "redacted".to_string(),
         message: "usage ingestion failed",
-    }
-}
-
-fn redact_identifier(value: &str) -> String {
-    let clean: String = value
-        .chars()
-        .filter(|character| !character.is_control())
-        .collect();
-    let suffix: String = clean
-        .chars()
-        .rev()
-        .take(4)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect();
-    if suffix.is_empty() {
-        "***".to_string()
-    } else {
-        format!("***{suffix}")
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::ingestion_error_payload;
+    use super::{
+        dashboard_invalidation_payload, ingestion_error_payload, DASHBOARD_EMIT_SCHEDULED,
+        EVENT_USAGE_DASHBOARD_INVALIDATED, LOG_EMIT_SCHEDULED,
+    };
 
     #[test]
     fn ingestion_error_payload_redacts_identifiers_and_raw_message() {
         let payload =
             ingestion_error_payload("global-provider-secret", "request-with-api-key-sk-secret");
-        assert_eq!(payload.provider_id, "***cret");
-        assert_eq!(payload.request_id, "***cret");
+        assert_eq!(payload.provider_id, "redacted");
+        assert_eq!(payload.request_id, "redacted");
         assert_eq!(payload.message, "usage ingestion failed");
 
         let serialized = serde_json::to_string(&payload).unwrap();
         assert!(!serialized.contains("global-provider-secret"));
         assert!(!serialized.contains("api-key"));
+        assert!(!serialized.contains("cret"));
+    }
+
+    #[test]
+    fn dashboard_invalidation_event_uses_the_global_name_and_unit_payload() {
+        assert_eq!(
+            EVENT_USAGE_DASHBOARD_INVALIDATED,
+            "usage-dashboard-invalidated"
+        );
+        assert_eq!(
+            serde_json::to_value(dashboard_invalidation_payload()).unwrap(),
+            serde_json::Value::Null
+        );
+    }
+
+    #[test]
+    fn usage_writes_schedule_dashboard_invalidation_on_an_independent_debounce_flag() {
+        let source = include_str!("usage_events.rs");
+        let scheduling = [
+            "EVENT_USAGE_DASHBOARD_",
+            "INVALIDATED,\n        &DASHBOARD_EMIT_SCHEDULED,",
+        ]
+        .concat();
+        assert!(source.contains(&scheduling));
+        assert!(!std::ptr::eq(
+            &LOG_EMIT_SCHEDULED,
+            &DASHBOARD_EMIT_SCHEDULED
+        ));
     }
 }

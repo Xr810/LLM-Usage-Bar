@@ -2250,8 +2250,9 @@ async fn real_proxy_requests_feed_dashboard_and_route_errors_stay_local() {
     assert_eq!(estimated_event.total_cost_usd.as_deref(), Some("0.00012"));
 
     let dashboard = UsageDashboardService::new(&db)
-        .get_dashboard(start_at, end_at, Some("claude-e2e"))
+        .get_dashboard(start_at, end_at, "claude-code")
         .expect("query usage dashboard");
+    assert_eq!(dashboard.agent_module_id, "claude-code");
     assert_eq!(dashboard.product_groups.len(), 1);
     let product = &dashboard.product_groups[0];
     assert_eq!(product.input_tokens, 30);

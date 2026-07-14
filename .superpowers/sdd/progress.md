@@ -23,7 +23,7 @@ worktree `.worktrees/agent-centric-usage-modules`.
 | 3. Protected credential store and atomic key lifecycle | completed | this task commit | credentials 72/72; backup 30/30; library 2057 passed / 2 ignored; release check and Clippy pass; reviews approved |
 | 4. Credential-routed proxy and frozen event attribution | completed | this task commit | credentials 84/84; response guard 35/35; proxy E2E 16/16; library 2160 passed / 2 ignored; Clippy and both reviews approved |
 | 5. Trusted session attribution and Agent-safe dedup | completed | this task commit | session 9/9; ingestion 18/18; event DAO 11/11; session services 43/43; library 2176 passed / 2 ignored; Clippy and both reviews approved |
-| 6. Agent dashboard, events, diagnostics, commands | pending | — | — |
+| 6. Agent dashboard, events, diagnostics, commands | completed | this task commit | dashboard 11/11; commands 9/9; integration 4/4; quota 12/12; proxy E2E 16/16; library 2195 passed / 2 ignored; both reviews approved |
 | 7. Agent-centric frontend and Settings | pending | — | — |
 | 8. Integration, security review, and full acceptance | pending | — | — |
 
@@ -160,3 +160,30 @@ worktree `.worktrees/agent-centric-usage-modules`.
   exclusion may trust a link only when both endpoints have the same non-null Agent
   and Provider, must select canonical ownership by `source='proxy'`, and must expose
   invalid legacy links as diagnostics rather than rewriting migration history.
+
+## Task 6 Evidence
+
+- RED: the legacy dashboard accepted an unscoped query and combined other-Agent and
+  unassigned history. Agent-scoped tests also exposed missing historical-only quota,
+  incomplete multi-binding cleanup, unsafe proxy origins, and a successful-delete
+  invalidation bypass before each production fix.
+- Dashboard and event queries now require immutable Agent ownership. Provider cards
+  are the distinct union of display-active bindings and in-range history; quota is
+  attached once per Provider and `shared_account` uses protected-store-verified
+  effective bindings without multiplying usage totals.
+- Runtime dedup trusts only proxy-to-session links whose endpoints share the same
+  non-null Agent and Provider. Cross-Agent, cross-Provider, null-Agent, reversed,
+  and missing-endpoint legacy links remain counted and appear in diagnostics.
+- Binding/key commands use direct `SecretString` inputs and credential-aware views.
+  Custom Agent deletion attempts every protected cleanup, can resume after a failed
+  archived cleanup, and emits only payload-free successful invalidations. Proxy
+  setup exposes local-only safe metadata and handles wildcard/IPv6/port-zero state.
+- Provider-ID singleflight is shared by manual and scheduler quota collection while
+  different Providers remain independent. Usage writes retain the legacy event and
+  independently debounce the new payload-free dashboard invalidation.
+- Focused verification passes dashboard 11/11, commands 9/9, integration 4/4,
+  event/DAO/invalidation 16/16, quota 12/12, and proxy E2E 16/16. Rust format,
+  `git diff --check`, and Clippy with `-D warnings` pass. The single-thread library
+  suite passes 2195 with 2 ignored and 0 failed.
+- Independent query/aggregation and lifecycle/security reviews approved the final
+  tree with no remaining Critical or Important findings.

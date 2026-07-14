@@ -16,7 +16,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::async_runtime::JoinHandle;
-use tokio::sync::watch;
+use tokio::sync::{watch, Mutex as AsyncMutex};
 use uuid::Uuid;
 
 pub const DEFAULT_QUOTA_INTERVAL_SECONDS: u64 = 300;
@@ -116,6 +116,13 @@ impl QuotaCollector for CodingPlanQuotaCollector {
 pub struct QuotaService {
     db: Arc<Database>,
     collectors: Arc<HashMap<String, Arc<dyn QuotaCollector>>>,
+    in_flight: Arc<AsyncMutex<HashMap<String, Arc<QuotaFlight>>>>,
+}
+
+type SharedQuotaRefreshResult = Result<QuotaRefreshResult, String>;
+
+struct QuotaFlight {
+    result: watch::Sender<Option<SharedQuotaRefreshResult>>,
 }
 
 impl QuotaService {
@@ -138,6 +145,7 @@ impl QuotaService {
         Self {
             db,
             collectors: Arc::new(collectors),
+            in_flight: Arc::new(AsyncMutex::new(HashMap::new())),
         }
     }
 
@@ -150,6 +158,55 @@ impl QuotaService {
     }
 
     async fn refresh_provider_at(
+        &self,
+        provider_id: &str,
+        attempted_at: i64,
+    ) -> Result<QuotaRefreshResult, AppError> {
+        let (flight, is_leader) = {
+            let mut in_flight = self.in_flight.lock().await;
+            if let Some(flight) = in_flight.get(provider_id) {
+                (flight.clone(), false)
+            } else {
+                let (result, _) = watch::channel(None);
+                let flight = Arc::new(QuotaFlight { result });
+                in_flight.insert(provider_id.to_string(), flight.clone());
+                (flight, true)
+            }
+        };
+
+        if is_leader {
+            let service = self.clone();
+            let provider_id = provider_id.to_string();
+            let leader_flight = flight.clone();
+            tokio::spawn(async move {
+                let result = service
+                    .refresh_provider_once_at(&provider_id, attempted_at)
+                    .await
+                    .map_err(|error| error.to_string());
+                leader_flight.result.send_replace(Some(result));
+
+                let mut in_flight = service.in_flight.lock().await;
+                if in_flight
+                    .get(&provider_id)
+                    .is_some_and(|current| Arc::ptr_eq(current, &leader_flight))
+                {
+                    in_flight.remove(&provider_id);
+                }
+            });
+        }
+
+        let mut result = flight.result.subscribe();
+        loop {
+            if let Some(result) = result.borrow().clone() {
+                return result.map_err(AppError::Message);
+            }
+            result.changed().await.map_err(|_| {
+                AppError::Message("quota refresh singleflight unavailable".to_string())
+            })?;
+        }
+    }
+
+    async fn refresh_provider_once_at(
         &self,
         provider_id: &str,
         attempted_at: i64,
@@ -521,6 +578,28 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct YieldingCollector {
+        calls: AtomicUsize,
+    }
+
+    impl QuotaCollector for YieldingCollector {
+        fn source(&self) -> &'static str {
+            "fake"
+        }
+
+        fn collect<'a>(
+            &'a self,
+            _provider: &'a UsageProviderStored,
+        ) -> BoxFuture<'a, Result<SubscriptionQuota, String>> {
+            Box::pin(async move {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                tokio::task::yield_now().await;
+                Ok(successful_quota("claude"))
+            })
+        }
+    }
+
     #[test]
     fn normalizes_documented_windows_and_optional_manual_resets() {
         let quota = successful_quota("claude");
@@ -713,5 +792,64 @@ mod tests {
                 .unwrap_or_default()
                 .contains("exactly one enabled provider"));
         }
+    }
+
+    #[tokio::test]
+    async fn concurrent_manual_refreshes_share_one_provider_snapshot() {
+        let db = Arc::new(Database::memory().unwrap());
+        db.save_usage_provider(&provider("sub", BillingKind::Subscription, true))
+            .unwrap();
+        let collector = Arc::new(YieldingCollector::default());
+        let service = QuotaService::with_collectors(db.clone(), vec![collector.clone()]);
+
+        let (first, second) = tokio::join!(
+            service.refresh_provider("sub"),
+            service.refresh_provider("sub")
+        );
+        let first = first.unwrap();
+        let second = second.unwrap();
+
+        assert_eq!(collector.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(first, second);
+        assert_eq!(
+            db.conn
+                .lock()
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM quota_snapshots WHERE provider_id = 'sub'",
+                    [],
+                    |row| row.get::<_, u64>(0),
+                )
+                .unwrap(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn manual_and_scheduler_refresh_share_the_same_provider_flight() {
+        let db = Arc::new(Database::memory().unwrap());
+        db.save_usage_provider(&provider("sub", BillingKind::Subscription, true))
+            .unwrap();
+        let collector = Arc::new(YieldingCollector::default());
+        let service = QuotaService::with_collectors(db.clone(), vec![collector.clone()]);
+
+        let (manual, scheduler) =
+            tokio::join!(service.refresh_provider("sub"), service.refresh_due_at(100));
+
+        manual.unwrap();
+        assert!(scheduler.unwrap().errors.is_empty());
+        assert_eq!(collector.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            db.conn
+                .lock()
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM quota_snapshots WHERE provider_id = 'sub'",
+                    [],
+                    |row| row.get::<_, u64>(0),
+                )
+                .unwrap(),
+            1
+        );
     }
 }

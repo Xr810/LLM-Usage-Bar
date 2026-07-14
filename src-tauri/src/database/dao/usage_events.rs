@@ -1,6 +1,9 @@
 use crate::database::{lock_conn, Database};
 use crate::error::AppError;
-use crate::usage::domain::{CostSource, TokenSource, UsageEvent, UsageEventLink, UsageEventPage};
+use crate::usage::domain::{
+    ArchivedAgentUsageSummary, CostSource, InvalidUsageLinkSummary, TokenSource,
+    UnassignedUsageDiagnostics, UnassignedUsageGroup, UsageEvent, UsageEventLink, UsageEventPage,
+};
 use rusqlite::{params, types::Type, OptionalExtension, Row};
 
 fn token_source_value(source: TokenSource) -> &'static str {
@@ -305,8 +308,173 @@ impl Database {
         Ok(UsageEventPage {
             items,
             total,
+            page: u64::from(page),
+            page_size: u64::from(page_size),
+        })
+    }
+
+    pub fn list_agent_usage_events(
+        &self,
+        agent_module_id: &str,
+        provider_id: Option<&str>,
+        start_at: i64,
+        end_at: i64,
+        page: u64,
+        page_size: u64,
+    ) -> Result<UsageEventPage, AppError> {
+        if !(1..=200).contains(&page_size) {
+            return Err(AppError::Message(
+                "page size must be between 1 and 200".to_string(),
+            ));
+        }
+        if page == 0 {
+            return Err(AppError::Message("page must be at least 1".to_string()));
+        }
+        let offset = page
+            .checked_sub(1)
+            .and_then(|value| value.checked_mul(page_size))
+            .and_then(|value| i64::try_from(value).ok())
+            .ok_or_else(|| AppError::Message("pagination offset is too large".to_string()))?;
+        let limit = i64::try_from(page_size)
+            .map_err(|_| AppError::Message("page size is too large".to_string()))?;
+
+        let conn = lock_conn!(self.conn);
+        let total = conn.query_row(
+            "SELECT COUNT(*) FROM usage_events
+             WHERE agent_module_id = ?1
+               AND (?2 IS NULL OR provider_id = ?2)
+               AND occurred_at >= ?3 AND occurred_at < ?4",
+            params![agent_module_id, provider_id, start_at, end_at],
+            |row| row.get::<_, u64>(0),
+        )?;
+        let mut statement = conn.prepare(&format!(
+            "SELECT {EVENT_COLUMNS} FROM usage_events
+             WHERE agent_module_id = ?1
+               AND (?2 IS NULL OR provider_id = ?2)
+               AND occurred_at >= ?3 AND occurred_at < ?4
+             ORDER BY occurred_at DESC, event_id DESC LIMIT ?5 OFFSET ?6"
+        ))?;
+        let items = statement
+            .query_map(
+                params![
+                    agent_module_id,
+                    provider_id,
+                    start_at,
+                    end_at,
+                    limit,
+                    offset
+                ],
+                usage_event_from_row,
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(UsageEventPage {
+            items,
+            total,
             page,
             page_size,
+        })
+    }
+
+    pub fn get_unassigned_usage_diagnostics(&self) -> Result<UnassignedUsageDiagnostics, AppError> {
+        let conn = lock_conn!(self.conn);
+
+        let unassigned_event_count = conn.query_row(
+            "SELECT COUNT(*) FROM usage_events WHERE agent_module_id IS NULL",
+            [],
+            |row| row.get::<_, u64>(0),
+        )?;
+        let unassigned_groups = {
+            let mut statement = conn.prepare(
+                "SELECT provider_id, source, COUNT(*), MIN(occurred_at), MAX(occurred_at)
+                 FROM usage_events
+                 WHERE agent_module_id IS NULL
+                 GROUP BY provider_id, source
+                 ORDER BY provider_id, source",
+            )?;
+            let rows = statement
+                .query_map([], |row| {
+                    Ok(UnassignedUsageGroup {
+                        provider_id: row.get(0)?,
+                        source: enum_from_text(row.get(1)?, 1)?,
+                        event_count: nonnegative_u64(row, 2)?,
+                        first_occurred_at: row.get(3)?,
+                        last_occurred_at: row.get(4)?,
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
+        let archived_agent_history = {
+            let mut statement = conn.prepare(
+                "SELECT event.agent_module_id, COUNT(*),
+                        MIN(event.occurred_at), MAX(event.occurred_at)
+                 FROM usage_events AS event
+                 JOIN agent_modules AS agent ON agent.id = event.agent_module_id
+                 WHERE agent.archived_at IS NOT NULL
+                 GROUP BY event.agent_module_id
+                 ORDER BY event.agent_module_id",
+            )?;
+            let rows = statement
+                .query_map([], |row| {
+                    Ok(ArchivedAgentUsageSummary {
+                        agent_module_id: row.get(0)?,
+                        event_count: nonnegative_u64(row, 1)?,
+                        first_occurred_at: row.get(2)?,
+                        last_occurred_at: row.get(3)?,
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
+        let invalid_link_summaries = {
+            let mut statement = conn.prepare(
+                "WITH classified AS (
+                     SELECT link.created_at,
+                            CASE
+                              WHEN canonical.event_id IS NULL OR duplicate.event_id IS NULL
+                                THEN 'missing_endpoint'
+                              WHEN canonical.source != 'proxy'
+                                OR duplicate.source != 'session_log'
+                                THEN 'invalid_source_direction'
+                              WHEN canonical.provider_id != duplicate.provider_id
+                                THEN 'provider_mismatch'
+                              WHEN canonical.agent_module_id IS NULL
+                                OR duplicate.agent_module_id IS NULL
+                                OR canonical.agent_module_id != duplicate.agent_module_id
+                                THEN 'agent_missing_or_mismatch'
+                              ELSE NULL
+                            END AS reason
+                     FROM usage_event_links AS link
+                     LEFT JOIN usage_events AS canonical
+                       ON canonical.event_id = link.canonical_event_id
+                     LEFT JOIN usage_events AS duplicate
+                       ON duplicate.event_id = link.duplicate_event_id
+                 )
+                 SELECT reason, COUNT(*), MIN(created_at), MAX(created_at)
+                 FROM classified
+                 WHERE reason IS NOT NULL
+                 GROUP BY reason
+                 ORDER BY reason",
+            )?;
+            let rows = statement
+                .query_map([], |row| {
+                    Ok(InvalidUsageLinkSummary {
+                        reason: row.get(0)?,
+                        link_count: nonnegative_u64(row, 1)?,
+                        first_created_at: row.get(2)?,
+                        last_created_at: row.get(3)?,
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
+
+        Ok(UnassignedUsageDiagnostics {
+            unassigned_event_count,
+            unassigned_groups,
+            archived_agent_history,
+            invalid_link_summaries,
         })
     }
 }
@@ -315,7 +483,8 @@ impl Database {
 mod tests {
     use crate::database::Database;
     use crate::usage::domain::{
-        BillingKind, CostSource, TokenSource, UsageEvent, UsageEventLink, UsageProviderInput,
+        AgentModuleInput, BillingKind, CostSource, TokenSource, UsageEvent, UsageEventLink,
+        UsageProviderInput,
     };
 
     fn save_provider(db: &Database, id: &str) {
@@ -774,6 +943,156 @@ mod tests {
                     .to_string(),
                 "page size must be between 1 and 200"
             );
+        }
+    }
+
+    #[test]
+    fn agent_event_page_filters_immutable_owner_and_optional_provider() {
+        let db = Database::memory().unwrap();
+        save_provider(&db, "one");
+        save_provider(&db, "two");
+        for usage_event in [
+            event_for_agent("codex-one", "one", TokenSource::Proxy, 10, Some("codex")),
+            event_for_agent(
+                "claude-one",
+                "one",
+                TokenSource::Proxy,
+                11,
+                Some("claude-code"),
+            ),
+            event_for_agent("unassigned", "one", TokenSource::Proxy, 12, None),
+            event_for_agent("codex-two", "two", TokenSource::Proxy, 13, Some("codex")),
+            event_for_agent("codex-end", "one", TokenSource::Proxy, 20, Some("codex")),
+        ] {
+            db.insert_usage_event(&usage_event).unwrap();
+        }
+
+        let all = db
+            .list_agent_usage_events("codex", None, 10, 20, 1, 10)
+            .unwrap();
+        assert_eq!(all.total, 2);
+        assert_eq!(
+            all.items
+                .iter()
+                .map(|event| event.event_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["codex-two", "codex-one"]
+        );
+
+        let one = db
+            .list_agent_usage_events("codex", Some("one"), 10, 20, 1, 10)
+            .unwrap();
+        assert_eq!(one.total, 1);
+        assert_eq!(one.items[0].event_id, "codex-one");
+
+        let first = db
+            .list_agent_usage_events("codex", None, 10, 20, 1, 1)
+            .unwrap();
+        let second = db
+            .list_agent_usage_events("codex", None, 10, 20, 2, 1)
+            .unwrap();
+        assert_eq!(first.items[0].event_id, "codex-two");
+        assert_eq!(second.items[0].event_id, "codex-one");
+        assert!(db
+            .list_agent_usage_events("codex", None, 10, 20, u64::MAX, 200)
+            .unwrap_err()
+            .to_string()
+            .contains("pagination offset is too large"));
+    }
+
+    #[test]
+    fn diagnostics_group_only_unassigned_and_summarize_archived_and_invalid_links() {
+        let db = Database::memory().unwrap();
+        save_provider(&db, "one");
+        save_provider(&db, "two");
+        for (id, provider_id, source, occurred_at) in [
+            ("one-proxy-a", "one", TokenSource::Proxy, 10),
+            ("one-session", "one", TokenSource::SessionLog, 20),
+            ("one-proxy-b", "one", TokenSource::Proxy, 30),
+            ("two-proxy", "two", TokenSource::Proxy, 40),
+        ] {
+            let mut unassigned = event_for_agent(id, provider_id, source, occurred_at, None);
+            unassigned.request_id = Some("request-secret".to_string());
+            unassigned.session_id = Some("session-secret".to_string());
+            unassigned.upstream_correlation_id = Some("correlation-secret".to_string());
+            db.insert_usage_event(&unassigned).unwrap();
+        }
+
+        let archived = db
+            .save_agent_module(&AgentModuleInput {
+                id: None,
+                name: "Archived".to_string(),
+                sort_order: 20,
+                visible: true,
+            })
+            .unwrap();
+        db.insert_usage_event(&event_for_agent(
+            "archived-event",
+            "one",
+            TokenSource::Proxy,
+            50,
+            Some(&archived.id),
+        ))
+        .unwrap();
+        db.delete_agent_module(&archived.id).unwrap();
+
+        let canonical = event_for_agent(
+            "invalid-canonical",
+            "one",
+            TokenSource::Proxy,
+            60,
+            Some("claude-code"),
+        );
+        let duplicate = event_for_agent(
+            "invalid-duplicate",
+            "one",
+            TokenSource::SessionLog,
+            61,
+            Some("codex"),
+        );
+        db.insert_usage_event(&canonical).unwrap();
+        db.insert_usage_event(&duplicate).unwrap();
+        db.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO usage_event_links (
+                     canonical_event_id, duplicate_event_id, link_kind, link_value, created_at
+                 ) VALUES (?1, ?2, 'request_id', 'legacy-secret', 62)",
+                [canonical.event_id.as_str(), duplicate.event_id.as_str()],
+            )
+            .unwrap();
+
+        let diagnostics = db.get_unassigned_usage_diagnostics().unwrap();
+        assert_eq!(diagnostics.unassigned_event_count, 4);
+        assert_eq!(diagnostics.unassigned_groups.len(), 3);
+        let one_proxy = diagnostics
+            .unassigned_groups
+            .iter()
+            .find(|group| group.provider_id == "one" && group.source == TokenSource::Proxy)
+            .unwrap();
+        assert_eq!(one_proxy.event_count, 2);
+        assert_eq!(one_proxy.first_occurred_at, 10);
+        assert_eq!(one_proxy.last_occurred_at, 30);
+        assert_eq!(
+            diagnostics.archived_agent_history[0].agent_module_id,
+            archived.id
+        );
+        assert_eq!(diagnostics.archived_agent_history[0].event_count, 1);
+        assert_eq!(
+            diagnostics.invalid_link_summaries[0].reason,
+            "agent_missing_or_mismatch"
+        );
+        assert_eq!(diagnostics.invalid_link_summaries[0].link_count, 1);
+
+        let public = serde_json::to_string(&diagnostics).unwrap();
+        for forbidden in [
+            "request-secret",
+            "session-secret",
+            "correlation-secret",
+            "legacy-secret",
+        ] {
+            assert!(!public.contains(forbidden));
         }
     }
 }
