@@ -1,3 +1,47 @@
+# Menu Bar Usage Popover — SDD Progress
+
+This active ledger belongs to branch `codex/menu-bar-usage-popover` in the
+isolated worktree `.worktrees/menu-bar-usage-popover`. The prior Agent-Centric
+ledger is retained below as historical evidence.
+
+## Active Baseline
+
+- Plan: `docs/superpowers/plans/2026-07-15-menu-bar-usage-popover-implementation.md`
+- Base commit: `b42b4b8e` (`docs: add menu bar usage popover implementation plan`)
+- Preflight correction: `b9a51b32` (`docs: align popover plan with production dependency injection`)
+- Frontend focused baseline: `src/i18n/dashboardCopy.test.ts` passes 5/5.
+- Rust focused baseline: `database::tests::migration_v16_to_v17` passes 6/6.
+- The root checkout's user-owned Settings/dashboard edits and `.pnpm-store/`
+  remain outside this worktree.
+- Worktree pnpm commands use `--config.verify-deps-before-run=false` with the
+  root checkout's existing dependency store; no network install is required.
+
+## Active Task Ledger
+
+| Task | State | Commit | Verification |
+| --- | --- | --- | --- |
+| 1. Schema v18 and daily budget persistence | in progress | — | baseline passed; RED/GREEN pending |
+| 2. Usage severity policy | pending | — | — |
+| 3. Usage snapshot projection | pending | — | — |
+| 4. Refresh orchestration and stale snapshot | pending | — | — |
+| 5. Real menu-bar dot assets | pending | — | — |
+| 6. macOS tray and popover window contract | pending | — | — |
+| 7. Popover renderer shell and payload | pending | — | — |
+| 8. Compact usage popover UI | pending | — | — |
+| 9. Daily budget settings | pending | — | — |
+| 10. Full verification and visual QA | pending | — | — |
+
+## Active Review Notes
+
+- A task is complete only after focused verification and independent review.
+- Preserve the last successful snapshot on refresh failure and never expose raw
+  provider configuration or credentials in renderer-safe payloads.
+- Subscription severity is green above 50%, yellow from 20% through 50%, and
+  red below 20%; metered severity is green below 50% of budget, yellow from 50%
+  through below 80%, and red at or above 80%.
+
+---
+
 # Agent-Centric Usage Modules — SDD Progress
 
 This ledger belongs to branch `codex/agent-centric-usage-modules` in the isolated
