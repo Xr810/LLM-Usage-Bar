@@ -71,6 +71,7 @@ upstream Key while retaining distinct local credentials for each Agent.
 - Converting existing custom Providers into one of the five system cards.
 - Importing legacy plaintext API Keys into protected storage without explicit user
   action.
+- Reading, copying, storing, or proxying with Claude Free/Pro/Max OAuth tokens.
 - Removing the existing Add Provider flow or custom Provider presets.
 - Expanding this release to additional fixed Providers.
 
@@ -108,7 +109,7 @@ identity:
 | System key | Display name | Billing | Authentication | Canonical endpoint |
 | --- | --- | --- | --- | --- |
 | `chatgpt-subscription` | ChatGPT Plus/Pro | Subscription | Managed Codex OAuth | Existing Codex OAuth backend |
-| `claude-subscription` | Claude Pro/Max | Subscription | Official Claude Code account login | Managed by Claude Code |
+| `claude-subscription` | Claude Pro/Max | Subscription | Official `claude auth` CLI | Managed entirely by Claude Code |
 | `openai-api` | OpenAI API | Metered | Provider API Key | `https://api.openai.com/v1` |
 | `anthropic-api` | Anthropic API | Metered | Provider API Key | `https://api.anthropic.com` |
 | `openrouter-api` | OpenRouter | Metered | Provider API Key | `https://openrouter.ai/api/v1` |
@@ -176,10 +177,11 @@ cards only, avoiding an unsafe reinterpretation of existing credentials.
 ### Managed subscription credentials
 
 The ChatGPT card references the existing managed Codex OAuth account state. The
-Claude card starts and verifies the official Claude Code account login instead of
-implementing a separate Anthropic OAuth client. Subscription credentials remain
-owned by their existing managed account stores and are referenced, not copied, by
-the system Provider.
+Claude card launches the official `claude auth login` command and verifies the
+result through `claude auth status`. LLM Usage Bar does not implement a Claude.ai
+OAuth client and does not read, copy, store, inject, refresh, or proxy with the
+Claude OAuth token. The Claude system Provider projects only CLI authentication
+status, subscription/quota state, and Claude Code session attribution.
 
 ## Seeding and Reconciliation
 
@@ -223,8 +225,10 @@ Each card shows:
 ### Subscription cards
 
 - ChatGPT Plus/Pro offers “Sign in with ChatGPT,” reconnect, and disconnect.
-- Claude Pro/Max offers “Sign in with Claude,” reconnect, and disconnect through
-  the official Claude Code login path.
+- Claude Pro/Max offers “Sign in with Claude,” reconnect, and disconnect by running
+  the official `claude auth login`, `claude auth status`, and
+  `claude auth logout` commands. The login command runs interactively in a visible
+  terminal; status is parsed only from the CLI's documented JSON output.
 - Successful authentication makes an otherwise valid requested binding effective.
 - Disconnecting keeps binding choices but makes every dependent binding
   ineffective immediately.
@@ -245,9 +249,12 @@ Users may add, remove, enable, or disable any compatible Agent binding. Adding a
 fixed API binding generates its local proxy credential. The UI shows the Agent's
 local endpoint and provides an explicit copy/rotate action for the local Key.
 
-Bindings configure LLM Usage Bar routing and attribution only. The app presents the
-values an external Agent needs but does not silently edit that Agent's live
-configuration.
+Fixed API bindings configure LLM Usage Bar routing and attribution. The ChatGPT
+binding uses the existing managed Codex path. The Claude Pro/Max binding is
+observation-only: it associates official Claude Code subscription status and
+session usage with the Claude Code Agent and is never accepted as a local proxy
+route. The app presents the values an external Agent needs but does not silently
+edit that Agent's live configuration.
 
 ## Proxy Data Flow
 
@@ -272,8 +279,12 @@ For a fixed API Provider request:
 The local credential must not survive in the upstream URL, headers, body, logs, or
 error messages.
 
-Managed subscription requests follow the same frozen Agent–Provider ownership
-rules, but upstream authentication comes from the referenced managed account.
+ChatGPT subscription requests continue to use the existing managed Codex path and
+the same frozen Agent–Provider ownership rules. Claude Pro/Max is not a proxy
+request path: any attempt to resolve its system Provider as an upstream proxy route
+is rejected locally. Claude Code continues to communicate through Anthropic's own
+official client and credential handling, while LLM Usage Bar observes only status,
+quota, and trusted Claude Code session data.
 
 ## Failure Behavior
 
@@ -303,7 +314,7 @@ Upgrade rules are conservative:
 - an existing managed ChatGPT/Codex OAuth account may be referenced by the new
   ChatGPT card because no secret is copied;
 - existing Claude Code login state may be verified by the new Claude card through
-  its official integration;
+  `claude auth status`, without reading its credential files or Keychain entries;
 - legacy plaintext API Keys are not copied into the fixed cards;
 - existing binding secrets are not reinterpreted as shared Provider credentials;
   and
@@ -322,6 +333,9 @@ adopting an ambiguous or exportable legacy secret.
 - One local credential resolves to at most one active binding.
 - Local credentials are never forwarded upstream.
 - Provider credentials are never accepted as local binding credentials.
+- Claude OAuth tokens are never read, copied, stored, returned, refreshed, injected,
+  or used for proxy routing by LLM Usage Bar.
+- The Claude Pro/Max system Provider is rejected by every local proxy route.
 - Provider disconnect or disable invalidates every dependent route immediately.
 - Binding edits affect future requests only and cannot reattribute history.
 - Proxy resolution completes before network I/O and holds no database or
@@ -344,8 +358,11 @@ adopting an ambiguous or exportable legacy secret.
 
 ### Authentication and credential lifecycle
 
-- ChatGPT and Claude login, expiry, reconnect, and disconnect states project onto
-  their cards and dependent bindings.
+- ChatGPT login, expiry, reconnect, and disconnect states project onto its card and
+  dependent binding.
+- Claude login, status, reconnect, and logout use only the documented
+  `claude auth` commands; tests inject a command runner and prove no credential
+  file, Keychain item, or OAuth token is read.
 - Provider API Key set, replace, clear, reconciliation, and connection test are
   covered with injected protected stores.
 - Local binding Key generation, explicit copy, rotation, and invalidation are
@@ -362,6 +379,8 @@ adopting an ambiguous or exportable legacy secret.
   Provider.
 - Requests with missing, unknown, duplicated, stale, or protocol-mismatched local
   credentials produce zero upstream calls.
+- Requests that select the Claude Pro/Max system Provider produce zero upstream
+  calls and a local unsupported-route error.
 - Upstream requests contain the Provider credential and no local credential.
 - Concurrent credential rotation and binding disable tests prove the existing
   request boundary is linearizable and future requests fail closed.
