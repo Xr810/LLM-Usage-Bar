@@ -8,9 +8,10 @@ use axum::{
 };
 use llm_usage_bar_lib::{
     credentials::{BindingCredentialService, CredentialStore, CredentialStoreError, SecretString},
+    get_agent_proxy_setup_info_test_hook, get_unassigned_usage_diagnostics_test_hook,
     usage::dashboard::UsageDashboardService,
-    AgentModuleInput, AgentProviderBindingInput, AgentProviderBindingView, BillingKind, CostSource,
-    Database, Provider, ProxyService, TokenSource, UsageEventPage, UsageProviderInput,
+    AgentModuleInput, AgentProviderBindingInput, AgentProviderBindingView, AppState, BillingKind,
+    CostSource, Database, Provider, ProxyService, TokenSource, UsageEventPage, UsageProviderInput,
 };
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -20,6 +21,8 @@ use std::sync::{
 };
 use std::time::Duration;
 use tokio::sync::{oneshot, Notify};
+
+const SYSTEM_OPENROUTER_PROVIDER_ID: &str = "system-openrouter-api";
 
 #[derive(Default)]
 struct MemoryCredentialStore {
@@ -1510,6 +1513,287 @@ async fn wait_for_events(
     })
     .await
     .expect("usage ingestion completed")
+}
+
+async fn wait_for_provider_events(
+    db: &Database,
+    provider_id: &str,
+    start_at: i64,
+    end_at: i64,
+    expected: u64,
+) -> UsageEventPage {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let page = db
+                .list_usage_events(provider_id, start_at, end_at, 1, 20)
+                .expect("query Provider usage events");
+            if page.total == expected {
+                return page;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("Provider usage ingestion completed")
+}
+
+#[tokio::test]
+async fn shared_openrouter_secret_leak_regression_preserves_edits_after_restart() {
+    const SHARED_UPSTREAM_KEY: &str = "openrouter-shared-upstream-e2e-sentinel";
+
+    ensure_app_log_capture();
+    CAPTURED_APP_LOGS
+        .lock()
+        .expect("captured app logs lock")
+        .clear();
+    let hits = Arc::new(AtomicUsize::new(0));
+    let captured = Arc::new(Mutex::new(Vec::new()));
+    let (upstream, upstream_shutdown) = start_mock_upstream(hits.clone(), captured.clone()).await;
+    let directory = tempfile::tempdir().expect("temporary OpenRouter database directory");
+    let database_path = directory.path().join("shared-openrouter.db");
+    let db = Arc::new(Database::init_at(&database_path).expect("initialize OpenRouter database"));
+
+    // The production catalog remains canonical. This file-backed test changes
+    // only its private fixture endpoint so the real proxy can hit a local
+    // capture server without weakening the system Provider mutation API.
+    let fixture_connection =
+        rusqlite::Connection::open(&database_path).expect("open fixture database connection");
+    fixture_connection
+        .execute(
+            "UPDATE usage_providers
+             SET route_config = ?2
+             WHERE id = ?1",
+            rusqlite::params![
+                SYSTEM_OPENROUTER_PROVIDER_ID,
+                json!({
+                    "base_url": format!("http://{upstream}"),
+                    "apiFormat": "openai_responses",
+                    "authMode": "bearer"
+                })
+                .to_string()
+            ],
+        )
+        .expect("point fixture OpenRouter at mock upstream");
+    drop(fixture_connection);
+
+    let store = Arc::new(MemoryCredentialStore::default());
+    let credentials = BindingCredentialService::new(db.clone(), store.clone());
+    credentials
+        .ensure_fixed_api_binding_local_keys()
+        .await
+        .expect("generate default OpenRouter local keys");
+    credentials
+        .set_provider_api_key(
+            SYSTEM_OPENROUTER_PROVIDER_ID,
+            0,
+            SecretString::new(SHARED_UPSTREAM_KEY.to_string()),
+        )
+        .await
+        .expect("protect the shared OpenRouter key");
+
+    let mut agent_bindings = Vec::new();
+    for agent_module_id in ["opencode", "openclaw", "hermes"] {
+        let binding = credentials
+            .list_agent_provider_bindings(Some(agent_module_id))
+            .await
+            .expect("list generated fixed binding")
+            .into_iter()
+            .find(|binding| binding.provider_id == SYSTEM_OPENROUTER_PROVIDER_ID)
+            .expect("default OpenRouter binding");
+        let reveal = credentials
+            .reveal_local_binding_key(&binding.id, binding.credential_version)
+            .await
+            .expect("reveal one local key for client setup");
+        agent_bindings.push((agent_module_id, binding, reveal.local_key.clone()));
+    }
+    let local_keys = agent_bindings
+        .iter()
+        .map(|(_, _, key)| key.clone())
+        .collect::<Vec<_>>();
+    let mut unique_local_keys = local_keys.clone();
+    unique_local_keys.sort();
+    unique_local_keys.dedup();
+    assert_eq!(unique_local_keys.len(), 3);
+
+    let (proxy, proxy_port) = start_proxy(db.clone(), store.clone()).await;
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .expect("build local OpenRouter client");
+    let start_at = chrono::Utc::now().timestamp() - 2;
+    let mut public_responses = Vec::new();
+    for (agent_module_id, _, local_key) in &agent_bindings {
+        let response = client
+            .post(format!(
+                "http://127.0.0.1:{proxy_port}/{agent_module_id}/v1/responses"
+            ))
+            .bearer_auth(local_key)
+            .json(&json!({
+                "model": "openai/gpt-5",
+                "input": format!("hello from {agent_module_id}"),
+                "stream": false
+            }))
+            .send()
+            .await
+            .expect("send namespaced OpenRouter request");
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        public_responses.push(response.text().await.expect("read OpenRouter response"));
+    }
+
+    assert_eq!(hits.load(Ordering::SeqCst), 3);
+    let requests = captured.lock().expect("captured requests lock").clone();
+    assert_eq!(requests.len(), 3);
+    for request in &requests {
+        assert_eq!(
+            captured_header(request, "authorization"),
+            Some(format!("Bearer {SHARED_UPSTREAM_KEY}").as_str())
+        );
+        let serialized = format!("{}\n{}\n{:?}", request.uri, request.body, request.headers);
+        for local_key in &local_keys {
+            assert!(
+                !serialized.contains(local_key),
+                "upstream received a local key"
+            );
+        }
+    }
+
+    let end_at = chrono::Utc::now().timestamp() + 10;
+    let events =
+        wait_for_provider_events(&db, SYSTEM_OPENROUTER_PROVIDER_ID, start_at, end_at, 3).await;
+    for (index, (agent_module_id, _, _)) in agent_bindings.iter().enumerate() {
+        let correlation_id = format!("resp-e2e-{index}");
+        let event = events
+            .items
+            .iter()
+            .find(|event| event.upstream_correlation_id.as_deref() == Some(&correlation_id))
+            .expect("OpenRouter event for namespaced request");
+        assert_eq!(event.provider_id, SYSTEM_OPENROUTER_PROVIDER_ID);
+        assert_eq!(event.agent_module_id.as_deref(), Some(*agent_module_id));
+    }
+
+    let status_body = client
+        .get(format!("http://127.0.0.1:{proxy_port}/status"))
+        .send()
+        .await
+        .expect("read proxy status")
+        .text()
+        .await
+        .expect("read proxy status body");
+    let command_state = AppState::new_with_credential_store(db.clone(), store.clone());
+    let mut setup_views = Vec::new();
+    for agent_module_id in ["opencode", "openclaw", "hermes"] {
+        setup_views.push(
+            get_agent_proxy_setup_info_test_hook(&command_state, agent_module_id)
+                .await
+                .expect("project Agent proxy setup"),
+        );
+    }
+    let ordinary_surfaces = format!(
+        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
+        serde_json::to_string(&credentials.list_usage_providers().await.unwrap()).unwrap(),
+        serde_json::to_string(
+            &credentials
+                .list_agent_provider_bindings(None)
+                .await
+                .unwrap()
+        )
+        .unwrap(),
+        serde_json::to_string(&events).expect("serialize attributed usage events"),
+        serde_json::to_string(&setup_views).expect("serialize proxy setup views"),
+        serde_json::to_string(&get_unassigned_usage_diagnostics_test_hook(&command_state).unwrap())
+            .expect("serialize diagnostics"),
+        db.export_sql_string().expect("export full SQL"),
+        db.export_sql_string_for_sync().expect("export sync SQL"),
+        [public_responses.join("\n"), status_body].join("\n")
+    );
+    for secret in local_keys
+        .iter()
+        .map(String::as_str)
+        .chain(std::iter::once(SHARED_UPSTREAM_KEY))
+    {
+        assert!(
+            !ordinary_surfaces.contains(secret),
+            "ordinary surface leaked a key"
+        );
+    }
+    let mut all_keys = local_keys.iter().map(String::as_str).collect::<Vec<_>>();
+    all_keys.push(SHARED_UPSTREAM_KEY);
+    assert_app_logs_omit_binding_keys(&all_keys);
+    drop(command_state);
+
+    let openclaw = agent_bindings
+        .iter()
+        .find(|(agent, _, _)| *agent == "openclaw")
+        .expect("OpenClaw binding")
+        .1
+        .clone();
+    credentials
+        .delete_binding(&openclaw.id, openclaw.credential_version)
+        .await
+        .expect("remove the default OpenClaw binding");
+    let added_codex = credentials
+        .create_system_api_binding(AgentProviderBindingInput {
+            id: None,
+            agent_module_id: "codex".to_string(),
+            provider_id: SYSTEM_OPENROUTER_PROVIDER_ID.to_string(),
+            enabled: true,
+        })
+        .await
+        .expect("add a manual OpenRouter Codex binding");
+    let added_codex_key = credentials
+        .reveal_local_binding_key(&added_codex.id, added_codex.credential_version)
+        .await
+        .expect("reveal manual binding key for persistence assertion")
+        .local_key
+        .clone();
+    db.set_usage_provider_enabled(SYSTEM_OPENROUTER_PROVIDER_ID, false)
+        .expect("persist disabled OpenRouter state");
+
+    proxy.stop().await.expect("stop proxy");
+    drop(proxy);
+    drop(credentials);
+    drop(db);
+    let _ = upstream_shutdown.send(());
+
+    let reopened = Arc::new(Database::init_at(&database_path).expect("reopen OpenRouter database"));
+    let restarted_credentials = BindingCredentialService::new(reopened.clone(), store);
+    let restarted_provider = restarted_credentials
+        .list_usage_providers()
+        .await
+        .expect("reconcile Provider status after restart")
+        .into_iter()
+        .find(|provider| provider.id == SYSTEM_OPENROUTER_PROVIDER_ID)
+        .expect("fixed OpenRouter card after restart");
+    assert!(!restarted_provider.enabled);
+    assert_eq!(
+        restarted_provider.upstream_credential_status,
+        llm_usage_bar_lib::BindingCredentialStatus::Configured
+    );
+    assert!(!restarted_provider
+        .bindings
+        .iter()
+        .any(|binding| binding.agent_module_id == "openclaw"));
+    assert!(restarted_provider.bindings.iter().any(|binding| {
+        binding.agent_module_id == "codex"
+            && binding.local_credential_status
+                == llm_usage_bar_lib::BindingCredentialStatus::Configured
+    }));
+    let restarted_sql = reopened.export_sql_string().expect("export restarted SQL");
+    for secret in [SHARED_UPSTREAM_KEY, added_codex_key.as_str()]
+        .into_iter()
+        .chain(local_keys.iter().map(String::as_str))
+    {
+        assert!(!restarted_sql.contains(secret));
+    }
+    let database_bytes = std::fs::read(&database_path).expect("read restarted database file");
+    for secret in [SHARED_UPSTREAM_KEY, added_codex_key.as_str()]
+        .into_iter()
+        .chain(local_keys.iter().map(String::as_str))
+    {
+        assert!(!database_bytes
+            .windows(secret.len())
+            .any(|window| window == secret.as_bytes()));
+    }
 }
 
 #[tokio::test]

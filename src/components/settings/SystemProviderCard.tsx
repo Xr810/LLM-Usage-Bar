@@ -111,9 +111,13 @@ export function SystemProviderCard({ provider }: SystemProviderCardProps) {
                 ? t("usageDashboard.upstreamKeyConfigured", {
                     defaultValue: "Upstream API key configured",
                   })
-                : t("usageDashboard.upstreamKeyMissing", {
-                    defaultValue: "Upstream API key required",
-                  })}
+                : provider.upstreamCredentialStatus === "unavailable"
+                  ? t("usageDashboard.credentialUnavailable", {
+                      defaultValue: "Credential unavailable",
+                    })
+                  : t("usageDashboard.upstreamKeyMissing", {
+                      defaultValue: "Upstream API key required",
+                    })}
             </div>
             <div className="flex flex-wrap gap-2">
               <Button size="sm" onClick={() => setKeyDialogOpen(true)}>
@@ -177,9 +181,10 @@ export function SystemProviderCard({ provider }: SystemProviderCardProps) {
                 </>
               ) : null}
             </div>
-            {connectionStatus ? (
+            {(connectionStatus ?? provider.lastConnectionTestStatus) ? (
               <div className="text-xs text-muted-foreground">
-                {connectionStatus === "success"
+                {(connectionStatus ?? provider.lastConnectionTestStatus) ===
+                "success"
                   ? t("usageDashboard.connectionSucceeded", {
                       defaultValue: "Connection succeeded",
                     })

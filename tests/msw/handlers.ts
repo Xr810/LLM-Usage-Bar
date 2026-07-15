@@ -138,6 +138,172 @@ const customBindingCredentialFields = {
 
 const initialUsageProvidersFixture: UsageProviderView[] = [
   {
+    id: "system-chatgpt-subscription",
+    name: "ChatGPT Plus/Pro",
+    billingKind: "subscription",
+    productGroupId: "chatgpt-subscription",
+    tokenSources: ["proxy", "session_log"],
+    sessionSourceBindings: [],
+    bindings: [
+      {
+        ...customBindingCredentialFields,
+        id: "system-binding-chatgpt-codex",
+        agentModuleId: "codex",
+        providerId: "system-chatgpt-subscription",
+        enabled: true,
+        effectiveEnabled: false,
+        credentialStatus: "not_required",
+        canClearCredential: false,
+        credentialVersion: 0,
+        routeProtocol: "codex",
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ],
+    quotaSource: "codex",
+    quotaIntervalSeconds: 300,
+    routeAppType: "codex",
+    enabled: true,
+    needsReview: false,
+    createdAt: 1,
+    updatedAt: 1,
+    routeBaseUrl: null,
+    hasRouteCredentials: false,
+    systemPresetKey: "chatgpt-subscription",
+    systemAuthKind: "codex_oauth",
+    canonicalEndpoint: null,
+    compatibleAgentModuleIds: ["codex"],
+    upstreamCredentialStatus: "not_required",
+    upstreamCredentialVersion: 0,
+    canClearUpstreamCredential: false,
+    lastConnectionTestAt: null,
+    lastConnectionTestStatus: null,
+  },
+  {
+    id: "system-claude-subscription",
+    name: "Claude Pro/Max",
+    billingKind: "subscription",
+    productGroupId: "claude-subscription",
+    tokenSources: ["session_log"],
+    sessionSourceBindings: [],
+    bindings: [
+      {
+        ...customBindingCredentialFields,
+        id: "system-binding-claude-code",
+        agentModuleId: "claude-code",
+        providerId: "system-claude-subscription",
+        enabled: true,
+        effectiveEnabled: false,
+        credentialStatus: "not_required",
+        canClearCredential: false,
+        credentialVersion: 0,
+        routeProtocol: null,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ],
+    quotaSource: null,
+    quotaIntervalSeconds: null,
+    routeAppType: null,
+    enabled: true,
+    needsReview: false,
+    createdAt: 1,
+    updatedAt: 1,
+    routeBaseUrl: null,
+    hasRouteCredentials: false,
+    systemPresetKey: "claude-subscription",
+    systemAuthKind: "claude_cli",
+    canonicalEndpoint: null,
+    compatibleAgentModuleIds: ["claude-code"],
+    upstreamCredentialStatus: "not_required",
+    upstreamCredentialVersion: 0,
+    canClearUpstreamCredential: false,
+    lastConnectionTestAt: null,
+    lastConnectionTestStatus: null,
+  },
+  ...(
+    [
+      [
+        "system-openai-api",
+        "OpenAI API",
+        "openai-api",
+        "https://api.openai.com/v1",
+        ["codex", "opencode", "openclaw", "hermes"],
+      ],
+      [
+        "system-anthropic-api",
+        "Anthropic API",
+        "anthropic-api",
+        "https://api.anthropic.com",
+        ["claude-code"],
+      ],
+      [
+        "system-openrouter-api",
+        "OpenRouter",
+        "openrouter-api",
+        "https://openrouter.ai/api/v1",
+        ["claude-code", "codex", "opencode", "openclaw", "hermes"],
+      ],
+    ] as const
+  ).map(
+    ([
+      id,
+      name,
+      systemPresetKey,
+      canonicalEndpoint,
+      compatibleAgentModuleIds,
+    ]) =>
+      ({
+        id,
+        name,
+        billingKind: "metered",
+        productGroupId: systemPresetKey,
+        tokenSources: ["proxy"],
+        sessionSourceBindings: [],
+        bindings:
+          id === "system-openrouter-api"
+            ? compatibleAgentModuleIds
+                .filter((agentModuleId) =>
+                  ["opencode", "openclaw", "hermes"].includes(agentModuleId),
+                )
+                .map((agentModuleId, index) => ({
+                  ...customBindingCredentialFields,
+                  id: `system-binding-openrouter-${agentModuleId}`,
+                  agentModuleId,
+                  providerId: id,
+                  enabled: true,
+                  effectiveEnabled: false,
+                  credentialStatus: "missing",
+                  canClearCredential: true,
+                  credentialVersion: 1,
+                  routeProtocol: agentModuleId,
+                  localCredentialStatus: "configured",
+                  providerCredentialStatus: "missing",
+                  createdAt: 2 + index,
+                  updatedAt: 2 + index,
+                }))
+            : [],
+        quotaSource: null,
+        quotaIntervalSeconds: null,
+        routeAppType: id === "system-anthropic-api" ? "claude" : "codex",
+        enabled: true,
+        needsReview: false,
+        createdAt: 1,
+        updatedAt: 1,
+        routeBaseUrl: canonicalEndpoint,
+        hasRouteCredentials: false,
+        systemPresetKey,
+        systemAuthKind: "provider_api_key",
+        canonicalEndpoint,
+        compatibleAgentModuleIds: [...compatibleAgentModuleIds],
+        upstreamCredentialStatus: "missing",
+        upstreamCredentialVersion: 0,
+        canClearUpstreamCredential: false,
+        lastConnectionTestAt: null,
+        lastConnectionTestStatus: null,
+      }) satisfies UsageProviderView,
+  ),
+  {
     ...customProviderSystemFields,
     id: "subscription-official",
     name: "Official Subscription",
@@ -425,10 +591,11 @@ const recomputeAgentBindingState = () => {
 
 const sharedAccountForProvider = (providerId: string) =>
   new Set(
-    usageProvider(providerId).bindings
-      .filter(
+    usageProvider(providerId)
+      .bindings.filter(
         (binding) =>
-          binding.effectiveEnabled && Boolean(activeAgent(binding.agentModuleId)),
+          binding.effectiveEnabled &&
+          Boolean(activeAgent(binding.agentModuleId)),
       )
       .map((binding) => binding.agentModuleId),
   ).size > 1;
@@ -650,6 +817,103 @@ export const handlers = [
   ),
   http.post(`${TAURI_ENDPOINT}/list_usage_providers`, () =>
     success(usageProvidersFixture),
+  ),
+  ...(
+    ["set_system_provider_api_key", "replace_system_provider_api_key"] as const
+  ).map((command) =>
+    http.post(`${TAURI_ENDPOINT}/${command}`, async ({ request }) => {
+      const { providerId, expectedVersion } = await withJson<{
+        providerId: string;
+        expectedVersion: number;
+        apiKey: string;
+      }>(request);
+      const provider = usageProvidersFixture.find(
+        (candidate) => candidate.id === providerId,
+      );
+      if (
+        !provider ||
+        provider.systemAuthKind !== "provider_api_key" ||
+        provider.upstreamCredentialVersion !== expectedVersion
+      ) {
+        return rejectUsageRequest("credential_conflict");
+      }
+      provider.upstreamCredentialStatus = "configured";
+      provider.upstreamCredentialVersion += 1;
+      provider.canClearUpstreamCredential = true;
+      provider.updatedAt += 1;
+      provider.bindings = provider.bindings.map((binding) => ({
+        ...binding,
+        credentialStatus:
+          binding.localCredentialStatus === "configured"
+            ? "configured"
+            : binding.credentialStatus,
+        providerCredentialStatus: "configured",
+      }));
+      recomputeAgentBindingState();
+      return success(provider);
+    }),
+  ),
+  http.post(
+    `${TAURI_ENDPOINT}/clear_system_provider_api_key`,
+    async ({ request }) => {
+      const { providerId, expectedVersion } = await withJson<{
+        providerId: string;
+        expectedVersion: number;
+      }>(request);
+      const provider = usageProvidersFixture.find(
+        (candidate) => candidate.id === providerId,
+      );
+      if (
+        !provider ||
+        provider.systemAuthKind !== "provider_api_key" ||
+        provider.upstreamCredentialVersion !== expectedVersion
+      ) {
+        return rejectUsageRequest("credential_conflict");
+      }
+      provider.upstreamCredentialStatus = "missing";
+      provider.upstreamCredentialVersion += 1;
+      provider.canClearUpstreamCredential = false;
+      provider.updatedAt += 1;
+      provider.bindings = provider.bindings.map((binding) => ({
+        ...binding,
+        credentialStatus: "missing",
+        providerCredentialStatus: "missing",
+      }));
+      recomputeAgentBindingState();
+      return success(provider);
+    },
+  ),
+  http.post(
+    `${TAURI_ENDPOINT}/test_system_provider_connection`,
+    async ({ request }) => {
+      const { providerId } = await withJson<{ providerId: string }>(request);
+      return success({
+        providerId,
+        success: true,
+        status: "success",
+        testedAt: 1_000,
+        errorCode: null,
+      });
+    },
+  ),
+  http.post(`${TAURI_ENDPOINT}/get_claude_cli_auth_status`, () =>
+    success({
+      installed: true,
+      authenticated: false,
+      subscriptionType: null,
+      quotaAvailability: "unavailable",
+      errorCode: null,
+    }),
+  ),
+  http.post(`${TAURI_ENDPOINT}/start_claude_cli_login`, () => success(null)),
+  http.post(`${TAURI_ENDPOINT}/logout_claude_cli`, () =>
+    success({
+      installed: true,
+      authenticated: false,
+      subscriptionType: null,
+      quotaAvailability: "unavailable",
+      errorCode: null,
+    }),
   ),
   http.post(`${TAURI_ENDPOINT}/save_usage_provider`, async ({ request }) => {
     const { input } = await withJson<{ input: UsageProviderInput }>(request);

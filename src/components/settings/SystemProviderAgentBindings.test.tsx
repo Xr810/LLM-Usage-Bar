@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SystemProviderAgentBindings } from "./SystemProviderAgentBindings";
 import type { UsageProviderView } from "@/types/usageDashboard";
 
@@ -32,6 +32,7 @@ vi.mock("@/lib/clipboard", () => ({
 const provider = {
   id: "system-openrouter-api",
   name: "OpenRouter",
+  enabled: true,
   systemAuthKind: "provider_api_key",
   compatibleAgentModuleIds: ["opencode", "openclaw", "hermes"],
   bindings: [
@@ -54,6 +55,13 @@ const provider = {
 } as UsageProviderView;
 
 describe("SystemProviderAgentBindings", () => {
+  beforeEach(() => {
+    for (const mock of Object.values(mocks)) mock.mockReset();
+    mocks.save.mockResolvedValue(undefined);
+    mocks.remove.mockResolvedValue(undefined);
+    mocks.copy.mockResolvedValue(undefined);
+  });
+
   it("edits one binding and copies a revealed local key without rendering it", async () => {
     mocks.reveal.mockResolvedValue({
       bindingId: "binding-opencode",
@@ -79,5 +87,79 @@ describe("SystemProviderAgentBindings", () => {
       expect(mocks.copy).toHaveBeenCalledWith("local-copy-secret"),
     );
     expect(screen.queryByText("local-copy-secret")).toBeNull();
+    expect(screen.getByLabelText("OpenCode: Effective")).toBeInTheDocument();
+  });
+
+  it("uses distinct accessible labels for missing, unavailable, and disconnected bindings", () => {
+    render(
+      <SystemProviderAgentBindings
+        provider={
+          {
+            ...provider,
+            compatibleAgentModuleIds: [
+              "opencode",
+              "openclaw",
+              "hermes",
+              "codex",
+            ],
+            bindings: [
+              provider.bindings[0],
+              {
+                ...provider.bindings[0],
+                id: "binding-openclaw",
+                agentModuleId: "openclaw",
+                effectiveEnabled: false,
+                credentialStatus: "missing",
+              },
+              {
+                ...provider.bindings[0],
+                id: "binding-hermes",
+                agentModuleId: "hermes",
+                effectiveEnabled: false,
+                credentialStatus: "unavailable",
+              },
+              {
+                ...provider.bindings[0],
+                id: "binding-codex",
+                agentModuleId: "codex",
+                effectiveEnabled: false,
+                credentialStatus: "not_required",
+              },
+            ],
+          } as UsageProviderView
+        }
+      />,
+    );
+
+    expect(screen.getByLabelText("OpenCode: Effective")).toBeInTheDocument();
+    expect(screen.getByLabelText("OpenClaw: Missing key")).toBeInTheDocument();
+    expect(
+      screen.getByLabelText("Hermes: Credential unavailable"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByLabelText("Codex: Requested · Disconnected"),
+    ).toBeInTheDocument();
+  });
+
+  it("confirms rotation, copies once, and clears the returned local key object", async () => {
+    const rotated = {
+      bindingId: "binding-opencode",
+      credentialVersion: 2,
+      localKey: "rotated-local-secret",
+    };
+    mocks.rotate.mockResolvedValue(rotated);
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<SystemProviderAgentBindings provider={provider} />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Rotate OpenCode local key" }),
+    );
+    await waitFor(() =>
+      expect(mocks.copy).toHaveBeenCalledWith("rotated-local-secret"),
+    );
+    expect(mocks.rotate).toHaveBeenCalledWith("binding-opencode", 1);
+    expect(rotated.localKey).toBe("");
+    expect(screen.queryByText("rotated-local-secret")).toBeNull();
+    confirm.mockRestore();
   });
 });

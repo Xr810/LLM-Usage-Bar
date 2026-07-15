@@ -111,6 +111,29 @@ export function SystemProviderAgentBindings({
         );
         const name = AGENT_NAMES[agentModuleId] ?? agentModuleId;
         const checkboxId = `${provider.id}-${agentModuleId}-binding`;
+        const stateLabel = !binding
+          ? null
+          : !provider.enabled
+            ? t("usageDashboard.providerDisabled", {
+                defaultValue: "Provider disabled",
+              })
+            : !binding.enabled
+              ? t("usageDashboard.requestedDisabled", {
+                  defaultValue: "Requested: disabled",
+                })
+              : binding.effectiveEnabled
+                ? t("usageDashboard.effective", { defaultValue: "Effective" })
+                : binding.credentialStatus === "missing"
+                  ? t("usageDashboard.missingKey", {
+                      defaultValue: "Missing key",
+                    })
+                  : binding.credentialStatus === "unavailable"
+                    ? t("usageDashboard.credentialUnavailable", {
+                        defaultValue: "Credential unavailable",
+                      })
+                    : t("usageDashboard.requestedDisconnected", {
+                        defaultValue: "Requested · Disconnected",
+                      });
         return (
           <div
             key={agentModuleId}
@@ -131,15 +154,12 @@ export function SystemProviderAgentBindings({
                   name,
                 })}
               </Label>
-              {binding ? (
-                <span className="text-xs text-muted-foreground">
-                  {binding.effectiveEnabled
-                    ? t("common.enabled", { defaultValue: "Enabled" })
-                    : binding.credentialStatus === "missing"
-                      ? t("usageDashboard.missingCredential", {
-                          defaultValue: "Credential required",
-                        })
-                      : t("common.disabled", { defaultValue: "Disabled" })}
+              {stateLabel ? (
+                <span
+                  className="text-xs text-muted-foreground"
+                  aria-label={`${name}: ${stateLabel}`}
+                >
+                  {stateLabel}
                 </span>
               ) : null}
             </div>
