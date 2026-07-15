@@ -18,7 +18,7 @@ use super::{
     },
     ProxyError,
 };
-use crate::credentials::CredentialExposureGuard;
+use crate::credentials::CredentialExposureGuardSet as CredentialExposureGuard;
 use crate::database::PRICING_SOURCE_REQUEST;
 use crate::usage::domain::TokenSource;
 use crate::usage::ingestion::{FrozenUsageProviderContext, LegacyLogInput, UsageIngestionInput};
@@ -196,7 +196,7 @@ fn credential_in_semantic_sse_block(
     block: &str,
     is_first_block: bool,
     guard: &CredentialExposureGuard,
-    semantic_scanner: &mut crate::credentials::CredentialSemanticStreamScanner,
+    semantic_scanner: &mut crate::credentials::CredentialSemanticStreamScannerSet,
 ) -> bool {
     // The SSE stream grammar permits one UTF-8 BOM at the beginning of the
     // stream. Keep it in the quarantined raw bytes, but ignore it for parsing

@@ -1,4 +1,4 @@
-use crate::credentials::CredentialExposureGuard;
+use crate::credentials::CredentialExposureGuardSet as CredentialExposureGuard;
 use crate::database::{lock_conn, Database, UsageSyncCursor};
 use crate::error::AppError;
 use crate::proxy::usage::calculator::{CostBreakdown, CostCalculator, ModelPricing};

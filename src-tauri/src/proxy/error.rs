@@ -6,7 +6,7 @@ use axum::{
 use serde_json::json;
 use thiserror::Error;
 
-use crate::credentials::CredentialExposureGuard;
+use crate::credentials::CredentialExposureGuardSet as CredentialExposureGuard;
 
 #[derive(Debug, Error)]
 pub enum ProxyError {
@@ -307,7 +307,7 @@ pub fn categorize_error(error: &reqwest::Error) -> ErrorCategory {
 #[cfg(test)]
 mod tests {
     use super::ProxyError;
-    use crate::credentials::CredentialExposureGuard;
+    use crate::credentials::CredentialExposureGuardSet as CredentialExposureGuard;
 
     #[test]
     fn credential_redaction_preserves_error_kind_without_rendering_secret() {

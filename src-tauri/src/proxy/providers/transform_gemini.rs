@@ -6,7 +6,7 @@
 
 use super::gemini_schema::build_gemini_function_declaration;
 use super::gemini_shadow::{GeminiAssistantTurn, GeminiShadowStore, GeminiToolCallMeta};
-use crate::credentials::CredentialExposureGuard;
+use crate::credentials::CredentialExposureGuardSet as CredentialExposureGuard;
 use crate::proxy::error::ProxyError;
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};

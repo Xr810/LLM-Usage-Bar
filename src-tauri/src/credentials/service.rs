@@ -129,16 +129,19 @@ fn binding_credential_is_acceptable(secret: &[u8]) -> bool {
 
 /// A verified, frozen binding projection and its protected upstream credential.
 /// It is intentionally non-Clone and non-serializable.
-#[allow(dead_code)] // Its route/key accessors are consumed by Task 4 proxy routing.
+#[allow(dead_code)] // Generation accessors are retained for audit/tests.
 pub struct ResolvedBindingCredential {
     ownership: FrozenBindingOwnership,
-    route_app_type: String,
+    route_protocol: String,
     product_group_id: String,
     runtime_provider: Provider,
     credential_placement: UpstreamCredentialPlacement,
     legacy_pricing_provider_id: Option<String>,
     pricing_override: BindingPricingOverride,
-    secret: Zeroizing<Vec<u8>>,
+    local_credential_version: u64,
+    upstream_credential_version: u64,
+    local_secret: Zeroizing<Vec<u8>>,
+    upstream_secret: Zeroizing<Vec<u8>>,
 }
 
 /// Transient, non-serializable detector used to keep the resolved binding key
@@ -350,6 +353,65 @@ impl CredentialExposureGuard {
     pub(crate) fn semantic_stream_scanner(&self) -> CredentialSemanticStreamScanner {
         CredentialSemanticStreamScanner::new(self.clone())
     }
+}
+
+/// Request-lifetime detector for every secret participating in a proxied
+/// binding. Fixed API bindings carry an Agent-local identity key and a shared
+/// Provider upstream key; neither may appear in requests derived from response
+/// data, logs, identifiers, buffered responses, or streaming responses.
+#[derive(Clone)]
+pub(crate) struct CredentialExposureGuardSet {
+    guards: Vec<CredentialExposureGuard>,
+}
+
+impl CredentialExposureGuardSet {
+    #[cfg(test)]
+    pub(crate) fn from_secret(secret: &[u8]) -> Self {
+        Self::from_secrets(&[secret])
+    }
+
+    pub(crate) fn from_secrets(secrets: &[&[u8]]) -> Self {
+        Self {
+            guards: secrets
+                .iter()
+                .map(|secret| CredentialExposureGuard::from_secret(secret))
+                .collect(),
+        }
+    }
+
+    pub(crate) fn contains_bytes(&self, value: &[u8]) -> bool {
+        self.guards.iter().any(|guard| guard.contains_bytes(value))
+    }
+
+    pub(crate) fn contains(&self, value: &str) -> bool {
+        self.contains_bytes(value.as_bytes())
+    }
+
+    pub(crate) fn contains_json_value(&self, value: &serde_json::Value) -> bool {
+        self.guards
+            .iter()
+            .any(|guard| guard.contains_json_value(value))
+    }
+
+    pub(crate) fn stream_scanner(&self) -> CredentialStreamScannerSet {
+        CredentialStreamScannerSet {
+            scanners: self
+                .guards
+                .iter()
+                .map(CredentialExposureGuard::stream_scanner)
+                .collect(),
+        }
+    }
+
+    pub(crate) fn semantic_stream_scanner(&self) -> CredentialSemanticStreamScannerSet {
+        CredentialSemanticStreamScannerSet {
+            scanners: self
+                .guards
+                .iter()
+                .map(CredentialExposureGuard::semantic_stream_scanner)
+                .collect(),
+        }
+    }
 
     pub(crate) fn redact_option(&self, value: Option<String>) -> Option<String> {
         value.filter(|value| !self.contains(value))
@@ -361,6 +423,12 @@ impl CredentialExposureGuard {
         } else {
             value
         }
+    }
+}
+
+impl fmt::Debug for CredentialExposureGuardSet {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("CredentialExposureGuardSet([REDACTED])")
     }
 }
 
@@ -665,6 +733,40 @@ impl CredentialStreamScanner {
             || self.form.has_partial_match()
             || self.json.has_partial_match()
             || self.json_strings.has_partial_match()
+    }
+}
+
+pub(crate) struct CredentialSemanticStreamScannerSet {
+    scanners: Vec<CredentialSemanticStreamScanner>,
+}
+
+impl CredentialSemanticStreamScannerSet {
+    pub(crate) fn push_json_value(&mut self, value: &serde_json::Value) -> bool {
+        self.scanners
+            .iter_mut()
+            .any(|scanner| scanner.push_json_value(value))
+    }
+
+    pub(crate) fn has_partial_match(&self) -> bool {
+        self.scanners
+            .iter()
+            .any(CredentialSemanticStreamScanner::has_partial_match)
+    }
+}
+
+pub(crate) struct CredentialStreamScannerSet {
+    scanners: Vec<CredentialStreamScanner>,
+}
+
+impl CredentialStreamScannerSet {
+    pub(crate) fn push(&mut self, bytes: &[u8]) -> bool {
+        self.scanners.iter_mut().any(|scanner| scanner.push(bytes))
+    }
+
+    pub(crate) fn has_partial_match(&self) -> bool {
+        self.scanners
+            .iter()
+            .any(CredentialStreamScanner::has_partial_match)
     }
 }
 
@@ -1256,7 +1358,6 @@ pub struct FrozenBindingOwnership {
     pub provider_id: String,
 }
 
-#[allow(dead_code)] // Its route/key accessors are consumed by Task 4 proxy routing.
 impl ResolvedBindingCredential {
     pub fn binding_id(&self) -> &str {
         &self.ownership.binding_id
@@ -1270,8 +1371,8 @@ impl ResolvedBindingCredential {
         &self.ownership.provider_id
     }
 
-    pub(crate) fn route_app_type(&self) -> &str {
-        &self.route_app_type
+    pub(crate) fn route_protocol(&self) -> &str {
+        &self.route_protocol
     }
 
     pub(crate) fn product_group_id(&self) -> &str {
@@ -1294,16 +1395,29 @@ impl ResolvedBindingCredential {
         &self.pricing_override
     }
 
+    #[cfg(test)]
+    pub(crate) fn local_credential_version(&self) -> u64 {
+        self.local_credential_version
+    }
+
+    #[cfg(test)]
+    pub(crate) fn upstream_credential_version(&self) -> u64 {
+        self.upstream_credential_version
+    }
+
     pub(crate) fn frozen_ownership(&self) -> FrozenBindingOwnership {
         self.ownership.clone()
     }
 
-    pub(crate) fn exposure_guard(&self) -> CredentialExposureGuard {
-        CredentialExposureGuard::from_secret(self.secret.as_slice())
+    pub(crate) fn exposure_guard(&self) -> CredentialExposureGuardSet {
+        CredentialExposureGuardSet::from_secrets(&[
+            self.local_secret.as_slice(),
+            self.upstream_secret.as_slice(),
+        ])
     }
 
-    pub(crate) fn expose_secret(&self) -> &[u8] {
-        self.secret.as_slice()
+    pub(crate) fn expose_upstream_secret(&self) -> &[u8] {
+        self.upstream_secret.as_slice()
     }
 }
 
@@ -2115,67 +2229,122 @@ impl BindingCredentialService {
         }
         let inbound_fingerprint = credential_fingerprint(api_key.expose_bytes());
         drop(api_key);
-        let snapshot = self
+        let initial = self
             .db
             .credential_binding_by_fingerprint(&inbound_fingerprint)
             .map_err(normalize_db_error)?
             .ok_or_else(|| public_error("binding_not_found"))?;
-        if !snapshot.enabled
-            || !snapshot.provider_enabled
-            || snapshot.agent_archived_at.is_some()
-            || snapshot.auth_mode != BindingAuthMode::DirectApiKey
+        if !initial.enabled
+            || !initial.provider_enabled
+            || initial.agent_archived_at.is_some()
+            || initial.auth_mode != BindingAuthMode::DirectApiKey
         {
             return Err(public_error("invalid_binding"));
         }
-        let db_fingerprint = snapshot
+        let db_fingerprint = initial
             .fingerprint
             .as_deref()
             .filter(|fingerprint| fingerprint.len() == 32)
             .ok_or_else(|| public_error("credential_unavailable"))?;
-        let slot = snapshot
+        let local_slot = initial
             .credential_slot
             .as_deref()
             .ok_or_else(|| public_error("credential_unavailable"))?;
         if !bool::from(inbound_fingerprint.as_slice().ct_eq(db_fingerprint)) {
             return Err(public_error("credential_unavailable"));
         }
-        let initial_binding_id = snapshot.id.clone();
-        let initial_credential_version = snapshot.credential_version;
-        let slot = slot.to_string();
-        let secret = self
-            .store_get(slot.clone())
+        let local_slot = local_slot.to_string();
+        let local_secret = self
+            .store_get(local_slot.clone())
             .await
             .map_err(|_| public_error("credential_unavailable"))?
             .ok_or_else(|| public_error("credential_unavailable"))?;
-        if !binding_credential_is_acceptable(secret.as_slice()) {
+        if !binding_credential_is_acceptable(local_secret.as_slice()) {
             return Err(public_error("credential_unavailable"));
         }
-        let stored_fingerprint = credential_fingerprint(secret.as_slice());
+        let stored_fingerprint = credential_fingerprint(local_secret.as_slice());
         if !bool::from(stored_fingerprint.as_slice().ct_eq(db_fingerprint))
             || !bool::from(stored_fingerprint.ct_eq(&inbound_fingerprint))
         {
             return Err(public_error("credential_unavailable"));
         }
-        // The protected-store read is asynchronous, so a rotation/clear/delete
-        // can publish while it is in flight. Re-read the authoritative binding
-        // after the secret has been verified; this second lookup is the
-        // pre-send linearization point. A request that crossed it before a
-        // mutation keeps its frozen projection, while a mutation that completed
-        // first makes the old generation fail locally.
+
+        let fixed_api = initial.is_fixed_system_api();
+        let upstream_secret = if fixed_api {
+            let provider_fingerprint = initial
+                .provider_fingerprint
+                .as_deref()
+                .filter(|fingerprint| fingerprint.len() == 32)
+                .ok_or_else(|| public_error("credential_unavailable"))?;
+            let provider_slot = initial
+                .provider_credential_slot
+                .as_deref()
+                .ok_or_else(|| public_error("credential_unavailable"))?;
+            let secret = self
+                .store_get(provider_slot.to_string())
+                .await
+                .map_err(|_| public_error("credential_unavailable"))?
+                .ok_or_else(|| public_error("credential_unavailable"))?;
+            if !provider_credential_is_acceptable(secret.as_slice()) {
+                return Err(public_error("credential_unavailable"));
+            }
+            let actual = provider_credential_fingerprint(secret.as_slice());
+            if !bool::from(actual.as_slice().ct_eq(provider_fingerprint)) {
+                return Err(public_error("credential_unavailable"));
+            }
+            secret
+        } else {
+            Zeroizing::new(local_secret.as_slice().to_vec())
+        };
+
+        // Both protected-store reads are asynchronous. Re-read one joined DB
+        // snapshot only after both secrets have been verified. This is the
+        // pre-send linearization point for the local and Provider generations,
+        // binding state, route namespace, and frozen upstream projection.
         let snapshot = self
             .db
             .credential_binding_by_fingerprint(&inbound_fingerprint)
             .map_err(normalize_db_error)?
             .ok_or_else(|| public_error("binding_not_found"))?;
-        if snapshot.id != initial_binding_id
-            || snapshot.credential_version != initial_credential_version
-            || snapshot.credential_slot.as_deref() != Some(slot.as_str())
+        if snapshot.id != initial.id
+            || snapshot.agent_module_id != initial.agent_module_id
+            || snapshot.provider_id != initial.provider_id
+            || snapshot.credential_version != initial.credential_version
+            || snapshot.credential_slot.as_deref() != Some(local_slot.as_str())
+            || snapshot.fingerprint != initial.fingerprint
+            || snapshot.provider_credential_version != initial.provider_credential_version
+            || snapshot.provider_credential_slot != initial.provider_credential_slot
+            || snapshot.provider_fingerprint != initial.provider_fingerprint
+            || snapshot.route_protocol != initial.route_protocol
+            || snapshot.route_app_type != initial.route_app_type
+            || snapshot.route_config != initial.route_config
+            || snapshot.quota_config != initial.quota_config
+            || snapshot.system_preset_key != initial.system_preset_key
+            || snapshot.provider_name != initial.provider_name
+            || snapshot.product_group_id != initial.product_group_id
+            || snapshot.legacy_migration_linked != initial.legacy_migration_linked
+            || snapshot.legacy_provider_id != initial.legacy_provider_id
             || !snapshot.enabled
             || !snapshot.provider_enabled
             || snapshot.agent_archived_at.is_some()
             || snapshot.auth_mode != BindingAuthMode::DirectApiKey
         {
             return Err(public_error("invalid_binding"));
+        }
+        let route_protocol = snapshot
+            .route_protocol
+            .clone()
+            .ok_or_else(|| public_error("invalid_binding"))?;
+        if fixed_api {
+            let preset_key = snapshot
+                .system_preset_key
+                .as_deref()
+                .ok_or_else(|| public_error("invalid_binding"))?;
+            if system_binding_route_protocol(preset_key, &snapshot.agent_module_id)
+                != Some(Some(route_protocol.as_str()))
+            {
+                return Err(public_error("invalid_binding"));
+            }
         }
         let route_app_type = snapshot
             .route_app_type
@@ -2198,7 +2367,10 @@ impl BindingCredentialService {
             snapshot.legacy_provider,
         )
         .map_err(|_| public_error("invalid_binding"))?;
-        let exposure_guard = CredentialExposureGuard::from_secret(secret.as_slice());
+        let exposure_guard = CredentialExposureGuardSet::from_secrets(&[
+            local_secret.as_slice(),
+            upstream_secret.as_slice(),
+        ]);
         let runtime_provider = serde_json::to_value(&projection.runtime_provider)
             .map_err(|_| public_error("invalid_binding"))?;
         if exposure_guard.contains_json_value(&runtime_provider) {
@@ -2209,7 +2381,8 @@ impl BindingCredentialService {
             agent_module_id: snapshot.agent_module_id,
             provider_id: snapshot.provider_id,
         };
-        if exposure_guard.contains(&route_app_type)
+        if exposure_guard.contains(&route_protocol)
+            || exposure_guard.contains(&route_app_type)
             || exposure_guard.contains(&snapshot.product_group_id)
             || exposure_guard.contains(&ownership.binding_id)
             || exposure_guard.contains(&ownership.agent_module_id)
@@ -2232,13 +2405,20 @@ impl BindingCredentialService {
         }
         Ok(ResolvedBindingCredential {
             ownership,
-            route_app_type,
+            route_protocol,
             product_group_id: snapshot.product_group_id,
             runtime_provider: projection.runtime_provider,
             credential_placement: projection.credential_placement,
             legacy_pricing_provider_id,
             pricing_override: projection.pricing_override,
-            secret,
+            local_credential_version: snapshot.credential_version,
+            upstream_credential_version: if fixed_api {
+                snapshot.provider_credential_version
+            } else {
+                snapshot.credential_version
+            },
+            local_secret,
+            upstream_secret,
         })
     }
 
@@ -2269,7 +2449,7 @@ impl BindingCredentialService {
             || !snapshot.provider_enabled
             || snapshot.agent_archived_at.is_some()
             || snapshot.auth_mode != BindingAuthMode::DirectApiKey
-            || snapshot.route_app_type.as_deref() != Some(expected_route_app_type)
+            || snapshot.route_protocol.as_deref() != Some(expected_route_app_type)
             || slot.is_none()
             || !fingerprint_matches
         {
@@ -2286,6 +2466,29 @@ impl BindingCredentialService {
         let protected_fingerprint = credential_fingerprint(protected_secret.as_slice());
         if !bool::from(protected_fingerprint.ct_eq(&inbound_fingerprint)) {
             return Err(public_error("credential_unavailable"));
+        }
+        if snapshot.is_fixed_system_api() {
+            let provider_fingerprint = snapshot
+                .provider_fingerprint
+                .as_deref()
+                .filter(|fingerprint| fingerprint.len() == 32)
+                .ok_or_else(|| public_error("credential_unavailable"))?;
+            let provider_slot = snapshot
+                .provider_credential_slot
+                .as_deref()
+                .ok_or_else(|| public_error("credential_unavailable"))?;
+            let provider_secret = self
+                .store_get(provider_slot.to_string())
+                .await
+                .map_err(|_| public_error("credential_unavailable"))?
+                .ok_or_else(|| public_error("credential_unavailable"))?;
+            if !provider_credential_is_acceptable(provider_secret.as_slice()) {
+                return Err(public_error("credential_unavailable"));
+            }
+            let actual = provider_credential_fingerprint(provider_secret.as_slice());
+            if !bool::from(actual.as_slice().ct_eq(provider_fingerprint)) {
+                return Err(public_error("credential_unavailable"));
+            }
         }
         Ok(())
     }

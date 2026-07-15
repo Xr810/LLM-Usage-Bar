@@ -23,7 +23,9 @@ use super::{
     ProxyError,
 };
 use crate::commands::CopilotAuthState;
-use crate::credentials::{CredentialExposureGuard, ResolvedBindingCredential};
+use crate::credentials::{
+    CredentialExposureGuardSet as CredentialExposureGuard, ResolvedBindingCredential,
+};
 use crate::{
     app_config::AppType,
     provider::{LocalProxyRequestOverrides, Provider},
@@ -460,7 +462,7 @@ impl RequestForwarder {
                     &extensions,
                     adapter.as_ref(),
                     binding_credential.credential_placement(),
-                    binding_credential.expose_secret(),
+                    binding_credential.expose_upstream_secret(),
                 )
                 .await
             {
@@ -543,7 +545,7 @@ impl RequestForwarder {
                                     &extensions,
                                     adapter.as_ref(),
                                     binding_credential.credential_placement(),
-                                    binding_credential.expose_secret(),
+                                    binding_credential.expose_upstream_secret(),
                                 )
                                 .await
                             {
@@ -661,7 +663,7 @@ impl RequestForwarder {
                                         &extensions,
                                         adapter.as_ref(),
                                         binding_credential.credential_placement(),
-                                        binding_credential.expose_secret(),
+                                        binding_credential.expose_upstream_secret(),
                                     )
                                     .await
                                 {
@@ -791,7 +793,7 @@ impl RequestForwarder {
                                     &extensions,
                                     adapter.as_ref(),
                                     binding_credential.credential_placement(),
-                                    binding_credential.expose_secret(),
+                                    binding_credential.expose_upstream_secret(),
                                 )
                                 .await
                             {

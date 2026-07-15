@@ -353,6 +353,48 @@ impl ProxyServer {
                 "/codex/v1/responses/compact",
                 post(handlers::handle_responses_compact),
             )
+            // Fixed OpenRouter Agent namespaces. Each namespace authenticates
+            // with its own binding-local key while sharing the Provider's
+            // protected upstream credential.
+            .route(
+                "/opencode/v1/chat/completions",
+                post(handlers::handle_opencode_chat_completions),
+            )
+            .route("/opencode/v1/models", get(handlers::handle_opencode_models))
+            .route(
+                "/opencode/v1/responses",
+                post(handlers::handle_opencode_responses),
+            )
+            .route(
+                "/opencode/v1/responses/compact",
+                post(handlers::handle_opencode_responses_compact),
+            )
+            .route(
+                "/openclaw/v1/chat/completions",
+                post(handlers::handle_openclaw_chat_completions),
+            )
+            .route("/openclaw/v1/models", get(handlers::handle_openclaw_models))
+            .route(
+                "/openclaw/v1/responses",
+                post(handlers::handle_openclaw_responses),
+            )
+            .route(
+                "/openclaw/v1/responses/compact",
+                post(handlers::handle_openclaw_responses_compact),
+            )
+            .route(
+                "/hermes/v1/chat/completions",
+                post(handlers::handle_hermes_chat_completions),
+            )
+            .route("/hermes/v1/models", get(handlers::handle_hermes_models))
+            .route(
+                "/hermes/v1/responses",
+                post(handlers::handle_hermes_responses),
+            )
+            .route(
+                "/hermes/v1/responses/compact",
+                post(handlers::handle_hermes_responses_compact),
+            )
             // Gemini API (支持带前缀和不带前缀)
             //
             // 用 `any(..)` 覆盖所有 HTTP 方法：除了 POST `:generateContent` /
@@ -400,5 +442,66 @@ impl ProxyServer {
             .provider_router
             .reset_provider_breaker(provider_id, app_type)
             .await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::credentials::{CredentialStore, CredentialStoreError};
+    use axum::body::Body;
+    use http::{Method, Request, StatusCode};
+    use tower::ServiceExt;
+
+    struct EmptyCredentialStore;
+
+    impl CredentialStore for EmptyCredentialStore {
+        fn put(&self, _slot: &str, _secret: &[u8]) -> Result<(), CredentialStoreError> {
+            Ok(())
+        }
+
+        fn get(&self, _slot: &str) -> Result<Option<Vec<u8>>, CredentialStoreError> {
+            Ok(None)
+        }
+
+        fn delete(&self, _slot: &str) -> Result<(), CredentialStoreError> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn fixed_openrouter_agent_namespaces_register_all_openai_compatible_routes() {
+        let db = Arc::new(Database::memory().unwrap());
+        let credentials = Arc::new(BindingCredentialService::new(
+            db.clone(),
+            Arc::new(EmptyCredentialStore),
+        ));
+        let router = ProxyServer::new(ProxyConfig::default(), db, credentials, None).build_router();
+
+        for namespace in ["opencode", "openclaw", "hermes"] {
+            for (method, suffix) in [
+                (Method::POST, "chat/completions"),
+                (Method::GET, "models"),
+                (Method::POST, "responses"),
+                (Method::POST, "responses/compact"),
+            ] {
+                let response = router
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .method(method)
+                            .uri(format!("/{namespace}/v1/{suffix}"))
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_ne!(
+                    response.status(),
+                    StatusCode::NOT_FOUND,
+                    "missing route /{namespace}/v1/{suffix}"
+                );
+            }
+        }
     }
 }

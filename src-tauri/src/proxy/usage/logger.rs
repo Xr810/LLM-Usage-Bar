@@ -2,7 +2,7 @@
 
 use super::calculator::{CostBreakdown, CostCalculator, ModelPricing};
 use super::parser::TokenUsage;
-use crate::credentials::CredentialExposureGuard;
+use crate::credentials::CredentialExposureGuardSet as CredentialExposureGuard;
 use crate::database::{Database, PRICING_SOURCE_REQUEST, PRICING_SOURCE_RESPONSE};
 use crate::error::AppError;
 use crate::proxy::provider_router::BindingPricingOverride;

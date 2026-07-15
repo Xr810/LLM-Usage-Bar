@@ -108,6 +108,59 @@ pub async fn handle_models() -> Result<Json<Value>, ProxyError> {
     Ok(Json(catalog))
 }
 
+pub async fn handle_opencode_models(
+    State(state): State<ProxyState>,
+    request: axum::extract::Request,
+) -> Result<Json<Value>, ProxyError> {
+    handle_models_for_app(state, request, AppType::OpenCode, "OpenCode", "opencode").await
+}
+
+pub async fn handle_openclaw_models(
+    State(state): State<ProxyState>,
+    request: axum::extract::Request,
+) -> Result<Json<Value>, ProxyError> {
+    handle_models_for_app(state, request, AppType::OpenClaw, "OpenClaw", "openclaw").await
+}
+
+pub async fn handle_hermes_models(
+    State(state): State<ProxyState>,
+    request: axum::extract::Request,
+) -> Result<Json<Value>, ProxyError> {
+    handle_models_for_app(state, request, AppType::Hermes, "Hermes", "hermes").await
+}
+
+async fn handle_models_for_app(
+    state: ProxyState,
+    request: axum::extract::Request,
+    app_type: AppType,
+    tag: &'static str,
+    app_type_str: &'static str,
+) -> Result<Json<Value>, ProxyError> {
+    let (parts, _body) = request.into_parts();
+    let mut uri = parts.uri;
+    let mut headers = parts.headers;
+    let mut endpoint = endpoint_with_query(&uri, "/models");
+    let inbound = extract_binding_credentials(
+        BindingAuthProtocol::Codex,
+        &mut headers,
+        &mut uri,
+        &mut endpoint,
+    )?;
+    preflight_binding_credential(&state, &inbound.binding_key, app_type_str).await?;
+    let mut ctx = RequestContext::new(
+        &state,
+        &Value::Null,
+        &headers,
+        inbound.binding_key,
+        app_type,
+        tag,
+        app_type_str,
+    )
+    .await?;
+    drop(ctx.take_binding_credential()?);
+    handle_models().await
+}
+
 // ============================================================================
 // Claude API 处理器（包含格式转换逻辑）
 // ============================================================================
@@ -788,6 +841,37 @@ pub async fn handle_chat_completions(
     State(state): State<ProxyState>,
     request: axum::extract::Request,
 ) -> Result<axum::response::Response, ProxyError> {
+    handle_chat_completions_for_app(state, request, AppType::Codex, "Codex", "codex").await
+}
+
+pub async fn handle_opencode_chat_completions(
+    State(state): State<ProxyState>,
+    request: axum::extract::Request,
+) -> Result<axum::response::Response, ProxyError> {
+    handle_chat_completions_for_app(state, request, AppType::OpenCode, "OpenCode", "opencode").await
+}
+
+pub async fn handle_openclaw_chat_completions(
+    State(state): State<ProxyState>,
+    request: axum::extract::Request,
+) -> Result<axum::response::Response, ProxyError> {
+    handle_chat_completions_for_app(state, request, AppType::OpenClaw, "OpenClaw", "openclaw").await
+}
+
+pub async fn handle_hermes_chat_completions(
+    State(state): State<ProxyState>,
+    request: axum::extract::Request,
+) -> Result<axum::response::Response, ProxyError> {
+    handle_chat_completions_for_app(state, request, AppType::Hermes, "Hermes", "hermes").await
+}
+
+async fn handle_chat_completions_for_app(
+    state: ProxyState,
+    request: axum::extract::Request,
+    app_type: AppType,
+    tag: &'static str,
+    app_type_str: &'static str,
+) -> Result<axum::response::Response, ProxyError> {
     let (parts, req_body) = request.into_parts();
     let method = parts.method.clone();
     let mut uri = parts.uri;
@@ -800,7 +884,7 @@ pub async fn handle_chat_completions(
         &mut uri,
         &mut endpoint,
     )?;
-    preflight_binding_credential(&state, &inbound.binding_key, "codex").await?;
+    preflight_binding_credential(&state, &inbound.binding_key, app_type_str).await?;
     let body_bytes = req_body
         .collect()
         .await
@@ -815,9 +899,9 @@ pub async fn handle_chat_completions(
         &body,
         &headers,
         inbound.binding_key,
-        AppType::Codex,
-        "Codex",
-        "codex",
+        app_type.clone(),
+        tag,
+        app_type_str,
     )
     .await?;
 
@@ -829,7 +913,7 @@ pub async fn handle_chat_completions(
     let forwarder = ctx.create_forwarder(&state);
     let mut result = match forwarder
         .forward_with_retry(
-            &AppType::Codex,
+            &app_type,
             method,
             &endpoint,
             body,
@@ -870,6 +954,37 @@ pub async fn handle_responses(
     State(state): State<ProxyState>,
     request: axum::extract::Request,
 ) -> Result<axum::response::Response, ProxyError> {
+    handle_responses_for_app(state, request, AppType::Codex, "Codex", "codex").await
+}
+
+pub async fn handle_opencode_responses(
+    State(state): State<ProxyState>,
+    request: axum::extract::Request,
+) -> Result<axum::response::Response, ProxyError> {
+    handle_responses_for_app(state, request, AppType::OpenCode, "OpenCode", "opencode").await
+}
+
+pub async fn handle_openclaw_responses(
+    State(state): State<ProxyState>,
+    request: axum::extract::Request,
+) -> Result<axum::response::Response, ProxyError> {
+    handle_responses_for_app(state, request, AppType::OpenClaw, "OpenClaw", "openclaw").await
+}
+
+pub async fn handle_hermes_responses(
+    State(state): State<ProxyState>,
+    request: axum::extract::Request,
+) -> Result<axum::response::Response, ProxyError> {
+    handle_responses_for_app(state, request, AppType::Hermes, "Hermes", "hermes").await
+}
+
+async fn handle_responses_for_app(
+    state: ProxyState,
+    request: axum::extract::Request,
+    app_type: AppType,
+    tag: &'static str,
+    app_type_str: &'static str,
+) -> Result<axum::response::Response, ProxyError> {
     let (parts, req_body) = request.into_parts();
     let method = parts.method.clone();
     let mut uri = parts.uri;
@@ -882,7 +997,7 @@ pub async fn handle_responses(
         &mut uri,
         &mut endpoint,
     )?;
-    preflight_binding_credential(&state, &inbound.binding_key, "codex").await?;
+    preflight_binding_credential(&state, &inbound.binding_key, app_type_str).await?;
     let body_bytes = req_body
         .collect()
         .await
@@ -897,9 +1012,9 @@ pub async fn handle_responses(
         &body,
         &headers,
         inbound.binding_key,
-        AppType::Codex,
-        "Codex",
-        "codex",
+        app_type.clone(),
+        tag,
+        app_type_str,
     )
     .await?;
 
@@ -912,7 +1027,7 @@ pub async fn handle_responses(
     let forwarder = ctx.create_forwarder(&state);
     let mut result = match forwarder
         .forward_with_retry(
-            &AppType::Codex,
+            &app_type,
             method,
             &endpoint,
             body,
@@ -965,6 +1080,39 @@ pub async fn handle_responses_compact(
     State(state): State<ProxyState>,
     request: axum::extract::Request,
 ) -> Result<axum::response::Response, ProxyError> {
+    handle_responses_compact_for_app(state, request, AppType::Codex, "Codex", "codex").await
+}
+
+pub async fn handle_opencode_responses_compact(
+    State(state): State<ProxyState>,
+    request: axum::extract::Request,
+) -> Result<axum::response::Response, ProxyError> {
+    handle_responses_compact_for_app(state, request, AppType::OpenCode, "OpenCode", "opencode")
+        .await
+}
+
+pub async fn handle_openclaw_responses_compact(
+    State(state): State<ProxyState>,
+    request: axum::extract::Request,
+) -> Result<axum::response::Response, ProxyError> {
+    handle_responses_compact_for_app(state, request, AppType::OpenClaw, "OpenClaw", "openclaw")
+        .await
+}
+
+pub async fn handle_hermes_responses_compact(
+    State(state): State<ProxyState>,
+    request: axum::extract::Request,
+) -> Result<axum::response::Response, ProxyError> {
+    handle_responses_compact_for_app(state, request, AppType::Hermes, "Hermes", "hermes").await
+}
+
+async fn handle_responses_compact_for_app(
+    state: ProxyState,
+    request: axum::extract::Request,
+    app_type: AppType,
+    tag: &'static str,
+    app_type_str: &'static str,
+) -> Result<axum::response::Response, ProxyError> {
     let (parts, req_body) = request.into_parts();
     let method = parts.method.clone();
     let mut uri = parts.uri;
@@ -977,7 +1125,7 @@ pub async fn handle_responses_compact(
         &mut uri,
         &mut endpoint,
     )?;
-    preflight_binding_credential(&state, &inbound.binding_key, "codex").await?;
+    preflight_binding_credential(&state, &inbound.binding_key, app_type_str).await?;
     let body_bytes = req_body
         .collect()
         .await
@@ -992,9 +1140,9 @@ pub async fn handle_responses_compact(
         &body,
         &headers,
         inbound.binding_key,
-        AppType::Codex,
-        "Codex",
-        "codex",
+        app_type.clone(),
+        tag,
+        app_type_str,
     )
     .await?;
 
@@ -1007,7 +1155,7 @@ pub async fn handle_responses_compact(
     let forwarder = ctx.create_forwarder(&state);
     let mut result = match forwarder
         .forward_with_retry(
-            &AppType::Codex,
+            &app_type,
             method,
             &endpoint,
             body,
@@ -2316,7 +2464,7 @@ async fn log_usage(
     legacy_session_id: Option<String>,
     upstream_cost: Option<UpstreamCost>,
     upstream_correlation_id: Option<String>,
-    credential_guard: crate::credentials::CredentialExposureGuard,
+    credential_guard: crate::credentials::CredentialExposureGuardSet,
 ) {
     if !usage_logging_enabled(state) {
         return;

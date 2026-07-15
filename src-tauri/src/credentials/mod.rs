@@ -10,8 +10,10 @@ use std::fmt;
 use std::sync::Arc;
 use zeroize::Zeroizing;
 
+#[cfg(test)]
+pub(crate) use service::CredentialExposureGuard;
 pub use service::{BindingCredentialService, ResolvedBindingCredential};
-pub(crate) use service::{CredentialExposureGuard, CredentialSemanticStreamScanner};
+pub(crate) use service::{CredentialExposureGuardSet, CredentialSemanticStreamScannerSet};
 
 pub(super) const KEYCHAIN_SERVICE: &str = "com.xr810.llm-usage-bar.agent-provider-binding.v1";
 

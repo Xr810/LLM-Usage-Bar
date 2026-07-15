@@ -22,6 +22,9 @@ struct MemoryCredentialStore {
     block_next_put: AtomicBool,
     put_waiting: AtomicBool,
     put_release: (Mutex<bool>, Condvar),
+    block_next_get: AtomicBool,
+    get_waiting: AtomicBool,
+    get_release: (Mutex<bool>, Condvar),
     get_calls: AtomicUsize,
     lock_probe: Mutex<Option<Weak<Database>>>,
 }
@@ -50,6 +53,14 @@ impl CredentialStore for MemoryCredentialStore {
     fn get(&self, slot: &str) -> Result<Option<Vec<u8>>, CredentialStoreError> {
         self.assert_database_unlocked();
         self.get_calls.fetch_add(1, Ordering::SeqCst);
+        if self.block_next_get.swap(false, Ordering::SeqCst) {
+            self.get_waiting.store(true, Ordering::SeqCst);
+            let (released, condition) = &self.get_release;
+            let mut released = released.lock().unwrap();
+            while !*released {
+                released = condition.wait(released).unwrap();
+            }
+        }
         Ok(self
             .items
             .lock()
@@ -115,6 +126,21 @@ impl MemoryCredentialStore {
         self.get_calls.load(Ordering::SeqCst)
     }
 
+    fn block_next_get(&self) {
+        *self.get_release.0.lock().unwrap() = false;
+        self.get_waiting.store(false, Ordering::SeqCst);
+        self.block_next_get.store(true, Ordering::SeqCst);
+    }
+
+    fn get_is_waiting(&self) -> bool {
+        self.get_waiting.load(Ordering::SeqCst)
+    }
+
+    fn release_get(&self) {
+        *self.get_release.0.lock().unwrap() = true;
+        self.get_release.1.notify_all();
+    }
+
     fn remove(&self, slot: &str) {
         self.items.lock().unwrap().remove(slot);
     }
@@ -157,6 +183,30 @@ fn exposure_guard_detects_raw_and_url_encoded_credentials() {
     }
     assert!(guard.contains(&suspicious_depth));
     assert!(!guard.contains("trace=unrelated"));
+}
+
+#[test]
+fn exposure_guard_set_covers_local_and_upstream_secrets_across_streams() {
+    let guard = super::CredentialExposureGuardSet::from_secrets(&[
+        b"lub_local-binding-secret",
+        b"sk-upstream-provider-secret",
+    ]);
+    assert!(guard.contains("Bearer lub_local-binding-secret"));
+    assert!(guard.contains("x-api-key=sk-upstream-provider-secret"));
+
+    let mut raw_stream = guard.stream_scanner();
+    assert!(!raw_stream.push(b"Bearer lub_local-"));
+    assert!(raw_stream.push(b"binding-secret"));
+
+    let mut semantic_stream = guard.semantic_stream_scanner();
+    assert!(!semantic_stream.push_json_value(&json!({
+        "delta": {"content": "sk-upstream-"},
+        "index": 0
+    })));
+    assert!(semantic_stream.push_json_value(&json!({
+        "delta": {"content": "provider-secret"},
+        "index": 0
+    })));
 }
 
 #[test]
@@ -526,7 +576,7 @@ async fn replace_uses_a_new_slot_and_only_the_new_key_resolves() {
     assert_eq!(resolved.binding_id(), binding.id);
     assert_eq!(resolved.agent_module_id(), "codex");
     assert_eq!(resolved.provider_id(), "replace-direct");
-    assert_eq!(resolved.expose_secret(), b"second-rotation-key");
+    assert_eq!(resolved.expose_upstream_secret(), b"second-rotation-key");
     assert_eq!(
         format!("{resolved:?}"),
         "ResolvedBindingCredential([REDACTED])"
@@ -2153,6 +2203,257 @@ async fn local_binding_keys_are_generated_per_agent_and_require_provider_key_to_
 }
 
 #[tokio::test]
+async fn fixed_api_resolution_separates_local_identity_from_shared_upstream_credential() {
+    let db = Arc::new(Database::memory().unwrap());
+    let store = Arc::new(MemoryCredentialStore::default());
+    let service = BindingCredentialService::new(db.clone(), store);
+    service.ensure_fixed_api_binding_local_keys().await.unwrap();
+    service
+        .set_provider_api_key(
+            "system-openrouter-api",
+            0,
+            secret("openrouter-shared-upstream-sentinel"),
+        )
+        .await
+        .unwrap();
+
+    for (agent_module_id, route_protocol) in [
+        ("opencode", "opencode"),
+        ("openclaw", "openclaw"),
+        ("hermes", "hermes"),
+    ] {
+        let binding = fixed_binding(&db, agent_module_id, "system-openrouter-api");
+        let local = service
+            .reveal_local_binding_key(&binding.id, binding.credential_version)
+            .await
+            .unwrap();
+        service
+            .preflight_binding_api_key(&SecretString::new(local.local_key.clone()), route_protocol)
+            .await
+            .unwrap();
+        assert_eq!(
+            service
+                .preflight_binding_api_key(&SecretString::new(local.local_key.clone()), "codex")
+                .await
+                .unwrap_err()
+                .to_string(),
+            "invalid_binding"
+        );
+
+        let resolved = service
+            .resolve_binding_api_key(SecretString::new(local.local_key.clone()))
+            .await
+            .unwrap();
+        assert_eq!(resolved.agent_module_id(), agent_module_id);
+        assert_eq!(resolved.provider_id(), "system-openrouter-api");
+        assert_eq!(resolved.route_protocol(), route_protocol);
+        assert_eq!(
+            resolved.expose_upstream_secret(),
+            b"openrouter-shared-upstream-sentinel"
+        );
+        let guard = resolved.exposure_guard();
+        assert!(guard.contains(&local.local_key));
+        assert!(guard.contains("openrouter-shared-upstream-sentinel"));
+    }
+}
+
+#[tokio::test]
+async fn fixed_api_preflight_requires_a_verified_provider_credential() {
+    let db = Arc::new(Database::memory().unwrap());
+    let store = Arc::new(MemoryCredentialStore::default());
+    let service = BindingCredentialService::new(db.clone(), store.clone());
+    service.ensure_fixed_api_binding_local_keys().await.unwrap();
+    let binding = fixed_binding(&db, "opencode", "system-openrouter-api");
+    let local_key = service
+        .reveal_local_binding_key(&binding.id, binding.credential_version)
+        .await
+        .unwrap()
+        .local_key
+        .clone();
+
+    assert_eq!(
+        service
+            .preflight_binding_api_key(&SecretString::new(local_key.clone()), "opencode")
+            .await
+            .unwrap_err()
+            .to_string(),
+        "credential_unavailable"
+    );
+    service
+        .set_provider_api_key(
+            "system-openrouter-api",
+            0,
+            secret("openrouter-preflight-upstream-key"),
+        )
+        .await
+        .unwrap();
+    service
+        .preflight_binding_api_key(&SecretString::new(local_key), "opencode")
+        .await
+        .unwrap();
+
+    let provider_slot = private_provider_credential_state(&db, "system-openrouter-api")
+        .1
+        .unwrap();
+    store.replace_for_test(&provider_slot, b"tampered-provider-secret");
+    assert_eq!(
+        service
+            .preflight_binding_api_key(
+                &SecretString::new(
+                    service
+                        .reveal_local_binding_key(&binding.id, binding.credential_version)
+                        .await
+                        .unwrap()
+                        .local_key
+                        .clone(),
+                ),
+                "opencode",
+            )
+            .await
+            .unwrap_err()
+            .to_string(),
+        "credential_unavailable"
+    );
+}
+
+#[tokio::test]
+async fn fixed_api_provider_and_local_rotations_have_independent_scope() {
+    let db = Arc::new(Database::memory().unwrap());
+    let service =
+        BindingCredentialService::new(db.clone(), Arc::new(MemoryCredentialStore::default()));
+    service.ensure_fixed_api_binding_local_keys().await.unwrap();
+    service
+        .set_provider_api_key(
+            "system-openrouter-api",
+            0,
+            secret("openrouter-upstream-generation-one"),
+        )
+        .await
+        .unwrap();
+    let opencode = fixed_binding(&db, "opencode", "system-openrouter-api");
+    let openclaw = fixed_binding(&db, "openclaw", "system-openrouter-api");
+    let opencode_local = service
+        .reveal_local_binding_key(&opencode.id, opencode.credential_version)
+        .await
+        .unwrap()
+        .local_key
+        .clone();
+    let openclaw_local = service
+        .reveal_local_binding_key(&openclaw.id, openclaw.credential_version)
+        .await
+        .unwrap()
+        .local_key
+        .clone();
+
+    service
+        .replace_provider_api_key(
+            "system-openrouter-api",
+            1,
+            secret("openrouter-upstream-generation-two"),
+        )
+        .await
+        .unwrap();
+    for local in [&opencode_local, &openclaw_local] {
+        let resolved = service
+            .resolve_binding_api_key(SecretString::new(local.to_string()))
+            .await
+            .unwrap();
+        assert_eq!(resolved.local_credential_version(), 1);
+        assert_eq!(resolved.upstream_credential_version(), 2);
+        assert_eq!(
+            resolved.expose_upstream_secret(),
+            b"openrouter-upstream-generation-two"
+        );
+    }
+
+    let rotated = service
+        .rotate_local_binding_key(&opencode.id, opencode.credential_version)
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .resolve_binding_api_key(SecretString::new(opencode_local))
+            .await
+            .unwrap_err()
+            .to_string(),
+        "binding_not_found"
+    );
+    for local in [&rotated.local_key, &openclaw_local] {
+        let resolved = service
+            .resolve_binding_api_key(SecretString::new(local.to_string()))
+            .await
+            .unwrap();
+        assert_eq!(resolved.upstream_credential_version(), 2);
+        assert_eq!(
+            resolved.expose_upstream_secret(),
+            b"openrouter-upstream-generation-two"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fixed_api_resolution_rejects_provider_generation_changed_during_store_read() {
+    let db = Arc::new(Database::memory().unwrap());
+    let store = Arc::new(MemoryCredentialStore::default());
+    let service = Arc::new(BindingCredentialService::new(db.clone(), store.clone()));
+    service.ensure_fixed_api_binding_local_keys().await.unwrap();
+    service
+        .set_provider_api_key(
+            "system-openrouter-api",
+            0,
+            secret("openrouter-race-generation-one"),
+        )
+        .await
+        .unwrap();
+    let binding = fixed_binding(&db, "opencode", "system-openrouter-api");
+    let local_key = service
+        .reveal_local_binding_key(&binding.id, binding.credential_version)
+        .await
+        .unwrap()
+        .local_key
+        .clone();
+
+    store.block_next_get();
+    let resolving_service = service.clone();
+    let resolving_key = local_key.clone();
+    let resolving = tokio::spawn(async move {
+        resolving_service
+            .resolve_binding_api_key(SecretString::new(resolving_key))
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !store.get_is_waiting() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("resolver should reach the protected-store test barrier");
+
+    service
+        .replace_provider_api_key(
+            "system-openrouter-api",
+            1,
+            secret("openrouter-race-generation-two"),
+        )
+        .await
+        .unwrap();
+    store.release_get();
+    assert_eq!(
+        resolving.await.unwrap().unwrap_err().to_string(),
+        "credential_unavailable"
+    );
+    let resolved = service
+        .resolve_binding_api_key(SecretString::new(local_key))
+        .await
+        .unwrap();
+    assert_eq!(resolved.upstream_credential_version(), 2);
+    assert_eq!(
+        resolved.expose_upstream_secret(),
+        b"openrouter-race-generation-two"
+    );
+}
+
+#[tokio::test]
 async fn local_binding_create_reveal_rotate_delete_and_readd_never_reuses_identity_or_key() {
     let db = Arc::new(Database::memory().unwrap());
     let store = Arc::new(MemoryCredentialStore::default());
@@ -2292,7 +2593,7 @@ async fn local_binding_custom_provider_keeps_user_supplied_key_semantics() {
             .resolve_binding_api_key(secret("custom-user-supplied-upstream-key"))
             .await
             .unwrap()
-            .expose_secret(),
+            .expose_upstream_secret(),
         b"custom-user-supplied-upstream-key"
     );
 }

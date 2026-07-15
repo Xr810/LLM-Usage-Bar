@@ -3,7 +3,9 @@
 //! 提供请求生命周期的上下文管理，封装通用初始化逻辑
 
 use crate::app_config::AppType;
-use crate::credentials::{CredentialExposureGuard, ResolvedBindingCredential, SecretString};
+use crate::credentials::{
+    CredentialExposureGuardSet as CredentialExposureGuard, ResolvedBindingCredential, SecretString,
+};
 #[cfg(test)]
 use crate::error::AppError;
 use crate::provider::Provider;
@@ -141,7 +143,7 @@ impl RequestContext {
             .resolve_binding_api_key(binding_key)
             .await
             .map_err(|_| ProxyError::BindingAuthorizationFailed)?;
-        if binding_credential.route_app_type() != canonical_route_protocol(app_type_str) {
+        if binding_credential.route_protocol() != canonical_route_protocol(app_type_str) {
             return Err(ProxyError::BindingAuthorizationFailed);
         }
         let credential_exposure_guard = binding_credential.exposure_guard();
@@ -168,7 +170,7 @@ impl RequestContext {
         let ownership = binding_credential.frozen_ownership();
         let frozen_usage_provider_context = FrozenUsageProviderContext {
             product_group_id: binding_credential.product_group_id().to_string(),
-            route_app_type: binding_credential.route_app_type().to_string(),
+            route_app_type: binding_credential.route_protocol().to_string(),
         };
         let binding_id = ownership.binding_id;
         let agent_module_id = ownership.agent_module_id;

@@ -399,12 +399,6 @@ pub async fn get_agent_proxy_setup_info_test_hook(
         .binding_credential_service
         .list_agent_provider_bindings(Some(agent_module_id))
         .await?;
-    let providers = state
-        .db
-        .list_usage_providers()?
-        .into_iter()
-        .map(|provider| (provider.id.clone(), provider))
-        .collect::<BTreeMap<_, _>>();
     let status = state
         .proxy_service
         .get_status()
@@ -419,9 +413,7 @@ pub async fn get_agent_proxy_setup_info_test_hook(
     let routes = bindings
         .into_iter()
         .map(|binding| -> Result<AgentProxyRouteSetup, AppError> {
-            let protocol = providers
-                .get(&binding.provider_id)
-                .and_then(|provider| provider.route_app_type.clone());
+            let protocol = binding.route_protocol.clone();
             let publishes_direct_setup = state
                 .db
                 .agent_provider_binding_supports_direct_api_key(&binding.id)?;
@@ -671,6 +663,9 @@ fn local_proxy_base_url(proxy_origin: &str, protocol: &str) -> Option<String> {
     let path = match protocol {
         "claude" => "/claude",
         "codex" => "/codex/v1",
+        "opencode" => "/opencode/v1",
+        "openclaw" => "/openclaw/v1",
+        "hermes" => "/hermes/v1",
         "gemini" => "/gemini",
         "claude-desktop" => "/claude-desktop",
         _ => return None,
@@ -681,7 +676,7 @@ fn local_proxy_base_url(proxy_origin: &str, protocol: &str) -> Option<String> {
 fn allowed_credential_placements(protocol: &str) -> Vec<String> {
     let placements: &[&str] = match protocol {
         "claude" => &["authorization", "x-api-key", "query:key"],
-        "codex" => &["authorization", "query:key"],
+        "codex" | "opencode" | "openclaw" | "hermes" => &["authorization", "query:key"],
         "gemini" => &["authorization", "x-goog-api-key", "query:key"],
         "claude-desktop" => &["x-api-key"],
         _ => &[],
@@ -970,6 +965,37 @@ mod tests {
         assert_eq!(setup.routes[0].protocol.as_deref(), Some("codex"));
         assert_eq!(setup.routes[0].local_base_url, None);
         assert!(setup.routes[0].credential_placements.is_empty());
+    }
+
+    #[tokio::test]
+    async fn fixed_openrouter_agents_publish_binding_owned_namespaced_base_urls() {
+        let db = Arc::new(Database::memory().unwrap());
+        let state =
+            AppState::new_with_credential_store(db, Arc::new(MemoryCredentialStore::default()));
+
+        for (agent_module_id, protocol, path) in [
+            ("opencode", "opencode", "/opencode/v1"),
+            ("openclaw", "openclaw", "/openclaw/v1"),
+            ("hermes", "hermes", "/hermes/v1"),
+        ] {
+            let setup = get_agent_proxy_setup_info_test_hook(&state, agent_module_id)
+                .await
+                .unwrap();
+            let route = setup
+                .routes
+                .iter()
+                .find(|route| route.provider_id == "system-openrouter-api")
+                .unwrap();
+            assert_eq!(route.protocol.as_deref(), Some(protocol));
+            assert_eq!(
+                route.local_base_url.as_deref(),
+                Some(format!("{}{path}", setup.proxy_origin).as_str())
+            );
+            assert_eq!(
+                route.credential_placements,
+                vec!["authorization".to_string(), "query:key".to_string()]
+            );
+        }
     }
 
     #[tokio::test]
