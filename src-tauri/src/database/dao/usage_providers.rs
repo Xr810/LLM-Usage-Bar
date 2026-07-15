@@ -2,9 +2,10 @@ use super::agent_provider_bindings::bindings_for_provider_on_conn;
 use crate::database::{lock_conn, to_json_string, Database};
 use crate::error::AppError;
 use crate::usage::domain::{
-    BillingKind, RouteBinding, TokenSource, UsageProviderInput, UsageProviderStored,
-    UsageProviderView, UsageSourceBinding,
+    BillingKind, BindingCredentialStatus, RouteBinding, SystemProviderAuthKind, TokenSource,
+    UsageProviderInput, UsageProviderStored, UsageProviderView, UsageSourceBinding,
 };
+use crate::usage::system_providers::system_provider_definitions;
 use rusqlite::{params, types::Type, OptionalExtension, Row};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -60,12 +61,67 @@ fn provider_from_row(row: &Row<'_>) -> rusqlite::Result<UsageProviderStored> {
         legacy_provider_id: row.get(13)?,
         created_at: row.get(14)?,
         updated_at: row.get(15)?,
+        system_preset_key: row.get(16)?,
     })
 }
 
 const PROVIDER_COLUMNS: &str = "id, name, billing_kind, product_group_id, token_sources,
     quota_source, quota_interval_seconds, route_app_type, route_config, quota_config,
-    enabled, needs_review, legacy_app_type, legacy_provider_id, created_at, updated_at";
+    enabled, needs_review, legacy_app_type, legacy_provider_id, created_at, updated_at,
+    system_preset_key";
+
+const PROVIDER_ORDER_BY: &str = "CASE system_preset_key
+    WHEN 'chatgpt-subscription' THEN 0
+    WHEN 'claude-subscription' THEN 1
+    WHEN 'openai-api' THEN 2
+    WHEN 'anthropic-api' THEN 3
+    WHEN 'openrouter-api' THEN 4
+    ELSE 5 END, CASE WHEN system_preset_key IS NULL THEN id ELSE '' END";
+
+#[derive(Default)]
+struct ProviderCredentialMetadata {
+    fingerprint: Option<Vec<u8>>,
+    credential_slot: Option<String>,
+    credential_version: u64,
+    last_test_at: Option<i64>,
+    last_test_status: Option<String>,
+}
+
+fn provider_credential_metadata(
+    conn: &rusqlite::Connection,
+    provider_id: &str,
+) -> Result<ProviderCredentialMetadata, AppError> {
+    conn.query_row(
+        "SELECT api_key_fingerprint, credential_slot, credential_version,
+                last_test_at, last_test_status
+         FROM provider_api_credentials WHERE provider_id = ?1",
+        [provider_id],
+        |row| {
+            Ok(ProviderCredentialMetadata {
+                fingerprint: row.get(0)?,
+                credential_slot: row.get(1)?,
+                credential_version: row.get::<_, i64>(2)?.max(0) as u64,
+                last_test_at: row.get(3)?,
+                last_test_status: row.get(4)?,
+            })
+        },
+    )
+    .optional()
+    .map(|metadata| metadata.unwrap_or_default())
+    .map_err(AppError::from)
+}
+
+fn compatible_agent_module_ids(preset_key: Option<&str>) -> Vec<String> {
+    let ids: &[&str] = match preset_key {
+        Some("chatgpt-subscription") => &["codex"],
+        Some("claude-subscription") => &["claude-code"],
+        Some("openai-api") => &["codex", "opencode", "openclaw", "hermes"],
+        Some("anthropic-api") => &["claude-code"],
+        Some("openrouter-api") => &["claude-code", "codex", "opencode", "openclaw", "hermes"],
+        _ => &[],
+    };
+    ids.iter().map(|id| (*id).to_string()).collect()
+}
 
 fn has_non_empty_value(value: &Value) -> bool {
     match value {
@@ -93,10 +149,11 @@ fn public_route_base_url(raw: String) -> Option<String> {
 }
 
 fn provider_view(
+    conn: &rusqlite::Connection,
     provider: &UsageProviderStored,
     session_source_bindings: Vec<String>,
     bindings: Vec<crate::usage::domain::AgentProviderBindingView>,
-) -> UsageProviderView {
+) -> Result<UsageProviderView, AppError> {
     let route_base_url = provider.route_config.as_ref().and_then(|config| {
         let direct_or_env = config
             .get("base_url")
@@ -160,7 +217,44 @@ fn provider_view(
         has_direct || has_env || has_codex
     });
 
-    UsageProviderView {
+    let system_definition = provider
+        .system_preset_key
+        .as_deref()
+        .and_then(|preset_key| {
+            system_provider_definitions()
+                .into_iter()
+                .find(|definition| definition.preset_key == preset_key)
+        });
+    let system_auth_kind = system_definition
+        .as_ref()
+        .map(|definition| definition.auth_kind);
+    let credential_metadata = provider_credential_metadata(conn, &provider.id)?;
+    let is_provider_api_key = system_auth_kind == Some(SystemProviderAuthKind::ProviderApiKey);
+    let credential_configured = is_provider_api_key
+        && credential_metadata
+            .fingerprint
+            .as_ref()
+            .is_some_and(|value| value.len() == 32)
+        && credential_metadata
+            .credential_slot
+            .as_deref()
+            .is_some_and(|slot| !slot.trim().is_empty())
+        && credential_metadata.credential_version > 0;
+    let upstream_credential_status = if is_provider_api_key {
+        if credential_configured {
+            BindingCredentialStatus::Configured
+        } else {
+            BindingCredentialStatus::Missing
+        }
+    } else {
+        BindingCredentialStatus::NotRequired
+    };
+    let canonical_endpoint = provider
+        .system_preset_key
+        .as_ref()
+        .and(route_base_url.clone());
+
+    Ok(UsageProviderView {
         id: provider.id.clone(),
         name: provider.name.clone(),
         billing_kind: provider.billing_kind,
@@ -177,7 +271,18 @@ fn provider_view(
         updated_at: provider.updated_at,
         route_base_url,
         has_route_credentials,
-    }
+        system_preset_key: provider.system_preset_key.clone(),
+        system_auth_kind,
+        canonical_endpoint,
+        compatible_agent_module_ids: compatible_agent_module_ids(
+            provider.system_preset_key.as_deref(),
+        ),
+        upstream_credential_status,
+        upstream_credential_version: credential_metadata.credential_version,
+        can_clear_upstream_credential: credential_configured,
+        last_connection_test_at: credential_metadata.last_test_at,
+        last_connection_test_status: credential_metadata.last_test_status,
+    })
 }
 
 fn validate_session_source_bindings(
@@ -226,7 +331,7 @@ impl Database {
     pub fn list_usage_providers(&self) -> Result<Vec<UsageProviderView>, AppError> {
         let conn = lock_conn!(self.conn);
         let mut statement = conn.prepare(&format!(
-            "SELECT {PROVIDER_COLUMNS} FROM usage_providers ORDER BY id"
+            "SELECT {PROVIDER_COLUMNS} FROM usage_providers ORDER BY {PROVIDER_ORDER_BY}"
         ))?;
         let providers = statement
             .query_map([], provider_from_row)?
@@ -234,11 +339,12 @@ impl Database {
         providers
             .iter()
             .map(|provider| {
-                Ok(provider_view(
+                provider_view(
+                    &conn,
                     provider,
                     source_bindings_for_provider(&conn, &provider.id)?,
                     bindings_for_provider_on_conn(&conn, &provider.id)?,
-                ))
+                )
             })
             .collect()
     }
@@ -258,6 +364,9 @@ impl Database {
         &self,
         input: &UsageProviderInput,
     ) -> Result<UsageProviderView, AppError> {
+        if self.is_system_provider(&input.id)? {
+            return Err(AppError::Message("system_provider_immutable".to_string()));
+        }
         input.validate().map_err(AppError::Message)?;
         let requested_session_sources = validate_session_source_bindings(input)?;
         let now = now_timestamp()?;
@@ -281,6 +390,17 @@ impl Database {
         let _operation_guard = lock_conn!(self.usage_source_binding_operation);
         let mut conn = lock_conn!(self.conn);
         let transaction = conn.transaction()?;
+        let became_system: bool = transaction.query_row(
+            "SELECT EXISTS(
+                 SELECT 1 FROM usage_providers
+                 WHERE id = ?1 AND system_preset_key IS NOT NULL
+             )",
+            [&input.id],
+            |row| row.get(0),
+        )?;
+        if became_system {
+            return Err(AppError::Message("system_provider_immutable".to_string()));
+        }
         if requested_session_sources.is_none()
             && !input.token_sources.contains(&TokenSource::SessionLog)
             && transaction.query_row(
@@ -357,8 +477,9 @@ impl Database {
         )?;
         let bindings = source_bindings_for_provider(&transaction, &input.id)?;
         let agent_bindings = bindings_for_provider_on_conn(&transaction, &input.id)?;
+        let view = provider_view(&transaction, &stored, bindings, agent_bindings)?;
         transaction.commit()?;
-        Ok(provider_view(&stored, bindings, agent_bindings))
+        Ok(view)
     }
 
     pub fn set_usage_provider_enabled(&self, id: &str, enabled: bool) -> Result<(), AppError> {
@@ -371,6 +492,28 @@ impl Database {
         if updated == 0 {
             return Err(AppError::Message("usage provider not found".to_string()));
         }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub(crate) fn is_system_provider(&self, provider_id: &str) -> Result<bool, AppError> {
+        let conn = lock_conn!(self.conn);
+        conn.query_row(
+            "SELECT EXISTS(
+                 SELECT 1 FROM usage_providers
+                 WHERE id = ?1 AND system_preset_key IS NOT NULL
+             )",
+            [provider_id],
+            |row| row.get(0),
+        )
+        .map_err(AppError::from)
+    }
+
+    pub(crate) fn reconcile_system_providers(&self) -> Result<(), AppError> {
+        let mut conn = lock_conn!(self.conn);
+        let transaction = conn.transaction()?;
+        crate::usage::system_provider_migration::reconcile_system_provider_catalog(&transaction)?;
+        crate::usage::system_provider_migration::validate_schema_v17_complete(&transaction)?;
         transaction.commit()?;
         Ok(())
     }
@@ -538,7 +681,8 @@ impl Database {
 mod tests {
     use crate::database::Database;
     use crate::usage::domain::{
-        AgentProviderBindingInput, BillingKind, TokenSource, UsageProviderInput,
+        AgentProviderBindingInput, BillingKind, BindingCredentialStatus, SystemProviderAuthKind,
+        TokenSource, UsageProviderInput,
     };
     use serde_json::json;
     use std::sync::{mpsc, Arc};
@@ -566,6 +710,275 @@ mod tests {
             quota_config: Some(json!({"access_token": "quota-secret"})),
             enabled: true,
         }
+    }
+
+    #[test]
+    fn fixed_system_provider_cards_sort_first_and_reject_public_edits_but_allow_enablement() {
+        let db = Database::memory().unwrap();
+        db.save_usage_provider(&provider(
+            "000-custom-provider",
+            BillingKind::Metered,
+            vec![TokenSource::Proxy],
+        ))
+        .unwrap();
+
+        let providers = db.list_usage_providers().unwrap();
+        assert_eq!(
+            providers
+                .iter()
+                .map(|provider| provider.id.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "system-chatgpt-subscription",
+                "system-claude-subscription",
+                "system-openai-api",
+                "system-anthropic-api",
+                "system-openrouter-api",
+                "000-custom-provider",
+            ]
+        );
+        assert_eq!(
+            providers[0].system_preset_key.as_deref(),
+            Some("chatgpt-subscription")
+        );
+        assert_eq!(
+            providers[0].system_auth_kind,
+            Some(SystemProviderAuthKind::CodexOauth)
+        );
+        assert_eq!(providers[0].compatible_agent_module_ids, vec!["codex"]);
+        assert_eq!(
+            providers[0].upstream_credential_status,
+            BindingCredentialStatus::NotRequired
+        );
+        assert_eq!(
+            providers[4].canonical_endpoint.as_deref(),
+            Some("https://openrouter.ai/api/v1")
+        );
+        assert_eq!(
+            providers[4].compatible_agent_module_ids,
+            vec!["claude-code", "codex", "opencode", "openclaw", "hermes"]
+        );
+        assert_eq!(
+            providers[4].upstream_credential_status,
+            BindingCredentialStatus::Missing
+        );
+        assert_eq!(providers[4].upstream_credential_version, 0);
+        assert!(!providers[4].can_clear_upstream_credential);
+
+        let attempted_edit = provider(
+            "system-openrouter-api",
+            BillingKind::Subscription,
+            vec![TokenSource::SessionLog],
+        );
+        assert_eq!(
+            db.save_usage_provider(&attempted_edit)
+                .unwrap_err()
+                .to_string(),
+            "system_provider_immutable"
+        );
+        db.set_usage_provider_enabled("system-openrouter-api", false)
+            .unwrap();
+        let openrouter = db
+            .list_usage_providers()
+            .unwrap()
+            .into_iter()
+            .find(|provider| provider.id == "system-openrouter-api")
+            .unwrap();
+        assert!(!openrouter.enabled);
+        assert_eq!(openrouter.name, "OpenRouter");
+    }
+
+    #[test]
+    fn system_provider_reconciliation_repairs_only_canonical_card_state() {
+        let db = Database::memory().unwrap();
+        let removed_binding_id = {
+            let conn = db.conn.lock().unwrap();
+            let binding_id: String = conn
+                .query_row(
+                    "SELECT id FROM agent_provider_bindings
+                     WHERE agent_module_id = 'opencode'
+                       AND provider_id = 'system-openrouter-api'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            conn.execute(
+                "DELETE FROM agent_provider_bindings WHERE id = ?1",
+                [&binding_id],
+            )
+            .unwrap();
+            conn.execute(
+                "UPDATE usage_providers
+                 SET name = 'Stale Router', route_app_type = 'claude',
+                     route_config = '{\"base_url\":\"https://stale.invalid\"}',
+                     enabled = 0, updated_at = 1234
+                 WHERE id = 'system-openrouter-api'",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "UPDATE provider_api_credentials
+                 SET api_key_fingerprint = ?1,
+                     credential_slot = 'provider/system-openrouter-api/test',
+                     credential_version = 7,
+                     last_test_at = 2222,
+                     last_test_status = 'failed',
+                     last_test_error_code = 'timeout',
+                     created_at = 3333,
+                     updated_at = 4444
+                 WHERE provider_id = 'system-openrouter-api'",
+                [vec![9_u8; 32]],
+            )
+            .unwrap();
+            binding_id
+        };
+
+        db.reconcile_system_providers().unwrap();
+        assert!(db.is_system_provider("system-openrouter-api").unwrap());
+        assert!(!db.is_system_provider("missing-custom").unwrap());
+
+        let conn = db.conn.lock().unwrap();
+        assert_eq!(
+            conn.query_row(
+                "SELECT name, route_app_type, route_config, enabled, updated_at
+                 FROM usage_providers WHERE id = 'system-openrouter-api'",
+                [],
+                |row| Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
+                )),
+            )
+            .unwrap(),
+            (
+                "OpenRouter".into(),
+                Some("codex".into()),
+                Some(
+                    "{\"base_url\":\"https://openrouter.ai/api/v1\",\"apiFormat\":\"openai_chat\",\"authMode\":\"bearer\"}"
+                        .into(),
+                ),
+                0,
+                1234,
+            )
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT api_key_fingerprint, credential_slot, credential_version,
+                        last_test_at, last_test_status, last_test_error_code,
+                        created_at, updated_at
+                 FROM provider_api_credentials
+                 WHERE provider_id = 'system-openrouter-api'",
+                [],
+                |row| Ok((
+                    row.get::<_, Option<Vec<u8>>>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, Option<i64>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, i64>(7)?,
+                )),
+            )
+            .unwrap(),
+            (
+                Some(vec![9_u8; 32]),
+                Some("provider/system-openrouter-api/test".into()),
+                7,
+                Some(2222),
+                Some("failed".into()),
+                Some("timeout".into()),
+                3333,
+                4444,
+            )
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM agent_provider_bindings WHERE id = ?1",
+                [&removed_binding_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn system_provider_reconciliation_restores_a_missing_card_without_restoring_defaults() {
+        let db = Database::memory().unwrap();
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "DELETE FROM agent_provider_bindings
+                 WHERE provider_id = 'system-chatgpt-subscription'",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "DELETE FROM usage_source_bindings
+                 WHERE provider_id = 'system-chatgpt-subscription'",
+                [],
+            )
+            .unwrap();
+            conn.execute_batch(
+                "DROP TRIGGER usage_providers_system_delete;
+                 DELETE FROM usage_providers
+                 WHERE id = 'system-chatgpt-subscription';
+                 CREATE TRIGGER usage_providers_system_delete
+                 BEFORE DELETE ON usage_providers
+                 WHEN OLD.system_preset_key IS NOT NULL
+                 BEGIN
+                     SELECT RAISE(ABORT, 'system provider cannot be deleted');
+                 END;",
+            )
+            .unwrap();
+        }
+
+        db.reconcile_system_providers().unwrap();
+        let conn = db.conn.lock().unwrap();
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM usage_providers
+                 WHERE id = 'system-chatgpt-subscription'
+                   AND system_preset_key = 'chatgpt-subscription'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM agent_provider_bindings
+                 WHERE provider_id = 'system-chatgpt-subscription'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+            0
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM usage_source_bindings
+                 WHERE provider_id = 'system-chatgpt-subscription'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+            0
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT value FROM settings
+                 WHERE key = 'system_provider_default_bindings_v1_seeded'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+            "true"
+        );
     }
 
     #[test]
@@ -656,7 +1069,12 @@ mod tests {
             .unwrap();
         db.set_usage_provider_enabled("subscription", false)
             .unwrap();
-        let saved = db.list_usage_providers().unwrap().remove(0);
+        let saved = db
+            .list_usage_providers()
+            .unwrap()
+            .into_iter()
+            .find(|provider| provider.id == "subscription")
+            .unwrap();
         assert!(!saved.enabled);
         assert_eq!(saved.bindings[0].id, binding.id);
         assert!(saved.bindings[0].enabled);
@@ -687,8 +1105,21 @@ mod tests {
         db.save_usage_provider(&same_id).unwrap();
 
         let providers = db.list_usage_providers().unwrap();
-        assert_eq!(providers.len(), 1);
-        assert_eq!(providers[0].name, "Updated globally");
+        assert_eq!(
+            providers
+                .iter()
+                .filter(|provider| provider.id == "shared")
+                .count(),
+            1
+        );
+        assert_eq!(
+            providers
+                .iter()
+                .find(|provider| provider.id == "shared")
+                .unwrap()
+                .name,
+            "Updated globally"
+        );
         assert_eq!(
             db.get_usage_provider("shared")
                 .unwrap()
@@ -941,8 +1372,22 @@ mod tests {
         assert!(db.get_usage_source_binding("codex").unwrap().is_none());
 
         let listed = db.list_usage_providers().unwrap();
-        assert_eq!(listed[0].session_source_bindings, Vec::<String>::new());
-        assert_eq!(listed[1].session_source_bindings, vec!["claude"]);
+        assert_eq!(
+            listed
+                .iter()
+                .find(|provider| provider.id == "first")
+                .unwrap()
+                .session_source_bindings,
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            listed
+                .iter()
+                .find(|provider| provider.id == "second")
+                .unwrap()
+                .session_source_bindings,
+            vec!["claude"]
+        );
     }
 
     #[test]
@@ -998,6 +1443,7 @@ mod tests {
     #[test]
     fn provider_and_session_bindings_roll_back_as_one_transaction() {
         let db = Database::memory().unwrap();
+        let original_claude_owner = db.get_usage_source_binding("claude").unwrap().unwrap();
         {
             let conn = db.conn.lock().unwrap();
             conn.execute_batch(
@@ -1016,7 +1462,10 @@ mod tests {
 
         assert!(db.save_usage_provider(&input).is_err());
         assert!(db.get_usage_provider("atomic").unwrap().is_none());
-        assert!(db.get_usage_source_binding("claude").unwrap().is_none());
+        assert_eq!(
+            db.get_usage_source_binding("claude").unwrap().unwrap(),
+            original_claude_owner
+        );
     }
 
     #[test]

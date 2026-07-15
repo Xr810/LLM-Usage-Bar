@@ -7,7 +7,7 @@ use crate::error::AppError;
 use chrono::{Local, Utc};
 use rusqlite::backup::Backup;
 use rusqlite::types::ValueRef;
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -52,6 +52,61 @@ struct CredentialJournalState {
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct ProtectedProviderCredentialState {
+    provider_id: String,
+    fingerprint: Option<Vec<u8>>,
+    credential_slot: Option<String>,
+    credential_version: i64,
+    last_test_at: Option<i64>,
+    last_test_status: Option<String>,
+    last_test_error_code: Option<String>,
+    created_at: i64,
+    updated_at: i64,
+}
+
+impl ProtectedProviderCredentialState {
+    fn is_pristine_placeholder(&self) -> bool {
+        self.fingerprint.is_none()
+            && self.credential_slot.is_none()
+            && self.credential_version == 0
+            && self.last_test_at.is_none()
+            && self.last_test_status.is_none()
+            && self.last_test_error_code.is_none()
+    }
+}
+
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct ProviderCredentialJournalState {
+    operation_id: String,
+    provider_id: String,
+    generation: i64,
+    operation_kind: String,
+    status: String,
+    staging_slot: Option<String>,
+    previous_slot: Option<String>,
+    created_at: i64,
+    updated_at: i64,
+}
+
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct SystemProviderCanonicalState {
+    id: String,
+    system_preset_key: String,
+    name: String,
+    billing_kind: String,
+    product_group_id: String,
+    token_sources: String,
+    quota_source: Option<String>,
+    quota_interval_seconds: Option<i64>,
+    route_app_type: Option<String>,
+    route_config: Option<String>,
+    quota_config: Option<String>,
+    needs_review: bool,
+    legacy_app_type: Option<String>,
+    legacy_provider_id: Option<String>,
+}
+
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
 struct SchemaObjectIdentity {
     object_type: String,
     name: String,
@@ -66,6 +121,7 @@ const SYNC_SKIP_TABLES: &[&str] = &[
     "proxy_live_backup",
     "usage_daily_rollups",
     "agent_credential_operations",
+    "provider_credential_operations",
 ];
 
 /// Tables whose local data is preserved (restored from local snapshot) during WebDAV import.
@@ -177,6 +233,124 @@ impl Database {
             .map_err(AppError::from)
     }
 
+    fn protected_provider_credential_state(
+        conn: &Connection,
+    ) -> Result<BTreeSet<ProtectedProviderCredentialState>, AppError> {
+        if !Self::table_exists(conn, "provider_api_credentials")? {
+            return Ok(BTreeSet::new());
+        }
+        let mut statement = conn.prepare(
+            "SELECT provider_id, api_key_fingerprint, credential_slot,
+                    credential_version, last_test_at, last_test_status,
+                    last_test_error_code, created_at, updated_at
+             FROM provider_api_credentials ORDER BY provider_id",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(ProtectedProviderCredentialState {
+                provider_id: row.get(0)?,
+                fingerprint: row.get(1)?,
+                credential_slot: row.get(2)?,
+                credential_version: row.get(3)?,
+                last_test_at: row.get(4)?,
+                last_test_status: row.get(5)?,
+                last_test_error_code: row.get(6)?,
+                created_at: row.get(7)?,
+                updated_at: row.get(8)?,
+            })
+        })?;
+        rows.collect::<Result<BTreeSet<_>, _>>()
+            .map_err(AppError::from)
+    }
+
+    fn provider_credential_journal_state(
+        conn: &Connection,
+    ) -> Result<BTreeSet<ProviderCredentialJournalState>, AppError> {
+        if !Self::table_exists(conn, "provider_credential_operations")? {
+            return Ok(BTreeSet::new());
+        }
+        let mut statement = conn.prepare(
+            "SELECT operation_id, provider_id, generation, operation_kind, status,
+                    staging_slot, previous_slot, created_at, updated_at
+             FROM provider_credential_operations ORDER BY operation_id",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(ProviderCredentialJournalState {
+                operation_id: row.get(0)?,
+                provider_id: row.get(1)?,
+                generation: row.get(2)?,
+                operation_kind: row.get(3)?,
+                status: row.get(4)?,
+                staging_slot: row.get(5)?,
+                previous_slot: row.get(6)?,
+                created_at: row.get(7)?,
+                updated_at: row.get(8)?,
+            })
+        })?;
+        rows.collect::<Result<BTreeSet<_>, _>>()
+            .map_err(AppError::from)
+    }
+
+    fn system_provider_canonical_state(
+        conn: &Connection,
+    ) -> Result<BTreeSet<SystemProviderCanonicalState>, AppError> {
+        if !Self::has_column(conn, "usage_providers", "system_preset_key")? {
+            return Ok(BTreeSet::new());
+        }
+        let mut statement = conn.prepare(
+            "SELECT id, system_preset_key, name, billing_kind, product_group_id,
+                    token_sources, quota_source, quota_interval_seconds,
+                    route_app_type, route_config, quota_config, needs_review,
+                    legacy_app_type, legacy_provider_id
+             FROM usage_providers
+             WHERE system_preset_key IS NOT NULL
+             ORDER BY system_preset_key",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(SystemProviderCanonicalState {
+                id: row.get(0)?,
+                system_preset_key: row.get(1)?,
+                name: row.get(2)?,
+                billing_kind: row.get(3)?,
+                product_group_id: row.get(4)?,
+                token_sources: row.get(5)?,
+                quota_source: row.get(6)?,
+                quota_interval_seconds: row.get(7)?,
+                route_app_type: row.get(8)?,
+                route_config: row.get(9)?,
+                quota_config: row.get(10)?,
+                needs_review: row.get(11)?,
+                legacy_app_type: row.get(12)?,
+                legacy_provider_id: row.get(13)?,
+            })
+        })?;
+        rows.collect::<Result<BTreeSet<_>, _>>()
+            .map_err(AppError::from)
+    }
+
+    fn preserve_system_provider_seed_marker(
+        local: &Connection,
+        incoming: &Connection,
+    ) -> Result<(), AppError> {
+        let marker: Option<String> = local
+            .query_row(
+                "SELECT value FROM settings
+                 WHERE key = 'system_provider_default_bindings_v1_seeded'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(marker) = marker else {
+            return Err(Self::credential_conflict());
+        };
+        incoming.execute(
+            "INSERT INTO settings (key, value)
+             VALUES ('system_provider_default_bindings_v1_seeded', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [marker],
+        )?;
+        Ok(())
+    }
+
     fn ever_bound_agent_ids(conn: &Connection) -> Result<BTreeSet<String>, AppError> {
         if !Self::table_exists(conn, "agent_modules")? {
             return Ok(BTreeSet::new());
@@ -269,6 +443,28 @@ impl Database {
             return Err(Self::credential_conflict());
         }
 
+        let current_provider_credentials = Self::protected_provider_credential_state(current)?;
+        let incoming_provider_credentials = Self::protected_provider_credential_state(incoming)?;
+        if current_provider_credentials
+            .iter()
+            .filter(|state| !state.is_pristine_placeholder())
+            .any(|state| !incoming_provider_credentials.contains(state))
+        {
+            return Err(Self::credential_conflict());
+        }
+
+        let current_provider_journal = Self::provider_credential_journal_state(current)?;
+        let incoming_provider_journal = Self::provider_credential_journal_state(incoming)?;
+        if current_provider_journal != incoming_provider_journal {
+            return Err(Self::credential_conflict());
+        }
+
+        if Self::system_provider_canonical_state(current)?
+            != Self::system_provider_canonical_state(incoming)?
+        {
+            return Err(Self::credential_conflict());
+        }
+
         // `ever_bound` is a one-way tombstone: once a local Agent has owned a
         // binding, importing an older snapshot must not make it hard-deletable
         // again after that binding is removed.
@@ -289,6 +485,8 @@ impl Database {
         // it; reject stale or foreign snapshots instead of executing them here.
         if !Self::credential_journal_state(local)?.is_empty()
             || !Self::credential_journal_state(incoming)?.is_empty()
+            || !Self::provider_credential_journal_state(local)?.is_empty()
+            || !Self::provider_credential_journal_state(incoming)?.is_empty()
         {
             return Err(Self::credential_conflict());
         }
@@ -322,6 +520,31 @@ impl Database {
                 Ok(_) | Err(_) => return Err(Self::credential_conflict()),
             }
         }
+        for state in Self::protected_provider_credential_state(local)? {
+            match incoming.execute(
+                "UPDATE provider_api_credentials
+                 SET api_key_fingerprint = ?2, credential_slot = ?3,
+                     credential_version = ?4, last_test_at = ?5,
+                     last_test_status = ?6, last_test_error_code = ?7,
+                     created_at = ?8, updated_at = ?9
+                 WHERE provider_id = ?1",
+                rusqlite::params![
+                    state.provider_id,
+                    state.fingerprint,
+                    state.credential_slot,
+                    state.credential_version,
+                    state.last_test_at,
+                    state.last_test_status,
+                    state.last_test_error_code,
+                    state.created_at,
+                    state.updated_at,
+                ],
+            ) {
+                Ok(1) => {}
+                Ok(_) | Err(_) => return Err(Self::credential_conflict()),
+            }
+        }
+        Self::preserve_system_provider_seed_marker(local, incoming)?;
         Ok(())
     }
 
@@ -415,7 +638,12 @@ impl Database {
 
         // 补齐缺失表/索引并进行基础校验
         Self::create_tables_on_conn(&temp_conn)?;
+        if Self::get_user_version(&temp_conn)? == crate::database::SCHEMA_VERSION {
+            crate::usage::system_provider_migration::reconcile_system_provider_catalog(&temp_conn)?;
+        }
         Self::apply_schema_migrations_on_conn(&temp_conn)?;
+        crate::usage::system_provider_migration::reconcile_system_provider_catalog(&temp_conn)?;
+        crate::usage::system_provider_migration::validate_schema_v17_complete(&temp_conn)?;
         Self::validate_basic_state(&temp_conn)?;
         Self::validate_import_schema_allowlist(&temp_conn)?;
         if let Some(local_snapshot) = local_snapshot.as_ref() {
@@ -426,6 +654,7 @@ impl Database {
         // 使用 Backup 将临时库原子写回主库
         {
             let mut main_conn = lock_conn!(self.conn);
+            Self::preserve_system_provider_seed_marker(&main_conn, &temp_conn)?;
             Self::ensure_protected_credentials_preserved(&main_conn, &temp_conn)?;
             let backup = Backup::new(&temp_conn, &mut main_conn)
                 .map_err(|e| AppError::Database(e.to_string()))?;
@@ -895,12 +1124,20 @@ impl Database {
                 .map_err(|e| AppError::Database(e.to_string()))?;
         }
         Self::create_tables_on_conn(&staged_conn)?;
+        if Self::get_user_version(&staged_conn)? == crate::database::SCHEMA_VERSION {
+            crate::usage::system_provider_migration::reconcile_system_provider_catalog(
+                &staged_conn,
+            )?;
+        }
         Self::apply_schema_migrations_on_conn(&staged_conn)?;
+        crate::usage::system_provider_migration::reconcile_system_provider_catalog(&staged_conn)?;
+        crate::usage::system_provider_migration::validate_schema_v17_complete(&staged_conn)?;
         Self::validate_import_schema_allowlist(&staged_conn)?;
 
         // Step 3: Preserve device-local credential lifecycle state, then restore.
         {
             let mut main_conn = lock_conn!(self.conn);
+            Self::preserve_system_provider_seed_marker(&main_conn, &staged_conn)?;
             Self::ensure_protected_credentials_preserved(&main_conn, &staged_conn)?;
             let backup = Backup::new(&staged_conn, &mut main_conn)
                 .map_err(|e| AppError::Database(e.to_string()))?;
@@ -912,6 +1149,7 @@ impl Database {
         // Step 4: Re-run idempotent initialization on the live connection.
         self.create_tables()?;
         self.apply_schema_migrations()?;
+        self.reconcile_system_providers()?;
         self.ensure_model_pricing_seeded()?;
 
         log::info!("Database restored from backup: {filename}, safety backup: {safety_id}");
@@ -1092,6 +1330,188 @@ mod tests {
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .map_err(AppError::from)
+    }
+
+    fn set_provider_credential_state(
+        db: &Database,
+        provider_id: &str,
+        fingerprint_byte: u8,
+        slot: &str,
+        version: i64,
+    ) -> Result<(), AppError> {
+        let conn = crate::database::lock_conn!(db.conn);
+        conn.execute(
+            "UPDATE provider_api_credentials
+             SET api_key_fingerprint = ?2, credential_slot = ?3,
+                 credential_version = ?4, last_test_at = 91,
+                 last_test_status = 'success', last_test_error_code = NULL,
+                 updated_at = 92
+             WHERE provider_id = ?1",
+            params![provider_id, vec![fingerprint_byte; 32], slot, version],
+        )?;
+        Ok(())
+    }
+
+    fn provider_credential_tuple(
+        db: &Database,
+        provider_id: &str,
+    ) -> Result<(Vec<u8>, String, i64, Option<i64>, Option<String>), AppError> {
+        let conn = crate::database::lock_conn!(db.conn);
+        conn.query_row(
+            "SELECT api_key_fingerprint, credential_slot, credential_version,
+                    last_test_at, last_test_status
+             FROM provider_api_credentials WHERE provider_id = ?1",
+            [provider_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .map_err(AppError::from)
+    }
+
+    fn insert_import_sentinel(db: &Database, id: &str) -> Result<(), AppError> {
+        db.conn.lock().unwrap().execute(
+            "INSERT INTO providers (id, app_type, name, settings_config, meta)
+             VALUES (?1, 'claude', 'Import Sentinel', '{}', '{}')",
+            [id],
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn ordinary_import_rejects_removing_local_provider_credential_metadata() -> Result<(), AppError>
+    {
+        let local = Database::memory()?;
+        set_provider_credential_state(
+            &local,
+            "system-openrouter-api",
+            0x71,
+            "provider/system-openrouter-api/local",
+            3,
+        )?;
+        let incoming = Database::memory()?;
+        insert_import_sentinel(&incoming, "provider-credential-ordinary-import")?;
+
+        let error = local
+            .import_sql_string(&incoming.export_sql_string()?)
+            .expect_err("ordinary import must not orphan a local Provider credential slot");
+        assert_eq!(error.to_string(), "credential_conflict");
+        assert_eq!(
+            provider_credential_tuple(&local, "system-openrouter-api")?,
+            (
+                vec![0x71; 32],
+                "provider/system-openrouter-api/local".into(),
+                3,
+                Some(91),
+                Some("success".into()),
+            )
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn sync_import_preserves_local_provider_credential_and_connection_test_metadata(
+    ) -> Result<(), AppError> {
+        let local = Database::memory()?;
+        set_provider_credential_state(
+            &local,
+            "system-openrouter-api",
+            0x72,
+            "provider/system-openrouter-api/local",
+            4,
+        )?;
+        let incoming = Database::memory()?;
+        insert_import_sentinel(&incoming, "provider-credential-sync-import")?;
+        set_provider_credential_state(
+            &incoming,
+            "system-openrouter-api",
+            0x73,
+            "provider/system-openrouter-api/remote",
+            8,
+        )?;
+
+        local.import_sql_string_for_sync(&incoming.export_sql_string_for_sync()?)?;
+        assert_eq!(
+            provider_credential_tuple(&local, "system-openrouter-api")?,
+            (
+                vec![0x72; 32],
+                "provider/system-openrouter-api/local".into(),
+                4,
+                Some(91),
+                Some("success".into()),
+            )
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn import_repairs_canonical_system_metadata_and_preserves_seed_marker() -> Result<(), AppError>
+    {
+        let local = Database::memory()?;
+        let incoming = Database::memory()?;
+        insert_import_sentinel(&incoming, "system-canonical-import")?;
+        {
+            let conn = crate::database::lock_conn!(incoming.conn);
+            conn.execute(
+                "UPDATE usage_providers
+                 SET name = 'Incoming Stale Router',
+                     route_config = '{\"base_url\":\"https://attacker.invalid\"}'
+                 WHERE id = 'system-openrouter-api'",
+                [],
+            )?;
+            conn.execute(
+                "UPDATE settings SET value = 'false'
+                 WHERE key = 'system_provider_default_bindings_v1_seeded'",
+                [],
+            )?;
+        }
+
+        local.import_sql_string(&incoming.export_sql_string()?)?;
+        let conn = crate::database::lock_conn!(local.conn);
+        assert_eq!(
+            conn.query_row(
+                "SELECT name FROM usage_providers WHERE id = 'system-openrouter-api'",
+                [],
+                |row| row.get::<_, String>(0),
+            )?,
+            "OpenRouter"
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT value FROM settings
+                 WHERE key = 'system_provider_default_bindings_v1_seeded'",
+                [],
+                |row| row.get::<_, String>(0),
+            )?,
+            "true"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn sync_export_skips_provider_credential_journal_rows() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        db.conn.lock().unwrap().execute(
+            "INSERT INTO provider_credential_operations (
+                 operation_id, provider_id, generation, operation_kind,
+                 status, staging_slot, previous_slot, created_at, updated_at
+             ) VALUES (
+                 'provider-journal-secret-sentinel', 'system-openrouter-api', 1,
+                 'set', 'pending', 'provider/staging/sentinel', NULL, 1, 1
+             )",
+            [],
+        )?;
+
+        let exported = db.export_sql_string_for_sync()?;
+        assert!(!exported.contains("provider-journal-secret-sentinel"));
+        assert!(!exported.contains("provider/staging/sentinel"));
+        Ok(())
     }
 
     fn insert_custom_agent(

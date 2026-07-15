@@ -178,6 +178,8 @@ pub(crate) fn reconcile_system_provider_catalog(conn: &Connection) -> Result<(),
                  route_config = excluded.route_config,
                  quota_config = NULL,
                  needs_review = 0,
+                 legacy_app_type = NULL,
+                 legacy_provider_id = NULL,
                  system_preset_key = excluded.system_preset_key",
             params![
                 definition.id,

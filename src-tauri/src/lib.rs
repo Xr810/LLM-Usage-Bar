@@ -228,7 +228,7 @@ pub fn prepare_database_runtime_test_hook(
 #[cfg(debug_assertions)]
 #[doc(hidden)]
 pub fn create_schema_v13_fixture_test_hook(path: &Path) -> Result<(), AppError> {
-    if database::SCHEMA_VERSION != 16
+    if database::SCHEMA_VERSION != 17
         || product_identity::DATABASE_IDENTITY_SOURCE_SCHEMA_VERSION != 13
     {
         return Err(AppError::Database(
@@ -692,6 +692,16 @@ pub fn run() {
                     }
                 }
             };
+
+            if let Err(error) = db.reconcile_system_providers() {
+                log::error!("Failed to reconcile fixed system Providers: {error}");
+                show_database_init_error_dialog(
+                    app.handle(),
+                    ready_database.database_path(),
+                    &error.to_string(),
+                );
+                return Err(Box::new(error));
+            }
 
             // 如果有预加载的配置，执行迁移
             if let Some(config) = migration_config {
