@@ -825,7 +825,7 @@ git commit -m "feat: project authoritative tray usage snapshot"
 
 - [ ] **Step 1: Write failing cache/failure/concurrency tests**
 
-Use the test-only closure constructor so the service can deterministically
+Use the dependency-injected constructor so the service can deterministically
 advance and inject failure without a Tauri runtime:
 
 ```rust
@@ -841,7 +841,7 @@ async fn failed_refresh_keeps_the_entire_last_successful_snapshot() {
     };
     let refresh_sources: RefreshSourcesFn =
         Arc::new(|| Box::pin(async { Ok(()) }));
-    let service = TrayUsageService::new_for_test(
+    let service = TrayUsageService::new_with_dependencies(
         project_snapshot,
         refresh_sources,
     );
@@ -886,7 +886,7 @@ async fn concurrent_refresh_does_not_start_a_second_collection() {
             })
         })
     };
-    let service = Arc::new(TrayUsageService::new_for_test(
+    let service = Arc::new(TrayUsageService::new_with_dependencies(
         Arc::new(|_| Ok(snapshot(UsageStatus::Green, "row"))),
         refresh_sources,
     ));
@@ -955,6 +955,13 @@ impl TrayUsageService {
                 ).await
             })
         });
+        Self::new_with_dependencies(project_snapshot, refresh_sources)
+    }
+
+    pub(crate) fn new_with_dependencies(
+        project_snapshot: ProjectSnapshotFn,
+        refresh_sources: RefreshSourcesFn,
+    ) -> Self {
         Self {
             project_snapshot,
             refresh_sources,
@@ -965,19 +972,6 @@ impl TrayUsageService {
 
     pub async fn cached_snapshot(&self) -> TrayUsageSnapshot {
         self.cache.read().await.clone()
-    }
-
-    #[cfg(test)]
-    fn new_for_test(
-        project_snapshot: ProjectSnapshotFn,
-        refresh_sources: RefreshSourcesFn,
-    ) -> Self {
-        Self {
-            project_snapshot,
-            refresh_sources,
-            cache: tokio::sync::RwLock::new(TrayUsageSnapshot::unknown(0)),
-            refresh_gate: tokio::sync::Mutex::new(()),
-        }
     }
 
     pub async fn rebuild_from_persisted_at<F>(
@@ -1077,8 +1071,9 @@ Do not log the returned upstream error string. Log only `tray usage source refre
 `refresh_all_sources` lists enabled Providers, awaits every eligible
 subscription quota refresh, runs each session scan in `spawn_blocking`, and
 returns `Err(())` when any call fails or any session result has non-empty
-`errors`. `new_for_test(ProjectSnapshotFn, RefreshSourcesFn)` is compiled only
-for tests and makes the sequence/blocking fakes in Step 1 type-correct.
+`errors`. Production `new` and tests both use
+`new_with_dependencies(ProjectSnapshotFn, RefreshSourcesFn)`, so dependency
+injection remains real production structure rather than a test-only API.
 
 - [ ] **Step 5: Own the service in `AppState`**
 
