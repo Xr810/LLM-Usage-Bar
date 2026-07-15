@@ -1516,3 +1516,554 @@ async fn credential_failures_log_only_generic_messages() {
     }
     assert!(logs.contains("credential store put failed"));
 }
+
+fn private_provider_credential_state(
+    db: &Database,
+    provider_id: &str,
+) -> (Option<Vec<u8>>, Option<String>, i64) {
+    db.conn
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT api_key_fingerprint, credential_slot, credential_version
+             FROM provider_api_credentials WHERE provider_id = ?1",
+            [provider_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap()
+}
+
+fn provider_credential_journal_count(db: &Database, provider_id: &str) -> i64 {
+    db.conn
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM provider_credential_operations WHERE provider_id = ?1",
+            [provider_id],
+            |row| row.get(0),
+        )
+        .unwrap()
+}
+
+fn all_binding_credential_state(db: &Database) -> Vec<(String, String, String, bool, i64)> {
+    let conn = db.conn.lock().unwrap();
+    let mut statement = conn
+        .prepare(
+            "SELECT id, agent_module_id, provider_id, enabled, credential_version
+             FROM agent_provider_bindings ORDER BY id",
+        )
+        .unwrap();
+    statement
+        .query_map([], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn provider_credential_set_replace_clear_is_versioned_and_redacted() {
+    let db = Arc::new(Database::memory().unwrap());
+    let store = Arc::new(MemoryCredentialStore::default());
+    let service = BindingCredentialService::new(db.clone(), store.clone());
+    let first_key = "provider-first-secret-sentinel";
+    let second_key = "provider-second-secret-sentinel";
+
+    let configured = service
+        .set_provider_api_key(
+            "system-openrouter-api",
+            0,
+            SecretString::new(first_key.to_string()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(configured.upstream_credential_version, 1);
+    assert_eq!(
+        configured.upstream_credential_status,
+        BindingCredentialStatus::Configured
+    );
+    assert!(configured.can_clear_upstream_credential);
+    let serialized = serde_json::to_string(&configured).unwrap();
+    assert!(!serialized.contains(first_key));
+    let first_slot = private_provider_credential_state(&db, "system-openrouter-api")
+        .1
+        .unwrap();
+
+    let replaced = service
+        .replace_provider_api_key(
+            "system-openrouter-api",
+            1,
+            SecretString::new(second_key.to_string()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(replaced.upstream_credential_version, 2);
+    let second_slot = private_provider_credential_state(&db, "system-openrouter-api")
+        .1
+        .unwrap();
+    assert_ne!(first_slot, second_slot);
+    assert_eq!(store.item_count(), 1);
+
+    let cleared = service
+        .clear_provider_api_key("system-openrouter-api", 2)
+        .await
+        .unwrap();
+    assert_eq!(cleared.upstream_credential_version, 3);
+    assert_eq!(
+        cleared.upstream_credential_status,
+        BindingCredentialStatus::Missing
+    );
+    assert!(!cleared.can_clear_upstream_credential);
+    assert_eq!(
+        private_provider_credential_state(&db, "system-openrouter-api"),
+        (None, None, 3)
+    );
+    assert_eq!(
+        provider_credential_journal_count(&db, "system-openrouter-api"),
+        0
+    );
+    assert_eq!(store.item_count(), 0);
+}
+
+#[tokio::test]
+async fn provider_credential_only_accepts_the_three_fixed_api_cards() {
+    let db = Arc::new(Database::memory().unwrap());
+    let service = BindingCredentialService::new(db, Arc::new(MemoryCredentialStore::default()));
+
+    for rejected in [
+        "system-chatgpt-subscription",
+        "system-claude-subscription",
+        "missing-custom-provider",
+    ] {
+        assert_eq!(
+            service
+                .set_provider_api_key(rejected, 0, secret("provider-rejected-key"))
+                .await
+                .unwrap_err()
+                .to_string(),
+            "unsupported_auth"
+        );
+    }
+}
+
+#[tokio::test]
+async fn provider_credential_fingerprint_is_domain_separated_from_local_binding_keys() {
+    let db = Arc::new(Database::memory().unwrap());
+    let store = Arc::new(MemoryCredentialStore::default());
+    let service = BindingCredentialService::new(db.clone(), store);
+    let shared_bytes = "same-bytes-provider-and-binding-sentinel";
+
+    service
+        .set_provider_api_key(
+            "system-openrouter-api",
+            0,
+            SecretString::new(shared_bytes.to_string()),
+        )
+        .await
+        .unwrap();
+    let provider_fingerprint = private_provider_credential_state(&db, "system-openrouter-api")
+        .0
+        .unwrap();
+    let mut binding_hasher = Sha256::new();
+    binding_hasher.update(super::KEYCHAIN_SERVICE.as_bytes());
+    binding_hasher.update(b"\0");
+    binding_hasher.update(shared_bytes.as_bytes());
+    assert_ne!(provider_fingerprint, binding_hasher.finalize().to_vec());
+    assert_eq!(
+        service
+            .resolve_binding_api_key(SecretString::new(shared_bytes.to_string()))
+            .await
+            .unwrap_err()
+            .to_string(),
+        "binding_not_found"
+    );
+}
+
+#[tokio::test]
+async fn provider_credential_rotation_never_changes_binding_generations_or_selection() {
+    let db = Arc::new(Database::memory().unwrap());
+    let store = Arc::new(MemoryCredentialStore::default());
+    let service = BindingCredentialService::new(db.clone(), store);
+    let bindings_before = all_binding_credential_state(&db);
+
+    service
+        .set_provider_api_key("system-openrouter-api", 0, secret("provider-rotation-one"))
+        .await
+        .unwrap();
+    service
+        .replace_provider_api_key("system-openrouter-api", 1, secret("provider-rotation-two"))
+        .await
+        .unwrap();
+    service
+        .clear_provider_api_key("system-openrouter-api", 2)
+        .await
+        .unwrap();
+
+    assert_eq!(all_binding_credential_state(&db), bindings_before);
+}
+
+#[tokio::test]
+async fn provider_credential_store_failure_and_concurrent_mutations_fail_closed() {
+    let db = Arc::new(Database::memory().unwrap());
+    let store = Arc::new(MemoryCredentialStore::default());
+    store.fail_put_after_write();
+    let service = Arc::new(BindingCredentialService::new(db.clone(), store.clone()));
+
+    assert_eq!(
+        service
+            .set_provider_api_key("system-openrouter-api", 0, secret("provider-store-failure"),)
+            .await
+            .unwrap_err()
+            .to_string(),
+        "credential_unavailable"
+    );
+    assert_eq!(
+        private_provider_credential_state(&db, "system-openrouter-api"),
+        (None, None, 0)
+    );
+    assert_eq!(
+        provider_credential_journal_count(&db, "system-openrouter-api"),
+        0
+    );
+    assert_eq!(store.item_count(), 0);
+
+    service
+        .set_provider_api_key(
+            "system-openrouter-api",
+            0,
+            secret("provider-concurrent-original"),
+        )
+        .await
+        .unwrap();
+    let replacing = service.clone();
+    let clearing = service.clone();
+    let (replace_result, clear_result) = tokio::join!(
+        async move {
+            replacing
+                .replace_provider_api_key(
+                    "system-openrouter-api",
+                    1,
+                    secret("provider-concurrent-replacement"),
+                )
+                .await
+        },
+        async move {
+            clearing
+                .clear_provider_api_key("system-openrouter-api", 1)
+                .await
+        }
+    );
+    assert_eq!(
+        usize::from(replace_result.is_ok()) + usize::from(clear_result.is_ok()),
+        1
+    );
+    let loser = replace_result.err().or_else(|| clear_result.err()).unwrap();
+    assert_eq!(loser.to_string(), "credential_conflict");
+    assert_eq!(
+        private_provider_credential_state(&db, "system-openrouter-api").2,
+        2
+    );
+    assert_eq!(
+        provider_credential_journal_count(&db, "system-openrouter-api"),
+        0
+    );
+}
+
+#[tokio::test]
+async fn provider_credential_startup_reconciliation_removes_unpublished_staging_items() {
+    let db = Arc::new(Database::memory().unwrap());
+    let store = Arc::new(MemoryCredentialStore::default());
+    let reservation = db
+        .reserve_provider_credential_operation(
+            "system-openrouter-api",
+            0,
+            CredentialMutationKind::Set,
+            Some(&[0x81_u8; 32]),
+        )
+        .unwrap();
+    let staging_slot = reservation.staging_slot.as_deref().unwrap();
+    store
+        .put(staging_slot, b"provider-unpublished-secret")
+        .unwrap();
+
+    let service = BindingCredentialService::new(db.clone(), store.clone());
+    service.reconcile_startup().await.unwrap();
+    assert_eq!(
+        provider_credential_journal_count(&db, "system-openrouter-api"),
+        0
+    );
+    assert_eq!(store.item_count(), 0);
+    assert_eq!(
+        private_provider_credential_state(&db, "system-openrouter-api"),
+        (None, None, 0)
+    );
+}
+
+#[tokio::test]
+async fn provider_credential_missing_or_mismatched_protected_items_are_unavailable() {
+    let db = Arc::new(Database::memory().unwrap());
+    let store = Arc::new(MemoryCredentialStore::default());
+    let service = BindingCredentialService::new(db.clone(), store.clone());
+    service
+        .set_provider_api_key(
+            "system-openrouter-api",
+            0,
+            secret("provider-protected-status"),
+        )
+        .await
+        .unwrap();
+    let slot = private_provider_credential_state(&db, "system-openrouter-api")
+        .1
+        .unwrap();
+
+    store.remove(&slot);
+    let missing = service
+        .list_usage_providers()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|provider| provider.id == "system-openrouter-api")
+        .unwrap();
+    assert_eq!(
+        missing.upstream_credential_status,
+        BindingCredentialStatus::Unavailable
+    );
+    assert!(missing.can_clear_upstream_credential);
+
+    store.replace_for_test(&slot, b"different-provider-protected-value");
+    let mismatched = service
+        .list_usage_providers()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|provider| provider.id == "system-openrouter-api")
+        .unwrap();
+    assert_eq!(
+        mismatched.upstream_credential_status,
+        BindingCredentialStatus::Unavailable
+    );
+}
+
+#[tokio::test]
+async fn provider_credential_duplicate_publish_cleans_only_its_staging_generation() {
+    let db = Arc::new(Database::memory().unwrap());
+    let store = Arc::new(MemoryCredentialStore::default());
+    let service = BindingCredentialService::new(db.clone(), store.clone());
+    let duplicate = "provider-duplicate-secret-sentinel";
+    service
+        .set_provider_api_key(
+            "system-openrouter-api",
+            0,
+            SecretString::new(duplicate.to_string()),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        service
+            .set_provider_api_key(
+                "system-openai-api",
+                0,
+                SecretString::new(duplicate.to_string()),
+            )
+            .await
+            .unwrap_err()
+            .to_string(),
+        "credential_conflict"
+    );
+    assert_eq!(
+        private_provider_credential_state(&db, "system-openai-api"),
+        (None, None, 0)
+    );
+    assert_eq!(
+        provider_credential_journal_count(&db, "system-openai-api"),
+        0
+    );
+    assert_eq!(store.item_count(), 1);
+}
+
+#[tokio::test]
+async fn provider_credential_startup_reconciliation_finishes_published_operations() {
+    let db = Arc::new(Database::memory().unwrap());
+    let store = Arc::new(MemoryCredentialStore::default());
+    let raw_key = b"provider-published-before-crash";
+    let mut hasher = Sha256::new();
+    hasher.update(b"com.xr810.llm-usage-bar.provider-upstream.v1\0");
+    hasher.update(raw_key);
+    let fingerprint: [u8; 32] = hasher.finalize().into();
+    let reservation = db
+        .reserve_provider_credential_operation(
+            "system-openrouter-api",
+            0,
+            CredentialMutationKind::Set,
+            Some(&fingerprint),
+        )
+        .unwrap();
+    let slot = reservation.staging_slot.as_deref().unwrap();
+    store.put(slot, raw_key).unwrap();
+    db.publish_provider_credential_operation(&reservation, Some(&fingerprint))
+        .unwrap();
+    assert_eq!(
+        provider_credential_journal_count(&db, "system-openrouter-api"),
+        1
+    );
+
+    let service = BindingCredentialService::new(db.clone(), store.clone());
+    service.reconcile_startup().await.unwrap();
+    assert_eq!(
+        provider_credential_journal_count(&db, "system-openrouter-api"),
+        0
+    );
+    assert_eq!(store.item_count(), 1);
+    assert_eq!(
+        service
+            .list_usage_providers()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|provider| provider.id == "system-openrouter-api")
+            .unwrap()
+            .upstream_credential_status,
+        BindingCredentialStatus::Configured
+    );
+}
+
+#[tokio::test]
+async fn provider_credential_exports_and_backups_never_contain_raw_keys() {
+    let directory = tempfile::tempdir().unwrap();
+    let database_path = directory.path().join("provider-credentials.db");
+    let db = Arc::new(Database::init_at(&database_path).unwrap());
+    let service =
+        BindingCredentialService::new(db.clone(), Arc::new(MemoryCredentialStore::default()));
+    let raw_key = "provider-backup-raw-sentinel-36f8";
+    let view = service
+        .set_provider_api_key(
+            "system-openrouter-api",
+            0,
+            SecretString::new(raw_key.to_string()),
+        )
+        .await
+        .unwrap();
+
+    let serialized = serde_json::to_string(&view).unwrap();
+    let full_sql = db.export_sql_string().unwrap();
+    let sync_sql = db.export_sql_string_for_sync().unwrap();
+    for surface in [&serialized, &full_sql, &sync_sql] {
+        assert!(!surface.contains(raw_key));
+    }
+    let backup = db.backup_database_file().unwrap().unwrap();
+    let bytes = std::fs::read(backup).unwrap();
+    assert!(!bytes
+        .windows(raw_key.len())
+        .any(|window| window == raw_key.as_bytes()));
+}
+
+#[tokio::test]
+async fn provider_credential_reconciliation_never_deletes_a_binding_active_slot() {
+    let db = Arc::new(Database::memory().unwrap());
+    let binding = direct_binding(&db, "provider-journal-active-binding");
+    let store = Arc::new(MemoryCredentialStore::default());
+    let service = BindingCredentialService::new(db.clone(), store.clone());
+    let configured = service
+        .set_binding_api_key(&binding.id, 0, secret("binding-slot-must-survive"))
+        .await
+        .unwrap();
+    requested_enabled(&db, &configured);
+    let active_slot = private_binding_state(&db, &binding.id).1.unwrap();
+    let reservation = db
+        .reserve_provider_credential_operation(
+            "system-openrouter-api",
+            0,
+            CredentialMutationKind::Set,
+            Some(&[0x91_u8; 32]),
+        )
+        .unwrap();
+    db.conn
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE provider_credential_operations
+             SET staging_slot = ?2 WHERE operation_id = ?1",
+            rusqlite::params![reservation.operation_id, active_slot],
+        )
+        .unwrap();
+
+    assert_eq!(
+        service.reconcile_startup().await.unwrap_err().to_string(),
+        "credential_unavailable"
+    );
+    assert_eq!(
+        provider_credential_journal_count(&db, "system-openrouter-api"),
+        1
+    );
+    assert_eq!(store.item_count(), 1);
+    assert_eq!(
+        service
+            .resolve_binding_api_key(secret("binding-slot-must-survive"))
+            .await
+            .unwrap()
+            .binding_id(),
+        binding.id
+    );
+}
+
+#[tokio::test]
+async fn provider_credential_active_slot_is_never_deleted_by_binding_reconciliation() {
+    let db = Arc::new(Database::memory().unwrap());
+    let pending = direct_binding(&db, "binding-journal-active-provider");
+    let store = Arc::new(MemoryCredentialStore::default());
+    let service = BindingCredentialService::new(db.clone(), store.clone());
+    service
+        .set_provider_api_key(
+            "system-openrouter-api",
+            0,
+            secret("provider-slot-must-survive"),
+        )
+        .await
+        .unwrap();
+    let active_slot = private_provider_credential_state(&db, "system-openrouter-api")
+        .1
+        .unwrap();
+    let reservation = db
+        .reserve_credential_operation(
+            &pending.id,
+            0,
+            CredentialMutationKind::Set,
+            Some(&[0x92_u8; 32]),
+        )
+        .unwrap();
+    db.conn
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE agent_credential_operations
+             SET staging_slot = ?2 WHERE operation_id = ?1",
+            rusqlite::params![reservation.operation_id, active_slot],
+        )
+        .unwrap();
+
+    assert_eq!(
+        service.reconcile_startup().await.unwrap_err().to_string(),
+        "credential_unavailable"
+    );
+    assert_eq!(journal_count(&db, &pending.id), 1);
+    assert_eq!(store.item_count(), 1);
+    assert_eq!(
+        service
+            .list_usage_providers()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|provider| provider.id == "system-openrouter-api")
+            .unwrap()
+            .upstream_credential_status,
+        BindingCredentialStatus::Configured
+    );
+}

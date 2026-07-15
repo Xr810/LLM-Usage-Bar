@@ -42,6 +42,10 @@ pub(crate) use dao::binding_credentials::{
     CredentialBindingSnapshot, CredentialJournalEntry, CredentialMutationKind,
     CredentialOperationReservation,
 };
+pub(crate) use dao::provider_credentials::{
+    ProviderCredentialJournalEntry, ProviderCredentialOperationReservation,
+    ProviderCredentialSnapshot,
+};
 pub(crate) use dao::providers_seed::{is_official_seed_id, CLAUDE_DESKTOP_OFFICIAL_PROVIDER_ID};
 pub(crate) use dao::proxy::{
     validate_cost_multiplier, validate_pricing_source, PRICING_SOURCE_REQUEST,

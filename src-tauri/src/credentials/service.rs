@@ -2,14 +2,17 @@ use super::lifecycle_lock::{CredentialLifecycleLock, SharedLifecycleGuard};
 use super::{CredentialStore, SecretString, KEYCHAIN_SERVICE};
 use crate::database::{
     BindingAuthMode, CredentialBindingSnapshot, CredentialJournalEntry, CredentialMutationKind,
-    CredentialOperationReservation, Database,
+    CredentialOperationReservation, Database, ProviderCredentialJournalEntry,
+    ProviderCredentialOperationReservation, ProviderCredentialSnapshot,
 };
 use crate::error::AppError;
 use crate::provider::Provider;
 use crate::proxy::provider_router::{
     build_binding_route_projection, BindingPricingOverride, UpstreamCredentialPlacement,
 };
-use crate::usage::domain::{AgentProviderBindingView, BindingCredentialStatus};
+use crate::usage::domain::{
+    AgentProviderBindingView, BindingCredentialStatus, SystemProviderAuthKind, UsageProviderView,
+};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -18,6 +21,7 @@ use subtle::ConstantTimeEq;
 use zeroize::{Zeroize, Zeroizing};
 
 const FINGERPRINT_SEPARATOR: &[u8] = b"\0";
+const PROVIDER_FINGERPRINT_DOMAIN: &[u8] = b"com.xr810.llm-usage-bar.provider-upstream.v1\0";
 const MIN_BINDING_CREDENTIAL_BYTES: usize = 16;
 const MAX_BINDING_CREDENTIAL_BYTES: usize = 4096;
 const MIN_BINDING_CREDENTIAL_DISTINCT_BYTES: usize = 4;
@@ -74,6 +78,18 @@ fn credential_fingerprint(secret: &[u8]) -> [u8; 32] {
     hasher.update(FINGERPRINT_SEPARATOR);
     hasher.update(secret);
     hasher.finalize().into()
+}
+
+fn provider_credential_fingerprint(secret: &[u8]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(PROVIDER_FINGERPRINT_DOMAIN);
+    hasher.update(secret);
+    hasher.finalize().into()
+}
+
+fn provider_credential_is_acceptable(secret: &[u8]) -> bool {
+    (1..=MAX_BINDING_CREDENTIAL_BYTES).contains(&secret.len())
+        && secret.iter().all(u8::is_ascii_graphic)
 }
 
 /// Binding credentials are forwarded through HTTP authentication headers and
@@ -1409,6 +1425,240 @@ impl BindingCredentialService {
             })
     }
 
+    async fn cleanup_provider_staging_after_failure(
+        &self,
+        reservation: &ProviderCredentialOperationReservation,
+    ) {
+        let Some(staging_slot) = reservation.staging_slot.as_deref() else {
+            if self
+                .db
+                .delete_pending_provider_journal_entry(
+                    &reservation.operation_id,
+                    &reservation.provider_id,
+                    reservation.generation,
+                )
+                .is_err()
+            {
+                log::error!("provider credential pending journal cleanup failed");
+            }
+            return;
+        };
+        match self.db.claim_pending_provider_staging_cleanup(reservation) {
+            Ok(false) => return,
+            Err(_) => {
+                log::error!("provider credential staging cleanup claim failed");
+                return;
+            }
+            Ok(true) => {}
+        }
+        match self.db.provider_credential_slot_is_active(staging_slot) {
+            Ok(false) => {}
+            Ok(true) | Err(_) => {
+                log::error!("provider credential staging cleanup safety check failed");
+                return;
+            }
+        }
+        if self.store_delete(staging_slot.to_string()).await.is_ok()
+            && self
+                .db
+                .finish_claimed_provider_staging_cleanup(reservation)
+                .is_err()
+        {
+            log::error!("provider credential pending journal cleanup failed");
+        }
+    }
+
+    async fn finish_published_provider_operation(
+        &self,
+        reservation: &ProviderCredentialOperationReservation,
+    ) -> Result<(), ()> {
+        if let Some(previous_slot) = reservation.previous_slot.as_deref() {
+            match self.db.provider_credential_slot_is_active(previous_slot) {
+                Ok(true) => return Err(()),
+                Err(_) => {
+                    log::error!("provider credential cleanup safety check failed");
+                    return Err(());
+                }
+                Ok(false) => {}
+            }
+            self.store_delete(previous_slot.to_string()).await?;
+        }
+        self.db
+            .finish_provider_credential_operation(reservation)
+            .map_err(|_| {
+                log::error!("provider credential journal finalization failed");
+            })
+    }
+
+    async fn mutate_provider_api_key(
+        &self,
+        provider_id: &str,
+        expected_version: u64,
+        api_key: SecretString,
+        kind: CredentialMutationKind,
+    ) -> Result<UsageProviderView, AppError> {
+        if !provider_credential_is_acceptable(api_key.expose_bytes()) {
+            return Err(public_error("credential_required"));
+        }
+        let lifecycle_guard = Arc::new(self.lifecycle_lock.shared().await.map_err(|_| {
+            log::error!("credential lifecycle lock failed");
+            public_error("credential_unavailable")
+        })?);
+        let fingerprint = provider_credential_fingerprint(api_key.expose_bytes());
+        let reservation = self
+            .db
+            .reserve_provider_credential_operation(
+                provider_id,
+                expected_version,
+                kind,
+                Some(&fingerprint),
+            )
+            .map_err(normalize_db_error)?;
+        let staging_slot = reservation
+            .staging_slot
+            .as_deref()
+            .ok_or_else(|| public_error("credential_unavailable"))?
+            .to_string();
+        let protected_secret = Zeroizing::new(api_key.expose_bytes().to_vec());
+        if self
+            .store_put(staging_slot, protected_secret, lifecycle_guard.clone())
+            .await
+            .is_err()
+        {
+            self.cleanup_provider_staging_after_failure(&reservation)
+                .await;
+            return Err(public_error("credential_unavailable"));
+        }
+        if let Err(error) = self
+            .db
+            .publish_provider_credential_operation(&reservation, Some(&fingerprint))
+        {
+            self.cleanup_provider_staging_after_failure(&reservation)
+                .await;
+            return Err(normalize_db_error(error));
+        }
+        let _ = self.finish_published_provider_operation(&reservation).await;
+        self.provider_view(provider_id).await
+    }
+
+    pub async fn set_provider_api_key(
+        &self,
+        provider_id: &str,
+        expected_version: u64,
+        api_key: SecretString,
+    ) -> Result<UsageProviderView, AppError> {
+        self.mutate_provider_api_key(
+            provider_id,
+            expected_version,
+            api_key,
+            CredentialMutationKind::Set,
+        )
+        .await
+    }
+
+    pub async fn replace_provider_api_key(
+        &self,
+        provider_id: &str,
+        expected_version: u64,
+        api_key: SecretString,
+    ) -> Result<UsageProviderView, AppError> {
+        self.mutate_provider_api_key(
+            provider_id,
+            expected_version,
+            api_key,
+            CredentialMutationKind::Replace,
+        )
+        .await
+    }
+
+    pub async fn clear_provider_api_key(
+        &self,
+        provider_id: &str,
+        expected_version: u64,
+    ) -> Result<UsageProviderView, AppError> {
+        let _lifecycle_guard = self.lifecycle_lock.shared().await.map_err(|_| {
+            log::error!("credential lifecycle lock failed");
+            public_error("credential_unavailable")
+        })?;
+        let reservation = self
+            .db
+            .reserve_provider_credential_operation(
+                provider_id,
+                expected_version,
+                CredentialMutationKind::Clear,
+                None,
+            )
+            .map_err(normalize_db_error)?;
+        if let Err(error) = self
+            .db
+            .publish_provider_credential_operation(&reservation, None)
+        {
+            self.cleanup_provider_staging_after_failure(&reservation)
+                .await;
+            return Err(normalize_db_error(error));
+        }
+        let _ = self.finish_published_provider_operation(&reservation).await;
+        self.provider_view(provider_id).await
+    }
+
+    async fn provider_credential_status(
+        &self,
+        snapshot: &ProviderCredentialSnapshot,
+    ) -> BindingCredentialStatus {
+        let (Some(fingerprint), Some(slot)) = (
+            snapshot.fingerprint.as_deref(),
+            snapshot.credential_slot.as_deref(),
+        ) else {
+            return if snapshot.fingerprint.is_none() && snapshot.credential_slot.is_none() {
+                BindingCredentialStatus::Missing
+            } else {
+                BindingCredentialStatus::Unavailable
+            };
+        };
+        if fingerprint.len() != 32 || snapshot.credential_version == 0 {
+            return BindingCredentialStatus::Unavailable;
+        }
+        let Ok(Some(secret)) = self.store_get(slot.to_string()).await else {
+            return BindingCredentialStatus::Unavailable;
+        };
+        let actual = provider_credential_fingerprint(secret.as_slice());
+        if bool::from(actual.as_slice().ct_eq(fingerprint)) {
+            BindingCredentialStatus::Configured
+        } else {
+            BindingCredentialStatus::Unavailable
+        }
+    }
+
+    async fn provider_view(&self, provider_id: &str) -> Result<UsageProviderView, AppError> {
+        self.list_usage_providers()
+            .await?
+            .into_iter()
+            .find(|provider| provider.id == provider_id)
+            .filter(|provider| {
+                provider.system_auth_kind == Some(SystemProviderAuthKind::ProviderApiKey)
+            })
+            .ok_or_else(|| public_error("unsupported_auth"))
+    }
+
+    pub async fn list_usage_providers(&self) -> Result<Vec<UsageProviderView>, AppError> {
+        let mut providers = self.db.list_usage_providers().map_err(normalize_db_error)?;
+        for provider in &mut providers {
+            if provider.system_auth_kind != Some(SystemProviderAuthKind::ProviderApiKey) {
+                continue;
+            }
+            let snapshot = self
+                .db
+                .provider_credential_snapshot(&provider.id)
+                .map_err(normalize_db_error)?
+                .ok_or_else(|| public_error("credential_unavailable"))?;
+            provider.upstream_credential_status = self.provider_credential_status(&snapshot).await;
+            provider.upstream_credential_version = snapshot.credential_version;
+            provider.can_clear_upstream_credential =
+                snapshot.fingerprint.is_some() && snapshot.credential_slot.is_some();
+        }
+        Ok(providers)
+    }
+
     async fn mutate_api_key(
         &self,
         binding_id: &str,
@@ -1894,7 +2144,156 @@ impl BindingCredentialService {
         self.db.finish_journal_entry(&entry).map_err(|_| ())
     }
 
+    async fn reconcile_provider_entry(
+        &self,
+        mut entry: ProviderCredentialJournalEntry,
+    ) -> Result<(), ()> {
+        if entry.status == "pending" {
+            let snapshot = self
+                .db
+                .provider_credential_reconcile_state(&entry.provider_id)
+                .map_err(|_| ())?
+                .ok_or(())?;
+            let published = match entry.kind {
+                CredentialMutationKind::Set | CredentialMutationKind::Replace => {
+                    snapshot.credential_version == entry.generation
+                        && snapshot.credential_slot.as_deref() == entry.staging_slot.as_deref()
+                        && snapshot.has_fingerprint
+                }
+                CredentialMutationKind::Clear => {
+                    snapshot.credential_version == entry.generation
+                        && snapshot.credential_slot.is_none()
+                        && !snapshot.has_fingerprint
+                }
+                CredentialMutationKind::Delete => false,
+            };
+            if published {
+                let status = if entry.previous_slot.is_some() {
+                    "cleanup"
+                } else {
+                    "committed"
+                };
+                self.db
+                    .promote_pending_provider_credential_operation(&entry.operation_id, status)
+                    .map_err(|_| ())?;
+                entry.status = status.to_string();
+            } else {
+                if let Some(staging_slot) = entry.staging_slot.as_deref() {
+                    if self
+                        .db
+                        .provider_credential_slot_is_active(staging_slot)
+                        .map_err(|_| ())?
+                    {
+                        return Err(());
+                    }
+                    let reservation = ProviderCredentialOperationReservation {
+                        operation_id: entry.operation_id.clone(),
+                        provider_id: entry.provider_id.clone(),
+                        kind: entry.kind,
+                        expected_version: entry.generation.saturating_sub(1),
+                        generation: entry.generation,
+                        staging_slot: entry.staging_slot.clone(),
+                        previous_slot: entry.previous_slot.clone(),
+                        previous_fingerprint: None,
+                    };
+                    if !self
+                        .db
+                        .claim_pending_provider_staging_cleanup(&reservation)
+                        .map_err(|_| ())?
+                    {
+                        return Err(());
+                    }
+                    if self
+                        .db
+                        .provider_credential_slot_is_active(staging_slot)
+                        .map_err(|_| ())?
+                    {
+                        return Err(());
+                    }
+                    self.store_delete(staging_slot.to_string()).await?;
+                    self.db
+                        .finish_claimed_provider_staging_cleanup(&reservation)
+                        .map_err(|_| ())?;
+                } else {
+                    self.db
+                        .delete_pending_provider_journal_entry(
+                            &entry.operation_id,
+                            &entry.provider_id,
+                            entry.generation,
+                        )
+                        .map_err(|_| ())?;
+                }
+                return Ok(());
+            }
+        }
+        if entry.status == "cleanup" {
+            if let Some(previous_slot) = entry.previous_slot.as_deref() {
+                if self
+                    .db
+                    .provider_credential_slot_is_active(previous_slot)
+                    .map_err(|_| ())?
+                {
+                    return Err(());
+                }
+                self.store_delete(previous_slot.to_string()).await?;
+            }
+        }
+        self.db
+            .finish_provider_journal_entry(&entry)
+            .map_err(|_| ())
+    }
+
+    async fn reconcile_provider_entries_locked(&self) -> Result<(), AppError> {
+        let initial_entries = self
+            .db
+            .provider_credential_journal_entries()
+            .map_err(normalize_db_error)?;
+        let mut previous_count = initial_entries.len();
+        let max_passes = previous_count.saturating_add(1).max(1);
+        let mut next_entries = Some(initial_entries);
+        for _ in 0..max_passes {
+            let entries = match next_entries.take() {
+                Some(entries) => entries,
+                None => self
+                    .db
+                    .provider_credential_journal_entries()
+                    .map_err(normalize_db_error)?,
+            };
+            if entries.is_empty() {
+                break;
+            }
+            for entry in entries {
+                if self.reconcile_provider_entry(entry).await.is_err() {
+                    log::error!("provider credential startup reconciliation step failed");
+                }
+            }
+            let remaining = self
+                .db
+                .provider_credential_journal_entries()
+                .map_err(normalize_db_error)?
+                .len();
+            if remaining == 0 {
+                break;
+            }
+            if remaining >= previous_count {
+                break;
+            }
+            previous_count = remaining;
+        }
+        if self
+            .db
+            .provider_credential_journal_entries()
+            .map_err(normalize_db_error)?
+            .is_empty()
+        {
+            Ok(())
+        } else {
+            Err(public_error("credential_unavailable"))
+        }
+    }
+
     async fn reconcile_locked(&self) -> Result<(), AppError> {
+        self.reconcile_provider_entries_locked().await?;
         let initial_entries = self
             .db
             .credential_journal_entries()
@@ -1941,6 +2340,9 @@ impl BindingCredentialService {
         // missing protected value.
         if self.list_agent_provider_bindings(None).await.is_err() {
             log::error!("credential active-pointer audit failed");
+        }
+        if self.list_usage_providers().await.is_err() {
+            log::error!("provider credential active-pointer audit failed");
         }
         if failed {
             Err(public_error("credential_unavailable"))

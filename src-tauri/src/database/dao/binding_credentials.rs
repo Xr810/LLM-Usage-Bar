@@ -39,7 +39,7 @@ pub(crate) enum CredentialMutationKind {
 }
 
 impl CredentialMutationKind {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Set => "set",
             Self::Replace => "replace",
@@ -286,6 +286,8 @@ impl Database {
         conn.query_row(
             "SELECT EXISTS(
                  SELECT 1 FROM agent_provider_bindings WHERE credential_slot = ?1
+                 UNION ALL
+                 SELECT 1 FROM provider_api_credentials WHERE credential_slot = ?1
              )",
             [slot],
             |row| row.get(0),
@@ -600,6 +602,10 @@ impl Database {
                AND NOT EXISTS (
                    SELECT 1 FROM agent_provider_bindings
                    WHERE credential_slot = ?5
+               )
+               AND NOT EXISTS (
+                   SELECT 1 FROM provider_api_credentials
+                   WHERE credential_slot = ?5
                )",
             params![
                 reservation.operation_id,
@@ -628,6 +634,10 @@ impl Database {
                AND previous_slot = ?2
                AND NOT EXISTS (
                    SELECT 1 FROM agent_provider_bindings
+                   WHERE credential_slot = ?2
+               )
+               AND NOT EXISTS (
+                   SELECT 1 FROM provider_api_credentials
                    WHERE credential_slot = ?2
                )",
             params![reservation.operation_id, staging_slot],
@@ -666,6 +676,9 @@ impl Database {
             Some(previous_slot) => transaction.query_row(
                 "SELECT EXISTS(
                      SELECT 1 FROM agent_provider_bindings
+                     WHERE credential_slot = ?1
+                     UNION ALL
+                     SELECT 1 FROM provider_api_credentials
                      WHERE credential_slot = ?1
                  )",
                 [previous_slot],
