@@ -9,12 +9,21 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { UsageProviderDialog } from "@/components/usage-dashboard/UsageProviderDialog";
+import { SystemProviderCard } from "./SystemProviderCard";
 import {
   useSaveUsageProvider,
   useSetUsageProviderEnabled,
   useUsageProviders,
 } from "@/lib/query/usageDashboard";
 import type { UsageProviderView } from "@/types/usageDashboard";
+
+const SYSTEM_PROVIDER_ORDER = [
+  "chatgpt-subscription",
+  "claude-subscription",
+  "openai-api",
+  "anthropic-api",
+  "openrouter-api",
+];
 
 export function UsageProvidersSettings() {
   const { t } = useTranslation();
@@ -41,6 +50,23 @@ export function UsageProvidersSettings() {
           : String(providersQuery.error),
       ]
     : [];
+  const providers = providersQuery.data ?? [];
+  const systemProviders = providers
+    .filter(
+      (provider) =>
+        provider.systemPresetKey !== null &&
+        provider.systemPresetKey !== undefined,
+    )
+    .sort(
+      (left, right) =>
+        SYSTEM_PROVIDER_ORDER.indexOf(left.systemPresetKey ?? "") -
+        SYSTEM_PROVIDER_ORDER.indexOf(right.systemPresetKey ?? ""),
+    );
+  const customProviders = providers.filter(
+    (provider) =>
+      provider.systemPresetKey === null ||
+      provider.systemPresetKey === undefined,
+  );
 
   return (
     <div className="space-y-4 pb-6">
@@ -67,11 +93,32 @@ export function UsageProvidersSettings() {
             {t("usageDashboard.addProvider", { defaultValue: "Add Provider" })}
           </Button>
         </CardHeader>
+      </Card>
+
+      {providersQuery.isLoading ? (
+        <div>{t("common.loading", { defaultValue: "Loading" })}</div>
+      ) : null}
+
+      {systemProviders.map((provider) => (
+        <SystemProviderCard key={provider.id} provider={provider} />
+      ))}
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">
+            {t("usageDashboard.customProviders", {
+              defaultValue: "Custom Providers",
+            })}
+          </CardTitle>
+          <CardDescription>
+            {t("usageDashboard.customProvidersDescription", {
+              defaultValue:
+                "Add or edit Providers with your own routing and metadata.",
+            })}
+          </CardDescription>
+        </CardHeader>
         <CardContent className="space-y-2">
-          {providersQuery.isLoading ? (
-            <div>{t("common.loading", { defaultValue: "Loading" })}</div>
-          ) : null}
-          {(providersQuery.data ?? []).map((provider) => (
+          {customProviders.map((provider) => (
             <div
               key={provider.id}
               data-testid={`provider-config-${provider.id}`}
@@ -137,11 +184,10 @@ export function UsageProvidersSettings() {
               </div>
             </div>
           ))}
-          {!providersQuery.isLoading &&
-          (providersQuery.data ?? []).length === 0 ? (
+          {!providersQuery.isLoading && customProviders.length === 0 ? (
             <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
-              {t("usageDashboard.noProvidersConfigured", {
-                defaultValue: "No Providers configured",
+              {t("usageDashboard.noCustomProvidersConfigured", {
+                defaultValue: "No custom Providers configured",
               })}
             </div>
           ) : null}

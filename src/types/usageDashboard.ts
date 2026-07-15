@@ -5,9 +5,7 @@ export type CostSource = "upstream" | "estimated" | "unavailable";
 export type BindingCredentialStatus =
   "not_required" | "missing" | "configured" | "unavailable";
 export type SystemProviderAuthKind =
-  | "codex_oauth"
-  | "claude_cli"
-  | "provider_api_key";
+  "codex_oauth" | "claude_cli" | "provider_api_key";
 
 export interface AgentModuleView {
   id: string;

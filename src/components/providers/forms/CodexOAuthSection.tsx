@@ -27,6 +27,8 @@ import { copyText } from "@/lib/clipboard";
 
 interface CodexOAuthSectionProps {
   className?: string;
+  /** Render inside an immutable built-in Provider card. */
+  variant?: "default" | "system-card";
   /** 当前选中的 ChatGPT 账号 ID */
   selectedAccountId?: string | null;
   /** 账号选择回调 */
@@ -45,6 +47,7 @@ interface CodexOAuthSectionProps {
  */
 export const CodexOAuthSection: React.FC<CodexOAuthSectionProps> = ({
   className,
+  variant = "default",
   selectedAccountId,
   onAccountSelect,
   fastModeEnabled = false,
@@ -93,7 +96,10 @@ export const CodexOAuthSection: React.FC<CodexOAuthSectionProps> = ({
   };
 
   return (
-    <div className={`space-y-4 ${className || ""}`}>
+    <div
+      data-variant={variant}
+      className={`space-y-4 ${variant === "system-card" ? "rounded-md border bg-muted/20 p-3" : ""} ${className || ""}`}
+    >
       {/* 认证状态标题 */}
       <div className="flex items-center justify-between">
         <Label>{t("codexOauth.authStatus", "认证状态")}</Label>
