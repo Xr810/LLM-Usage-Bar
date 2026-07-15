@@ -1,4 +1,5 @@
 pub mod balance;
+pub mod claude_cli_auth;
 pub mod codex_oauth_models;
 pub mod coding_plan;
 pub mod config;
@@ -30,6 +31,7 @@ pub mod webdav;
 pub mod webdav_auto_sync;
 pub mod webdav_sync;
 
+pub use claude_cli_auth::{ClaudeCliAuthService, ClaudeCliAuthStatus};
 pub use config::ConfigService;
 pub use mcp::McpService;
 pub use omo::OmoService;

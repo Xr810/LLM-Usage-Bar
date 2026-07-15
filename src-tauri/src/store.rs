@@ -1,6 +1,8 @@
 use crate::credentials::{unavailable_credential_store, BindingCredentialService, CredentialStore};
 use crate::database::Database;
-use crate::services::{ProxyService, UsageCache};
+#[cfg(test)]
+use crate::services::claude_cli_auth::ClaudeAuthCommandRunner;
+use crate::services::{ClaudeCliAuthService, ProxyService, UsageCache};
 use crate::usage::quota::{QuotaSchedulerHandle, QuotaService};
 use crate::usage::session::SessionUsageService;
 use std::sync::{Arc, Mutex};
@@ -11,6 +13,7 @@ pub struct AppState {
     pub proxy_service: ProxyService,
     pub credential_store: Arc<dyn CredentialStore>,
     pub binding_credential_service: Arc<BindingCredentialService>,
+    pub claude_cli_auth_service: Arc<ClaudeCliAuthService>,
     pub usage_cache: Arc<UsageCache>,
     pub quota_service: Arc<QuotaService>,
     pub session_usage_service: Arc<SessionUsageService>,
@@ -27,6 +30,31 @@ impl AppState {
         db: Arc<Database>,
         credential_store: Arc<dyn CredentialStore>,
     ) -> Self {
+        Self::new_with_services(
+            db,
+            credential_store,
+            Arc::new(ClaudeCliAuthService::production()),
+        )
+    }
+
+    #[cfg(test)]
+    pub fn new_with_credential_store_and_claude_auth_runner(
+        db: Arc<Database>,
+        credential_store: Arc<dyn CredentialStore>,
+        runner: Arc<dyn ClaudeAuthCommandRunner>,
+    ) -> Self {
+        Self::new_with_services(
+            db,
+            credential_store,
+            Arc::new(ClaudeCliAuthService::new(runner)),
+        )
+    }
+
+    fn new_with_services(
+        db: Arc<Database>,
+        credential_store: Arc<dyn CredentialStore>,
+        claude_cli_auth_service: Arc<ClaudeCliAuthService>,
+    ) -> Self {
         let proxy_service =
             ProxyService::new_with_credential_store(db.clone(), credential_store.clone());
         let binding_credential_service = proxy_service.binding_credential_service();
@@ -38,6 +66,7 @@ impl AppState {
             proxy_service,
             credential_store,
             binding_credential_service,
+            claude_cli_auth_service,
             usage_cache: Arc::new(UsageCache::new()),
             quota_service,
             session_usage_service,
