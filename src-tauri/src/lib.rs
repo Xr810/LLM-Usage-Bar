@@ -1283,6 +1283,14 @@ pub fn run() {
                 {
                     log::error!("protected credential startup reconciliation failed");
                 }
+                if state
+                    .binding_credential_service
+                    .ensure_fixed_api_binding_local_keys()
+                    .await
+                    .is_err()
+                {
+                    log::error!("fixed API binding local credential initialization failed");
+                }
 
                 // 检查是否有 Live 备份（表示上次异常退出时可能处于接管状态）
                 let has_backups = match state.db.has_any_live_backup().await {

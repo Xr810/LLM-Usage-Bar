@@ -122,8 +122,32 @@ pub struct AgentProviderBindingView {
     pub credential_status: BindingCredentialStatus,
     pub can_clear_credential: bool,
     pub credential_version: u64,
+    pub route_protocol: Option<String>,
+    pub local_credential_status: BindingCredentialStatus,
+    pub provider_credential_status: BindingCredentialStatus,
     pub created_at: i64,
     pub updated_at: i64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalBindingKeyReveal {
+    pub binding_id: String,
+    pub credential_version: u64,
+    pub local_key: String,
+}
+
+impl std::fmt::Debug for LocalBindingKeyReveal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("LocalBindingKeyReveal([REDACTED])")
+    }
+}
+
+impl Drop for LocalBindingKeyReveal {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        self.local_key.zeroize();
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

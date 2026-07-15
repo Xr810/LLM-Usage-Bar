@@ -2067,3 +2067,313 @@ async fn provider_credential_active_slot_is_never_deleted_by_binding_reconciliat
         BindingCredentialStatus::Configured
     );
 }
+
+fn fixed_binding(
+    db: &Database,
+    agent_module_id: &str,
+    provider_id: &str,
+) -> AgentProviderBindingView {
+    db.list_agent_provider_bindings(Some(agent_module_id))
+        .unwrap()
+        .into_iter()
+        .find(|binding| binding.provider_id == provider_id)
+        .unwrap()
+}
+
+#[tokio::test]
+async fn local_binding_keys_are_generated_per_agent_and_require_provider_key_to_be_effective() {
+    let db = Arc::new(Database::memory().unwrap());
+    let store = Arc::new(MemoryCredentialStore::default());
+    let service = BindingCredentialService::new(db.clone(), store.clone());
+
+    service.ensure_fixed_api_binding_local_keys().await.unwrap();
+    let bindings = service.list_agent_provider_bindings(None).await.unwrap();
+    let openrouter = bindings
+        .iter()
+        .filter(|binding| binding.provider_id == "system-openrouter-api")
+        .collect::<Vec<_>>();
+    assert_eq!(openrouter.len(), 3);
+    assert!(openrouter.iter().all(|binding| {
+        binding.local_credential_status == BindingCredentialStatus::Configured
+            && binding.provider_credential_status == BindingCredentialStatus::Missing
+            && !binding.effective_enabled
+            && binding.credential_version == 1
+    }));
+
+    let mut revealed = Vec::new();
+    for binding in &openrouter {
+        let secret = service
+            .reveal_local_binding_key(&binding.id, binding.credential_version)
+            .await
+            .unwrap();
+        assert!(secret.local_key.starts_with("lub_"));
+        assert_eq!(secret.local_key.len(), 69);
+        assert_eq!(secret.binding_id, binding.id);
+        assert_eq!(secret.credential_version, 1);
+        assert_eq!(format!("{secret:?}"), "LocalBindingKeyReveal([REDACTED])");
+        revealed.push(secret.local_key.clone());
+    }
+    revealed.sort();
+    revealed.dedup();
+    assert_eq!(revealed.len(), 3);
+
+    service
+        .set_provider_api_key(
+            "system-openrouter-api",
+            0,
+            secret("openrouter-shared-upstream-key"),
+        )
+        .await
+        .unwrap();
+    let bindings = service.list_agent_provider_bindings(None).await.unwrap();
+    assert!(bindings
+        .iter()
+        .filter(|binding| binding.provider_id == "system-openrouter-api")
+        .all(|binding| {
+            binding.provider_credential_status == BindingCredentialStatus::Configured
+                && binding.effective_enabled
+        }));
+    assert_eq!(store.item_count(), 4);
+
+    service
+        .clear_provider_api_key("system-openrouter-api", 1)
+        .await
+        .unwrap();
+    let bindings = service.list_agent_provider_bindings(None).await.unwrap();
+    assert!(bindings
+        .iter()
+        .filter(|binding| binding.provider_id == "system-openrouter-api")
+        .all(|binding| {
+            binding.local_credential_status == BindingCredentialStatus::Configured
+                && binding.provider_credential_status == BindingCredentialStatus::Missing
+                && binding.credential_version == 1
+                && !binding.effective_enabled
+        }));
+    assert_eq!(store.item_count(), 3);
+}
+
+#[tokio::test]
+async fn local_binding_create_reveal_rotate_delete_and_readd_never_reuses_identity_or_key() {
+    let db = Arc::new(Database::memory().unwrap());
+    let store = Arc::new(MemoryCredentialStore::default());
+    let service = BindingCredentialService::new(db.clone(), store);
+    let input = AgentProviderBindingInput {
+        id: None,
+        agent_module_id: "codex".to_string(),
+        provider_id: "system-openai-api".to_string(),
+        enabled: true,
+    };
+
+    let created = service
+        .create_system_api_binding(input.clone())
+        .await
+        .unwrap();
+    assert!(created.enabled);
+    assert_eq!(created.route_protocol.as_deref(), Some("codex"));
+    assert_eq!(
+        created.local_credential_status,
+        BindingCredentialStatus::Configured
+    );
+    let first_reveal = service
+        .reveal_local_binding_key(&created.id, 1)
+        .await
+        .unwrap();
+    let first_key = first_reveal.local_key.clone();
+    service
+        .set_provider_api_key(
+            "system-openai-api",
+            0,
+            secret("openai-provider-key-for-local-rotation"),
+        )
+        .await
+        .unwrap();
+    service
+        .resolve_binding_api_key(SecretString::new(first_key.clone()))
+        .await
+        .unwrap();
+
+    let rotated = service
+        .rotate_local_binding_key(&created.id, 1)
+        .await
+        .unwrap();
+    assert_eq!(rotated.credential_version, 2);
+    assert_ne!(rotated.local_key, first_key);
+    assert_eq!(
+        service
+            .resolve_binding_api_key(SecretString::new(first_key.clone()))
+            .await
+            .unwrap_err()
+            .to_string(),
+        "binding_not_found"
+    );
+    assert_eq!(
+        service
+            .reveal_local_binding_key(&created.id, 1)
+            .await
+            .unwrap_err()
+            .to_string(),
+        "credential_conflict"
+    );
+
+    service.delete_binding(&created.id, 2).await.unwrap();
+    let readded = service.create_system_api_binding(input).await.unwrap();
+    let readded_reveal = service
+        .reveal_local_binding_key(&readded.id, 1)
+        .await
+        .unwrap();
+    assert_ne!(readded.id, created.id);
+    assert_ne!(readded_reveal.local_key, first_key);
+    assert_ne!(readded_reveal.local_key, rotated.local_key);
+}
+
+#[tokio::test]
+async fn local_binding_lists_and_setup_views_never_reveal_raw_keys() {
+    let db = Arc::new(Database::memory().unwrap());
+    let service =
+        BindingCredentialService::new(db.clone(), Arc::new(MemoryCredentialStore::default()));
+    let created = service
+        .create_system_api_binding(AgentProviderBindingInput {
+            id: None,
+            agent_module_id: "codex".to_string(),
+            provider_id: "system-openai-api".to_string(),
+            enabled: true,
+        })
+        .await
+        .unwrap();
+    let reveal = service
+        .reveal_local_binding_key(&created.id, 1)
+        .await
+        .unwrap();
+    let raw = reveal.local_key.clone();
+
+    let listed = service.list_agent_provider_bindings(None).await.unwrap();
+    let serialized = serde_json::to_string(&listed).unwrap();
+    assert!(!serialized.contains(&raw));
+    assert!(!serialized.contains("lub_"));
+    assert!(serialized.contains("localCredentialStatus"));
+    assert!(serialized.contains("providerCredentialStatus"));
+    let provider = service
+        .list_usage_providers()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|provider| provider.id == "system-openai-api")
+        .unwrap();
+    assert_eq!(provider.bindings.len(), 1);
+    assert_eq!(
+        provider.bindings[0].local_credential_status,
+        BindingCredentialStatus::Configured
+    );
+    assert!(!serde_json::to_string(&provider).unwrap().contains(&raw));
+}
+
+#[tokio::test]
+async fn local_binding_custom_provider_keeps_user_supplied_key_semantics() {
+    let db = Arc::new(Database::memory().unwrap());
+    let binding = direct_binding(&db, "local-binding-custom-provider");
+    let service =
+        BindingCredentialService::new(db.clone(), Arc::new(MemoryCredentialStore::default()));
+    let configured = service
+        .set_binding_api_key(&binding.id, 0, secret("custom-user-supplied-upstream-key"))
+        .await
+        .unwrap();
+    assert_eq!(
+        configured.local_credential_status,
+        BindingCredentialStatus::NotRequired
+    );
+    assert_eq!(
+        configured.provider_credential_status,
+        BindingCredentialStatus::NotRequired
+    );
+    assert_eq!(configured.route_protocol.as_deref(), Some("claude"));
+    requested_enabled(&db, &configured);
+    assert_eq!(
+        service
+            .resolve_binding_api_key(secret("custom-user-supplied-upstream-key"))
+            .await
+            .unwrap()
+            .expose_secret(),
+        b"custom-user-supplied-upstream-key"
+    );
+}
+
+#[tokio::test]
+async fn local_binding_rejects_unsupported_pairs_and_subscription_key_reveal() {
+    let db = Arc::new(Database::memory().unwrap());
+    let service =
+        BindingCredentialService::new(db.clone(), Arc::new(MemoryCredentialStore::default()));
+    assert_eq!(
+        service
+            .create_system_api_binding(AgentProviderBindingInput {
+                id: None,
+                agent_module_id: "claude-code".to_string(),
+                provider_id: "system-openai-api".to_string(),
+                enabled: true,
+            })
+            .await
+            .unwrap_err()
+            .to_string(),
+        "invalid_binding"
+    );
+
+    let claude = fixed_binding(&db, "claude-code", "system-claude-subscription");
+    assert_eq!(claude.route_protocol, None);
+    assert_eq!(
+        service
+            .reveal_local_binding_key(&claude.id, claude.credential_version)
+            .await
+            .unwrap_err()
+            .to_string(),
+        "unsupported_auth"
+    );
+}
+
+#[tokio::test]
+async fn local_binding_create_store_failure_leaves_no_enabled_or_orphaned_binding() {
+    let db = Arc::new(Database::memory().unwrap());
+    let store = Arc::new(MemoryCredentialStore::default());
+    store.fail_put_after_write();
+    let service = BindingCredentialService::new(db.clone(), store.clone());
+
+    assert_eq!(
+        service
+            .create_system_api_binding(AgentProviderBindingInput {
+                id: None,
+                agent_module_id: "codex".to_string(),
+                provider_id: "system-openai-api".to_string(),
+                enabled: true,
+            })
+            .await
+            .unwrap_err()
+            .to_string(),
+        "credential_unavailable"
+    );
+    assert!(db
+        .list_agent_provider_bindings(Some("codex"))
+        .unwrap()
+        .into_iter()
+        .all(|binding| binding.provider_id != "system-openai-api"));
+    assert_eq!(store.item_count(), 0);
+}
+
+#[tokio::test]
+async fn local_binding_startup_generation_failure_preserves_selection_and_reports_unavailable() {
+    let db = Arc::new(Database::memory().unwrap());
+    let service = BindingCredentialService::new(db.clone(), super::unavailable_credential_store());
+
+    let views = service.ensure_fixed_api_binding_local_keys().await.unwrap();
+    let openrouter = views
+        .iter()
+        .filter(|binding| binding.provider_id == "system-openrouter-api")
+        .collect::<Vec<_>>();
+    assert_eq!(openrouter.len(), 3);
+    assert!(openrouter.iter().all(|binding| {
+        binding.enabled
+            && !binding.effective_enabled
+            && binding.local_credential_status == BindingCredentialStatus::Unavailable
+    }));
+    assert!(all_binding_credential_state(&db)
+        .into_iter()
+        .filter(|(_, _, provider_id, _, _)| provider_id == "system-openrouter-api")
+        .all(|(_, _, _, enabled, version)| enabled && version == 0));
+}

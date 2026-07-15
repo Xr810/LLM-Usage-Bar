@@ -89,3 +89,71 @@ pub fn system_provider_definitions() -> Vec<SystemProviderDefinition> {
         },
     ]
 }
+
+pub(crate) fn system_binding_route_protocol(
+    preset_key: &str,
+    agent_module_id: &str,
+) -> Option<Option<&'static str>> {
+    match (preset_key, agent_module_id) {
+        ("chatgpt-subscription", "codex") => Some(Some("codex")),
+        ("claude-subscription", "claude-code") => Some(None),
+        ("openai-api", "codex") => Some(Some("codex")),
+        ("openai-api", "opencode") => Some(Some("opencode")),
+        ("openai-api", "openclaw") => Some(Some("openclaw")),
+        ("openai-api", "hermes") => Some(Some("hermes")),
+        ("anthropic-api", "claude-code") => Some(Some("claude")),
+        ("openrouter-api", "claude-code") => Some(Some("claude")),
+        ("openrouter-api", "codex") => Some(Some("codex")),
+        ("openrouter-api", "opencode") => Some(Some("opencode")),
+        ("openrouter-api", "openclaw") => Some(Some("openclaw")),
+        ("openrouter-api", "hermes") => Some(Some("hermes")),
+        _ => None,
+    }
+}
+
+pub(crate) fn is_fixed_api_preset(preset_key: Option<&str>) -> bool {
+    matches!(
+        preset_key,
+        Some("openai-api" | "anthropic-api" | "openrouter-api")
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::system_binding_route_protocol;
+
+    #[test]
+    fn system_binding_protocol_matrix_is_exact_and_server_owned() {
+        let supported = [
+            ("chatgpt-subscription", "codex", Some("codex")),
+            ("claude-subscription", "claude-code", None),
+            ("openai-api", "codex", Some("codex")),
+            ("openai-api", "opencode", Some("opencode")),
+            ("openai-api", "openclaw", Some("openclaw")),
+            ("openai-api", "hermes", Some("hermes")),
+            ("anthropic-api", "claude-code", Some("claude")),
+            ("openrouter-api", "claude-code", Some("claude")),
+            ("openrouter-api", "codex", Some("codex")),
+            ("openrouter-api", "opencode", Some("opencode")),
+            ("openrouter-api", "openclaw", Some("openclaw")),
+            ("openrouter-api", "hermes", Some("hermes")),
+        ];
+        for (preset, agent, protocol) in supported {
+            assert_eq!(
+                system_binding_route_protocol(preset, agent),
+                Some(protocol),
+                "{preset}/{agent}"
+            );
+        }
+        for (preset, agent) in [
+            ("chatgpt-subscription", "claude-code"),
+            ("claude-subscription", "codex"),
+            ("openai-api", "claude-code"),
+            ("anthropic-api", "codex"),
+            ("openrouter-api", "unknown-agent"),
+            ("unknown-provider", "codex"),
+        ] {
+            assert_eq!(system_binding_route_protocol(preset, agent), None);
+        }
+    }
+}

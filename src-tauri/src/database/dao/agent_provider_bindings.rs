@@ -5,6 +5,7 @@ use crate::usage::domain::{
     AgentProviderBindingInput, AgentProviderBindingView, BillingKind, BindingCredentialStatus,
     TokenSource,
 };
+use crate::usage::system_providers::{is_fixed_api_preset, system_binding_route_protocol};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde_json::Value;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -41,6 +42,11 @@ pub(crate) struct BindingRecord {
     pub(crate) legacy_migration_linked: bool,
     pub(crate) legacy_provider_id: Option<String>,
     pub(crate) legacy_provider: Option<Provider>,
+    pub(crate) route_protocol: Option<String>,
+    pub(crate) system_preset_key: Option<String>,
+    pub(crate) provider_fingerprint: Option<Vec<u8>>,
+    pub(crate) provider_credential_slot: Option<String>,
+    pub(crate) provider_credential_version: i64,
 }
 
 fn public_error(code: &'static str) -> AppError {
@@ -149,6 +155,11 @@ pub(crate) fn binding_record_from_row(row: &Row<'_>) -> rusqlite::Result<Binding
         legacy_provider_id: row.get(30)?,
         product_group_id: row.get(31)?,
         legacy_provider,
+        route_protocol: row.get(32)?,
+        system_preset_key: row.get(33)?,
+        provider_fingerprint: row.get(34)?,
+        provider_credential_slot: row.get(35)?,
+        provider_credential_version: row.get(36)?,
     })
 }
 
@@ -164,13 +175,19 @@ pub(crate) const BINDING_RECORD_QUERY: &str =
             legacy.icon_color, legacy.in_failover_queue,
             (provider.legacy_app_type IS NOT NULL
              AND provider.legacy_provider_id IS NOT NULL),
-            provider.legacy_provider_id, provider.product_group_id
+            provider.legacy_provider_id, provider.product_group_id,
+            binding.route_protocol, provider.system_preset_key,
+            provider_credential.api_key_fingerprint,
+            provider_credential.credential_slot,
+            COALESCE(provider_credential.credential_version, 0)
      FROM agent_provider_bindings AS binding
      JOIN usage_providers AS provider ON provider.id = binding.provider_id
      JOIN agent_modules AS agent ON agent.id = binding.agent_module_id
      LEFT JOIN providers AS legacy
        ON legacy.id = provider.legacy_provider_id
-      AND legacy.app_type = provider.legacy_app_type";
+      AND legacy.app_type = provider.legacy_app_type
+     LEFT JOIN provider_api_credentials AS provider_credential
+       ON provider_credential.provider_id = provider.id";
 
 fn normalized_auth_marker(value: &str) -> String {
     value
@@ -237,7 +254,9 @@ fn is_managed_auth_marker(value: &str) -> bool {
 fn default_direct_placement(protocol: &str) -> Option<DirectCredentialPlacement> {
     match protocol {
         "claude" | "claude-desktop" => Some(DirectCredentialPlacement::XApiKey),
-        "codex" => Some(DirectCredentialPlacement::AuthorizationBearer),
+        "codex" | "opencode" | "openclaw" | "hermes" => {
+            Some(DirectCredentialPlacement::AuthorizationBearer)
+        }
         "gemini" => Some(DirectCredentialPlacement::XGoogApiKey),
         _ => None,
     }
@@ -522,6 +541,21 @@ pub(crate) fn resolve_direct_credential_placement(
 }
 
 pub(crate) fn binding_auth_mode(record: &BindingRecord) -> BindingAuthMode {
+    match record.system_preset_key.as_deref() {
+        Some("chatgpt-subscription") => return BindingAuthMode::ManagedAuth,
+        Some("claude-subscription") => return BindingAuthMode::SessionOnly,
+        preset if is_fixed_api_preset(preset) => {
+            return if preset
+                .and_then(|preset| system_binding_route_protocol(preset, &record.agent_module_id))
+                .is_some()
+            {
+                BindingAuthMode::DirectApiKey
+            } else {
+                BindingAuthMode::Unsupported
+            };
+        }
+        _ => {}
+    }
     let has_session = record.token_sources.contains(&TokenSource::SessionLog);
     let has_proxy = record.token_sources.contains(&TokenSource::Proxy);
     let is_managed_auth = [
@@ -586,8 +620,8 @@ fn credential_status(
             if record.fingerprint.is_none() && record.credential_slot.is_none() {
                 BindingCredentialStatus::Missing
             } else {
-                // Task 3 upgrades this to Configured only after the protected item
-                // has been loaded and its fingerprint verified.
+                // The synchronous DAO cannot open protected storage, so only the
+                // credential service may upgrade this to Configured.
                 BindingCredentialStatus::Unavailable
             }
         }
@@ -601,8 +635,23 @@ fn binding_view(record: &BindingRecord) -> Result<AgentProviderBindingView, AppE
     let credential_version = u64::try_from(record.credential_version)
         .map_err(|_| AppError::Database("negative credential version".to_string()))?;
     let can_clear_credential = record.fingerprint.is_some() && record.credential_slot.is_some();
-    // `effective_enabled` is proxy routability. Until Task 3 can verify the
-    // protected credential, no binding is effectively routable.
+    let is_fixed_api = is_fixed_api_preset(record.system_preset_key.as_deref());
+    let provider_credential_status = if is_fixed_api {
+        if record.provider_fingerprint.is_none() && record.provider_credential_slot.is_none() {
+            BindingCredentialStatus::Missing
+        } else {
+            BindingCredentialStatus::Unavailable
+        }
+    } else {
+        BindingCredentialStatus::NotRequired
+    };
+    let local_credential_status = if is_fixed_api {
+        credential_status
+    } else {
+        BindingCredentialStatus::NotRequired
+    };
+    // `effective_enabled` is proxy routability. The synchronous DAO cannot verify
+    // protected credentials, so no binding is effectively routable here.
     let effective_enabled = record.enabled
         && record.provider_enabled
         && record.agent_archived_at.is_none()
@@ -617,6 +666,9 @@ fn binding_view(record: &BindingRecord) -> Result<AgentProviderBindingView, AppE
         credential_status,
         can_clear_credential,
         credential_version,
+        route_protocol: record.route_protocol.clone(),
+        local_credential_status,
+        provider_credential_status,
         created_at: record.created_at,
         updated_at: record.updated_at,
     })
@@ -664,6 +716,15 @@ fn binding_record_by_id(
     )
 }
 
+fn derived_route_protocol(record: &BindingRecord) -> Result<Option<String>, AppError> {
+    match record.system_preset_key.as_deref() {
+        Some(preset_key) => system_binding_route_protocol(preset_key, &record.agent_module_id)
+            .ok_or_else(|| public_error("invalid_binding"))
+            .map(|protocol| protocol.map(str::to_string)),
+        None => Ok(record.route_app_type.clone()),
+    }
+}
+
 #[allow(dead_code)] // Consumed by the protected credential lifecycle in Task 3.
 pub(crate) fn binding_auth_mode_for_id_on_conn(
     conn: &Connection,
@@ -677,7 +738,7 @@ fn provider_context_for_new_binding(
     agent_module_id: &str,
     provider_id: &str,
 ) -> Result<BindingRecord, AppError> {
-    let row = conn
+    let mut row = conn
         .query_row(
             "SELECT provider.enabled, provider.billing_kind, provider.token_sources,
                     provider.route_app_type, provider.route_config, provider.quota_config,
@@ -690,9 +751,15 @@ fn provider_context_for_new_binding(
                     agent.archived_at,
                     (provider.legacy_app_type IS NOT NULL
                      AND provider.legacy_provider_id IS NOT NULL),
-                    provider.legacy_provider_id, provider.product_group_id
+                    provider.legacy_provider_id, provider.product_group_id,
+                    provider.system_preset_key,
+                    provider_credential.api_key_fingerprint,
+                    provider_credential.credential_slot,
+                    COALESCE(provider_credential.credential_version, 0)
              FROM usage_providers AS provider
              JOIN agent_modules AS agent ON agent.id = ?1
+             LEFT JOIN provider_api_credentials AS provider_credential
+               ON provider_credential.provider_id = provider.id
              WHERE provider.id = ?2",
             params![agent_module_id, provider_id],
             |row| {
@@ -728,6 +795,11 @@ fn provider_context_for_new_binding(
                     legacy_migration_linked: row.get(9)?,
                     legacy_provider_id: row.get(10)?,
                     legacy_provider: None,
+                    route_protocol: row.get(3)?,
+                    system_preset_key: row.get(12)?,
+                    provider_fingerprint: row.get(13)?,
+                    provider_credential_slot: row.get(14)?,
+                    provider_credential_version: row.get(15)?,
                 })
             },
         )
@@ -736,6 +808,7 @@ fn provider_context_for_new_binding(
     if row.agent_archived_at.is_some() {
         return Err(public_error("invalid_binding"));
     }
+    row.route_protocol = derived_route_protocol(&row)?;
     Ok(row)
 }
 
@@ -812,10 +885,12 @@ impl Database {
                 return Err(public_error("invalid_binding"));
             }
             validate_requested_enabled(&record, input.enabled)?;
+            let route_protocol = derived_route_protocol(&record)?;
             if transaction.execute(
-                "UPDATE agent_provider_bindings SET enabled = ?2, updated_at = ?3
+                "UPDATE agent_provider_bindings
+                 SET enabled = ?2, updated_at = ?3, route_protocol = ?4
                  WHERE id = ?1",
-                params![id, input.enabled, now],
+                params![id, input.enabled, now, route_protocol],
             )? != 1
             {
                 return Err(public_error("binding_not_found"));
@@ -844,14 +919,15 @@ impl Database {
                 "INSERT INTO agent_provider_bindings (
                      id, agent_module_id, provider_id, enabled,
                      api_key_fingerprint, credential_slot, credential_version,
-                     created_at, updated_at
-                 ) VALUES (?1, ?2, ?3, ?4, NULL, NULL, 0, ?5, ?5)",
+                     created_at, updated_at, route_protocol
+                 ) VALUES (?1, ?2, ?3, ?4, NULL, NULL, 0, ?5, ?5, ?6)",
                 params![
                     id,
                     input.agent_module_id,
                     input.provider_id,
                     input.enabled,
-                    now
+                    now,
+                    record.route_protocol,
                 ],
             )?;
             id
@@ -914,6 +990,7 @@ impl Database {
 
 #[cfg(test)]
 mod tests {
+    use super::{resolve_direct_credential_placement, DirectCredentialPlacement};
     use crate::database::Database;
     use crate::usage::domain::{
         AgentModuleInput, AgentProviderBindingInput, BindingCredentialStatus,
@@ -958,6 +1035,23 @@ mod tests {
             agent_module_id: agent_module_id.to_string(),
             provider_id: provider_id.to_string(),
             enabled,
+        }
+    }
+
+    #[test]
+    fn fixed_agent_route_namespaces_default_to_bearer_local_auth() {
+        for protocol in ["codex", "opencode", "openclaw", "hermes"] {
+            assert_eq!(
+                resolve_direct_credential_placement(
+                    protocol,
+                    &serde_json::json!({
+                        "base_url": "https://api.example/v1",
+                        "apiFormat": "openai_chat",
+                        "authMode": "bearer"
+                    }),
+                ),
+                Some(DirectCredentialPlacement::AuthorizationBearer)
+            );
         }
     }
 
@@ -1008,7 +1102,8 @@ mod tests {
         assert!(db
             .list_agent_provider_bindings(Some("codex"))
             .unwrap()
-            .is_empty());
+            .into_iter()
+            .all(|binding| binding.provider_id != "direct"));
 
         let binding = db
             .save_agent_provider_binding(&input("codex", "direct", false))
@@ -1039,7 +1134,14 @@ mod tests {
             .unwrap();
         db.save_agent_provider_binding(&input("codex", "two", true))
             .unwrap();
-        assert_eq!(db.list_agent_provider_bindings(None).unwrap().len(), 3);
+        assert_eq!(
+            db.list_agent_provider_bindings(None)
+                .unwrap()
+                .into_iter()
+                .filter(|binding| matches!(binding.provider_id.as_str(), "one" | "two"))
+                .count(),
+            3
+        );
         assert_eq!(
             db.save_agent_provider_binding(&input("codex", "one", true))
                 .unwrap_err()
@@ -1662,7 +1764,11 @@ mod tests {
         );
         db.delete_agent_provider_binding_metadata(&binding.id, 0)
             .unwrap();
-        assert!(db.list_agent_provider_bindings(None).unwrap().is_empty());
+        assert!(db
+            .list_agent_provider_bindings(None)
+            .unwrap()
+            .into_iter()
+            .all(|candidate| candidate.id != binding.id));
     }
 
     #[test]

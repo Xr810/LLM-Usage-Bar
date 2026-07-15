@@ -5,7 +5,7 @@ use crate::usage::domain::{
     BillingKind, BindingCredentialStatus, RouteBinding, SystemProviderAuthKind, TokenSource,
     UsageProviderInput, UsageProviderStored, UsageProviderView, UsageSourceBinding,
 };
-use crate::usage::system_providers::system_provider_definitions;
+use crate::usage::system_providers::{system_binding_route_protocol, system_provider_definitions};
 use rusqlite::{params, types::Type, OptionalExtension, Row};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -112,15 +112,14 @@ fn provider_credential_metadata(
 }
 
 fn compatible_agent_module_ids(preset_key: Option<&str>) -> Vec<String> {
-    let ids: &[&str] = match preset_key {
-        Some("chatgpt-subscription") => &["codex"],
-        Some("claude-subscription") => &["claude-code"],
-        Some("openai-api") => &["codex", "opencode", "openclaw", "hermes"],
-        Some("anthropic-api") => &["claude-code"],
-        Some("openrouter-api") => &["claude-code", "codex", "opencode", "openclaw", "hermes"],
-        _ => &[],
+    let Some(preset_key) = preset_key else {
+        return Vec::new();
     };
-    ids.iter().map(|id| (*id).to_string()).collect()
+    ["claude-code", "codex", "opencode", "openclaw", "hermes"]
+        .into_iter()
+        .filter(|agent_id| system_binding_route_protocol(preset_key, agent_id).is_some())
+        .map(str::to_string)
+        .collect()
 }
 
 fn has_non_empty_value(value: &Value) -> bool {

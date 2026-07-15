@@ -11,8 +11,10 @@ use crate::proxy::provider_router::{
     build_binding_route_projection, BindingPricingOverride, UpstreamCredentialPlacement,
 };
 use crate::usage::domain::{
-    AgentProviderBindingView, BindingCredentialStatus, SystemProviderAuthKind, UsageProviderView,
+    AgentProviderBindingInput, AgentProviderBindingView, BindingCredentialStatus,
+    LocalBindingKeyReveal, SystemProviderAuthKind, UsageProviderView,
 };
+use crate::usage::system_providers::{is_fixed_api_preset, system_binding_route_protocol};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -90,6 +92,14 @@ fn provider_credential_fingerprint(secret: &[u8]) -> [u8; 32] {
 fn provider_credential_is_acceptable(secret: &[u8]) -> bool {
     (1..=MAX_BINDING_CREDENTIAL_BYTES).contains(&secret.len())
         && secret.iter().all(u8::is_ascii_graphic)
+}
+
+fn generate_local_binding_key() -> SecretString {
+    SecretString::new(format!(
+        "lub_{}_{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple(),
+    ))
 }
 
 /// Binding credentials are forwarded through HTTP authentication headers and
@@ -1656,6 +1666,14 @@ impl BindingCredentialService {
             provider.can_clear_upstream_credential =
                 snapshot.fingerprint.is_some() && snapshot.credential_slot.is_some();
         }
+        let verified_bindings = self.list_agent_provider_bindings(None).await?;
+        for provider in &mut providers {
+            provider.bindings = verified_bindings
+                .iter()
+                .filter(|binding| binding.provider_id == provider.id)
+                .cloned()
+                .collect();
+        }
         Ok(providers)
     }
 
@@ -1840,6 +1858,39 @@ impl BindingCredentialService {
         }
     }
 
+    async fn binding_provider_credential_status(
+        &self,
+        snapshot: &CredentialBindingSnapshot,
+    ) -> BindingCredentialStatus {
+        if !snapshot.is_fixed_system_api() {
+            return BindingCredentialStatus::NotRequired;
+        }
+        let (Some(fingerprint), Some(slot)) = (
+            snapshot.provider_fingerprint.as_deref(),
+            snapshot.provider_credential_slot.as_deref(),
+        ) else {
+            return if snapshot.provider_fingerprint.is_none()
+                && snapshot.provider_credential_slot.is_none()
+            {
+                BindingCredentialStatus::Missing
+            } else {
+                BindingCredentialStatus::Unavailable
+            };
+        };
+        if fingerprint.len() != 32 || snapshot.provider_credential_version == 0 {
+            return BindingCredentialStatus::Unavailable;
+        }
+        let Ok(Some(secret)) = self.store_get(slot.to_string()).await else {
+            return BindingCredentialStatus::Unavailable;
+        };
+        let actual = provider_credential_fingerprint(secret.as_slice());
+        if bool::from(actual.as_slice().ct_eq(fingerprint)) {
+            BindingCredentialStatus::Configured
+        } else {
+            BindingCredentialStatus::Unavailable
+        }
+    }
+
     async fn binding_view(&self, binding_id: &str) -> Result<AgentProviderBindingView, AppError> {
         let snapshot = self
             .db
@@ -1847,7 +1898,8 @@ impl BindingCredentialService {
             .map_err(normalize_db_error)?
             .ok_or_else(|| public_error("binding_not_found"))?;
         let status = self.credential_status(&snapshot).await;
-        Ok(snapshot.into_view(status))
+        let provider_status = self.binding_provider_credential_status(&snapshot).await;
+        Ok(snapshot.into_view(status, provider_status))
     }
 
     pub async fn list_agent_provider_bindings(
@@ -1861,7 +1913,195 @@ impl BindingCredentialService {
         let mut views = Vec::with_capacity(snapshots.len());
         for snapshot in snapshots {
             let status = self.credential_status(&snapshot).await;
-            views.push(snapshot.into_view(status));
+            let provider_status = self.binding_provider_credential_status(&snapshot).await;
+            views.push(snapshot.into_view(status, provider_status));
+        }
+        Ok(views)
+    }
+
+    pub async fn create_system_api_binding(
+        &self,
+        input: AgentProviderBindingInput,
+    ) -> Result<AgentProviderBindingView, AppError> {
+        if input.id.is_some() {
+            return Err(public_error("invalid_binding"));
+        }
+        let provider = self
+            .db
+            .get_usage_provider(&input.provider_id)
+            .map_err(normalize_db_error)?
+            .ok_or_else(|| public_error("invalid_binding"))?;
+        let preset_key = provider.system_preset_key.as_deref();
+        if !is_fixed_api_preset(preset_key)
+            || preset_key
+                .and_then(|preset| system_binding_route_protocol(preset, &input.agent_module_id))
+                .is_none()
+        {
+            return Err(public_error("invalid_binding"));
+        }
+
+        let requested_enabled = input.enabled;
+        let reserved = self
+            .db
+            .save_agent_provider_binding(&AgentProviderBindingInput {
+                id: None,
+                agent_module_id: input.agent_module_id.clone(),
+                provider_id: input.provider_id.clone(),
+                enabled: false,
+            })
+            .map_err(normalize_db_error)?;
+        if let Err(error) = self
+            .set_binding_api_key(
+                &reserved.id,
+                reserved.credential_version,
+                generate_local_binding_key(),
+            )
+            .await
+        {
+            let _ = self
+                .db
+                .delete_agent_provider_binding_metadata(&reserved.id, reserved.credential_version);
+            return Err(error);
+        }
+        if requested_enabled {
+            if let Err(error) = self
+                .db
+                .save_agent_provider_binding(&AgentProviderBindingInput {
+                    id: Some(reserved.id.clone()),
+                    agent_module_id: input.agent_module_id,
+                    provider_id: input.provider_id,
+                    enabled: true,
+                })
+            {
+                let _ = self.delete_binding(&reserved.id, 1).await;
+                return Err(normalize_db_error(error));
+            }
+        }
+        self.binding_view(&reserved.id).await
+    }
+
+    pub async fn reveal_local_binding_key(
+        &self,
+        binding_id: &str,
+        expected_version: u64,
+    ) -> Result<LocalBindingKeyReveal, AppError> {
+        let initial = self
+            .db
+            .credential_binding_snapshot(binding_id)
+            .map_err(normalize_db_error)?
+            .ok_or_else(|| public_error("binding_not_found"))?;
+        if !initial.is_fixed_system_api() {
+            return Err(public_error("unsupported_auth"));
+        }
+        if initial.credential_version != expected_version {
+            return Err(public_error("credential_conflict"));
+        }
+        let fingerprint = initial
+            .fingerprint
+            .as_deref()
+            .filter(|fingerprint| fingerprint.len() == 32)
+            .ok_or_else(|| public_error("credential_required"))?;
+        let slot = initial
+            .credential_slot
+            .as_deref()
+            .ok_or_else(|| public_error("credential_required"))?
+            .to_string();
+        let secret = self
+            .store_get(slot.clone())
+            .await
+            .map_err(|_| public_error("credential_unavailable"))?
+            .ok_or_else(|| public_error("credential_unavailable"))?;
+        if !binding_credential_is_acceptable(secret.as_slice())
+            || !bool::from(
+                credential_fingerprint(secret.as_slice())
+                    .as_slice()
+                    .ct_eq(fingerprint),
+            )
+        {
+            return Err(public_error("credential_unavailable"));
+        }
+        let authoritative = self
+            .db
+            .credential_binding_snapshot(binding_id)
+            .map_err(normalize_db_error)?
+            .ok_or_else(|| public_error("binding_not_found"))?;
+        if !authoritative.is_fixed_system_api()
+            || authoritative.credential_version != expected_version
+            || authoritative.credential_slot.as_deref() != Some(slot.as_str())
+            || authoritative.fingerprint.as_deref() != Some(fingerprint)
+        {
+            return Err(public_error("credential_conflict"));
+        }
+        let local_key = String::from_utf8(secret.to_vec())
+            .map_err(|_| public_error("credential_unavailable"))?;
+        Ok(LocalBindingKeyReveal {
+            binding_id: binding_id.to_string(),
+            credential_version: expected_version,
+            local_key,
+        })
+    }
+
+    pub async fn rotate_local_binding_key(
+        &self,
+        binding_id: &str,
+        expected_version: u64,
+    ) -> Result<LocalBindingKeyReveal, AppError> {
+        let snapshot = self
+            .db
+            .credential_binding_snapshot(binding_id)
+            .map_err(normalize_db_error)?
+            .ok_or_else(|| public_error("binding_not_found"))?;
+        if !snapshot.is_fixed_system_api() {
+            return Err(public_error("unsupported_auth"));
+        }
+        if snapshot.credential_version != expected_version {
+            return Err(public_error("credential_conflict"));
+        }
+        let rotated = self
+            .replace_binding_api_key(binding_id, expected_version, generate_local_binding_key())
+            .await?;
+        self.reveal_local_binding_key(binding_id, rotated.credential_version)
+            .await
+    }
+
+    pub async fn ensure_fixed_api_binding_local_keys(
+        &self,
+    ) -> Result<Vec<AgentProviderBindingView>, AppError> {
+        let snapshots = self
+            .db
+            .credential_binding_snapshots(None)
+            .map_err(normalize_db_error)?;
+        let mut unavailable_bindings = HashSet::new();
+        for snapshot in snapshots {
+            if !snapshot.is_fixed_system_api()
+                || snapshot.agent_archived_at.is_some()
+                || snapshot.fingerprint.is_some()
+                || snapshot.credential_slot.is_some()
+            {
+                continue;
+            }
+            if let Err(error) = self
+                .set_binding_api_key(
+                    &snapshot.id,
+                    snapshot.credential_version,
+                    generate_local_binding_key(),
+                )
+                .await
+            {
+                unavailable_bindings.insert(snapshot.id.clone());
+                log::error!(
+                    "fixed API binding local credential generation failed: {}",
+                    error
+                );
+            }
+        }
+        let mut views = self.list_agent_provider_bindings(None).await?;
+        for view in &mut views {
+            if unavailable_bindings.contains(&view.id) {
+                view.local_credential_status = BindingCredentialStatus::Unavailable;
+                view.credential_status = BindingCredentialStatus::Unavailable;
+                view.effective_enabled = false;
+            }
         }
         Ok(views)
     }

@@ -6,6 +6,7 @@ use crate::database::{lock_conn, Database};
 use crate::error::AppError;
 use crate::provider::Provider;
 use crate::usage::domain::{AgentProviderBindingView, BindingCredentialStatus};
+use crate::usage::system_providers::is_fixed_api_preset;
 use rusqlite::{params, OptionalExtension, TransactionBehavior};
 use serde_json::Value;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -70,19 +71,39 @@ pub(crate) struct CredentialBindingSnapshot {
     pub(crate) legacy_migration_linked: bool,
     pub(crate) legacy_provider_id: Option<String>,
     pub(crate) legacy_provider: Option<Provider>,
+    pub(crate) route_protocol: Option<String>,
+    pub(crate) system_preset_key: Option<String>,
+    pub(crate) provider_fingerprint: Option<Vec<u8>>,
+    pub(crate) provider_credential_slot: Option<String>,
+    pub(crate) provider_credential_version: u64,
 }
 
 impl CredentialBindingSnapshot {
+    pub(crate) fn is_fixed_system_api(&self) -> bool {
+        is_fixed_api_preset(self.system_preset_key.as_deref())
+    }
+
     pub(crate) fn into_view(
         self,
         credential_status: BindingCredentialStatus,
+        provider_credential_status: BindingCredentialStatus,
     ) -> AgentProviderBindingView {
         let can_clear_credential = self.fingerprint.is_some() && self.credential_slot.is_some();
-        let effective_enabled = self.enabled
-            && self.provider_enabled
-            && self.agent_archived_at.is_none()
-            && self.auth_mode == BindingAuthMode::DirectApiKey
-            && credential_status == BindingCredentialStatus::Configured;
+        let is_fixed_api = self.is_fixed_system_api();
+        let effective_enabled = if is_fixed_api {
+            self.enabled
+                && self.provider_enabled
+                && self.agent_archived_at.is_none()
+                && self.auth_mode == BindingAuthMode::DirectApiKey
+                && credential_status == BindingCredentialStatus::Configured
+                && provider_credential_status == BindingCredentialStatus::Configured
+        } else {
+            self.enabled
+                && self.provider_enabled
+                && self.agent_archived_at.is_none()
+                && self.auth_mode == BindingAuthMode::DirectApiKey
+                && credential_status == BindingCredentialStatus::Configured
+        };
         AgentProviderBindingView {
             id: self.id,
             agent_module_id: self.agent_module_id,
@@ -92,6 +113,17 @@ impl CredentialBindingSnapshot {
             credential_status,
             can_clear_credential,
             credential_version: self.credential_version,
+            route_protocol: self.route_protocol,
+            local_credential_status: if is_fixed_api {
+                credential_status
+            } else {
+                BindingCredentialStatus::NotRequired
+            },
+            provider_credential_status: if is_fixed_api {
+                provider_credential_status
+            } else {
+                BindingCredentialStatus::NotRequired
+            },
             created_at: self.created_at,
             updated_at: self.updated_at,
         }
@@ -142,6 +174,8 @@ impl Database {
     ) -> Result<CredentialBindingSnapshot, AppError> {
         let credential_version = u64::try_from(record.credential_version)
             .map_err(|_| public_error("credential_unavailable"))?;
+        let provider_credential_version = u64::try_from(record.provider_credential_version)
+            .map_err(|_| public_error("credential_unavailable"))?;
         let auth_mode = binding_auth_mode(&record);
         Ok(CredentialBindingSnapshot {
             id: record.id,
@@ -164,6 +198,11 @@ impl Database {
             legacy_migration_linked: record.legacy_migration_linked,
             legacy_provider_id: record.legacy_provider_id,
             legacy_provider: record.legacy_provider,
+            route_protocol: record.route_protocol,
+            system_preset_key: record.system_preset_key,
+            provider_fingerprint: record.provider_fingerprint,
+            provider_credential_slot: record.provider_credential_slot,
+            provider_credential_version,
         })
     }
 
@@ -231,10 +270,14 @@ impl Database {
     ) -> Result<AgentProviderBindingView, AppError> {
         let conn = lock_conn!(self.conn);
         conn.query_row(
-            "SELECT id, agent_module_id, provider_id, enabled,
-                    api_key_fingerprint, credential_slot, credential_version,
-                    created_at, updated_at
-             FROM agent_provider_bindings WHERE id = ?1",
+            "SELECT binding.id, binding.agent_module_id, binding.provider_id,
+                    binding.enabled, binding.api_key_fingerprint,
+                    binding.credential_slot, binding.credential_version,
+                    binding.created_at, binding.updated_at,
+                    binding.route_protocol, provider.system_preset_key
+             FROM agent_provider_bindings binding
+             JOIN usage_providers provider ON provider.id = binding.provider_id
+             WHERE binding.id = ?1",
             [binding_id],
             |row| {
                 let fingerprint = row.get::<_, Option<Vec<u8>>>(4)?;
@@ -251,6 +294,21 @@ impl Database {
                     credential_version: u64::try_from(credential_version).map_err(|_| {
                         rusqlite::Error::IntegralValueOutOfRange(6, credential_version)
                     })?,
+                    route_protocol: row.get(9)?,
+                    local_credential_status: if is_fixed_api_preset(
+                        row.get::<_, Option<String>>(10)?.as_deref(),
+                    ) {
+                        BindingCredentialStatus::Unavailable
+                    } else {
+                        BindingCredentialStatus::NotRequired
+                    },
+                    provider_credential_status: if is_fixed_api_preset(
+                        row.get::<_, Option<String>>(10)?.as_deref(),
+                    ) {
+                        BindingCredentialStatus::Unavailable
+                    } else {
+                        BindingCredentialStatus::NotRequired
+                    },
                     created_at: row.get(7)?,
                     updated_at: row.get(8)?,
                 })
@@ -357,7 +415,9 @@ impl Database {
             .into_iter()
             .next()
             .ok_or_else(|| public_error("binding_not_found"))?;
-            if snapshot.agent_archived_at.is_some() || !snapshot.provider_enabled {
+            if snapshot.agent_archived_at.is_some()
+                || (!snapshot.provider_enabled && !snapshot.is_fixed_system_api())
+            {
                 return Err(public_error("invalid_binding"));
             }
             if snapshot.auth_mode != BindingAuthMode::DirectApiKey {
@@ -494,7 +554,7 @@ impl Database {
             .next()
             .ok_or_else(|| public_error("credential_conflict"))?;
             if snapshot.agent_archived_at.is_some()
-                || !snapshot.provider_enabled
+                || (!snapshot.provider_enabled && !snapshot.is_fixed_system_api())
                 || snapshot.auth_mode != BindingAuthMode::DirectApiKey
             {
                 return Err(public_error("credential_conflict"));
