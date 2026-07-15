@@ -1,3 +1,4 @@
+use crate::commands::CodexOAuthState;
 use crate::credentials::SecretString;
 use crate::database::AgentModuleDeleteOutcome;
 use crate::error::AppError;
@@ -13,6 +14,7 @@ use crate::usage::domain::{
 };
 use crate::usage::quota::QuotaRefreshResult;
 use crate::usage::session::ProviderSessionSyncResult;
+use crate::usage::system_providers::{CHATGPT_SUBSCRIPTION_ID, CLAUDE_SUBSCRIPTION_ID};
 use std::collections::{BTreeMap, BTreeSet};
 use tauri::State;
 
@@ -59,9 +61,16 @@ pub async fn delete_dashboard_module(
 #[tauri::command]
 pub async fn list_agent_provider_bindings(
     state: State<'_, AppState>,
+    codex_state: State<'_, CodexOAuthState>,
     agent_module_id: Option<String>,
 ) -> Result<Vec<AgentProviderBindingView>, AppError> {
-    list_agent_provider_bindings_test_hook(&state, agent_module_id.as_deref()).await
+    let auth = system_provider_auth_snapshot(&state, &codex_state).await;
+    list_agent_provider_bindings_with_auth_snapshot_test_hook(
+        &state,
+        agent_module_id.as_deref(),
+        auth,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -186,8 +195,10 @@ pub fn get_unassigned_usage_diagnostics(
 #[tauri::command]
 pub async fn list_usage_providers(
     state: State<'_, AppState>,
+    codex_state: State<'_, CodexOAuthState>,
 ) -> Result<Vec<UsageProviderView>, AppError> {
-    list_usage_providers_test_hook(&state).await
+    let auth = system_provider_auth_snapshot(&state, &codex_state).await;
+    list_usage_providers_with_auth_snapshot_test_hook(&state, auth).await
 }
 
 #[tauri::command]
@@ -371,10 +382,72 @@ pub async fn list_agent_provider_bindings_test_hook(
     state: &AppState,
     agent_module_id: Option<&str>,
 ) -> Result<Vec<AgentProviderBindingView>, AppError> {
-    state
+    list_agent_provider_bindings_with_auth_snapshot_test_hook(
+        state,
+        agent_module_id,
+        SystemProviderAuthSnapshot::default(),
+    )
+    .await
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SystemProviderAuthSnapshot {
+    pub codex_authenticated: bool,
+    pub claude_authenticated: bool,
+}
+
+async fn system_provider_auth_snapshot(
+    state: &AppState,
+    codex_state: &CodexOAuthState,
+) -> SystemProviderAuthSnapshot {
+    let codex_authenticated = codex_state.0.read().await.is_authenticated().await;
+    let claude_authenticated = state.claude_cli_auth_service.status().await.authenticated;
+    SystemProviderAuthSnapshot {
+        codex_authenticated,
+        claude_authenticated,
+    }
+}
+
+fn project_system_subscription_auth(
+    state: &AppState,
+    bindings: &mut [AgentProviderBindingView],
+    auth: SystemProviderAuthSnapshot,
+) -> Result<(), AppError> {
+    let provider_enabled = state
+        .db
+        .list_usage_providers()?
+        .into_iter()
+        .map(|provider| (provider.id, provider.enabled))
+        .collect::<BTreeMap<_, _>>();
+    for binding in bindings {
+        let authenticated = match binding.provider_id.as_str() {
+            CHATGPT_SUBSCRIPTION_ID => Some(auth.codex_authenticated),
+            CLAUDE_SUBSCRIPTION_ID => Some(auth.claude_authenticated),
+            _ => None,
+        };
+        if let Some(authenticated) = authenticated {
+            binding.effective_enabled = binding.enabled
+                && provider_enabled
+                    .get(&binding.provider_id)
+                    .copied()
+                    .unwrap_or(false)
+                && authenticated;
+        }
+    }
+    Ok(())
+}
+
+pub async fn list_agent_provider_bindings_with_auth_snapshot_test_hook(
+    state: &AppState,
+    agent_module_id: Option<&str>,
+    auth: SystemProviderAuthSnapshot,
+) -> Result<Vec<AgentProviderBindingView>, AppError> {
+    let mut bindings = state
         .binding_credential_service
         .list_agent_provider_bindings(agent_module_id)
-        .await
+        .await?;
+    project_system_subscription_auth(state, &mut bindings, auth)?;
+    Ok(bindings)
 }
 
 pub async fn save_agent_provider_binding_test_hook(
@@ -610,11 +683,16 @@ pub fn get_unassigned_usage_diagnostics_test_hook(
 async fn verified_bindings_by_provider(
     state: &AppState,
 ) -> Result<BTreeMap<String, Vec<AgentProviderBindingView>>, AppError> {
+    verified_bindings_by_provider_with_auth(state, SystemProviderAuthSnapshot::default()).await
+}
+
+async fn verified_bindings_by_provider_with_auth(
+    state: &AppState,
+    auth: SystemProviderAuthSnapshot,
+) -> Result<BTreeMap<String, Vec<AgentProviderBindingView>>, AppError> {
     let mut bindings_by_provider = BTreeMap::new();
-    for binding in state
-        .binding_credential_service
-        .list_agent_provider_bindings(None)
-        .await?
+    for binding in
+        list_agent_provider_bindings_with_auth_snapshot_test_hook(state, None, auth).await?
     {
         bindings_by_provider
             .entry(binding.provider_id.clone())
@@ -652,7 +730,15 @@ fn hydrate_dashboard_provider_bindings(
 pub async fn list_usage_providers_test_hook(
     state: &AppState,
 ) -> Result<Vec<UsageProviderView>, AppError> {
-    let bindings_by_provider = verified_bindings_by_provider(state).await?;
+    list_usage_providers_with_auth_snapshot_test_hook(state, SystemProviderAuthSnapshot::default())
+        .await
+}
+
+pub async fn list_usage_providers_with_auth_snapshot_test_hook(
+    state: &AppState,
+    auth: SystemProviderAuthSnapshot,
+) -> Result<Vec<UsageProviderView>, AppError> {
+    let bindings_by_provider = verified_bindings_by_provider_with_auth(state, auth).await?;
     let mut providers = state.db.list_usage_providers()?;
     for provider in &mut providers {
         hydrate_provider_bindings(provider, &bindings_by_provider);
@@ -890,6 +976,48 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn subscription_binding_effective_state_follows_transient_official_auth() {
+        let state = AppState::new(Arc::new(Database::memory().unwrap()));
+        let connected = SystemProviderAuthSnapshot {
+            codex_authenticated: true,
+            claude_authenticated: true,
+        };
+        let connected_bindings =
+            list_agent_provider_bindings_with_auth_snapshot_test_hook(&state, None, connected)
+                .await
+                .unwrap();
+        for provider_id in [CHATGPT_SUBSCRIPTION_ID, CLAUDE_SUBSCRIPTION_ID] {
+            assert!(connected_bindings.iter().any(|binding| {
+                binding.provider_id == provider_id && binding.enabled && binding.effective_enabled
+            }));
+        }
+
+        let disconnected_bindings = list_agent_provider_bindings_with_auth_snapshot_test_hook(
+            &state,
+            None,
+            SystemProviderAuthSnapshot::default(),
+        )
+        .await
+        .unwrap();
+        for provider_id in [CHATGPT_SUBSCRIPTION_ID, CLAUDE_SUBSCRIPTION_ID] {
+            assert!(disconnected_bindings.iter().any(|binding| {
+                binding.provider_id == provider_id && binding.enabled && !binding.effective_enabled
+            }));
+        }
+
+        let providers = list_usage_providers_with_auth_snapshot_test_hook(&state, connected)
+            .await
+            .unwrap();
+        assert!(providers
+            .iter()
+            .find(|provider| provider.id == CHATGPT_SUBSCRIPTION_ID)
+            .unwrap()
+            .bindings
+            .iter()
+            .all(|binding| binding.effective_enabled));
+    }
+
     impl MemoryCredentialStore {
         fn item_count(&self) -> usize {
             self.items.lock().unwrap().len()
@@ -1020,7 +1148,9 @@ mod tests {
             list_agent_provider_bindings_test_hook(&state, Some("codex"))
                 .await
                 .unwrap()
-                .len(),
+                .iter()
+                .filter(|candidate| candidate.provider_id == "direct")
+                .count(),
             1
         );
 
@@ -1043,9 +1173,12 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(setup.agent_module_id, "codex");
-        assert_eq!(setup.routes.len(), 1);
-        assert_eq!(setup.routes[0].provider_id, "direct");
-        assert!(setup.routes[0]
+        let direct_route = setup
+            .routes
+            .iter()
+            .find(|route| route.provider_id == "direct")
+            .expect("direct route");
+        assert!(direct_route
             .credential_placements
             .contains(&"authorization".to_string()));
         let setup_json = serde_json::to_string(&setup).unwrap();
@@ -1073,10 +1206,11 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            list_agent_provider_bindings_test_hook(&state, Some("codex"))
+            !list_agent_provider_bindings_test_hook(&state, Some("codex"))
                 .await
                 .unwrap()
-                .is_empty()
+                .iter()
+                .any(|candidate| candidate.provider_id == "direct")
         );
         for public in [
             serde_json::to_string(&configured).unwrap(),
@@ -1193,10 +1327,14 @@ mod tests {
         let setup = get_agent_proxy_setup_info_test_hook(&state, "codex")
             .await
             .unwrap();
-        assert_eq!(setup.routes.len(), 1);
-        assert_eq!(setup.routes[0].protocol.as_deref(), Some("codex"));
-        assert_eq!(setup.routes[0].local_base_url, None);
-        assert!(setup.routes[0].credential_placements.is_empty());
+        let managed_route = setup
+            .routes
+            .iter()
+            .find(|route| route.provider_id == "managed-codex")
+            .expect("managed route");
+        assert_eq!(managed_route.protocol.as_deref(), Some("codex"));
+        assert_eq!(managed_route.local_base_url, None);
+        assert!(managed_route.credential_placements.is_empty());
     }
 
     #[tokio::test]
@@ -1292,7 +1430,14 @@ mod tests {
         let verified = list_agent_provider_bindings_test_hook(&state, Some("codex"))
             .await
             .unwrap();
-        assert!(verified
+        let unavailable_custom_bindings = verified
+            .iter()
+            .filter(|binding| {
+                binding.provider_id == direct.id || binding.provider_id == unsupported.id
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(unavailable_custom_bindings.len(), 2);
+        assert!(unavailable_custom_bindings
             .iter()
             .all(|binding| { binding.credential_status == BindingCredentialStatus::Unavailable }));
 
@@ -1351,7 +1496,14 @@ mod tests {
         assert!(verified.effective_enabled);
 
         let listed = list_usage_providers_test_hook(&state).await.unwrap();
-        assert_eq!(listed[0].bindings, vec![verified.clone()]);
+        assert_eq!(
+            listed
+                .iter()
+                .find(|provider| provider.id == "provider-view")
+                .expect("provider view")
+                .bindings,
+            vec![verified.clone()]
+        );
 
         let mut edited = direct_provider("provider-view");
         edited.name = "Provider view edited".to_string();
@@ -1362,7 +1514,12 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            dashboard.product_groups[0].metered_providers[0]
+            dashboard
+                .product_groups
+                .iter()
+                .flat_map(|product| product.metered_providers.iter())
+                .find(|usage| usage.provider.id == "provider-view")
+                .expect("provider dashboard view")
                 .provider
                 .bindings,
             vec![verified]
@@ -1626,7 +1783,12 @@ mod tests {
         let dashboard = get_usage_dashboard_test_hook(&state, 0, 100, "codex")
             .await
             .unwrap();
-        let usage = &dashboard.product_groups[0].subscription_providers[0];
+        let usage = dashboard
+            .product_groups
+            .iter()
+            .flat_map(|product| product.subscription_providers.iter())
+            .find(|usage| usage.provider.id == "shared-direct")
+            .expect("shared direct usage");
         assert!(usage.shared_account);
         assert_eq!(usage.event_count, 1);
         assert_eq!(usage.input_tokens, 10);
@@ -1671,7 +1833,12 @@ mod tests {
         let dashboard = get_usage_dashboard_test_hook(&state, 0, 100, "codex")
             .await
             .unwrap();
-        let usage = &dashboard.product_groups[0].subscription_providers[0];
+        let usage = dashboard
+            .product_groups
+            .iter()
+            .flat_map(|product| product.subscription_providers.iter())
+            .find(|usage| usage.provider.id == "shared-session")
+            .expect("shared session usage");
         assert!(!usage.shared_account);
     }
 
@@ -1682,8 +1849,8 @@ mod tests {
         let notifier = ["crate::usage_events::notify_", "dashboard_invalidated();"].concat();
         assert_eq!(
             production.matches(&notifier).count(),
-            6,
-            "module cleanup, save/delete, and set/replace/clear must notify exactly once"
+            12,
+            "module cleanup plus binding, local-key, and Provider-key mutations must each notify exactly once"
         );
     }
 
