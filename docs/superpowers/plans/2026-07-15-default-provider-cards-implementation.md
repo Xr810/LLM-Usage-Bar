@@ -1405,6 +1405,40 @@ git add docs/superpowers/specs/2026-07-15-default-provider-cards-design.md \
 git commit -m "docs: close fixed provider implementation plan"
 ```
 
+## Implementation status (2026-07-15)
+
+Completed on `codex/default-provider-cards` with no design deviation. The final
+implementation contains exactly the five approved fixed Provider cards and the
+approved one-time defaults: ChatGPT Plus/Pro → Codex, Claude Pro/Max → Claude
+Code, and OpenRouter → OpenCode/OpenClaw/Hermes. OpenAI API and Anthropic API
+remain initially unbound, and every binding remains user-editable.
+
+Final verification results:
+
+- `pnpm rust -- fmt --manifest-path src-tauri/Cargo.toml -- --check`: passed.
+- `pnpm rust -- clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings`: passed.
+- `pnpm typecheck`: passed.
+- `pnpm format:check`: passed.
+- Focused Rust feature suites passed: migration v16→v17 (6), credential service
+  (66), usage-dashboard commands (17), proxy handler context (11), and proxy
+  handlers (50).
+- Focused Provider UI/settings/i18n suites passed: 9 files, 34 tests.
+- `pnpm rust -- test --manifest-path src-tauri/Cargo.toml -- --test-threads=1`:
+  passed with 2,249 library tests and 142 integration/end-to-end tests; 2
+  explicitly ignored tests remained ignored. The serial runner and local socket
+  permission are required by existing process-wide HOME and loopback-listener
+  tests.
+- `pnpm test:unit --exclude '.worktrees/**'`: passed, 97 files and 522 tests.
+- `pnpm build:renderer`: passed.
+
+The final self-review confirmed that catalog reconciliation preserves user
+enablement, credentials, and binding edits; the one-time seed never restores a
+removed default; Claude auth invokes only the official CLI auth commands; fixed
+API routing verifies both local and upstream credential generations; binding
+namespaces are server-owned; custom Provider behavior remains compatible; raw
+keys are absent from normal DTO/log/backup/export surfaces; and revealed local
+keys are copied transiently without entering React Query state.
+
 ## Official references to re-check during implementation
 
 - Claude CLI commands and exit behavior:
