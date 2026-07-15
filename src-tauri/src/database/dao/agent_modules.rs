@@ -312,7 +312,7 @@ mod tests {
     }
 
     #[test]
-    fn fresh_database_lists_exactly_five_fixed_agents_without_api() {
+    fn fresh_database_lists_exactly_five_fixed_agents_with_default_bindings() {
         let db = Database::memory().unwrap();
         let agents = db.list_agent_modules().unwrap();
         assert_eq!(
@@ -324,7 +324,7 @@ mod tests {
         );
         assert!(agents.iter().all(|agent| agent.is_fixed));
         assert!(agents.iter().all(|agent| agent.archived_at.is_none()));
-        assert!(agents.iter().all(|agent| agent.provider_count == 0));
+        assert!(agents.iter().all(|agent| agent.provider_count == 1));
     }
 
     #[test]
@@ -528,6 +528,6 @@ mod tests {
             .into_iter()
             .find(|agent| agent.id == "codex")
             .unwrap();
-        assert_eq!(codex.provider_count, 2);
+        assert_eq!(codex.provider_count, 3);
     }
 }

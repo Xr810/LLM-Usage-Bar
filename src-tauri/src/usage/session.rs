@@ -199,6 +199,22 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
+    fn database_without_system_source_bindings() -> Database {
+        let db = Database::memory().unwrap();
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "DELETE FROM usage_source_bindings
+                 WHERE provider_id IN (
+                     SELECT id FROM usage_providers WHERE system_preset_key IS NOT NULL
+                 )",
+                [],
+            )
+            .unwrap();
+        }
+        db
+    }
+
     fn provider(id: &str) -> UsageProviderInput {
         UsageProviderInput {
             id: id.to_string(),
@@ -257,7 +273,7 @@ mod tests {
 
     #[test]
     fn unbound_source_is_skipped_with_visible_warning() {
-        let db = Arc::new(Database::memory().unwrap());
+        let db = Arc::new(database_without_system_source_bindings());
         db.save_usage_provider(&provider("sub")).unwrap();
         let service = SessionUsageService::new(db.clone());
 
@@ -276,7 +292,7 @@ mod tests {
 
     #[test]
     fn bound_records_use_provider_and_only_exact_ids_link() {
-        let db = Arc::new(Database::memory().unwrap());
+        let db = Arc::new(database_without_system_source_bindings());
         db.save_usage_provider(&provider("sub")).unwrap();
         db.set_usage_source_binding("claude", "sub").unwrap();
         seed_agent_binding(&db, "claude-code", "sub", true);
@@ -337,7 +353,7 @@ mod tests {
 
     #[test]
     fn source_parsers_freeze_their_fixed_agents_even_with_multiple_provider_bindings() {
-        let db = Arc::new(Database::memory().unwrap());
+        let db = Arc::new(database_without_system_source_bindings());
         db.save_usage_provider(&provider("shared")).unwrap();
         db.set_usage_source_binding("claude", "shared").unwrap();
         db.set_usage_source_binding("codex", "shared").unwrap();
@@ -382,7 +398,7 @@ mod tests {
 
     #[test]
     fn source_binding_rejects_a_provider_without_the_fixed_agent_binding() {
-        let db = Arc::new(Database::memory().unwrap());
+        let db = Arc::new(database_without_system_source_bindings());
         db.save_usage_provider(&provider("wrong-agent")).unwrap();
         db.set_usage_source_binding("claude", "wrong-agent")
             .unwrap();
@@ -403,7 +419,7 @@ mod tests {
 
     #[test]
     fn rebinding_and_rescan_cannot_move_an_existing_session_event() {
-        let db = Arc::new(Database::memory().unwrap());
+        let db = Arc::new(database_without_system_source_bindings());
         db.save_usage_provider(&provider("first-owner")).unwrap();
         db.save_usage_provider(&provider("second-owner")).unwrap();
         seed_agent_binding(&db, "claude-code", "first-owner", true);
@@ -447,7 +463,7 @@ mod tests {
 
     #[test]
     fn sync_provider_never_uses_another_providers_source_binding() {
-        let db = Arc::new(Database::memory().unwrap());
+        let db = Arc::new(database_without_system_source_bindings());
         db.save_usage_provider(&provider("requested-a")).unwrap();
         db.save_usage_provider(&provider("bound-b")).unwrap();
         db.set_usage_source_binding("claude", "bound-b").unwrap();
@@ -470,7 +486,7 @@ mod tests {
 
     #[test]
     fn explicit_source_bindings_override_product_group_and_include_every_source() {
-        let db = Arc::new(Database::memory().unwrap());
+        let db = Arc::new(database_without_system_source_bindings());
         db.save_usage_provider(&provider("sub")).unwrap();
         let service = SessionUsageService::new(db.clone());
 
@@ -489,7 +505,7 @@ mod tests {
 
     #[test]
     fn provider_sync_rechecks_requested_owner_after_binding_changes() {
-        let db = Arc::new(Database::memory().unwrap());
+        let db = Arc::new(database_without_system_source_bindings());
         db.save_usage_provider(&provider("requested-a")).unwrap();
         db.save_usage_provider(&provider("new-owner-b")).unwrap();
         db.set_usage_source_binding("claude", "requested-a")
@@ -509,7 +525,7 @@ mod tests {
 
     #[test]
     fn claude_and_codex_bound_entrypoints_wait_for_the_binding_operation_guard() {
-        let db = Arc::new(Database::memory().unwrap());
+        let db = Arc::new(database_without_system_source_bindings());
         let guard = db.usage_source_binding_operation.lock().unwrap();
         let (done_tx, done_rx) = mpsc::channel();
 

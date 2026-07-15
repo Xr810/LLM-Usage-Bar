@@ -419,6 +419,22 @@ mod tests {
     use rust_decimal::Decimal;
     use serde_json::json;
 
+    fn database_without_system_bindings() -> Database {
+        let db = Database::memory().unwrap();
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "DELETE FROM agent_provider_bindings
+                 WHERE provider_id IN (
+                     SELECT id FROM usage_providers WHERE system_preset_key IS NOT NULL
+                 )",
+                [],
+            )
+            .unwrap();
+        }
+        db
+    }
+
     fn provider(id: &str, billing_kind: BillingKind, product_group_id: &str) -> UsageProviderInput {
         UsageProviderInput {
             id: id.to_string(),
@@ -474,7 +490,7 @@ mod tests {
     #[test]
     fn aggregation_separates_billing_excludes_only_linked_duplicates_and_attaches_subscription_quota(
     ) {
-        let db = Database::memory().unwrap();
+        let db = database_without_system_bindings();
         db.save_usage_provider(&provider("sub", BillingKind::Subscription, "product"))
             .unwrap();
         db.save_usage_provider(&provider("metered", BillingKind::Metered, "product"))
@@ -587,7 +603,7 @@ mod tests {
 
     #[test]
     fn dashboard_range_is_half_open_for_the_requested_agent() {
-        let db = Database::memory().unwrap();
+        let db = database_without_system_bindings();
         db.save_usage_provider(&provider("a", BillingKind::Metered, "one"))
             .unwrap();
         db.save_usage_provider(&provider("b", BillingKind::Metered, "two"))
@@ -630,7 +646,7 @@ mod tests {
 
     #[test]
     fn subscription_fetch_failure_is_visible_without_a_successful_snapshot() {
-        let db = Database::memory().unwrap();
+        let db = database_without_system_bindings();
         let mut subscription = provider("sub", BillingKind::Subscription, "product");
         subscription.token_sources = vec![TokenSource::SessionLog];
         db.save_usage_provider(&subscription).unwrap();
@@ -659,7 +675,7 @@ mod tests {
 
     #[test]
     fn immutable_event_product_group_survives_provider_reclassification() {
-        let db = Database::memory().unwrap();
+        let db = database_without_system_bindings();
         db.save_usage_provider(&provider("metered", BillingKind::Metered, "old-product"))
             .unwrap();
         let mut historical = event(
@@ -687,7 +703,7 @@ mod tests {
 
     #[test]
     fn historical_only_subscription_provider_still_attaches_quota_once() {
-        let db = Database::memory().unwrap();
+        let db = database_without_system_bindings();
         db.save_usage_provider(&provider(
             "historical-subscription",
             BillingKind::Subscription,
@@ -741,7 +757,7 @@ mod tests {
 
     #[test]
     fn provider_cost_overflow_returns_an_error_instead_of_panicking() {
-        let db = Database::memory().unwrap();
+        let db = database_without_system_bindings();
         db.save_usage_provider(&provider("metered", BillingKind::Metered, "product"))
             .unwrap();
         let maximum = Decimal::MAX.to_string();
@@ -767,7 +783,7 @@ mod tests {
 
     #[test]
     fn product_cost_overflow_returns_an_error_instead_of_panicking() {
-        let db = Database::memory().unwrap();
+        let db = database_without_system_bindings();
         for id in ["first", "second"] {
             db.save_usage_provider(&provider(id, BillingKind::Metered, "product"))
                 .unwrap();
@@ -804,7 +820,7 @@ mod tests {
 
     #[test]
     fn dashboard_totals_include_only_the_requested_agents_immutable_events() {
-        let db = Database::memory().unwrap();
+        let db = database_without_system_bindings();
         db.save_usage_provider(&provider("metered", BillingKind::Metered, "codex"))
             .unwrap();
 
@@ -840,7 +856,7 @@ mod tests {
 
     #[test]
     fn dashboard_provider_membership_is_active_bindings_union_agent_history() {
-        let db = Database::memory().unwrap();
+        let db = database_without_system_bindings();
         for provider_id in ["active", "historical", "unrelated"] {
             let mut input = provider(provider_id, BillingKind::Subscription, "product");
             input.token_sources = vec![TokenSource::SessionLog];
@@ -880,7 +896,7 @@ mod tests {
 
     #[test]
     fn only_fully_valid_legacy_links_suppress_requested_agent_usage() {
-        let db = Database::memory().unwrap();
+        let db = database_without_system_bindings();
         for provider_id in ["metered", "other-provider"] {
             db.save_usage_provider(&provider(provider_id, BillingKind::Metered, "product"))
                 .unwrap();
@@ -1050,7 +1066,7 @@ mod tests {
 
     #[test]
     fn public_agent_dashboard_identifies_owner_and_shared_account_state() {
-        let db = Database::memory().unwrap();
+        let db = database_without_system_bindings();
         db.save_usage_provider(&provider("metered", BillingKind::Metered, "product"))
             .unwrap();
         let mut owned = event(

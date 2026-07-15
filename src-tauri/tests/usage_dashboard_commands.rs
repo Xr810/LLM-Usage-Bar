@@ -94,7 +94,15 @@ async fn nine_command_adapters_validate_and_never_serialize_provider_secrets() {
         .unwrap()
         .contains("route-secret"));
     let providers = list_usage_providers_test_hook(&state).await.unwrap();
-    assert_eq!(providers.len(), 1);
+    assert_eq!(providers.len(), 6);
+    assert_eq!(
+        providers
+            .iter()
+            .filter(|provider| provider.system_preset_key.is_some())
+            .count(),
+        5
+    );
+    assert!(providers.iter().any(|provider| provider.id == "metered"));
     assert!(!serde_json::to_string(&providers)
         .unwrap()
         .contains("route-secret"));
@@ -115,18 +123,30 @@ async fn nine_command_adapters_validate_and_never_serialize_provider_secrets() {
     let empty_dashboard = get_usage_dashboard_test_hook(&state, 0, 100, "claude-code")
         .await
         .unwrap();
-    assert!(empty_dashboard.product_groups.is_empty());
+    assert_eq!(empty_dashboard.product_groups.len(), 1);
+    assert_eq!(
+        empty_dashboard.product_groups[0].subscription_providers[0]
+            .provider
+            .id,
+        "system-claude-subscription"
+    );
+    assert_eq!(
+        empty_dashboard.product_groups[0].subscription_providers[0].event_count,
+        0
+    );
 
     state.db.insert_usage_event(&event()).unwrap();
     let dashboard = get_usage_dashboard_test_hook(&state, 0, 100, "claude-code")
         .await
         .unwrap();
-    assert_eq!(dashboard.product_groups.len(), 1);
-    assert_eq!(dashboard.product_groups[0].input_tokens, 10);
-    assert_eq!(
-        dashboard.product_groups[0].total_cost_usd.as_deref(),
-        Some("0.3")
-    );
+    assert_eq!(dashboard.product_groups.len(), 2);
+    let metered_product = dashboard
+        .product_groups
+        .iter()
+        .find(|product| product.product_group_id == "product")
+        .unwrap();
+    assert_eq!(metered_product.input_tokens, 10);
+    assert_eq!(metered_product.total_cost_usd.as_deref(), Some("0.3"));
     assert!(!serde_json::to_string(&dashboard)
         .unwrap()
         .contains("route-secret"));
@@ -209,7 +229,12 @@ async fn nine_command_adapters_validate_and_never_serialize_provider_secrets() {
     let failed_quota_dashboard = get_usage_dashboard_test_hook(&state, 0, 100, "claude-code")
         .await
         .unwrap();
-    let subscription = &failed_quota_dashboard.product_groups[0].subscription_providers[0];
+    let subscription = failed_quota_dashboard
+        .product_groups
+        .iter()
+        .flat_map(|product| product.subscription_providers.iter())
+        .find(|usage| usage.provider.id == "subscription")
+        .unwrap();
     assert!(subscription.quota.is_none());
     assert!(subscription
         .quota_fetch_state

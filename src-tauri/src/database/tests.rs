@@ -488,6 +488,11 @@ mod schema_v15_dashboard_module_migration_tests {
                 ("codex-plan".into(), Some("codex".into())),
                 ("kimi-plan".into(), Some("kimi-coding-plan".into())),
                 ("openrouter".into(), None),
+                ("system-anthropic-api".into(), None),
+                ("system-chatgpt-subscription".into(), None),
+                ("system-claude-subscription".into(), None),
+                ("system-openai-api".into(), None),
+                ("system-openrouter-api".into(), None),
             ]
         );
     }
@@ -3197,7 +3202,14 @@ fn migration_v12_to_v13_preserves_legacy_rows_and_imports_only_proxy_events() {
     assert_eq!(Database::get_user_version(&conn).unwrap(), SCHEMA_VERSION);
     assert_eq!(count(&conn, "providers"), legacy_provider_count);
     assert_eq!(count(&conn, "proxy_request_logs"), legacy_log_count);
-    assert_eq!(count(&conn, "usage_providers"), legacy_provider_count);
+    assert_eq!(count(&conn, "usage_providers"), legacy_provider_count + 5);
+    assert_eq!(
+        scalar_i64(
+            &conn,
+            "SELECT COUNT(*) FROM usage_providers WHERE system_preset_key IS NULL"
+        ),
+        legacy_provider_count
+    );
     assert_eq!(count(&conn, "usage_events"), 1);
     assert_eq!(
         scalar_text(&conn, "SELECT cost_source FROM usage_events LIMIT 1"),
@@ -3283,7 +3295,7 @@ fn migration_v12_to_v13_preserves_legacy_rows_and_imports_only_proxy_events() {
     );
 
     Database::apply_schema_migrations_on_conn(&conn).expect("second migration is idempotent");
-    assert_eq!(count(&conn, "usage_providers"), legacy_provider_count);
+    assert_eq!(count(&conn, "usage_providers"), legacy_provider_count + 5);
     assert_eq!(count(&conn, "usage_events"), 1);
 
     assert!(conn

@@ -1352,10 +1352,12 @@ mod tests {
         Ok(())
     }
 
+    type ProviderCredentialTuple = (Vec<u8>, String, i64, Option<i64>, Option<String>);
+
     fn provider_credential_tuple(
         db: &Database,
         provider_id: &str,
-    ) -> Result<(Vec<u8>, String, i64, Option<i64>, Option<String>), AppError> {
+    ) -> Result<ProviderCredentialTuple, AppError> {
         let conn = crate::database::lock_conn!(db.conn);
         conn.query_row(
             "SELECT api_key_fingerprint, credential_slot, credential_version,
