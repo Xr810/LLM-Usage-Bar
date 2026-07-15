@@ -546,6 +546,15 @@ impl Database {
                         crate::usage::agent_module_migration::migrate_v15_to_v16(conn)?;
                         Self::set_user_version(conn, 16)?;
                     }
+                    16 => {
+                        log::info!(
+                            "迁移数据库从 v16 到 v17（添加固定系统 Provider 和分层凭据元数据）"
+                        );
+                        Self::validate_schema_v15_complete(conn)?;
+                        crate::usage::agent_module_migration::validate_schema_v16_complete(conn)?;
+                        crate::usage::system_provider_migration::migrate_v16_to_v17(conn)?;
+                        Self::set_user_version(conn, 17)?;
+                    }
                     _ => {
                         return Err(AppError::Database(format!(
                             "未知的数据库版本 {version}，无法迁移到 {SCHEMA_VERSION}"
@@ -554,9 +563,12 @@ impl Database {
                 }
                 version = Self::get_user_version(conn)?;
             }
-            if version == 16 {
+            if version >= 16 {
                 Self::validate_schema_v15_complete(conn)?;
                 crate::usage::agent_module_migration::validate_schema_v16_complete(conn)?;
+            }
+            if version == 17 {
+                crate::usage::system_provider_migration::validate_schema_v17_complete(conn)?;
             }
             Ok(())
         })();

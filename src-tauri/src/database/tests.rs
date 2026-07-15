@@ -565,7 +565,7 @@ mod migration_v15_to_v16 {
     use std::collections::{HashMap, HashSet};
     use std::path::PathBuf;
 
-    fn roots() -> UsageSourceRoots {
+    pub(super) fn roots() -> UsageSourceRoots {
         UsageSourceRoots {
             claude: PathBuf::from("/Users/test/.claude/projects"),
             codex: PathBuf::from("/Users/test/.codex"),
@@ -574,7 +574,7 @@ mod migration_v15_to_v16 {
         }
     }
 
-    fn v15_usage_fixture() -> Connection {
+    pub(super) fn v15_usage_fixture() -> Connection {
         let conn = Connection::open_in_memory().expect("open v15 fixture");
         conn.execute_batch("PRAGMA foreign_keys = ON;")
             .expect("enable foreign keys");
@@ -587,6 +587,26 @@ mod migration_v15_to_v16 {
             .expect("create v15 module schema");
         Database::set_user_version(&conn, 15).expect("set v15 version");
         conn
+    }
+
+    fn migrate_fixture_to_v16(conn: &Connection) {
+        Database::validate_schema_v15_complete(conn).expect("validate complete v15 fixture");
+        crate::usage::agent_module_migration::migrate_v15_to_v16(conn)
+            .expect("migrate fixture from v15 to v16");
+        Database::set_user_version(conn, 16).expect("set v16 fixture version");
+        crate::usage::agent_module_migration::validate_schema_v16_complete(conn)
+            .expect("validate complete v16 fixture");
+    }
+
+    fn migrate_v12_fixture_to_v16(conn: &Connection) {
+        crate::usage::migration::migrate_v12_to_v13(conn).expect("migrate fixture to v13");
+        Database::set_user_version(conn, 13).expect("set v13 fixture version");
+        crate::usage::cursor_migration::migrate_v13_to_v14(conn, &roots())
+            .expect("migrate fixture to v14");
+        Database::set_user_version(conn, 14).expect("set v14 fixture version");
+        crate::usage::module_migration::migrate_v14_to_v15(conn).expect("migrate fixture to v15");
+        Database::set_user_version(conn, 15).expect("set v15 fixture version");
+        migrate_fixture_to_v16(conn);
     }
 
     fn insert_provider(
@@ -708,8 +728,7 @@ mod migration_v15_to_v16 {
         .expect("seed exact source binding evidence");
 
         let provider_count = super::count(&conn, "usage_providers");
-        Database::apply_schema_migrations_on_conn_with_roots(&conn, &roots())
-            .expect("migrate v15 to v16");
+        migrate_fixture_to_v16(&conn);
 
         assert_eq!(Database::get_user_version(&conn).unwrap(), 16);
         assert_eq!(super::count(&conn, "usage_providers"), provider_count);
@@ -1024,8 +1043,7 @@ mod migration_v15_to_v16 {
             .is_err());
 
         let unused = v15_usage_fixture();
-        Database::apply_schema_migrations_on_conn_with_roots(&unused, &roots())
-            .expect("migrate unused Kimi default");
+        migrate_fixture_to_v16(&unused);
         assert_eq!(super::count(&unused, "usage_providers"), 0);
         assert_eq!(super::count(&unused, "usage_events"), 0);
         assert_eq!(
@@ -1226,8 +1244,7 @@ mod migration_v15_to_v16 {
         ]);
         let delete_trigger_before = trigger_sql(&conn, "usage_events_immutable_delete");
 
-        Database::apply_schema_migrations_on_conn_with_roots(&conn, &roots())
-            .expect("migrate historical Agent ownership");
+        migrate_fixture_to_v16(&conn);
 
         assert_eq!(
             agent_for(&conn, "exact-claude-session").as_deref(),
@@ -1344,8 +1361,7 @@ mod migration_v15_to_v16 {
     #[test]
     fn migration_v15_to_v16_continues_v12_chain_and_validates_complete_schema() {
         let conn = super::true_v12_usage_fixture();
-        Database::apply_schema_migrations_on_conn_with_roots(&conn, &roots())
-            .expect("migrate v12 continuously through v16");
+        migrate_v12_fixture_to_v16(&conn);
         assert_eq!(Database::get_user_version(&conn).unwrap(), 16);
         assert!(Database::table_exists(&conn, "agent_modules").unwrap());
         assert!(Database::table_exists(&conn, "agent_provider_bindings").unwrap());
@@ -1374,8 +1390,7 @@ mod migration_v15_to_v16 {
                     ('claude', 'slot-provider-b', 10);",
         )
         .expect("seed binding evidence");
-        Database::apply_schema_migrations_on_conn_with_roots(&conn, &roots())
-            .expect("create complete v16 schema");
+        migrate_fixture_to_v16(&conn);
 
         let binding_ids = conn
             .prepare("SELECT id FROM agent_provider_bindings ORDER BY id")
@@ -1450,8 +1465,7 @@ mod migration_v15_to_v16 {
              END;",
         ] {
             let conn = v15_usage_fixture();
-            Database::apply_schema_migrations_on_conn_with_roots(&conn, &roots())
-                .expect("create complete v16 schema");
+            migrate_fixture_to_v16(&conn);
             conn.execute_batch(corruption)
                 .expect("replace required object with malformed namesake");
 
@@ -1503,6 +1517,481 @@ mod migration_v15_to_v16 {
                 )
                 .is_err());
         }
+    }
+}
+
+mod migration_v16_to_v17 {
+    use super::*;
+
+    fn v16_usage_fixture() -> Connection {
+        let conn = super::migration_v15_to_v16::v15_usage_fixture();
+        crate::usage::agent_module_migration::migrate_v15_to_v16(&conn)
+            .expect("create complete v16 fixture");
+        Database::set_user_version(&conn, 16).expect("set v16 fixture version");
+        assert_eq!(Database::get_user_version(&conn).unwrap(), 16);
+        conn
+    }
+
+    #[test]
+    fn migration_v16_to_v17_seeds_exact_system_catalog_and_preserves_custom_rows() {
+        let conn = v16_usage_fixture();
+        conn.execute(
+            "INSERT INTO usage_providers (
+                 id, name, billing_kind, product_group_id, token_sources,
+                 quota_source, quota_interval_seconds, route_app_type, route_config,
+                 quota_config, enabled, needs_review, legacy_app_type,
+                 legacy_provider_id, created_at, updated_at
+             ) VALUES (
+                 'custom-provider', 'Custom Provider', 'metered', 'custom-product',
+                 '[\"proxy\",\"session_log\"]', NULL, NULL, 'gemini',
+                 '{\"baseUrl\":\"https://custom.example/v1\"}', NULL,
+                 0, 1, NULL, NULL, 41, 42
+             )",
+            [],
+        )
+        .expect("insert custom v16 provider");
+        conn.execute(
+            "INSERT INTO usage_source_bindings (source, provider_id, updated_at)
+             VALUES ('codex', 'custom-provider', 45)",
+            [],
+        )
+        .expect("insert existing Codex source owner");
+        conn.execute(
+            "INSERT INTO agent_provider_bindings (
+                 id, agent_module_id, provider_id, enabled,
+                 api_key_fingerprint, credential_slot, credential_version,
+                 created_at, updated_at
+             ) VALUES (
+                 'custom-binding', 'codex', 'custom-provider', 0,
+                 NULL, NULL, 0, 43, 44
+             )",
+            [],
+        )
+        .expect("insert custom v16 binding");
+
+        Database::apply_schema_migrations_on_conn_with_roots(
+            &conn,
+            &super::migration_v15_to_v16::roots(),
+        )
+        .expect("migrate v16 to v17");
+
+        assert_eq!(Database::get_user_version(&conn).unwrap(), 17);
+
+        let system_rows = conn
+            .prepare(
+                "SELECT id, system_preset_key, name, billing_kind
+                 FROM usage_providers
+                 WHERE system_preset_key IS NOT NULL
+                 ORDER BY system_preset_key",
+            )
+            .unwrap()
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(
+            system_rows,
+            vec![
+                (
+                    "system-anthropic-api".into(),
+                    "anthropic-api".into(),
+                    "Anthropic API".into(),
+                    "metered".into(),
+                ),
+                (
+                    "system-chatgpt-subscription".into(),
+                    "chatgpt-subscription".into(),
+                    "ChatGPT Plus/Pro".into(),
+                    "subscription".into(),
+                ),
+                (
+                    "system-claude-subscription".into(),
+                    "claude-subscription".into(),
+                    "Claude Pro/Max".into(),
+                    "subscription".into(),
+                ),
+                (
+                    "system-openai-api".into(),
+                    "openai-api".into(),
+                    "OpenAI API".into(),
+                    "metered".into(),
+                ),
+                (
+                    "system-openrouter-api".into(),
+                    "openrouter-api".into(),
+                    "OpenRouter".into(),
+                    "metered".into(),
+                ),
+            ]
+        );
+
+        let default_bindings = conn
+            .prepare(
+                "SELECT agent_module_id, provider_id, route_protocol
+                 FROM agent_provider_bindings
+                 WHERE provider_id LIKE 'system-%'
+                 ORDER BY agent_module_id, provider_id",
+            )
+            .unwrap()
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(
+            default_bindings,
+            vec![
+                (
+                    "claude-code".into(),
+                    "system-claude-subscription".into(),
+                    None,
+                ),
+                (
+                    "codex".into(),
+                    "system-chatgpt-subscription".into(),
+                    Some("codex".into()),
+                ),
+                (
+                    "hermes".into(),
+                    "system-openrouter-api".into(),
+                    Some("hermes".into()),
+                ),
+                (
+                    "openclaw".into(),
+                    "system-openrouter-api".into(),
+                    Some("openclaw".into()),
+                ),
+                (
+                    "opencode".into(),
+                    "system-openrouter-api".into(),
+                    Some("opencode".into()),
+                ),
+            ]
+        );
+        assert_eq!(
+            super::scalar_i64(
+                &conn,
+                "SELECT COUNT(*) FROM agent_provider_bindings
+                 WHERE provider_id IN ('system-openai-api','system-anthropic-api')",
+            ),
+            0
+        );
+        assert_eq!(super::count(&conn, "provider_api_credentials"), 3);
+        assert_eq!(
+            super::scalar_i64(
+                &conn,
+                "SELECT COUNT(*) FROM provider_api_credentials
+                 WHERE provider_id IN (
+                     'system-openai-api','system-anthropic-api','system-openrouter-api'
+                 )
+                   AND api_key_fingerprint IS NULL
+                   AND credential_slot IS NULL
+                   AND credential_version = 0",
+            ),
+            3
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT name, billing_kind, product_group_id, token_sources,
+                        route_app_type, route_config, enabled, needs_review,
+                        created_at, updated_at, system_preset_key
+                 FROM usage_providers WHERE id = 'custom-provider'",
+                [],
+                |row| Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, i64>(7)?,
+                    row.get::<_, i64>(8)?,
+                    row.get::<_, i64>(9)?,
+                    row.get::<_, Option<String>>(10)?,
+                )),
+            )
+            .unwrap(),
+            (
+                "Custom Provider".into(),
+                "metered".into(),
+                "custom-product".into(),
+                "[\"proxy\",\"session_log\"]".into(),
+                Some("gemini".into()),
+                Some("{\"baseUrl\":\"https://custom.example/v1\"}".into()),
+                0,
+                1,
+                41,
+                42,
+                None,
+            )
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT id, agent_module_id, provider_id, enabled,
+                        credential_version, created_at, updated_at, route_protocol
+                 FROM agent_provider_bindings WHERE id = 'custom-binding'",
+                [],
+                |row| Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, Option<String>>(7)?,
+                )),
+            )
+            .unwrap(),
+            (
+                "custom-binding".into(),
+                "codex".into(),
+                "custom-provider".into(),
+                0,
+                0,
+                43,
+                44,
+                Some("gemini".into()),
+            )
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT value FROM settings
+                 WHERE key = 'system_provider_default_bindings_v1_seeded'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+            "true"
+        );
+        assert_eq!(
+            conn.prepare(
+                "SELECT source, provider_id
+                 FROM usage_source_bindings ORDER BY source",
+            )
+            .unwrap()
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap(),
+            vec![
+                ("claude".into(), "system-claude-subscription".into()),
+                ("codex".into(), "custom-provider".into()),
+            ]
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT updated_at FROM usage_source_bindings WHERE source = 'codex'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+            45
+        );
+    }
+
+    #[test]
+    fn system_catalog_reconciliation_is_idempotent_and_never_restores_a_deleted_default_binding() {
+        let conn = v16_usage_fixture();
+        Database::apply_schema_migrations_on_conn_with_roots(
+            &conn,
+            &super::migration_v15_to_v16::roots(),
+        )
+        .expect("migrate v16 to v17");
+        conn.execute(
+            "DELETE FROM agent_provider_bindings
+             WHERE agent_module_id = 'opencode'
+               AND provider_id = 'system-openrouter-api'",
+            [],
+        )
+        .expect("user removes a default binding");
+
+        crate::usage::system_provider_migration::reconcile_system_provider_catalog(&conn)
+            .expect("reconcile canonical card metadata");
+        crate::usage::system_provider_migration::reconcile_system_provider_catalog(&conn)
+            .expect("repeat catalog reconciliation");
+
+        assert_eq!(
+            super::scalar_i64(
+                &conn,
+                "SELECT COUNT(*) FROM usage_providers
+                 WHERE system_preset_key IS NOT NULL",
+            ),
+            5
+        );
+        assert_eq!(
+            super::scalar_i64(
+                &conn,
+                "SELECT COUNT(*) FROM agent_provider_bindings
+                 WHERE provider_id LIKE 'system-%'",
+            ),
+            4
+        );
+        assert_eq!(super::count(&conn, "provider_api_credentials"), 3);
+        assert_eq!(
+            super::scalar_i64(
+                &conn,
+                "SELECT COUNT(*) FROM agent_provider_bindings
+                 WHERE agent_module_id = 'opencode'
+                   AND provider_id = 'system-openrouter-api'",
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn system_provider_identity_and_rows_are_sql_protected() {
+        let conn = v16_usage_fixture();
+        Database::apply_schema_migrations_on_conn_with_roots(
+            &conn,
+            &super::migration_v15_to_v16::roots(),
+        )
+        .expect("migrate v16 to v17");
+
+        assert!(conn
+            .execute(
+                "UPDATE usage_providers
+                 SET system_preset_key = 'renamed'
+                 WHERE id = 'system-openai-api'",
+                [],
+            )
+            .is_err());
+        assert!(conn
+            .execute(
+                "UPDATE usage_providers
+                 SET id = 'renamed-system-openai-api'
+                 WHERE id = 'system-openai-api'",
+                [],
+            )
+            .is_err());
+        assert!(conn
+            .execute(
+                "DELETE FROM usage_providers WHERE id = 'system-openai-api'",
+                [],
+            )
+            .is_err());
+        assert!(conn
+            .execute(
+                "INSERT INTO usage_providers (
+                     id, name, billing_kind, product_group_id, token_sources,
+                     enabled, needs_review, created_at, updated_at, system_preset_key
+                 ) VALUES (
+                     'duplicate-system-key', 'Duplicate', 'metered', 'duplicate',
+                     '[\"proxy\"]', 1, 0, 1, 1, 'openai-api'
+                 )",
+                [],
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn migration_v16_to_v17_rolls_back_every_object_and_row_on_catalog_collision() {
+        let conn = v16_usage_fixture();
+        conn.execute(
+            "INSERT INTO usage_providers (
+                 id, name, billing_kind, product_group_id, token_sources,
+                 enabled, needs_review, created_at, updated_at
+             ) VALUES (
+                 'system-openai-api', 'User Collision', 'metered', 'collision',
+                 '[\"proxy\"]', 1, 0, 1, 1
+             )",
+            [],
+        )
+        .expect("insert reserved-id collision in v16");
+
+        let error = Database::apply_schema_migrations_on_conn_with_roots(
+            &conn,
+            &super::migration_v15_to_v16::roots(),
+        )
+        .expect_err("reserved system id collision must fail closed");
+        assert!(error.to_string().contains("reserved system Provider id"));
+        assert_eq!(Database::get_user_version(&conn).unwrap(), 16);
+        assert!(!Database::has_column(&conn, "usage_providers", "system_preset_key").unwrap());
+        assert!(!Database::has_column(&conn, "agent_provider_bindings", "route_protocol").unwrap());
+        assert!(!Database::table_exists(&conn, "provider_api_credentials").unwrap());
+        assert!(!Database::table_exists(&conn, "provider_credential_operations").unwrap());
+        assert_eq!(
+            super::scalar_i64(
+                &conn,
+                "SELECT COUNT(*) FROM usage_providers
+                 WHERE id = 'system-openai-api' AND name = 'User Collision'",
+            ),
+            1
+        );
+        for object in [
+            "idx_usage_providers_system_preset_key",
+            "usage_providers_system_identity_immutable",
+            "usage_providers_system_delete",
+        ] {
+            assert_eq!(
+                super::scalar_i64(
+                    &conn,
+                    &format!("SELECT COUNT(*) FROM sqlite_schema WHERE name = '{object}'"),
+                ),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn current_v17_validator_rejects_same_named_but_malformed_objects() {
+        for corruption in [
+            "DROP INDEX idx_usage_providers_system_preset_key;
+             CREATE INDEX idx_usage_providers_system_preset_key
+             ON usage_providers(system_preset_key);",
+            "DROP TRIGGER usage_providers_system_delete;
+             CREATE TRIGGER usage_providers_system_delete
+             AFTER INSERT ON usage_providers
+             BEGIN
+                 SELECT 1;
+             END;",
+        ] {
+            let conn = v16_usage_fixture();
+            Database::apply_schema_migrations_on_conn_with_roots(
+                &conn,
+                &super::migration_v15_to_v16::roots(),
+            )
+            .expect("create complete v17 schema");
+            conn.execute_batch(corruption)
+                .expect("replace required object with malformed namesake");
+
+            let error = Database::apply_schema_migrations_on_conn_with_roots(
+                &conn,
+                &super::migration_v15_to_v16::roots(),
+            )
+            .expect_err("v17 validator must reject a malformed namesake");
+            assert!(error.to_string().contains("incomplete schema v17"));
+        }
+    }
+
+    #[test]
+    fn migration_continues_from_v12_through_complete_v17() {
+        let conn = super::true_v12_usage_fixture();
+        Database::apply_schema_migrations_on_conn_with_roots(
+            &conn,
+            &super::migration_v15_to_v16::roots(),
+        )
+        .expect("migrate continuously from v12 through v17");
+        assert_eq!(Database::get_user_version(&conn).unwrap(), 17);
+        assert!(Database::has_column(&conn, "usage_providers", "system_preset_key").unwrap());
+        assert!(Database::has_column(&conn, "agent_provider_bindings", "route_protocol").unwrap());
+        assert!(Database::table_exists(&conn, "provider_api_credentials").unwrap());
+        assert!(Database::table_exists(&conn, "provider_credential_operations").unwrap());
     }
 }
 

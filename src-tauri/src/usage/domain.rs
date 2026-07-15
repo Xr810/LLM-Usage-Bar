@@ -15,6 +15,14 @@ pub enum TokenSource {
     SessionLog,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SystemProviderAuthKind {
+    CodexOauth,
+    ClaudeCli,
+    ProviderApiKey,
+}
+
 pub const CLAUDE_CODE_AGENT_MODULE_ID: &str = "claude-code";
 pub const CODEX_AGENT_MODULE_ID: &str = "codex";
 

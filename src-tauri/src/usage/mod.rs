@@ -8,6 +8,8 @@ pub(crate) mod module_migration;
 pub mod quota;
 pub mod session;
 pub(crate) mod source_roots;
+pub(crate) mod system_provider_migration;
+pub(crate) mod system_providers;
 #[cfg(test)]
 pub(crate) mod watcher_state;
 

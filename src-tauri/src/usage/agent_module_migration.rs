@@ -564,21 +564,21 @@ pub(crate) fn validate_schema_v16_complete(conn: &Connection) -> Result<(), AppE
             ("updated_at", "INTEGER", 1, None, 0),
         ],
     )?;
-    require_table_shape(
-        conn,
-        "agent_provider_bindings",
-        &[
-            ("id", "TEXT", 1, None, 1),
-            ("agent_module_id", "TEXT", 1, None, 0),
-            ("provider_id", "TEXT", 1, None, 0),
-            ("enabled", "INTEGER", 1, Some("0"), 0),
-            ("api_key_fingerprint", "BLOB", 0, None, 0),
-            ("credential_slot", "TEXT", 0, None, 0),
-            ("credential_version", "INTEGER", 1, Some("0"), 0),
-            ("created_at", "INTEGER", 1, None, 0),
-            ("updated_at", "INTEGER", 1, None, 0),
-        ],
-    )?;
+    let mut binding_columns = vec![
+        ("id", "TEXT", 1, None, 1),
+        ("agent_module_id", "TEXT", 1, None, 0),
+        ("provider_id", "TEXT", 1, None, 0),
+        ("enabled", "INTEGER", 1, Some("0"), 0),
+        ("api_key_fingerprint", "BLOB", 0, None, 0),
+        ("credential_slot", "TEXT", 0, None, 0),
+        ("credential_version", "INTEGER", 1, Some("0"), 0),
+        ("created_at", "INTEGER", 1, None, 0),
+        ("updated_at", "INTEGER", 1, None, 0),
+    ];
+    if Database::has_column(conn, "agent_provider_bindings", "route_protocol")? {
+        binding_columns.push(("route_protocol", "TEXT", 0, None, 0));
+    }
+    require_table_shape(conn, "agent_provider_bindings", &binding_columns)?;
     require_table_shape(
         conn,
         "agent_credential_operations",
