@@ -4,6 +4,10 @@ export type SessionSource = "claude" | "codex";
 export type CostSource = "upstream" | "estimated" | "unavailable";
 export type BindingCredentialStatus =
   "not_required" | "missing" | "configured" | "unavailable";
+export type SystemProviderAuthKind =
+  | "codex_oauth"
+  | "claude_cli"
+  | "provider_api_key";
 
 export interface AgentModuleView {
   id: string;
@@ -38,6 +42,9 @@ export interface AgentProviderBindingView {
   credentialStatus: BindingCredentialStatus;
   canClearCredential: boolean;
   credentialVersion: number;
+  routeProtocol: string | null;
+  localCredentialStatus: BindingCredentialStatus;
+  providerCredentialStatus: BindingCredentialStatus;
   createdAt: number;
   updatedAt: number;
 }
@@ -56,6 +63,28 @@ export interface AgentProxySetupInfo {
   proxyRunning: boolean;
   proxyOrigin: string;
   routes: AgentProxyRouteSetup[];
+}
+
+export interface LocalBindingKeyReveal {
+  bindingId: string;
+  credentialVersion: number;
+  localKey: string;
+}
+
+export interface SystemProviderConnectionTestResult {
+  providerId: string;
+  success: boolean;
+  status: "success" | "failed";
+  testedAt: number;
+  errorCode: string | null;
+}
+
+export interface ClaudeCliAuthStatus {
+  installed: boolean;
+  authenticated: boolean;
+  subscriptionType: "pro" | "max" | null;
+  quotaAvailability: "unavailable";
+  errorCode: string | null;
 }
 
 export interface UsageProviderInput {
@@ -90,6 +119,15 @@ export interface UsageProviderView {
   updatedAt: number;
   routeBaseUrl: string | null;
   hasRouteCredentials: boolean;
+  systemPresetKey: string | null;
+  systemAuthKind: SystemProviderAuthKind | null;
+  canonicalEndpoint: string | null;
+  compatibleAgentModuleIds: string[];
+  upstreamCredentialStatus: BindingCredentialStatus;
+  upstreamCredentialVersion: number;
+  canClearUpstreamCredential: boolean;
+  lastConnectionTestAt: number | null;
+  lastConnectionTestStatus: string | null;
 }
 
 export interface CostSourceCounts {

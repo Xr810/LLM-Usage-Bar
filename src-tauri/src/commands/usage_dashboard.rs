@@ -2,12 +2,14 @@ use crate::credentials::SecretString;
 use crate::database::AgentModuleDeleteOutcome;
 use crate::error::AppError;
 use crate::proxy::{ProxyConfig, ProxyStatus};
+use crate::services::SystemProviderConnectionTestResult;
 use crate::store::AppState;
 use crate::usage::dashboard::UsageDashboardService;
 use crate::usage::domain::{
     AgentModuleInput, AgentModuleView, AgentProviderBindingInput, AgentProviderBindingView,
-    AgentProxyRouteSetup, AgentProxySetupInfo, RouteBinding, UnassignedUsageDiagnostics,
-    UsageDashboardView, UsageEventPage, UsageProviderInput, UsageProviderView,
+    AgentProxyRouteSetup, AgentProxySetupInfo, LocalBindingKeyReveal, RouteBinding,
+    SystemProviderAuthKind, UnassignedUsageDiagnostics, UsageDashboardView, UsageEventPage,
+    UsageProviderInput, UsageProviderView,
 };
 use crate::usage::quota::QuotaRefreshResult;
 use crate::usage::session::ProviderSessionSyncResult;
@@ -108,6 +110,62 @@ pub async fn clear_agent_provider_binding_api_key(
     expected_version: u64,
 ) -> Result<AgentProviderBindingView, AppError> {
     clear_agent_provider_binding_api_key_test_hook(&state, &binding_id, expected_version).await
+}
+
+#[tauri::command]
+pub async fn set_system_provider_api_key(
+    state: State<'_, AppState>,
+    provider_id: String,
+    expected_version: u64,
+    api_key: SecretString,
+) -> Result<UsageProviderView, AppError> {
+    set_system_provider_api_key_test_hook(&state, &provider_id, expected_version, api_key).await
+}
+
+#[tauri::command]
+pub async fn replace_system_provider_api_key(
+    state: State<'_, AppState>,
+    provider_id: String,
+    expected_version: u64,
+    api_key: SecretString,
+) -> Result<UsageProviderView, AppError> {
+    replace_system_provider_api_key_test_hook(&state, &provider_id, expected_version, api_key).await
+}
+
+#[tauri::command]
+pub async fn clear_system_provider_api_key(
+    state: State<'_, AppState>,
+    provider_id: String,
+    expected_version: u64,
+) -> Result<UsageProviderView, AppError> {
+    clear_system_provider_api_key_test_hook(&state, &provider_id, expected_version).await
+}
+
+#[tauri::command]
+pub async fn test_system_provider_connection(
+    state: State<'_, AppState>,
+    provider_id: String,
+    expected_version: u64,
+) -> Result<SystemProviderConnectionTestResult, AppError> {
+    test_system_provider_connection_test_hook(&state, &provider_id, expected_version).await
+}
+
+#[tauri::command]
+pub async fn reveal_agent_provider_local_key(
+    state: State<'_, AppState>,
+    binding_id: String,
+    expected_version: u64,
+) -> Result<LocalBindingKeyReveal, AppError> {
+    reveal_agent_provider_local_key_test_hook(&state, &binding_id, expected_version).await
+}
+
+#[tauri::command]
+pub async fn rotate_agent_provider_local_key(
+    state: State<'_, AppState>,
+    binding_id: String,
+    expected_version: u64,
+) -> Result<LocalBindingKeyReveal, AppError> {
+    rotate_agent_provider_local_key_test_hook(&state, &binding_id, expected_version).await
 }
 
 #[tauri::command]
@@ -324,6 +382,23 @@ pub async fn save_agent_provider_binding_test_hook(
     input: AgentProviderBindingInput,
 ) -> Result<AgentProviderBindingView, AppError> {
     let agent_module_id = input.agent_module_id.clone();
+    let is_new_fixed_api = input.id.is_none()
+        && state
+            .db
+            .list_usage_providers()?
+            .into_iter()
+            .find(|provider| provider.id == input.provider_id)
+            .is_some_and(|provider| {
+                provider.system_auth_kind == Some(SystemProviderAuthKind::ProviderApiKey)
+            });
+    if is_new_fixed_api {
+        let view = state
+            .binding_credential_service
+            .create_system_api_binding(input)
+            .await?;
+        crate::usage_events::notify_dashboard_invalidated();
+        return Ok(view);
+    }
     let saved = state.db.save_agent_provider_binding(&input)?;
     let view = state
         .binding_credential_service
@@ -388,6 +463,84 @@ pub async fn clear_agent_provider_binding_api_key_test_hook(
         .await?;
     crate::usage_events::notify_dashboard_invalidated();
     Ok(view)
+}
+
+pub async fn set_system_provider_api_key_test_hook(
+    state: &AppState,
+    provider_id: &str,
+    expected_version: u64,
+    api_key: SecretString,
+) -> Result<UsageProviderView, AppError> {
+    let view = state
+        .binding_credential_service
+        .set_provider_api_key(provider_id, expected_version, api_key)
+        .await?;
+    crate::usage_events::notify_dashboard_invalidated();
+    Ok(view)
+}
+
+pub async fn replace_system_provider_api_key_test_hook(
+    state: &AppState,
+    provider_id: &str,
+    expected_version: u64,
+    api_key: SecretString,
+) -> Result<UsageProviderView, AppError> {
+    let view = state
+        .binding_credential_service
+        .replace_provider_api_key(provider_id, expected_version, api_key)
+        .await?;
+    crate::usage_events::notify_dashboard_invalidated();
+    Ok(view)
+}
+
+pub async fn clear_system_provider_api_key_test_hook(
+    state: &AppState,
+    provider_id: &str,
+    expected_version: u64,
+) -> Result<UsageProviderView, AppError> {
+    let view = state
+        .binding_credential_service
+        .clear_provider_api_key(provider_id, expected_version)
+        .await?;
+    crate::usage_events::notify_dashboard_invalidated();
+    Ok(view)
+}
+
+pub async fn test_system_provider_connection_test_hook(
+    state: &AppState,
+    provider_id: &str,
+    expected_version: u64,
+) -> Result<SystemProviderConnectionTestResult, AppError> {
+    let result = state
+        .system_provider_connection_service
+        .test(provider_id, expected_version)
+        .await?;
+    crate::usage_events::notify_dashboard_invalidated();
+    Ok(result)
+}
+
+pub async fn reveal_agent_provider_local_key_test_hook(
+    state: &AppState,
+    binding_id: &str,
+    expected_version: u64,
+) -> Result<LocalBindingKeyReveal, AppError> {
+    state
+        .binding_credential_service
+        .reveal_local_binding_key(binding_id, expected_version)
+        .await
+}
+
+pub async fn rotate_agent_provider_local_key_test_hook(
+    state: &AppState,
+    binding_id: &str,
+    expected_version: u64,
+) -> Result<LocalBindingKeyReveal, AppError> {
+    let reveal = state
+        .binding_credential_service
+        .rotate_local_binding_key(binding_id, expected_version)
+        .await?;
+    crate::usage_events::notify_dashboard_invalidated();
+    Ok(reveal)
 }
 
 pub async fn get_agent_proxy_setup_info_test_hook(
@@ -933,6 +1086,85 @@ mod tests {
             assert!(!public.contains(first_secret));
             assert!(!public.contains(second_secret));
         }
+    }
+
+    #[tokio::test]
+    async fn system_provider_commands_separate_shared_and_local_key_lifecycles() {
+        let db = Arc::new(Database::memory().unwrap());
+        let state =
+            AppState::new_with_credential_store(db, Arc::new(MemoryCredentialStore::default()));
+        let binding = save_agent_provider_binding_test_hook(
+            &state,
+            AgentProviderBindingInput {
+                id: None,
+                agent_module_id: "codex".to_string(),
+                provider_id: "system-openai-api".to_string(),
+                enabled: true,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            binding.local_credential_status,
+            BindingCredentialStatus::Configured
+        );
+        assert_eq!(binding.credential_version, 1);
+        let local = reveal_agent_provider_local_key_test_hook(
+            &state,
+            &binding.id,
+            binding.credential_version,
+        )
+        .await
+        .unwrap();
+        let first_local = local.local_key.clone();
+
+        let provider = set_system_provider_api_key_test_hook(
+            &state,
+            "system-openai-api",
+            0,
+            SecretString::new("openai-command-upstream-sentinel".to_string()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(provider.upstream_credential_version, 1);
+        assert_eq!(
+            provider.upstream_credential_status,
+            BindingCredentialStatus::Configured
+        );
+        let public_json =
+            serde_json::to_string(&list_usage_providers_test_hook(&state).await.unwrap()).unwrap();
+        assert!(!public_json.contains(&first_local));
+        assert!(!public_json.contains("openai-command-upstream-sentinel"));
+
+        let rotated = rotate_agent_provider_local_key_test_hook(
+            &state,
+            &binding.id,
+            binding.credential_version,
+        )
+        .await
+        .unwrap();
+        assert_ne!(rotated.local_key, first_local);
+        assert_eq!(rotated.credential_version, 2);
+        assert_eq!(
+            reveal_agent_provider_local_key_test_hook(&state, &binding.id, 1)
+                .await
+                .unwrap_err()
+                .to_string(),
+            "credential_conflict"
+        );
+
+        let cleared = clear_system_provider_api_key_test_hook(
+            &state,
+            "system-openai-api",
+            provider.upstream_credential_version,
+        )
+        .await
+        .unwrap();
+        assert_eq!(cleared.upstream_credential_version, 2);
+        assert_eq!(
+            cleared.upstream_credential_status,
+            BindingCredentialStatus::Missing
+        );
     }
 
     #[tokio::test]

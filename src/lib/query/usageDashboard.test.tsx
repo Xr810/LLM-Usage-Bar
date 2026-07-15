@@ -3,6 +3,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { usageDashboardApi } from "@/lib/api/usageDashboard";
+import { claudeCliAuthApi } from "@/lib/api/claudeCliAuth";
 import {
   usageDashboardKeys,
   useAgentProviderBindingCredentialActions,
@@ -122,6 +123,26 @@ describe("usageDashboardApi wire contract", () => {
       "replace-test-key",
     );
     await usageDashboardApi.clearAgentProviderBindingApiKey("binding-a", 4);
+    await usageDashboardApi.setSystemProviderApiKey(
+      "system-openrouter-api",
+      0,
+      "provider-set-key",
+    );
+    await usageDashboardApi.replaceSystemProviderApiKey(
+      "system-openrouter-api",
+      1,
+      "provider-replace-key",
+    );
+    await usageDashboardApi.clearSystemProviderApiKey(
+      "system-openrouter-api",
+      2,
+    );
+    await usageDashboardApi.testSystemProviderConnection(
+      "system-openrouter-api",
+      2,
+    );
+    await usageDashboardApi.revealAgentProviderLocalKey("binding-a", 4);
+    await usageDashboardApi.rotateAgentProviderLocalKey("binding-a", 4);
     await usageDashboardApi.getAgentProxySetupInfo("codex");
     await usageDashboardApi.getUnassignedUsageDiagnostics();
 
@@ -152,8 +173,51 @@ describe("usageDashboardApi wire contract", () => {
         "clear_agent_provider_binding_api_key",
         { bindingId: "binding-a", expectedVersion: 4 },
       ],
+      [
+        "set_system_provider_api_key",
+        {
+          providerId: "system-openrouter-api",
+          expectedVersion: 0,
+          apiKey: "provider-set-key",
+        },
+      ],
+      [
+        "replace_system_provider_api_key",
+        {
+          providerId: "system-openrouter-api",
+          expectedVersion: 1,
+          apiKey: "provider-replace-key",
+        },
+      ],
+      [
+        "clear_system_provider_api_key",
+        { providerId: "system-openrouter-api", expectedVersion: 2 },
+      ],
+      [
+        "test_system_provider_connection",
+        { providerId: "system-openrouter-api", expectedVersion: 2 },
+      ],
+      [
+        "reveal_agent_provider_local_key",
+        { bindingId: "binding-a", expectedVersion: 4 },
+      ],
+      [
+        "rotate_agent_provider_local_key",
+        { bindingId: "binding-a", expectedVersion: 4 },
+      ],
       ["get_agent_proxy_setup_info", { agentModuleId: "codex" }],
       ["get_unassigned_usage_diagnostics"],
+    ]);
+  });
+
+  it("uses only the three official Claude CLI auth commands", async () => {
+    await claudeCliAuthApi.getStatus();
+    await claudeCliAuthApi.startLogin();
+    await claudeCliAuthApi.logout();
+    expect(invokeMock.mock.calls).toEqual([
+      ["get_claude_cli_auth_status"],
+      ["start_claude_cli_login"],
+      ["logout_claude_cli"],
     ]);
   });
 

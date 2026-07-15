@@ -2,7 +2,9 @@ use crate::credentials::{unavailable_credential_store, BindingCredentialService,
 use crate::database::Database;
 #[cfg(test)]
 use crate::services::claude_cli_auth::ClaudeAuthCommandRunner;
-use crate::services::{ClaudeCliAuthService, ProxyService, UsageCache};
+use crate::services::{
+    ClaudeCliAuthService, ProxyService, SystemProviderConnectionService, UsageCache,
+};
 use crate::usage::quota::{QuotaSchedulerHandle, QuotaService};
 use crate::usage::session::SessionUsageService;
 use std::sync::{Arc, Mutex};
@@ -14,6 +16,7 @@ pub struct AppState {
     pub credential_store: Arc<dyn CredentialStore>,
     pub binding_credential_service: Arc<BindingCredentialService>,
     pub claude_cli_auth_service: Arc<ClaudeCliAuthService>,
+    pub system_provider_connection_service: Arc<SystemProviderConnectionService>,
     pub usage_cache: Arc<UsageCache>,
     pub quota_service: Arc<QuotaService>,
     pub session_usage_service: Arc<SessionUsageService>,
@@ -58,6 +61,11 @@ impl AppState {
         let proxy_service =
             ProxyService::new_with_credential_store(db.clone(), credential_store.clone());
         let binding_credential_service = proxy_service.binding_credential_service();
+        let system_provider_connection_service =
+            Arc::new(SystemProviderConnectionService::production(
+                db.clone(),
+                binding_credential_service.clone(),
+            ));
         let quota_service = Arc::new(QuotaService::new(db.clone()));
         let session_usage_service = Arc::new(SessionUsageService::new(db.clone()));
 
@@ -67,6 +75,7 @@ impl AppState {
             credential_store,
             binding_credential_service,
             claude_cli_auth_service,
+            system_provider_connection_service,
             usage_cache: Arc::new(UsageCache::new()),
             quota_service,
             session_usage_service,

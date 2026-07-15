@@ -98,6 +98,33 @@ impl Database {
         .map_err(AppError::from)
     }
 
+    pub(crate) fn record_provider_connection_test(
+        &self,
+        provider_id: &str,
+        expected_version: u64,
+        status: &str,
+        error_code: Option<&str>,
+    ) -> Result<i64, AppError> {
+        if !matches!(status, "success" | "failed") {
+            return Err(public_error("invalid_connection_status"));
+        }
+        let expected_version =
+            i64::try_from(expected_version).map_err(|_| public_error("credential_conflict"))?;
+        let tested_at = now_timestamp()?;
+        let conn = lock_conn!(self.conn);
+        let changed = conn.execute(
+            "UPDATE provider_api_credentials
+             SET last_test_at = ?3, last_test_status = ?4,
+                 last_test_error_code = ?5, updated_at = ?3
+             WHERE provider_id = ?1 AND credential_version = ?2",
+            params![provider_id, expected_version, tested_at, status, error_code],
+        )?;
+        if changed != 1 {
+            return Err(public_error("credential_conflict"));
+        }
+        Ok(tested_at)
+    }
+
     pub(crate) fn reserve_provider_credential_operation(
         &self,
         provider_id: &str,

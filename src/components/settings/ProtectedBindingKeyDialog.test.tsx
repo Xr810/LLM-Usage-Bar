@@ -12,6 +12,9 @@ const binding: AgentProviderBindingView = {
   credentialStatus: "missing",
   canClearCredential: false,
   credentialVersion: 2,
+  routeProtocol: "codex",
+  localCredentialStatus: "not_required",
+  providerCredentialStatus: "not_required",
   createdAt: 1,
   updatedAt: 1,
 };

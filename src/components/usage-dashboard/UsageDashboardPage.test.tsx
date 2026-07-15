@@ -94,6 +94,15 @@ function provider(
     updatedAt: 1,
     routeBaseUrl: billingKind === "metered" ? "https://example.com" : null,
     hasRouteCredentials: billingKind === "metered",
+    systemPresetKey: null,
+    systemAuthKind: null,
+    canonicalEndpoint: null,
+    compatibleAgentModuleIds: [],
+    upstreamCredentialStatus: "not_required",
+    upstreamCredentialVersion: 0,
+    canClearUpstreamCredential: false,
+    lastConnectionTestAt: null,
+    lastConnectionTestStatus: null,
   };
 }
 

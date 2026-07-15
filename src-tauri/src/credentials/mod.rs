@@ -12,6 +12,7 @@ use zeroize::Zeroizing;
 
 #[cfg(test)]
 pub(crate) use service::CredentialExposureGuard;
+pub(crate) use service::ResolvedProviderCredential;
 pub use service::{BindingCredentialService, ResolvedBindingCredential};
 pub(crate) use service::{CredentialExposureGuardSet, CredentialSemanticStreamScannerSet};
 

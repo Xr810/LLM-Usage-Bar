@@ -25,6 +25,7 @@ pub mod sql_helpers;
 pub mod stream_check;
 pub mod subscription;
 pub mod sync_protocol;
+pub mod system_provider_connection;
 pub mod usage_cache;
 pub mod usage_stats;
 pub mod webdav;
@@ -41,6 +42,9 @@ pub use proxy::ProxyService;
 #[allow(unused_imports)]
 pub use skill::{DiscoverableSkill, Skill, SkillRepo, SkillService};
 pub use speedtest::{EndpointLatency, SpeedtestService};
+pub use system_provider_connection::{
+    SystemProviderConnectionService, SystemProviderConnectionTestResult,
+};
 pub use usage_cache::UsageCache;
 #[allow(unused_imports)]
 pub use usage_stats::{

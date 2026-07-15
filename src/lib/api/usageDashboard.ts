@@ -5,6 +5,7 @@ import type {
   AgentProviderBindingInput,
   AgentProviderBindingView,
   AgentProxySetupInfo,
+  LocalBindingKeyReveal,
   ProviderSessionSyncResult,
   QuotaRefreshResult,
   UnassignedUsageDiagnostics,
@@ -12,6 +13,7 @@ import type {
   UsageEventPage,
   UsageProviderInput,
   UsageProviderView,
+  SystemProviderConnectionTestResult,
 } from "@/types/usageDashboard";
 
 export const usageDashboardApi = {
@@ -67,6 +69,58 @@ export const usageDashboardApi = {
     expectedVersion: number,
   ): Promise<AgentProviderBindingView> =>
     invoke("clear_agent_provider_binding_api_key", {
+      bindingId,
+      expectedVersion,
+    }),
+  setSystemProviderApiKey: (
+    providerId: string,
+    expectedVersion: number,
+    apiKey: string,
+  ): Promise<UsageProviderView> =>
+    invoke("set_system_provider_api_key", {
+      providerId,
+      expectedVersion,
+      apiKey,
+    }),
+  replaceSystemProviderApiKey: (
+    providerId: string,
+    expectedVersion: number,
+    apiKey: string,
+  ): Promise<UsageProviderView> =>
+    invoke("replace_system_provider_api_key", {
+      providerId,
+      expectedVersion,
+      apiKey,
+    }),
+  clearSystemProviderApiKey: (
+    providerId: string,
+    expectedVersion: number,
+  ): Promise<UsageProviderView> =>
+    invoke("clear_system_provider_api_key", {
+      providerId,
+      expectedVersion,
+    }),
+  testSystemProviderConnection: (
+    providerId: string,
+    expectedVersion: number,
+  ): Promise<SystemProviderConnectionTestResult> =>
+    invoke("test_system_provider_connection", {
+      providerId,
+      expectedVersion,
+    }),
+  revealAgentProviderLocalKey: (
+    bindingId: string,
+    expectedVersion: number,
+  ): Promise<LocalBindingKeyReveal> =>
+    invoke("reveal_agent_provider_local_key", {
+      bindingId,
+      expectedVersion,
+    }),
+  rotateAgentProviderLocalKey: (
+    bindingId: string,
+    expectedVersion: number,
+  ): Promise<LocalBindingKeyReveal> =>
+    invoke("rotate_agent_provider_local_key", {
       bindingId,
       expectedVersion,
     }),

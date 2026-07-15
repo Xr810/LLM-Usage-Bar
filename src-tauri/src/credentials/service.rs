@@ -144,6 +144,44 @@ pub struct ResolvedBindingCredential {
     upstream_secret: Zeroizing<Vec<u8>>,
 }
 
+/// Verified, frozen Provider credential used only for a fixed-endpoint
+/// connection probe. It is intentionally non-Clone and non-serializable.
+pub(crate) struct ResolvedProviderCredential {
+    provider_id: String,
+    system_preset_key: String,
+    canonical_endpoint: String,
+    credential_version: u64,
+    secret: Zeroizing<Vec<u8>>,
+}
+
+impl ResolvedProviderCredential {
+    pub(crate) fn provider_id(&self) -> &str {
+        &self.provider_id
+    }
+
+    pub(crate) fn system_preset_key(&self) -> &str {
+        &self.system_preset_key
+    }
+
+    pub(crate) fn canonical_endpoint(&self) -> &str {
+        &self.canonical_endpoint
+    }
+
+    pub(crate) fn credential_version(&self) -> u64 {
+        self.credential_version
+    }
+
+    pub(crate) fn expose_secret(&self) -> &[u8] {
+        self.secret.as_slice()
+    }
+}
+
+impl fmt::Debug for ResolvedProviderCredential {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ResolvedProviderCredential([REDACTED])")
+    }
+}
+
 /// Transient, non-serializable detector used to keep the resolved binding key
 /// out of response-derived identifiers and compatibility logs. Prefix-safe
 /// streaming requires the request credential itself; it is shared only for the
@@ -1723,6 +1761,76 @@ impl BindingCredentialService {
         }
         let _ = self.finish_published_provider_operation(&reservation).await;
         self.provider_view(provider_id).await
+    }
+
+    pub(crate) async fn resolve_provider_api_key(
+        &self,
+        provider_id: &str,
+        expected_version: u64,
+    ) -> Result<ResolvedProviderCredential, AppError> {
+        let initial = self
+            .db
+            .provider_credential_snapshot(provider_id)
+            .map_err(normalize_db_error)?
+            .ok_or_else(|| public_error("unsupported_auth"))?;
+        if initial.credential_version != expected_version {
+            return Err(public_error("credential_conflict"));
+        }
+        let fingerprint = initial
+            .fingerprint
+            .as_deref()
+            .filter(|fingerprint| fingerprint.len() == 32)
+            .ok_or_else(|| public_error("credential_unavailable"))?;
+        let slot = initial
+            .credential_slot
+            .as_deref()
+            .ok_or_else(|| public_error("credential_unavailable"))?
+            .to_string();
+        let secret = self
+            .store_get(slot.clone())
+            .await
+            .map_err(|_| public_error("credential_unavailable"))?
+            .ok_or_else(|| public_error("credential_unavailable"))?;
+        if !provider_credential_is_acceptable(secret.as_slice()) {
+            return Err(public_error("credential_unavailable"));
+        }
+        let actual = provider_credential_fingerprint(secret.as_slice());
+        if !bool::from(actual.as_slice().ct_eq(fingerprint)) {
+            return Err(public_error("credential_unavailable"));
+        }
+        let current = self
+            .db
+            .provider_credential_snapshot(provider_id)
+            .map_err(normalize_db_error)?
+            .ok_or_else(|| public_error("unsupported_auth"))?;
+        if current.credential_version != initial.credential_version
+            || current.credential_slot.as_deref() != Some(slot.as_str())
+            || current.fingerprint != initial.fingerprint
+        {
+            return Err(public_error("credential_conflict"));
+        }
+        let provider = self
+            .db
+            .list_usage_providers()
+            .map_err(normalize_db_error)?
+            .into_iter()
+            .find(|provider| provider.id == provider_id)
+            .filter(|provider| {
+                provider.enabled
+                    && provider.system_auth_kind == Some(SystemProviderAuthKind::ProviderApiKey)
+            })
+            .ok_or_else(|| public_error("unsupported_auth"))?;
+        Ok(ResolvedProviderCredential {
+            provider_id: provider.id,
+            system_preset_key: provider
+                .system_preset_key
+                .ok_or_else(|| public_error("unsupported_auth"))?,
+            canonical_endpoint: provider
+                .canonical_endpoint
+                .ok_or_else(|| public_error("unsupported_auth"))?,
+            credential_version: current.credential_version,
+            secret,
+        })
     }
 
     async fn provider_credential_status(

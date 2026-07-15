@@ -104,8 +104,41 @@ const initialAgentModulesFixture: AgentModuleView[] = [
   },
 ];
 
+const customProviderSystemFields = {
+  systemPresetKey: null,
+  systemAuthKind: null,
+  canonicalEndpoint: null,
+  compatibleAgentModuleIds: [],
+  upstreamCredentialStatus: "not_required",
+  upstreamCredentialVersion: 0,
+  canClearUpstreamCredential: false,
+  lastConnectionTestAt: null,
+  lastConnectionTestStatus: null,
+} satisfies Pick<
+  UsageProviderView,
+  | "systemPresetKey"
+  | "systemAuthKind"
+  | "canonicalEndpoint"
+  | "compatibleAgentModuleIds"
+  | "upstreamCredentialStatus"
+  | "upstreamCredentialVersion"
+  | "canClearUpstreamCredential"
+  | "lastConnectionTestAt"
+  | "lastConnectionTestStatus"
+>;
+
+const customBindingCredentialFields = {
+  routeProtocol: null,
+  localCredentialStatus: "not_required",
+  providerCredentialStatus: "not_required",
+} satisfies Pick<
+  AgentProviderBindingView,
+  "routeProtocol" | "localCredentialStatus" | "providerCredentialStatus"
+>;
+
 const initialUsageProvidersFixture: UsageProviderView[] = [
   {
+    ...customProviderSystemFields,
     id: "subscription-official",
     name: "Official Subscription",
     billingKind: "subscription",
@@ -114,6 +147,7 @@ const initialUsageProvidersFixture: UsageProviderView[] = [
     sessionSourceBindings: ["codex"],
     bindings: [
       {
+        ...customBindingCredentialFields,
         id: "binding-codex-subscription",
         agentModuleId: "codex",
         providerId: "subscription-official",
@@ -137,6 +171,7 @@ const initialUsageProvidersFixture: UsageProviderView[] = [
     hasRouteCredentials: false,
   },
   {
+    ...customProviderSystemFields,
     id: "subscription-claude",
     name: "Claude Team",
     billingKind: "subscription",
@@ -145,6 +180,7 @@ const initialUsageProvidersFixture: UsageProviderView[] = [
     sessionSourceBindings: ["claude"],
     bindings: [
       {
+        ...customBindingCredentialFields,
         id: "binding-claude-subscription",
         agentModuleId: "claude-code",
         providerId: "subscription-claude",
@@ -168,6 +204,7 @@ const initialUsageProvidersFixture: UsageProviderView[] = [
     hasRouteCredentials: false,
   },
   {
+    ...customProviderSystemFields,
     id: "subscription-kimi",
     name: "Kimi Team",
     billingKind: "subscription",
@@ -176,6 +213,7 @@ const initialUsageProvidersFixture: UsageProviderView[] = [
     sessionSourceBindings: [],
     bindings: [
       {
+        ...customBindingCredentialFields,
         id: "binding-opencode-subscription",
         agentModuleId: "opencode",
         providerId: "subscription-kimi",
@@ -199,6 +237,7 @@ const initialUsageProvidersFixture: UsageProviderView[] = [
     hasRouteCredentials: false,
   },
   {
+    ...customProviderSystemFields,
     id: "subscription-research",
     name: "Research Subscription",
     billingKind: "subscription",
@@ -207,6 +246,7 @@ const initialUsageProvidersFixture: UsageProviderView[] = [
     sessionSourceBindings: [],
     bindings: [
       {
+        ...customBindingCredentialFields,
         id: "binding-custom-subscription",
         agentModuleId: "custom-research",
         providerId: "subscription-research",
@@ -230,6 +270,7 @@ const initialUsageProvidersFixture: UsageProviderView[] = [
     hasRouteCredentials: false,
   },
   {
+    ...customProviderSystemFields,
     id: "azure-api",
     name: "Azure API",
     billingKind: "metered",
@@ -238,6 +279,7 @@ const initialUsageProvidersFixture: UsageProviderView[] = [
     sessionSourceBindings: [],
     bindings: [
       {
+        ...customBindingCredentialFields,
         id: "binding-codex-azure",
         agentModuleId: "codex",
         providerId: "azure-api",
@@ -250,6 +292,7 @@ const initialUsageProvidersFixture: UsageProviderView[] = [
         updatedAt: 5,
       },
       {
+        ...customBindingCredentialFields,
         id: "binding-claude-azure",
         agentModuleId: "claude-code",
         providerId: "azure-api",
@@ -273,6 +316,7 @@ const initialUsageProvidersFixture: UsageProviderView[] = [
     hasRouteCredentials: true,
   },
   {
+    ...customProviderSystemFields,
     id: "openrouter-api",
     name: "OpenRouter",
     billingKind: "metered",
@@ -281,6 +325,7 @@ const initialUsageProvidersFixture: UsageProviderView[] = [
     sessionSourceBindings: [],
     bindings: [
       {
+        ...customBindingCredentialFields,
         id: "binding-opencode-openrouter",
         agentModuleId: "opencode",
         providerId: "openrouter-api",
@@ -293,6 +338,7 @@ const initialUsageProvidersFixture: UsageProviderView[] = [
         updatedAt: 6,
       },
       {
+        ...customBindingCredentialFields,
         id: "binding-custom-openrouter",
         agentModuleId: "custom-research",
         providerId: "openrouter-api",
@@ -622,6 +668,7 @@ export const handlers = [
         ? input.routeConfig.baseUrl
         : (existing?.routeBaseUrl ?? null);
     const saved: UsageProviderView = {
+      ...customProviderSystemFields,
       id: input.id,
       name: input.name,
       billingKind: input.billingKind,
@@ -733,6 +780,7 @@ export const handlers = [
       }
       const timestamp = 1_000 + nextBindingId;
       const saved: AgentProviderBindingView = {
+        ...customBindingCredentialFields,
         id: `binding-msw-${nextBindingId++}`,
         agentModuleId: input.agentModuleId,
         providerId: input.providerId,

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { usageDashboardApi } from "@/lib/api/usageDashboard";
+import { claudeCliAuthApi } from "@/lib/api/claudeCliAuth";
 import type {
   AgentModuleInput,
   AgentProviderBindingInput,
@@ -20,6 +21,7 @@ export const usageDashboardKeys = {
   setup: (agentModuleId: string) =>
     [...usageDashboardKeys.setupRoot(), agentModuleId] as const,
   diagnostics: () => [...usageDashboardKeys.all, "diagnostics"] as const,
+  claudeAuth: () => [...usageDashboardKeys.all, "claude-cli-auth"] as const,
   dashboards: () => [...usageDashboardKeys.all, "dashboard"] as const,
   dashboard: (agentModuleId: string, startAt: number, endAt: number) =>
     [
@@ -85,6 +87,13 @@ export function useUnassignedUsageDiagnostics() {
   return useQuery({
     queryKey: usageDashboardKeys.diagnostics(),
     queryFn: usageDashboardApi.getUnassignedUsageDiagnostics,
+  });
+}
+
+export function useClaudeCliAuthStatus() {
+  return useQuery({
+    queryKey: usageDashboardKeys.claudeAuth(),
+    queryFn: claudeCliAuthApi.getStatus,
   });
 }
 
@@ -292,6 +301,94 @@ export function useAgentProviderBindingCredentialActions() {
           expectedVersion,
         ),
       ),
+  };
+}
+
+function useTransientUsageDashboardAction() {
+  const queryClient = useQueryClient();
+  const [isPending, setIsPending] = useState(false);
+  const run = async <T>(operation: () => Promise<T>): Promise<T> => {
+    setIsPending(true);
+    try {
+      return await operation();
+    } finally {
+      await queryClient
+        .invalidateQueries({ queryKey: usageDashboardKeys.all })
+        .catch(() => undefined);
+      setIsPending(false);
+    }
+  };
+  return { isPending, run };
+}
+
+export function useSystemProviderCredentialActions() {
+  const { isPending, run } = useTransientUsageDashboardAction();
+  return {
+    isPending,
+    setApiKey: (providerId: string, expectedVersion: number, apiKey: string) =>
+      run(() =>
+        usageDashboardApi.setSystemProviderApiKey(
+          providerId,
+          expectedVersion,
+          apiKey,
+        ),
+      ),
+    replaceApiKey: (
+      providerId: string,
+      expectedVersion: number,
+      apiKey: string,
+    ) =>
+      run(() =>
+        usageDashboardApi.replaceSystemProviderApiKey(
+          providerId,
+          expectedVersion,
+          apiKey,
+        ),
+      ),
+    clearApiKey: (providerId: string, expectedVersion: number) =>
+      run(() =>
+        usageDashboardApi.clearSystemProviderApiKey(
+          providerId,
+          expectedVersion,
+        ),
+      ),
+    testConnection: (providerId: string, expectedVersion: number) =>
+      run(() =>
+        usageDashboardApi.testSystemProviderConnection(
+          providerId,
+          expectedVersion,
+        ),
+      ),
+  };
+}
+
+export function useAgentProviderLocalKeyActions() {
+  const { isPending, run } = useTransientUsageDashboardAction();
+  return {
+    isPending,
+    reveal: (bindingId: string, expectedVersion: number) =>
+      run(() =>
+        usageDashboardApi.revealAgentProviderLocalKey(
+          bindingId,
+          expectedVersion,
+        ),
+      ),
+    rotate: (bindingId: string, expectedVersion: number) =>
+      run(() =>
+        usageDashboardApi.rotateAgentProviderLocalKey(
+          bindingId,
+          expectedVersion,
+        ),
+      ),
+  };
+}
+
+export function useClaudeCliAuthActions() {
+  const { isPending, run } = useTransientUsageDashboardAction();
+  return {
+    isPending,
+    startLogin: () => run(claudeCliAuthApi.startLogin),
+    logout: () => run(claudeCliAuthApi.logout),
   };
 }
 
