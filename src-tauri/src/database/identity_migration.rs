@@ -3463,8 +3463,14 @@ mod tests {
         let path = directory.join("published.db");
         std::fs::write(&path, b"owned-object").expect("write owned object");
         let expected = FileIdentity::from_path(&path).expect("capture owned identity");
+        let replacement = directory.join("replacement.db");
+        std::fs::write(&replacement, b"replacement-evidence").expect("write replacement");
         std::fs::remove_file(&path).expect("remove owned object before replacement");
-        std::fs::write(&path, b"replacement-evidence").expect("write replacement");
+        std::fs::rename(&replacement, &path).expect("publish replacement");
+        assert_ne!(
+            FileIdentity::from_path(&path).expect("capture replacement identity"),
+            expected
+        );
 
         let error = quarantine_remove(&directory, &path, &expected, "mismatch-test")
             .expect_err("replacement identity must not be deleted");
