@@ -181,7 +181,10 @@ Claude card launches the official `claude auth login` command and verifies the
 result through `claude auth status`. LLM Usage Bar does not implement a Claude.ai
 OAuth client and does not read, copy, store, inject, refresh, or proxy with the
 Claude OAuth token. The Claude system Provider projects only CLI authentication
-status, subscription/quota state, and Claude Code session attribution.
+status, documented account/subscription metadata returned by that command, and
+Claude Code session attribution. It does not query quota through a copied OAuth
+credential. If the official CLI does not expose machine-readable quota data, the
+card reports quota as unavailable instead of opening another credential path.
 
 ## Seeding and Reconciliation
 
@@ -276,6 +279,14 @@ For a fixed API Provider request:
 8. Usage ingestion records the frozen Agent and Provider identities and never
    re-resolves the current binding after the request starts.
 
+The local route protocol belongs to the Agent binding, not the shared Provider.
+OpenCode, OpenClaw, and Hermes therefore use distinct local route namespaces
+(`opencode`, `openclaw`, and `hermes`) even when all three bindings target the same
+OpenRouter Provider row. Canonical upstream endpoint and API format remain
+Provider-owned. This separation is required so a local Key cannot be replayed
+through another Agent's namespace and so one Provider is not forced to pretend it
+has only one inbound protocol.
+
 The local credential must not survive in the upstream URL, headers, body, logs, or
 error messages.
 
@@ -283,8 +294,10 @@ ChatGPT subscription requests continue to use the existing managed Codex path an
 the same frozen Agent–Provider ownership rules. Claude Pro/Max is not a proxy
 request path: any attempt to resolve its system Provider as an upstream proxy route
 is rejected locally. Claude Code continues to communicate through Anthropic's own
-official client and credential handling, while LLM Usage Bar observes only status,
-quota, and trusted Claude Code session data.
+official client and credential handling, while LLM Usage Bar observes only
+documented CLI status and trusted Claude Code session data. Quota remains
+unavailable unless the official CLI exposes it through a documented
+machine-readable command that requires no token access by LLM Usage Bar.
 
 ## Failure Behavior
 
