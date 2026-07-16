@@ -14,9 +14,7 @@ use crate::usage::domain::{
 };
 use crate::usage::quota::QuotaRefreshResult;
 use crate::usage::session::ProviderSessionSyncResult;
-use crate::usage::system_providers::{
-    CHATGPT_SUBSCRIPTION_ID, CLAUDE_SUBSCRIPTION_ID, MANAGED_CODEX_QUOTA_SOURCE,
-};
+use crate::usage::system_providers::{CHATGPT_SUBSCRIPTION_ID, CLAUDE_SUBSCRIPTION_ID};
 use std::collections::{BTreeMap, BTreeSet};
 use tauri::State;
 
@@ -941,6 +939,7 @@ mod tests {
         CostSource, TokenSource, UsageEvent, UsageProviderInput,
     };
     use crate::usage::quota::{QuotaCollector, QuotaService};
+    use crate::usage::system_providers::MANAGED_CODEX_QUOTA_SOURCE;
     use futures::future::BoxFuture;
     use serde_json::json;
     use std::collections::HashMap;
