@@ -20,6 +20,42 @@ use chrono::{DateTime, Local};
 use std::collections::{BTreeMap, BTreeSet};
 use tauri::{AppHandle, State};
 
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SaveUsageProviderCommandInput {
+    id: String,
+    name: String,
+    billing_kind: crate::usage::domain::BillingKind,
+    product_group_id: String,
+    token_sources: Vec<crate::usage::domain::TokenSource>,
+    #[serde(default)]
+    session_source_bindings: Option<Vec<String>>,
+    quota_source: Option<String>,
+    quota_interval_seconds: Option<u64>,
+    route_app_type: Option<String>,
+    route_config: Option<serde_json::Value>,
+    enabled: bool,
+}
+
+impl From<SaveUsageProviderCommandInput> for UsageProviderInput {
+    fn from(input: SaveUsageProviderCommandInput) -> Self {
+        Self {
+            id: input.id,
+            name: input.name,
+            billing_kind: input.billing_kind,
+            product_group_id: input.product_group_id,
+            token_sources: input.token_sources,
+            session_source_bindings: input.session_source_bindings,
+            quota_source: input.quota_source,
+            quota_interval_seconds: input.quota_interval_seconds,
+            route_app_type: input.route_app_type,
+            route_config: input.route_config,
+            quota_config: None,
+            enabled: input.enabled,
+        }
+    }
+}
+
 #[tauri::command]
 pub fn list_dashboard_modules(
     state: State<'_, AppState>,
@@ -206,9 +242,9 @@ pub async fn list_usage_providers(
 #[tauri::command]
 pub async fn save_usage_provider(
     state: State<'_, AppState>,
-    input: UsageProviderInput,
+    input: SaveUsageProviderCommandInput,
 ) -> Result<UsageProviderView, AppError> {
-    save_usage_provider_test_hook(&state, input).await
+    save_usage_provider_command_test_hook(&state, input).await
 }
 
 #[tauri::command]
@@ -843,6 +879,13 @@ pub async fn save_usage_provider_test_hook(
     .await
 }
 
+pub async fn save_usage_provider_command_test_hook(
+    state: &AppState,
+    input: SaveUsageProviderCommandInput,
+) -> Result<UsageProviderView, AppError> {
+    save_usage_provider_test_hook(state, input.into()).await
+}
+
 async fn save_usage_provider_with_invalidation_test_hook<I>(
     state: &AppState,
     input: UsageProviderInput,
@@ -1417,6 +1460,118 @@ mod tests {
             quota_config: None,
             enabled: true,
         }
+    }
+
+    const COMMAND_QUOTA_CONFIG_SENTINEL: &str =
+        "renderer-command-secret-sentinel /Users/example/private/provider.json";
+
+    fn renderer_provider_json(id: &str) -> serde_json::Value {
+        json!({
+            "id": id,
+            "name": format!("{id} name"),
+            "billingKind": "metered",
+            "productGroupId": "product",
+            "tokenSources": ["proxy"],
+            "sessionSourceBindings": null,
+            "quotaSource": null,
+            "quotaIntervalSeconds": null,
+            "routeAppType": "codex",
+            "routeConfig": {"baseUrl": "https://upstream.example/v1"},
+            "enabled": true
+        })
+    }
+
+    #[test]
+    fn save_usage_provider_command_input_rejects_quota_config_injections_without_echoing_values() {
+        for (field, value) in [
+            (
+                "quotaConfig",
+                json!({"accessToken": COMMAND_QUOTA_CONFIG_SENTINEL}),
+            ),
+            ("quotaConfig", serde_json::Value::Null),
+            (
+                "quota_config",
+                json!({"access_token": COMMAND_QUOTA_CONFIG_SENTINEL}),
+            ),
+        ] {
+            let mut payload = renderer_provider_json("renderer-rejected-secret");
+            payload
+                .as_object_mut()
+                .expect("renderer provider object")
+                .insert(field.to_string(), value);
+
+            let error = serde_json::from_value::<SaveUsageProviderCommandInput>(payload)
+                .expect_err("quota config fields must be rejected at the command boundary");
+            let error = error.to_string();
+            assert!(error.contains("unknown field"));
+            assert!(!error.contains(COMMAND_QUOTA_CONFIG_SENTINEL));
+        }
+    }
+
+    #[test]
+    fn save_usage_provider_command_input_converts_to_secret_free_domain_input() {
+        let input = serde_json::from_value::<SaveUsageProviderCommandInput>(
+            renderer_provider_json("renderer-conversion"),
+        )
+        .unwrap();
+
+        let internal: UsageProviderInput = input.into();
+
+        assert_eq!(internal.id, "renderer-conversion");
+        assert_eq!(internal.name, "renderer-conversion name");
+        assert_eq!(internal.quota_config, None);
+    }
+
+    #[tokio::test]
+    async fn save_usage_provider_command_preserves_internal_quota_config_and_redacts_views() {
+        let db = Arc::new(Database::memory().unwrap());
+        let mut existing = direct_provider("renderer-existing");
+        existing.quota_config = Some(json!({
+            "accessToken": COMMAND_QUOTA_CONFIG_SENTINEL,
+        }));
+        db.save_usage_provider(&existing).unwrap();
+        let state = AppState::new(db.clone());
+
+        let mut existing_payload = renderer_provider_json("renderer-existing");
+        existing_payload["name"] = json!("Renderer metadata edit");
+        let existing_input =
+            serde_json::from_value::<SaveUsageProviderCommandInput>(existing_payload).unwrap();
+        let existing_view = save_usage_provider_command_test_hook(&state, existing_input)
+            .await
+            .unwrap();
+
+        assert_eq!(existing_view.name, "Renderer metadata edit");
+        assert_eq!(
+            db.get_usage_provider("renderer-existing")
+                .unwrap()
+                .unwrap()
+                .quota_config,
+            existing.quota_config,
+        );
+        let existing_json = serde_json::to_string(&existing_view).unwrap();
+        assert!(!existing_json.contains(COMMAND_QUOTA_CONFIG_SENTINEL));
+        assert!(!existing_json.contains("quotaConfig"));
+        assert!(!existing_json.contains("quota_config"));
+
+        let created_input = serde_json::from_value::<SaveUsageProviderCommandInput>(
+            renderer_provider_json("renderer-new"),
+        )
+        .unwrap();
+        let created_view = save_usage_provider_command_test_hook(&state, created_input)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            db.get_usage_provider("renderer-new")
+                .unwrap()
+                .unwrap()
+                .quota_config,
+            None,
+        );
+        let created_json = serde_json::to_string(&created_view).unwrap();
+        assert!(!created_json.contains(COMMAND_QUOTA_CONFIG_SENTINEL));
+        assert!(!created_json.contains("quotaConfig"));
+        assert!(!created_json.contains("quota_config"));
     }
 
     #[tokio::test]
