@@ -79,6 +79,16 @@ function agent(id: string, name: string): AgentModuleView {
 const codex = agent("codex", "Codex");
 const claude = agent("claude-code", "Claude Code");
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, reject, resolve };
+}
+
 function provider(
   id: string,
   billingKind: "subscription" | "metered",
@@ -382,4 +392,47 @@ describe("UsageDashboardPage", () => {
       screen.getAllByRole("alert", { name: "shared failure" }),
     ).toHaveLength(1);
   });
+
+  it.each(["resolve", "reject"] as const)(
+    "preserves Agent B feedback when Agent A's deferred refresh %s settles late",
+    async (outcome) => {
+      const staleRefresh = deferred<unknown>();
+      mocks.dashboard.mockImplementation((agentModuleId: string) => ({
+        data: dashboardData(agentModuleId),
+        isLoading: false,
+        error: null,
+      }));
+      mocks.refreshQuota
+        .mockImplementationOnce(() => staleRefresh.promise)
+        .mockRejectedValueOnce(new Error("Agent B refresh failed"));
+      const { rerender } = render(
+        <UsageDashboardPage selectedAgent={codex} />,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Refresh quota" }));
+      rerender(<UsageDashboardPage selectedAgent={claude} />);
+      fireEvent.click(screen.getByRole("button", { name: "Refresh quota" }));
+      expect(
+        await screen.findByRole("alert", { name: "Agent B refresh failed" }),
+      ).toBeInTheDocument();
+
+      await act(async () => {
+        if (outcome === "resolve") {
+          staleRefresh.resolve({});
+        } else {
+          staleRefresh.reject(new Error("Agent A stale refresh failed"));
+        }
+        await staleRefresh.promise.catch(() => undefined);
+      });
+
+      expect(
+        screen.getByRole("alert", { name: "Agent B refresh failed" }),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole("alert", {
+          name: "Agent A stale refresh failed",
+        }),
+      ).toBeNull();
+    },
+  );
 });
