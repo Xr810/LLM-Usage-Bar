@@ -25,6 +25,7 @@ export interface TrayUsagePopoverViewProps {
   onOpenDetails: (agentModuleId: string | null) => void;
   onOpenSettings: (providerId: string | null) => void;
   onQuit: () => void;
+  focusRequestKey?: number;
   now?: Date;
 }
 
@@ -38,6 +39,7 @@ export function TrayUsagePopoverView({
   onOpenDetails,
   onOpenSettings,
   onQuit,
+  focusRequestKey = 0,
   now = new Date(),
 }: TrayUsagePopoverViewProps) {
   const { t, i18n } = useTranslation();
@@ -113,6 +115,7 @@ export function TrayUsagePopoverView({
             defaultValue: "Agent tabs",
           })}
           panelId={panelId}
+          focusRequestKey={focusRequestKey}
         />
 
         <div

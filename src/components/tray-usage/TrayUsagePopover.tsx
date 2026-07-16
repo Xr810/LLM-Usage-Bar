@@ -24,6 +24,7 @@ export function TrayUsagePopover() {
   const [selectedAgentId, setSelectedAgentId] = useState<"overview" | string>(
     "overview",
   );
+  const [focusRequestKey, setFocusRequestKey] = useState(0);
   const hiddenForCycle = useRef(false);
   const navigationInProgress = useRef(false);
   const showCycle = useRef(0);
@@ -64,6 +65,7 @@ export function TrayUsagePopover() {
     showCycle.current += 1;
     hiddenForCycle.current = false;
     navigationInProgress.current = false;
+    setFocusRequestKey((current) => current + 1);
     if (!refresh.isPending && !data?.refreshInProgress) {
       refresh.mutate();
     }
@@ -110,6 +112,7 @@ export function TrayUsagePopover() {
       selectedAgentId={selectedAgentId}
       onSelectAgent={setSelectedAgentId}
       refreshing={refresh.isPending || Boolean(data?.refreshInProgress)}
+      focusRequestKey={focusRequestKey}
       onRefresh={() => refresh.mutate()}
       onOpenDetails={openDetails}
       onOpenSettings={openSettings}

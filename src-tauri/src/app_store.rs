@@ -140,6 +140,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[serial_test::serial]
     fn resolves_tilde_with_the_application_home_boundary() {
         assert_eq!(
             resolve_path("~/.cc-switch"),
@@ -148,6 +149,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn legacy_cc_switch_override_is_rejected_before_store_write() {
         let legacy = resolve_path("~/.cc-switch");
         let error = crate::config::validate_app_config_dir_override(&legacy)

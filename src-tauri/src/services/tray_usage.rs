@@ -1026,7 +1026,7 @@ mod tests {
             let source_finished = source_finished.clone();
             Arc::new(move || {
                 assert!(source_finished.load(AtomicOrdering::Acquire));
-                post_midnight.clone()
+                post_midnight
             })
         };
         let service =

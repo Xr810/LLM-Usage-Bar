@@ -315,6 +315,37 @@ describe("TrayUsagePopoverView", () => {
     );
   });
 
+  it("keeps legal nonzero micro-dollar costs and budgets visible", () => {
+    const snapshot = structuredClone(fullSnapshot);
+    const usage = snapshot.agents[0].providers[1].metered!;
+    usage.todayCostUsd = "0.000001";
+    usage.dailyBudgetUsd = "0.000001";
+
+    render(<TrayUsagePopoverView {...viewProps({ snapshot })} />);
+
+    expect(screen.getByText("$0.000001 of $0.000001")).toBeInTheDocument();
+  });
+
+  it("gives duplicate provider budget progress bars distinct Agent names in overview", () => {
+    const snapshot = structuredClone(fullSnapshot);
+    const duplicate = structuredClone(snapshot.agents[0].providers[1]);
+    duplicate.providerId = "system-openai-api-claude";
+    snapshot.agents[1].providers.push(duplicate);
+
+    render(<TrayUsagePopoverView {...viewProps({ snapshot })} />);
+
+    expect(
+      screen.getByRole("progressbar", {
+        name: "Daily budget for OpenAI API · Codex",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("progressbar", {
+        name: "Daily budget for OpenAI API · Claude Code with a deliberately long account name",
+      }),
+    ).toBeInTheDocument();
+  });
+
   it("filters the local snapshot by Agent without invoking the backend", async () => {
     const user = userEvent.setup();
     const onSelectAgent = vi.fn();
@@ -676,6 +707,19 @@ describe("TrayUsagePopover controller", () => {
     await waitFor(() =>
       expect(commandCalls("refresh_tray_usage")).toHaveLength(2),
     );
+  });
+
+  it("restores focus to the selected Agent tab on every show cycle", async () => {
+    render(<TrayUsagePopover />, { wrapper: createQueryWrapper() });
+    expect(await screen.findByText("ChatGPT Plus/Pro")).toBeInTheDocument();
+
+    const overview = screen.getByRole("tab", { name: "Overview" });
+    const quit = screen.getByRole("button", { name: "Quit" });
+    quit.focus();
+    expect(quit).toHaveFocus();
+
+    act(() => emitTauriEvent("tray-popover-shown"));
+    await waitFor(() => expect(overview).toHaveFocus());
   });
 
   it("hides at most once per show cycle and guards navigation blur", async () => {

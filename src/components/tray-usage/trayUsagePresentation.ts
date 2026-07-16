@@ -16,6 +16,10 @@ export interface TrayProviderRow {
 }
 
 const PLACEHOLDER = "—";
+const STANDARD_USD_FRACTION_DIGITS = 2;
+const MICRO_USD_FRACTION_DIGITS = 6;
+const STATUS_PERCENT_BOUNDARIES = [20, 50, 80] as const;
+const PERCENT_FRACTION_DIGIT_STEPS = [2, 3, 4, 6, 8, 12, 15] as const;
 
 function parseNonNegativeNumber(value: string | null): number | null {
   if (value == null || value.trim() === "") return null;
@@ -27,12 +31,17 @@ export function formatUsd(value: string | null, locale: string): string {
   const parsed = parseNonNegativeNumber(value);
   if (parsed == null) return PLACEHOLDER;
 
+  const maximumFractionDigits =
+    parsed > 0 && parsed < 0.01
+      ? MICRO_USD_FRACTION_DIGITS
+      : STANDARD_USD_FRACTION_DIGITS;
+
   return new Intl.NumberFormat(locale, {
     style: "currency",
     currency: "USD",
     currencyDisplay: "narrowSymbol",
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
+    minimumFractionDigits: STANDARD_USD_FRACTION_DIGITS,
+    maximumFractionDigits,
   }).format(parsed);
 }
 
@@ -40,9 +49,22 @@ export function formatPercent(value: string | null): string {
   const parsed = parseNonNegativeNumber(value);
   if (parsed == null) return PLACEHOLDER;
 
-  return `${new Intl.NumberFormat("en-US", {
-    maximumFractionDigits: 2,
-  }).format(parsed)}%`;
+  for (const maximumFractionDigits of PERCENT_FRACTION_DIGIT_STEPS) {
+    const formatted = new Intl.NumberFormat("en-US", {
+      maximumFractionDigits,
+    }).format(parsed);
+    const displayed = Number(formatted.replace(/,/g, ""));
+    const preservesStatusBoundary = STATUS_PERCENT_BOUNDARIES.every(
+      (boundary) =>
+        parsed === boundary ||
+        (parsed < boundary && displayed < boundary) ||
+        (parsed > boundary && displayed > boundary),
+    );
+
+    if (preservesStatusBoundary) return `${formatted}%`;
+  }
+
+  return `${parsed.toString()}%`;
 }
 
 export function clampPercentForProgress(value: string | null): number {

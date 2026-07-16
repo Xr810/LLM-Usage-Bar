@@ -871,29 +871,71 @@ pub fn refresh_tray_menu(app: &tauri::AppHandle) {
 static MACOS_DOCK_VISIBLE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+#[cfg(target_os = "macos")]
+static MACOS_TRAY_POLICY_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(all(target_os = "macos", not(test)))]
 pub fn is_macos_dock_visible() -> bool {
     MACOS_DOCK_VISIBLE.load(std::sync::atomic::Ordering::Acquire)
 }
 
 #[cfg(target_os = "macos")]
-pub fn apply_tray_policy(app: &tauri::AppHandle, dock_visible: bool) {
+fn commit_tray_policy(
+    dock_visible: bool,
+    mut set_dock_visibility: impl FnMut(bool) -> Result<(), String>,
+    mut set_activation_policy: impl FnMut(bool) -> Result<(), String>,
+) -> Result<bool, String> {
+    let _guard = MACOS_TRAY_POLICY_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let previous = MACOS_DOCK_VISIBLE.load(std::sync::atomic::Ordering::Acquire);
+
+    if let Err(error) = set_dock_visibility(dock_visible) {
+        // Native setters can fail after making a partial change. Restore both
+        // halves of the policy while the transaction lock is still held.
+        let _ = set_activation_policy(previous);
+        let _ = set_dock_visibility(previous);
+        return Err(error);
+    }
+    if let Err(error) = set_activation_policy(dock_visible) {
+        let _ = set_activation_policy(previous);
+        let _ = set_dock_visibility(previous);
+        return Err(error);
+    }
+    MACOS_DOCK_VISIBLE.store(dock_visible, std::sync::atomic::Ordering::Release);
+    Ok(previous)
+}
+
+#[cfg(target_os = "macos")]
+pub fn try_apply_tray_policy(
+    app: &tauri::AppHandle,
+    dock_visible: bool,
+) -> Result<bool, crate::error::AppError> {
     use tauri::ActivationPolicy;
 
-    MACOS_DOCK_VISIBLE.store(dock_visible, std::sync::atomic::Ordering::Release);
+    commit_tray_policy(
+        dock_visible,
+        |visible| {
+            app.set_dock_visibility(visible)
+                .map_err(|_| "dock_visibility_failed".to_string())
+        },
+        |visible| {
+            let desired_policy = if visible {
+                ActivationPolicy::Regular
+            } else {
+                ActivationPolicy::Accessory
+            };
+            app.set_activation_policy(desired_policy)
+                .map_err(|_| "activation_policy_failed".to_string())
+        },
+    )
+    .map_err(crate::error::AppError::Message)
+}
 
-    let desired_policy = if dock_visible {
-        ActivationPolicy::Regular
-    } else {
-        ActivationPolicy::Accessory
-    };
-
-    if let Err(err) = app.set_dock_visibility(dock_visible) {
-        log::warn!("设置 Dock 显示状态失败: {err}");
-    }
-
-    if let Err(err) = app.set_activation_policy(desired_policy) {
-        log::warn!("设置激活策略失败: {err}");
+#[cfg(target_os = "macos")]
+pub fn apply_tray_policy(app: &tauri::AppHandle, dock_visible: bool) {
+    if let Err(error) = try_apply_tray_policy(app, dock_visible) {
+        log::warn!("设置 macOS 托盘策略失败: {error}");
     }
 }
 
@@ -1070,6 +1112,8 @@ pub(crate) async fn refresh_all_usage_in_tray(app: &tauri::AppHandle) {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "macos")]
+    use super::{commit_tray_policy, MACOS_DOCK_VISIBLE};
     use super::{format_script_summary, format_subscription_summary, tray_website_url, TRAY_ID};
     use crate::provider::{UsageData, UsageResult};
     use crate::services::subscription::{
@@ -1090,6 +1134,147 @@ mod tests {
             tray_website_url(),
             "https://github.com/Xr810/LLM-Usage-Bar/releases/latest"
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[serial_test::serial]
+    fn tray_policy_commits_visibility_only_after_both_native_steps_succeed() {
+        use std::sync::atomic::Ordering;
+
+        MACOS_DOCK_VISIBLE.store(false, Ordering::Release);
+        let previous =
+            commit_tray_policy(true, |_| Ok(()), |_| Ok(())).expect("policy should commit");
+        assert!(!previous);
+        assert!(MACOS_DOCK_VISIBLE.load(Ordering::Acquire));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[serial_test::serial]
+    fn tray_policy_rolls_back_dock_when_activation_policy_fails() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        use std::sync::atomic::Ordering;
+
+        MACOS_DOCK_VISIBLE.store(false, Ordering::Release);
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let dock_calls = Rc::clone(&calls);
+        let activation_calls = Rc::clone(&calls);
+        let error = commit_tray_policy(
+            true,
+            move |visible| {
+                dock_calls.borrow_mut().push(("dock", visible));
+                Ok(())
+            },
+            move |visible| {
+                activation_calls.borrow_mut().push(("activation", visible));
+                Err("activation_policy_failed".to_string())
+            },
+        )
+        .expect_err("activation failure must abort the policy change");
+
+        assert_eq!(error, "activation_policy_failed");
+        assert_eq!(
+            calls.borrow().as_slice(),
+            &[
+                ("dock", true),
+                ("activation", true),
+                ("activation", false),
+                ("dock", false),
+            ]
+        );
+        assert!(!MACOS_DOCK_VISIBLE.load(Ordering::Acquire));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[serial_test::serial]
+    fn tray_policy_failure_restores_a_previously_visible_dock() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        use std::sync::atomic::Ordering;
+
+        MACOS_DOCK_VISIBLE.store(true, Ordering::Release);
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let dock_calls = Rc::clone(&calls);
+        let activation_calls = Rc::clone(&calls);
+        let error = commit_tray_policy(
+            false,
+            move |visible| {
+                dock_calls.borrow_mut().push(("dock", visible));
+                Ok(())
+            },
+            move |visible| {
+                activation_calls.borrow_mut().push(("activation", visible));
+                if visible {
+                    Ok(())
+                } else {
+                    Err("activation_policy_failed".to_string())
+                }
+            },
+        )
+        .expect_err("activation failure must abort the policy change");
+
+        assert_eq!(error, "activation_policy_failed");
+        assert_eq!(
+            calls.borrow().as_slice(),
+            &[
+                ("dock", false),
+                ("activation", false),
+                ("activation", true),
+                ("dock", true),
+            ]
+        );
+        assert!(MACOS_DOCK_VISIBLE.load(Ordering::Acquire));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[serial_test::serial]
+    fn concurrent_tray_policy_transactions_do_not_interleave_native_steps() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+        use std::time::Duration;
+
+        MACOS_DOCK_VISIBLE.store(false, Ordering::Release);
+        let active_transactions = Arc::new(AtomicUsize::new(0));
+        let maximum_active = Arc::new(AtomicUsize::new(0));
+        let start = Arc::new(Barrier::new(3));
+
+        thread::scope(|scope| {
+            for desired in [true, false] {
+                let active_transactions = Arc::clone(&active_transactions);
+                let maximum_active = Arc::clone(&maximum_active);
+                let start = Arc::clone(&start);
+                scope.spawn(move || {
+                    start.wait();
+                    let active_for_dock = Arc::clone(&active_transactions);
+                    let maximum_for_dock = Arc::clone(&maximum_active);
+                    let active_for_activation = Arc::clone(&active_transactions);
+                    commit_tray_policy(
+                        desired,
+                        move |_| {
+                            let active = active_for_dock.fetch_add(1, Ordering::AcqRel) + 1;
+                            maximum_for_dock.fetch_max(active, Ordering::AcqRel);
+                            thread::sleep(Duration::from_millis(10));
+                            Ok(())
+                        },
+                        move |_| {
+                            thread::sleep(Duration::from_millis(10));
+                            active_for_activation.fetch_sub(1, Ordering::AcqRel);
+                            Ok(())
+                        },
+                    )
+                    .expect("concurrent policy transaction should succeed");
+                });
+            }
+            start.wait();
+        });
+
+        assert_eq!(maximum_active.load(Ordering::Acquire), 1);
+        assert_eq!(active_transactions.load(Ordering::Acquire), 0);
     }
 
     fn make_quota(tool: &str, success: bool, tiers: Vec<QuotaTier>) -> SubscriptionQuota {

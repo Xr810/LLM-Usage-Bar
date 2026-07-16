@@ -56,6 +56,21 @@ export function TrayApiSpendingSection({
             hasUsableUsd(todayCost) &&
             hasUsablePercent(usage.budgetConsumedPercent);
           const quality = costQualityLabel(usage.costQuality, t);
+          const dailyBudgetLabel = t("trayUsage.dailyBudget", {
+            defaultValue: "Daily budget",
+          });
+          const budgetProgressLabel = showAgentName
+            ? t("trayUsage.providerAllowanceForAgent", {
+                allowance: dailyBudgetLabel,
+                provider: provider.providerName,
+                agent: agentName,
+                defaultValue: "{{allowance}} for {{provider}} · {{agent}}",
+              })
+            : t("trayUsage.providerAllowance", {
+                allowance: dailyBudgetLabel,
+                provider: provider.providerName,
+                defaultValue: "{{allowance}} for {{provider}}",
+              });
 
           return (
             <article
@@ -118,11 +133,7 @@ export function TrayApiSpendingSection({
 
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between gap-3 text-xs">
-                  <span className="font-medium">
-                    {t("trayUsage.dailyBudget", {
-                      defaultValue: "Daily budget",
-                    })}
-                  </span>
+                  <span className="font-medium">{dailyBudgetLabel}</span>
                   <span className="text-[11px] text-muted-foreground">
                     {quality}
                   </span>
@@ -139,9 +150,7 @@ export function TrayApiSpendingSection({
                     </div>
                     {hasUsableBudgetProgress ? (
                       <TrayUsageProgress
-                        label={`${t("trayUsage.dailyBudget", {
-                          defaultValue: "Daily budget",
-                        })} ${provider.providerName}`}
+                        label={budgetProgressLabel}
                         value={clampPercentForProgress(
                           usage.budgetConsumedPercent,
                         )}

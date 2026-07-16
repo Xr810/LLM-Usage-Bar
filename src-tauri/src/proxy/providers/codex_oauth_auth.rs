@@ -220,7 +220,30 @@ struct CodexOAuthStore {
     default_account_id: Option<String>,
 }
 
+#[cfg(test)]
+type TestRefreshFuture = std::pin::Pin<
+    Box<
+        dyn std::future::Future<Output = Result<OAuthTokenResponse, CodexOAuthError>>
+            + Send
+            + 'static,
+    >,
+>;
+
+#[cfg(test)]
+type TestRefreshHook = Arc<dyn Fn(String) -> TestRefreshFuture + Send + Sync>;
+
+#[cfg(test)]
+type TestPersistenceFuture =
+    std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>>;
+
+#[cfg(test)]
+type TestPersistenceHook = Arc<dyn Fn() -> TestPersistenceFuture + Send + Sync>;
+
 /// Codex OAuth 认证管理器（多账号）
+///
+/// Clone 会共享所有内部状态锁，仅复制不可变配置。这允许调用方在
+/// 释放包装本 manager 的外层锁后，继续执行可能包含网络等待的操作。
+#[derive(Clone)]
 pub struct CodexOAuthManager {
     accounts: Arc<RwLock<HashMap<String, CodexAccountData>>>,
     default_account_id: Arc<RwLock<Option<String>>>,
@@ -231,7 +254,13 @@ pub struct CodexOAuthManager {
     /// 进行中的 Device Code 流程：device_auth_id -> {user_code, expires_at_ms}
     /// 过期条目会在 start_device_flow 时被清理，防止放弃的登录流程导致无界增长
     pending_device_codes: Arc<RwLock<HashMap<String, PendingDeviceCode>>>,
+    /// 账号状态变更与对应的磁盘快照必须在同一临界区内完成，防止旧快照覆盖删除/登出。
+    persistence_lock: Arc<Mutex<()>>,
     storage_path: PathBuf,
+    #[cfg(test)]
+    refresh_hook: Arc<RwLock<Option<TestRefreshHook>>>,
+    #[cfg(test)]
+    persistence_snapshot_hook: Arc<RwLock<Option<TestPersistenceHook>>>,
 }
 
 impl CodexOAuthManager {
@@ -244,7 +273,12 @@ impl CodexOAuthManager {
             access_tokens: Arc::new(RwLock::new(HashMap::new())),
             refresh_locks: Arc::new(RwLock::new(HashMap::new())),
             pending_device_codes: Arc::new(RwLock::new(HashMap::new())),
+            persistence_lock: Arc::new(Mutex::new(())),
             storage_path,
+            #[cfg(test)]
+            refresh_hook: Arc::new(RwLock::new(None)),
+            #[cfg(test)]
+            persistence_snapshot_hook: Arc::new(RwLock::new(None)),
         };
 
         if let Err(e) = manager.load_from_disk_sync() {
@@ -403,20 +437,16 @@ impl CodexOAuthManager {
             CodexOAuthError::ParseError("无法从 token 中提取 account_id".to_string())
         })?;
 
-        // 缓存 access_token
-        {
-            let mut tokens_cache = self.access_tokens.write().await;
-            tokens_cache.insert(
-                account_id.clone(),
-                CachedAccessToken {
-                    token: tokens.access_token.clone(),
-                    expires_at_ms: compute_expires_at_ms(tokens.expires_in),
-                },
-            );
-        }
-
         let account = self
-            .add_account_internal(account_id, refresh_token, email)
+            .add_account_with_access_token_internal(
+                account_id,
+                refresh_token,
+                email,
+                Some(CachedAccessToken {
+                    token: tokens.access_token,
+                    expires_at_ms: compute_expires_at_ms(tokens.expires_in),
+                }),
+            )
             .await?;
 
         Ok(Some(account))
@@ -461,6 +491,14 @@ impl CodexOAuthManager {
         &self,
         refresh_token: &str,
     ) -> Result<OAuthTokenResponse, CodexOAuthError> {
+        #[cfg(test)]
+        {
+            let hook = self.refresh_hook.read().await.clone();
+            if let Some(hook) = hook {
+                return hook(refresh_token.to_string()).await;
+            }
+        }
+
         let response = crate::proxy::http_client::get()
             .post(OAUTH_TOKEN_URL)
             .header("Content-Type", "application/x-www-form-urlencoded")
@@ -499,14 +537,10 @@ impl CodexOAuthManager {
         &self,
         account_id: &str,
     ) -> Result<String, CodexOAuthError> {
-        // 先检查缓存
-        {
-            let tokens = self.access_tokens.read().await;
-            if let Some(cached) = tokens.get(account_id) {
-                if !cached.is_expiring_soon() {
-                    return Ok(cached.token.clone());
-                }
-            }
+        // accounts -> access_tokens 是账号删除、清空和刷新提交的统一锁序。
+        // 这也保证缓存快速路径不会在账号已删除后继续返回 token。
+        if let Some(token) = self.cached_token_for_existing_account(account_id).await? {
+            return Ok(token);
         }
 
         log::info!("{TOKEN_REFRESH_LOG_MESSAGE}");
@@ -515,13 +549,8 @@ impl CodexOAuthManager {
         let _guard = refresh_lock.lock().await;
 
         // double-check
-        {
-            let tokens = self.access_tokens.read().await;
-            if let Some(cached) = tokens.get(account_id) {
-                if !cached.is_expiring_soon() {
-                    return Ok(cached.token.clone());
-                }
-            }
+        if let Some(token) = self.cached_token_for_existing_account(account_id).await? {
+            return Ok(token);
         }
 
         let refresh_token = {
@@ -534,23 +563,29 @@ impl CodexOAuthManager {
 
         let new_tokens = self.refresh_with_token(&refresh_token).await?;
 
-        // 如果服务端返回了新的 refresh_token，更新存储
-        if let Some(new_refresh) = new_tokens.refresh_token.clone() {
-            if new_refresh != refresh_token {
-                let mut accounts = self.accounts.write().await;
-                if let Some(account) = accounts.get_mut(account_id) {
-                    account.refresh_token = new_refresh;
-                }
-                drop(accounts);
-                self.save_to_disk().await?;
-            }
-        }
-
         let access_token = new_tokens.access_token.clone();
         let expires_at_ms = compute_expires_at_ms(new_tokens.expires_in);
+        let mut refresh_token_changed = false;
+        let persistence_guard = self.persistence_lock.lock().await;
 
         {
+            // 与 remove_account/clear_auth 使用同一 accounts -> access_tokens
+            // 锁序提交网络刷新结果。删除先线性化时，这里必须失败；
+            // 刷新先线性化时，后续删除会同时清掉账号和 token。
+            let mut accounts = self.accounts.write().await;
+            let account = accounts
+                .get_mut(account_id)
+                .filter(|account| account.refresh_token == refresh_token)
+                .ok_or_else(|| CodexOAuthError::AccountNotFound(account_id.to_string()))?;
             let mut tokens = self.access_tokens.write().await;
+
+            if let Some(new_refresh) = new_tokens.refresh_token {
+                if new_refresh != refresh_token {
+                    account.refresh_token = new_refresh;
+                    refresh_token_changed = true;
+                }
+            }
+
             tokens.insert(
                 account_id.to_string(),
                 CachedAccessToken {
@@ -558,6 +593,11 @@ impl CodexOAuthManager {
                     expires_at_ms,
                 },
             );
+        }
+
+        if refresh_token_changed {
+            self.persist_current_state_locked(&persistence_guard)
+                .await?;
         }
 
         Ok(access_token)
@@ -588,16 +628,14 @@ impl CodexOAuthManager {
 
     pub async fn remove_account(&self, account_id: &str) -> Result<(), CodexOAuthError> {
         log::info!("[CodexOAuth] 移除账号: {account_id}");
+        let persistence_guard = self.persistence_lock.lock().await;
 
         {
             let mut accounts = self.accounts.write().await;
+            let mut tokens = self.access_tokens.write().await;
             if accounts.remove(account_id).is_none() {
                 return Err(CodexOAuthError::AccountNotFound(account_id.to_string()));
             }
-        }
-
-        {
-            let mut tokens = self.access_tokens.write().await;
             tokens.remove(account_id);
         }
         {
@@ -613,11 +651,14 @@ impl CodexOAuthManager {
             }
         }
 
-        self.save_to_disk().await?;
+        self.persist_current_state_locked(&persistence_guard)
+            .await?;
         Ok(())
     }
 
     pub async fn set_default_account(&self, account_id: &str) -> Result<(), CodexOAuthError> {
+        let persistence_guard = self.persistence_lock.lock().await;
+
         {
             let accounts = self.accounts.read().await;
             if !accounts.contains_key(account_id) {
@@ -630,24 +671,24 @@ impl CodexOAuthManager {
             *default = Some(account_id.to_string());
         }
 
-        self.save_to_disk().await?;
+        self.persist_current_state_locked(&persistence_guard)
+            .await?;
         Ok(())
     }
 
     pub async fn clear_auth(&self) -> Result<(), CodexOAuthError> {
         log::info!("[CodexOAuth] 清除所有认证");
+        let persistence_guard = self.persistence_lock.lock().await;
 
         {
             let mut accounts = self.accounts.write().await;
+            let mut tokens = self.access_tokens.write().await;
             accounts.clear();
+            tokens.clear();
         }
         {
             let mut default = self.default_account_id.write().await;
             *default = None;
-        }
-        {
-            let mut tokens = self.access_tokens.write().await;
-            tokens.clear();
         }
         {
             let mut locks = self.refresh_locks.write().await;
@@ -658,10 +699,8 @@ impl CodexOAuthManager {
             pending.clear();
         }
 
-        if self.storage_path.exists() {
-            std::fs::remove_file(&self.storage_path)?;
-        }
-
+        self.persist_current_state_locked(&persistence_guard)
+            .await?;
         Ok(())
     }
 
@@ -692,13 +731,26 @@ impl CodexOAuthManager {
 
     // ==================== 内部方法 ====================
 
+    #[cfg(test)]
     async fn add_account_internal(
         &self,
         account_id: String,
         refresh_token: String,
         email: Option<String>,
     ) -> Result<GitHubAccount, CodexOAuthError> {
+        self.add_account_with_access_token_internal(account_id, refresh_token, email, None)
+            .await
+    }
+
+    async fn add_account_with_access_token_internal(
+        &self,
+        account_id: String,
+        refresh_token: String,
+        email: Option<String>,
+        access_token: Option<CachedAccessToken>,
+    ) -> Result<GitHubAccount, CodexOAuthError> {
         let now = chrono::Utc::now().timestamp();
+        let persistence_guard = self.persistence_lock.lock().await;
 
         let data = CodexAccountData {
             account_id: account_id.clone(),
@@ -714,6 +766,11 @@ impl CodexOAuthManager {
             accounts.insert(account_id.clone(), data);
         }
 
+        if let Some(access_token) = access_token {
+            let mut tokens = self.access_tokens.write().await;
+            tokens.insert(account_id.clone(), access_token);
+        }
+
         {
             let mut default = self.default_account_id.write().await;
             if default.is_none() {
@@ -721,7 +778,8 @@ impl CodexOAuthManager {
             }
         }
 
-        self.save_to_disk().await?;
+        self.persist_current_state_locked(&persistence_guard)
+            .await?;
         Ok(account)
     }
 
@@ -779,6 +837,22 @@ impl CodexOAuthManager {
                 .entry(account_id.to_string())
                 .or_insert_with(|| Arc::new(Mutex::new(()))),
         )
+    }
+
+    async fn cached_token_for_existing_account(
+        &self,
+        account_id: &str,
+    ) -> Result<Option<String>, CodexOAuthError> {
+        let accounts = self.accounts.read().await;
+        if !accounts.contains_key(account_id) {
+            return Err(CodexOAuthError::AccountNotFound(account_id.to_string()));
+        }
+
+        let tokens = self.access_tokens.read().await;
+        Ok(tokens
+            .get(account_id)
+            .filter(|cached| !cached.is_expiring_soon())
+            .map(|cached| cached.token.clone()))
     }
 
     fn write_store_atomic(&self, content: &str) -> Result<(), CodexOAuthError> {
@@ -861,7 +935,10 @@ impl CodexOAuthManager {
         Ok(())
     }
 
-    async fn save_to_disk(&self) -> Result<(), CodexOAuthError> {
+    async fn persist_current_state_locked(
+        &self,
+        _persistence_guard: &tokio::sync::MutexGuard<'_, ()>,
+    ) -> Result<(), CodexOAuthError> {
         let accounts = self.accounts.read().await.clone();
         let default = self.resolve_default_account_id().await;
 
@@ -874,7 +951,23 @@ impl CodexOAuthManager {
         let content = serde_json::to_string_pretty(&store)
             .map_err(|e| CodexOAuthError::ParseError(e.to_string()))?;
 
-        self.write_store_atomic(&content)?;
+        #[cfg(test)]
+        {
+            let hook = self.persistence_snapshot_hook.read().await.clone();
+            if let Some(hook) = hook {
+                hook().await;
+            }
+        }
+
+        if store.accounts.is_empty() {
+            match fs::remove_file(&self.storage_path) {
+                Ok(()) => log::info!("[CodexOAuth] 已删除空的账号存储"),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+        } else {
+            self.write_store_atomic(&content)?;
+        }
 
         log::info!(
             "[CodexOAuth] 保存到磁盘成功（{} 个账号）",
@@ -970,6 +1063,412 @@ fn extract_identity_from_tokens(tokens: &OAuthTokenResponse) -> (Option<String>,
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::sync::Semaphore;
+
+    fn delayed_refresh_hook() -> (TestRefreshHook, Arc<Semaphore>, Arc<Semaphore>) {
+        let started = Arc::new(Semaphore::new(0));
+        let release = Arc::new(Semaphore::new(0));
+        let hook_started = Arc::clone(&started);
+        let hook_release = Arc::clone(&release);
+        let hook: TestRefreshHook = Arc::new(move |_refresh_token| {
+            let started = Arc::clone(&hook_started);
+            let release = Arc::clone(&hook_release);
+            Box::pin(async move {
+                started.add_permits(1);
+                let permit = release.acquire().await.unwrap();
+                permit.forget();
+                Ok(OAuthTokenResponse {
+                    access_token: "refreshed-access-token".to_string(),
+                    refresh_token: Some("rotated-refresh-token".to_string()),
+                    id_token: None,
+                    expires_in: Some(3600),
+                })
+            })
+        });
+
+        (hook, started, release)
+    }
+
+    fn delayed_first_persistence_snapshot_hook() -> (
+        TestPersistenceHook,
+        Arc<Semaphore>,
+        Arc<Semaphore>,
+        Arc<Semaphore>,
+    ) {
+        let first_started = Arc::new(Semaphore::new(0));
+        let release_first = Arc::new(Semaphore::new(0));
+        let later_started = Arc::new(Semaphore::new(0));
+        let invocation_count = Arc::new(AtomicUsize::new(0));
+        let hook_first_started = Arc::clone(&first_started);
+        let hook_release_first = Arc::clone(&release_first);
+        let hook_later_started = Arc::clone(&later_started);
+        let hook_invocation_count = Arc::clone(&invocation_count);
+        let hook: TestPersistenceHook = Arc::new(move || {
+            let first_started = Arc::clone(&hook_first_started);
+            let release_first = Arc::clone(&hook_release_first);
+            let later_started = Arc::clone(&hook_later_started);
+            let invocation = hook_invocation_count.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move {
+                if invocation == 0 {
+                    first_started.add_permits(1);
+                    let permit = release_first.acquire().await.unwrap();
+                    permit.forget();
+                } else {
+                    later_started.add_permits(1);
+                }
+            })
+        });
+
+        (hook, first_started, release_first, later_started)
+    }
+
+    async fn wait_for_refresh_request(started: &Semaphore) {
+        let permit = tokio::time::timeout(std::time::Duration::from_secs(2), started.acquire())
+            .await
+            .expect("refresh should reach the test hook")
+            .unwrap();
+        permit.forget();
+    }
+
+    async fn wait_for_persistence_snapshot(started: &Semaphore) {
+        let permit = tokio::time::timeout(std::time::Duration::from_secs(2), started.acquire())
+            .await
+            .expect("persistence should reach the snapshot hook")
+            .unwrap();
+        permit.forget();
+    }
+
+    async fn assert_account_and_token_absent(manager: &CodexOAuthManager, account_id: &str) {
+        assert!(!manager.accounts.read().await.contains_key(account_id));
+        assert!(!manager.access_tokens.read().await.contains_key(account_id));
+    }
+
+    async fn assert_account_absent_after_disk_reload(
+        data_dir: &std::path::Path,
+        account_id: &str,
+        forbidden_refresh_tokens: &[&str],
+    ) {
+        let storage_path = data_dir.join("codex_oauth_auth.json");
+        if let Ok(content) = fs::read_to_string(&storage_path) {
+            assert!(!content.contains(account_id));
+            for token in forbidden_refresh_tokens {
+                assert!(!content.contains(token));
+            }
+        }
+
+        let reloaded = CodexOAuthManager::new(data_dir.to_path_buf());
+        let accounts = reloaded.accounts.read().await;
+        assert!(!accounts.contains_key(account_id));
+        assert!(accounts.values().all(|account| forbidden_refresh_tokens
+            .iter()
+            .all(|token| account.refresh_token != *token)));
+        drop(accounts);
+        assert!(!reloaded.access_tokens.read().await.contains_key(account_id));
+        assert_ne!(
+            reloaded.default_account_id().await.as_deref(),
+            Some(account_id)
+        );
+    }
+
+    #[tokio::test]
+    async fn managed_quota_query_releases_outer_lock_while_token_lookup_waits() {
+        let temp = tempfile::tempdir().unwrap();
+        let manager = Arc::new(RwLock::new(CodexOAuthManager::new(
+            temp.path().to_path_buf(),
+        )));
+        manager
+            .read()
+            .await
+            .add_account_internal(
+                "blocked-account".to_string(),
+                "refresh-token".to_string(),
+                None,
+            )
+            .await
+            .unwrap();
+        let access_tokens = {
+            let manager = manager.read().await;
+            Arc::clone(&manager.access_tokens)
+        };
+
+        // Force token lookup to remain pending without making a network request.
+        let token_guard = access_tokens.write().await;
+        let start_guard = manager.write().await;
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let query_manager = Arc::clone(&manager);
+        let query_task = tokio::spawn(async move {
+            started_tx.send(()).unwrap();
+            crate::services::subscription::query_managed_codex_oauth_quota(
+                &query_manager,
+                Some("blocked-account"),
+            )
+            .await
+        });
+
+        // The query is now queued behind start_guard. Tokio's fair RwLock queue
+        // guarantees it acquires the next read permit before this later writer.
+        started_rx.await.unwrap();
+        drop(start_guard);
+
+        let outer_write = tokio::time::timeout(std::time::Duration::from_secs(1), manager.write())
+            .await
+            .expect("token lookup must not retain the outer manager read lock");
+        drop(outer_write);
+
+        query_task.abort();
+        drop(token_guard);
+        let _ = query_task.await;
+    }
+
+    #[tokio::test]
+    async fn cached_token_fast_path_rejects_a_removed_account() {
+        let temp = tempfile::tempdir().unwrap();
+        let manager = CodexOAuthManager::new(temp.path().to_path_buf());
+        manager
+            .add_account_internal("acc-cached".to_string(), "refresh-token".to_string(), None)
+            .await
+            .unwrap();
+        manager.access_tokens.write().await.insert(
+            "acc-cached".to_string(),
+            CachedAccessToken {
+                token: "cached-access-token".to_string(),
+                expires_at_ms: compute_expires_at_ms(Some(3600)),
+            },
+        );
+
+        // Model the old removal window: the account disappeared before its
+        // cached token was cleaned up. The fast path must still reject it.
+        manager.accounts.write().await.remove("acc-cached");
+
+        let result = manager.get_valid_token_for_account("acc-cached").await;
+        assert!(matches!(
+            result,
+            Err(CodexOAuthError::AccountNotFound(id)) if id == "acc-cached"
+        ));
+    }
+
+    #[tokio::test]
+    async fn remove_account_during_refresh_does_not_resurrect_access_token() {
+        let temp = tempfile::tempdir().unwrap();
+        let (hook, started, release) = delayed_refresh_hook();
+        let manager = CodexOAuthManager::new(temp.path().to_path_buf());
+        *manager.refresh_hook.write().await = Some(hook);
+        manager
+            .add_account_internal(
+                "acc-remove-race".to_string(),
+                "refresh-token".to_string(),
+                None,
+            )
+            .await
+            .unwrap();
+        let manager = Arc::new(manager);
+
+        let refreshing_manager = Arc::clone(&manager);
+        let refresh = tokio::spawn(async move {
+            refreshing_manager
+                .get_valid_token_for_account("acc-remove-race")
+                .await
+        });
+        wait_for_refresh_request(&started).await;
+
+        manager.remove_account("acc-remove-race").await.unwrap();
+        release.add_permits(1);
+
+        let result = tokio::time::timeout(std::time::Duration::from_secs(2), refresh)
+            .await
+            .expect("refresh task should finish")
+            .unwrap();
+        assert!(matches!(
+            result,
+            Err(CodexOAuthError::AccountNotFound(id)) if id == "acc-remove-race"
+        ));
+        assert_account_and_token_absent(&manager, "acc-remove-race").await;
+    }
+
+    #[tokio::test]
+    async fn clear_auth_during_refresh_does_not_resurrect_access_token() {
+        let temp = tempfile::tempdir().unwrap();
+        let (hook, started, release) = delayed_refresh_hook();
+        let manager = CodexOAuthManager::new(temp.path().to_path_buf());
+        *manager.refresh_hook.write().await = Some(hook);
+        manager
+            .add_account_internal(
+                "acc-clear-race".to_string(),
+                "refresh-token".to_string(),
+                None,
+            )
+            .await
+            .unwrap();
+        let manager = Arc::new(manager);
+
+        let refreshing_manager = Arc::clone(&manager);
+        let refresh = tokio::spawn(async move {
+            refreshing_manager
+                .get_valid_token_for_account("acc-clear-race")
+                .await
+        });
+        wait_for_refresh_request(&started).await;
+
+        manager.clear_auth().await.unwrap();
+        release.add_permits(1);
+
+        let result = tokio::time::timeout(std::time::Duration::from_secs(2), refresh)
+            .await
+            .expect("refresh task should finish")
+            .unwrap();
+        assert!(matches!(
+            result,
+            Err(CodexOAuthError::AccountNotFound(id)) if id == "acc-clear-race"
+        ));
+        assert_account_and_token_absent(&manager, "acc-clear-race").await;
+    }
+
+    #[tokio::test]
+    async fn remove_account_waits_for_refresh_persistence_and_wins_on_disk() {
+        let temp = tempfile::tempdir().unwrap();
+        let data_dir = temp.path().to_path_buf();
+        let (refresh_hook, refresh_started, release_refresh) = delayed_refresh_hook();
+        let (persistence_hook, first_snapshot, release_first_snapshot, later_snapshot) =
+            delayed_first_persistence_snapshot_hook();
+        let manager = CodexOAuthManager::new(data_dir.clone());
+        *manager.refresh_hook.write().await = Some(refresh_hook);
+        manager
+            .add_account_internal(
+                "acc-remove-disk-race".to_string(),
+                "original-refresh-token".to_string(),
+                None,
+            )
+            .await
+            .unwrap();
+        *manager.persistence_snapshot_hook.write().await = Some(persistence_hook);
+        let manager = Arc::new(manager);
+
+        let refreshing_manager = Arc::clone(&manager);
+        let refresh = tokio::spawn(async move {
+            refreshing_manager
+                .get_valid_token_for_account("acc-remove-disk-race")
+                .await
+        });
+        wait_for_refresh_request(&refresh_started).await;
+        release_refresh.add_permits(1);
+        wait_for_persistence_snapshot(&first_snapshot).await;
+
+        let removing_manager = Arc::clone(&manager);
+        let (remove_started_tx, remove_started_rx) = tokio::sync::oneshot::channel();
+        let remove = tokio::spawn(async move {
+            remove_started_tx.send(()).unwrap();
+            removing_manager
+                .remove_account("acc-remove-disk-race")
+                .await
+        });
+        remove_started_rx.await.unwrap();
+        assert!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(100),
+                later_snapshot.acquire()
+            )
+            .await
+            .is_err(),
+            "remove must not snapshot state while refresh persistence is paused"
+        );
+
+        release_first_snapshot.add_permits(1);
+        wait_for_persistence_snapshot(&later_snapshot).await;
+        assert_eq!(
+            tokio::time::timeout(std::time::Duration::from_secs(2), refresh)
+                .await
+                .expect("refresh task should finish")
+                .unwrap()
+                .unwrap(),
+            "refreshed-access-token"
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(2), remove)
+            .await
+            .expect("remove task should finish")
+            .unwrap()
+            .unwrap();
+
+        assert_account_and_token_absent(&manager, "acc-remove-disk-race").await;
+        assert_account_absent_after_disk_reload(
+            &data_dir,
+            "acc-remove-disk-race",
+            &["original-refresh-token", "rotated-refresh-token"],
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn clear_auth_waits_for_refresh_persistence_and_wins_on_disk() {
+        let temp = tempfile::tempdir().unwrap();
+        let data_dir = temp.path().to_path_buf();
+        let (refresh_hook, refresh_started, release_refresh) = delayed_refresh_hook();
+        let (persistence_hook, first_snapshot, release_first_snapshot, later_snapshot) =
+            delayed_first_persistence_snapshot_hook();
+        let manager = CodexOAuthManager::new(data_dir.clone());
+        *manager.refresh_hook.write().await = Some(refresh_hook);
+        manager
+            .add_account_internal(
+                "acc-clear-disk-race".to_string(),
+                "original-refresh-token".to_string(),
+                None,
+            )
+            .await
+            .unwrap();
+        *manager.persistence_snapshot_hook.write().await = Some(persistence_hook);
+        let manager = Arc::new(manager);
+
+        let refreshing_manager = Arc::clone(&manager);
+        let refresh = tokio::spawn(async move {
+            refreshing_manager
+                .get_valid_token_for_account("acc-clear-disk-race")
+                .await
+        });
+        wait_for_refresh_request(&refresh_started).await;
+        release_refresh.add_permits(1);
+        wait_for_persistence_snapshot(&first_snapshot).await;
+
+        let clearing_manager = Arc::clone(&manager);
+        let (clear_started_tx, clear_started_rx) = tokio::sync::oneshot::channel();
+        let clear = tokio::spawn(async move {
+            clear_started_tx.send(()).unwrap();
+            clearing_manager.clear_auth().await
+        });
+        clear_started_rx.await.unwrap();
+        assert!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(100),
+                later_snapshot.acquire()
+            )
+            .await
+            .is_err(),
+            "clear must not snapshot state while refresh persistence is paused"
+        );
+
+        release_first_snapshot.add_permits(1);
+        wait_for_persistence_snapshot(&later_snapshot).await;
+        assert_eq!(
+            tokio::time::timeout(std::time::Duration::from_secs(2), refresh)
+                .await
+                .expect("refresh task should finish")
+                .unwrap()
+                .unwrap(),
+            "refreshed-access-token"
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(2), clear)
+            .await
+            .expect("clear task should finish")
+            .unwrap()
+            .unwrap();
+
+        assert_account_and_token_absent(&manager, "acc-clear-disk-race").await;
+        assert_account_absent_after_disk_reload(
+            &data_dir,
+            "acc-clear-disk-race",
+            &["original-refresh-token", "rotated-refresh-token"],
+        )
+        .await;
+    }
 
     #[test]
     fn codex_oauth_user_agent_preserves_legacy_wire_bytes() {

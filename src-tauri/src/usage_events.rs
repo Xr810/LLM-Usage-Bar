@@ -11,8 +11,7 @@
 //! - 不阻塞写入：通知失败仅记录 warn 日志，不向上传播错误。
 
 use std::future::Future;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, LazyLock, OnceLock};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::time::Duration;
 
 use tauri::{AppHandle, Emitter, Manager};
@@ -37,20 +36,70 @@ const DEBOUNCE_WINDOW: Duration = Duration::from_millis(200);
 
 static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum DebounceState {
+    #[default]
+    Idle,
+    Scheduled,
+    Running,
+    RunningDirty,
+}
+
 #[derive(Clone, Default)]
 struct DebounceGate {
-    scheduled: Arc<AtomicBool>,
+    state: Arc<Mutex<DebounceState>>,
 }
 
 impl DebounceGate {
     fn try_admit(&self) -> bool {
-        self.scheduled
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match *state {
+            DebounceState::Idle => {
+                *state = DebounceState::Scheduled;
+                true
+            }
+            DebounceState::Scheduled | DebounceState::RunningDirty => false,
+            DebounceState::Running => {
+                *state = DebounceState::RunningDirty;
+                false
+            }
+        }
     }
 
-    fn release(&self) {
-        self.scheduled.store(false, Ordering::Release);
+    fn begin_action(&self) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        debug_assert_eq!(*state, DebounceState::Scheduled);
+        *state = DebounceState::Running;
+    }
+
+    /// Finish the current action and report whether one trailing action was
+    /// requested while it was running.
+    fn finish_action(&self) -> bool {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match *state {
+            DebounceState::RunningDirty => {
+                *state = DebounceState::Scheduled;
+                true
+            }
+            DebounceState::Running => {
+                *state = DebounceState::Idle;
+                false
+            }
+            DebounceState::Idle | DebounceState::Scheduled => {
+                debug_assert!(false, "debounced action finished outside the running state");
+                *state = DebounceState::Idle;
+                false
+            }
+        }
     }
 }
 
@@ -129,20 +178,22 @@ where
 
 async fn run_debounced_action<Wait, WaitFuture, Action, ActionFuture>(
     gate: DebounceGate,
-    wait: Wait,
-    action: Action,
+    mut wait: Wait,
+    mut action: Action,
 ) where
-    Wait: FnOnce() -> WaitFuture,
+    Wait: FnMut() -> WaitFuture,
     WaitFuture: Future<Output = ()>,
-    Action: FnOnce() -> ActionFuture,
+    Action: FnMut() -> ActionFuture,
     ActionFuture: Future<Output = ()>,
 {
-    wait().await;
-    // Release before beginning the action so a mutation arriving during a
-    // potentially slow projection can schedule a follow-up instead of being
-    // lost behind the just-finished debounce window.
-    gate.release();
-    action().await;
+    loop {
+        wait().await;
+        gate.begin_action();
+        action().await;
+        if !gate.finish_action() {
+            break;
+        }
+    }
 }
 
 fn schedule_debounced_unit_event(
@@ -156,9 +207,12 @@ fn schedule_debounced_unit_event(
             || async {
                 tokio::time::sleep(DEBOUNCE_WINDOW).await;
             },
-            move || async move {
-                if handle.emit(event_name, ()).is_err() {
-                    log::warn!("usage event emit failed");
+            move || {
+                let handle = handle.clone();
+                async move {
+                    if handle.emit(event_name, ()).is_err() {
+                        log::warn!("usage event emit failed");
+                    }
                 }
             },
         ));
@@ -176,19 +230,22 @@ fn schedule_tray_snapshot_rebuild() {
             || async {
                 tokio::time::sleep(DEBOUNCE_WINDOW).await;
             },
-            move || async move {
-                let service = {
-                    let Some(state) = handle.try_state::<crate::store::AppState>() else {
-                        log::warn!("tray usage state is unavailable");
-                        return;
+            move || {
+                let handle = handle.clone();
+                async move {
+                    let service = {
+                        let Some(state) = handle.try_state::<crate::store::AppState>() else {
+                            log::warn!("tray usage state is unavailable");
+                            return;
+                        };
+                        state.tray_usage_service.clone()
                     };
-                    state.tray_usage_service.clone()
-                };
-                let _ = service
-                    .rebuild_from_persisted(|snapshot| {
-                        crate::tray_status::publish_tray_usage(&handle, snapshot);
-                    })
-                    .await;
+                    let _ = service
+                        .rebuild_from_persisted(|snapshot| {
+                            crate::tray_status::publish_tray_usage(&handle, snapshot);
+                        })
+                        .await;
+                }
             },
         ));
     });
@@ -363,27 +420,68 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tray_gate_reopens_before_rebuild_so_a_follow_up_is_not_lost() {
+    async fn slow_action_coalesces_running_notifications_into_one_trailing_action() {
         let gate = DebounceGate::default();
         assert!(gate.try_admit());
 
-        let release_wait = Arc::new(Notify::new());
-        let action_started = Arc::new(Notify::new());
-        let finish_action = Arc::new(Notify::new());
+        let first_wait_release = Arc::new(Notify::new());
+        let trailing_wait_entered = Arc::new(Notify::new());
+        let trailing_wait_release = Arc::new(Notify::new());
+        let first_action_started = Arc::new(Notify::new());
+        let first_action_release = Arc::new(Notify::new());
+        let trailing_action_started = Arc::new(Notify::new());
+        let trailing_action_release = Arc::new(Notify::new());
+        let waits = Arc::new(AtomicUsize::new(0));
+        let actions = Arc::new(AtomicUsize::new(0));
         let task = tokio::spawn(run_debounced_action(
             gate.clone(),
             {
-                let release_wait = release_wait.clone();
-                move || async move {
-                    release_wait.notified().await;
+                let first_wait_release = first_wait_release.clone();
+                let trailing_wait_entered = trailing_wait_entered.clone();
+                let trailing_wait_release = trailing_wait_release.clone();
+                let waits = waits.clone();
+                move || {
+                    let first_wait_release = first_wait_release.clone();
+                    let trailing_wait_entered = trailing_wait_entered.clone();
+                    let trailing_wait_release = trailing_wait_release.clone();
+                    let wait_index = waits.fetch_add(1, Ordering::SeqCst);
+                    async move {
+                        match wait_index {
+                            0 => first_wait_release.notified().await,
+                            1 => {
+                                trailing_wait_entered.notify_one();
+                                trailing_wait_release.notified().await;
+                            }
+                            _ => panic!("unexpected extra debounce wait"),
+                        }
+                    }
                 }
             },
             {
-                let action_started = action_started.clone();
-                let finish_action = finish_action.clone();
-                move || async move {
-                    action_started.notify_one();
-                    finish_action.notified().await;
+                let first_action_started = first_action_started.clone();
+                let first_action_release = first_action_release.clone();
+                let trailing_action_started = trailing_action_started.clone();
+                let trailing_action_release = trailing_action_release.clone();
+                let actions = actions.clone();
+                move || {
+                    let first_action_started = first_action_started.clone();
+                    let first_action_release = first_action_release.clone();
+                    let trailing_action_started = trailing_action_started.clone();
+                    let trailing_action_release = trailing_action_release.clone();
+                    let action_index = actions.fetch_add(1, Ordering::SeqCst);
+                    async move {
+                        match action_index {
+                            0 => {
+                                first_action_started.notify_one();
+                                first_action_release.notified().await;
+                            }
+                            1 => {
+                                trailing_action_started.notify_one();
+                                trailing_action_release.notified().await;
+                            }
+                            _ => panic!("unexpected extra debounced action"),
+                        }
+                    }
                 }
             },
         ));
@@ -394,21 +492,43 @@ mod tests {
         });
         assert_eq!(premature_follow_up.load(Ordering::SeqCst), 0);
 
-        release_wait.notify_one();
-        timeout(Duration::from_secs(1), action_started.notified())
+        first_wait_release.notify_one();
+        timeout(Duration::from_secs(1), first_action_started.notified())
             .await
             .expect("rebuild action should start after the injected wait");
 
-        let follow_up = AtomicUsize::new(0);
-        schedule_debounced_action(&gate, |_| {
-            follow_up.fetch_add(1, Ordering::SeqCst);
-        });
-        assert_eq!(follow_up.load(Ordering::SeqCst), 1);
+        let overlapping_workers = AtomicUsize::new(0);
+        for _ in 0..8 {
+            schedule_debounced_action(&gate, |_| {
+                overlapping_workers.fetch_add(1, Ordering::SeqCst);
+            });
+        }
+        assert_eq!(overlapping_workers.load(Ordering::SeqCst), 0);
 
-        finish_action.notify_one();
+        first_action_release.notify_one();
+        timeout(Duration::from_secs(1), trailing_wait_entered.notified())
+            .await
+            .expect("one trailing rebuild should be scheduled");
+
+        for _ in 0..8 {
+            schedule_debounced_action(&gate, |_| {
+                overlapping_workers.fetch_add(1, Ordering::SeqCst);
+            });
+        }
+        assert_eq!(overlapping_workers.load(Ordering::SeqCst), 0);
+
+        trailing_wait_release.notify_one();
+        timeout(Duration::from_secs(1), trailing_action_started.notified())
+            .await
+            .expect("the coalesced trailing rebuild should start");
+        trailing_action_release.notify_one();
         timeout(Duration::from_secs(1), task)
             .await
             .expect("debounced action should finish")
             .expect("debounced action task should not panic");
+
+        assert_eq!(waits.load(Ordering::SeqCst), 2);
+        assert_eq!(actions.load(Ordering::SeqCst), 2);
+        assert_eq!(overlapping_workers.load(Ordering::SeqCst), 0);
     }
 }

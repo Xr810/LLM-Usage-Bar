@@ -1,16 +1,15 @@
 use super::agent_provider_bindings::bindings_for_provider_on_conn;
 use crate::database::{lock_conn, to_json_string, Database};
 use crate::error::AppError;
+use crate::usage::budget_migration::canonicalize_daily_budget;
 use crate::usage::domain::{
     BillingKind, BindingCredentialStatus, RouteBinding, SystemProviderAuthKind, TokenSource,
     UsageProviderInput, UsageProviderStored, UsageProviderView, UsageSourceBinding,
 };
 use crate::usage::system_providers::{system_binding_route_protocol, system_provider_definitions};
 use rusqlite::{params, types::Type, OptionalExtension, Row};
-use rust_decimal::Decimal;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
 use url::Url;
 
@@ -21,15 +20,6 @@ fn now_timestamp() -> Result<i64, AppError> {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs() as i64)
         .map_err(|error| AppError::Database(format!("system clock before unix epoch: {error}")))
-}
-
-fn canonicalize_daily_budget(raw: &str) -> Result<String, AppError> {
-    let value = Decimal::from_str(raw.trim())
-        .map_err(|_| AppError::Message("invalid_daily_budget".to_string()))?;
-    if value <= Decimal::ZERO {
-        return Err(AppError::Message("invalid_daily_budget".to_string()));
-    }
-    Ok(value.normalize().to_string())
 }
 
 fn billing_kind_value(kind: BillingKind) -> &'static str {
@@ -417,6 +407,18 @@ impl Database {
         )?;
         if became_system {
             return Err(AppError::Message("system_provider_immutable".to_string()));
+        }
+        let existing_daily_budget = transaction
+            .query_row(
+                "SELECT daily_budget_usd FROM usage_providers WHERE id = ?1",
+                [&input.id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?;
+        if input.billing_kind != BillingKind::Metered && existing_daily_budget.flatten().is_some() {
+            return Err(AppError::Message(
+                "daily_budget_requires_metered_provider".to_string(),
+            ));
         }
         if requested_session_sources.is_none()
             && !input.token_sources.contains(&TokenSource::SessionLog)
@@ -869,6 +871,25 @@ mod tests {
             .unwrap()
             .get("dailyBudgetUsd")
             .is_none());
+    }
+
+    #[test]
+    fn provider_save_rejects_switching_a_budgeted_provider_to_subscription() {
+        let db = Database::memory().unwrap();
+        let mut input = provider("metered", BillingKind::Metered, vec![TokenSource::Proxy]);
+        db.save_usage_provider(&input).unwrap();
+        db.set_provider_daily_budget("metered", Some("9.5"))
+            .unwrap();
+
+        input.billing_kind = BillingKind::Subscription;
+        input.token_sources = vec![TokenSource::SessionLog];
+        let error = db.save_usage_provider(&input).unwrap_err();
+
+        assert_eq!(error.to_string(), "daily_budget_requires_metered_provider");
+        let stored = db.get_usage_provider("metered").unwrap().unwrap();
+        assert_eq!(stored.billing_kind, BillingKind::Metered);
+        assert_eq!(stored.daily_budget_usd.as_deref(), Some("9.5"));
+        assert!(db.list_usage_providers().is_ok());
     }
 
     #[test]

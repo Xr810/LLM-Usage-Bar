@@ -670,13 +670,14 @@ fn unix_ts_to_iso(ts: i64) -> Option<String> {
 
 /// 使用 LLM Usage Bar 自管账号查询 ChatGPT 订阅额度。
 ///
-/// 账号和 token 解析必须在 manager guard 内完成；实际 HTTP 请求前释放 guard，
-/// 避免一个慢请求阻塞其他 OAuth 状态操作。
+/// 外层 manager guard 只用于克隆共享 handle；账号解析和 token 刷新由
+/// `CodexOAuthManager` 的内部锁保护。因此 token 刷新与额度 HTTP 请求的
+/// 网络等待都不会阻塞需要外层 write guard 的 OAuth 状态操作。
 pub(crate) async fn query_managed_codex_oauth_quota(
     manager: &Arc<RwLock<CodexOAuthManager>>,
     requested_account_id: Option<&str>,
 ) -> Result<SubscriptionQuota, String> {
-    let manager = manager.read().await;
+    let manager = manager.read().await.clone();
     let account_id = match requested_account_id
         .map(str::trim)
         .filter(|id| !id.is_empty())
@@ -698,8 +699,6 @@ pub(crate) async fn query_managed_codex_oauth_quota(
             ));
         }
     };
-    drop(manager);
-
     query_codex_quota(
         &access_token,
         Some(&account_id),

@@ -253,31 +253,76 @@ pub fn open_main_window(
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MainWindowRevealRollback {
+    hide_main_window: bool,
+    restore_dock_visibility: Option<bool>,
+}
+
+#[cfg(target_os = "macos")]
+fn main_window_reveal_rollback(previous_dock_visible: bool) -> MainWindowRevealRollback {
+    if previous_dock_visible {
+        // The caller did not expose the app in the Dock. A later reveal error
+        // must not hide an already-visible main window or demote the app to an
+        // Accessory activation policy.
+        MainWindowRevealRollback {
+            hide_main_window: false,
+            restore_dock_visibility: None,
+        }
+    } else {
+        MainWindowRevealRollback {
+            hide_main_window: true,
+            restore_dock_visibility: Some(false),
+        }
+    }
+}
+
 pub fn reveal_main_window(app: &AppHandle) -> Result<(), AppError> {
     #[cfg(target_os = "macos")]
-    crate::tray::apply_tray_policy(app, true);
+    let previous_dock_visible = crate::tray::try_apply_tray_policy(app, true)
+        .map_err(|error| main_window_error("activation policy", error))?;
 
-    crate::lightweight::exit_lightweight_mode(app)
-        .map_err(|error| main_window_error("lightweight-mode exit", error))?;
-    let main = app
-        .get_webview_window("main")
-        .ok_or_else(|| AppError::Message("main_window_unavailable".to_string()))?;
+    let result = (|| {
+        crate::lightweight::exit_lightweight_mode(app)
+            .map_err(|error| main_window_error("lightweight-mode exit", error))?;
+        let main = app
+            .get_webview_window("main")
+            .ok_or_else(|| AppError::Message("main_window_unavailable".to_string()))?;
 
-    #[cfg(target_os = "windows")]
-    main.set_skip_taskbar(false)
-        .map_err(|error| main_window_error("taskbar restore", error))?;
+        #[cfg(target_os = "windows")]
+        main.set_skip_taskbar(false)
+            .map_err(|error| main_window_error("taskbar restore", error))?;
 
-    main.unminimize()
-        .map_err(|error| main_window_error("unminimize", error))?;
-    main.show()
-        .map_err(|error| main_window_error("show", error))?;
-    main.set_focus()
-        .map_err(|error| main_window_error("focus", error))?;
+        main.unminimize()
+            .map_err(|error| main_window_error("unminimize", error))?;
+        main.show()
+            .map_err(|error| main_window_error("show", error))?;
+        main.set_focus()
+            .map_err(|error| main_window_error("focus", error))?;
 
-    #[cfg(target_os = "linux")]
-    crate::linux_fix::nudge_main_window(main);
+        #[cfg(target_os = "linux")]
+        crate::linux_fix::nudge_main_window(main);
 
-    Ok(())
+        Ok(())
+    })();
+
+    #[cfg(target_os = "macos")]
+    if result.is_err() {
+        let rollback = main_window_reveal_rollback(previous_dock_visible);
+        if rollback.hide_main_window {
+            if let Some(main) = app.get_webview_window("main") {
+                let _ = main.hide();
+            }
+        }
+        if let Some(previous) = rollback.restore_dock_visibility {
+            if let Err(error) = crate::tray::try_apply_tray_policy(app, previous) {
+                log::warn!("failed to restore tray activation policy: {error}");
+            }
+        }
+    }
+
+    result
 }
 
 #[cfg(test)]
@@ -291,6 +336,30 @@ mod tests {
             position: PhysicalPosition::new(x, y),
             size: PhysicalSize::new(width, height),
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn reveal_rollback_preserves_an_already_visible_main_window_and_dock() {
+        assert_eq!(
+            main_window_reveal_rollback(true),
+            MainWindowRevealRollback {
+                hide_main_window: false,
+                restore_dock_visibility: None,
+            }
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn reveal_rollback_hides_and_restores_a_tray_only_app() {
+        assert_eq!(
+            main_window_reveal_rollback(false),
+            MainWindowRevealRollback {
+                hide_main_window: true,
+                restore_dock_visibility: Some(false),
+            }
+        );
     }
 
     #[test]

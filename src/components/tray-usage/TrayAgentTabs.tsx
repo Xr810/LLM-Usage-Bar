@@ -9,18 +9,20 @@ export function TrayAgentTabs({
   overviewLabel,
   navigationLabel,
   panelId,
+  focusRequestKey,
 }: {
   agents: TrayAgentUsageView[];
   selectedAgentId: "overview" | string;
   overviewLabel: string;
   navigationLabel: string;
   panelId: string;
+  focusRequestKey: number;
 }) {
   const selectedTabRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
     selectedTabRef.current?.focus();
-  }, [selectedAgentId]);
+  }, [focusRequestKey, selectedAgentId]);
 
   return (
     <div className="shrink-0 border-b border-border">

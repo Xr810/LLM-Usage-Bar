@@ -15,8 +15,11 @@ use tempfile::NamedTempFile;
 
 const LLM_USAGE_BAR_SQL_EXPORT_HEADER: &str = "-- LLM Usage Bar SQLite export";
 const LEGACY_CC_SWITCH_SQL_EXPORT_HEADER: &str = "-- CC Switch SQLite 导出";
+const REDACTED_BACKUP_MARKER: &str = "-- sensitive fields: redacted";
+const REDACTED_BACKUP_SETTING: &str = "backup_redaction_version";
+const REDACTED_BACKUP_VERSION: &str = "1";
 
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct ProtectedBindingState {
     binding_id: String,
     agent_module_id: String,
@@ -25,6 +28,7 @@ struct ProtectedBindingState {
     fingerprint: Option<Vec<u8>>,
     credential_slot: Option<String>,
     credential_version: i64,
+    route_protocol: Option<String>,
     provider_enabled: bool,
     billing_kind: String,
     token_sources: String,
@@ -36,6 +40,21 @@ struct ProtectedBindingState {
     legacy_settings_config: Option<String>,
     legacy_meta: Option<String>,
     agent_archived_at: Option<i64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ProtectedProviderRouteState {
+    provider_id: String,
+    provider_enabled: bool,
+    billing_kind: String,
+    token_sources: String,
+    route_app_type: Option<String>,
+    route_config: Option<String>,
+    quota_config: Option<String>,
+    legacy_app_type: Option<String>,
+    legacy_provider_id: Option<String>,
+    legacy_settings_config: Option<String>,
+    legacy_meta: Option<String>,
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
@@ -133,6 +152,191 @@ const SYNC_PRESERVE_TABLES: &[&str] = &[
     "usage_daily_rollups",
 ];
 
+fn normalized_secret_key(key: &str) -> String {
+    key.chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn is_secret_json_key(key: &str) -> bool {
+    let key = normalized_secret_key(key);
+    key.contains("apikey")
+        || key.contains("apitoken")
+        || key.contains("accesstoken")
+        || key.contains("refreshtoken")
+        || key.contains("idtoken")
+        || key.contains("authtoken")
+        || key == "token"
+        || key.ends_with("token")
+        || key.ends_with("bearertoken")
+        || key.contains("clientsecret")
+        || key.contains("secret")
+        || key.contains("credential")
+        || key.contains("accesskeyid")
+        || key.contains("secretaccesskey")
+        || key.contains("privatekey")
+        || key.contains("password")
+        || key.contains("passwd")
+        || key.ends_with("pwd")
+        || key.contains("passphrase")
+        || key.ends_with("authorization")
+        || key.contains("cookie")
+        || matches!(
+            key.as_str(),
+            "key"
+                | "sig"
+                | "signature"
+                | "pat"
+                | "jwt"
+                | "assertion"
+                | "auth"
+                | "oauth"
+                | "code"
+                | "headers"
+                | "env"
+                | "args"
+                | "command"
+                | "body"
+        )
+}
+
+fn redact_url_secrets(raw: &str) -> Option<String> {
+    let mut url = url::Url::parse(raw).ok()?;
+    let had_userinfo = !url.username().is_empty() || url.password().is_some();
+    if had_userinfo {
+        url.set_username("").ok()?;
+        url.set_password(None).ok()?;
+    }
+
+    // Custom endpoints can embed bearer or bot tokens in their paths. Portable
+    // backups keep only the network origin; same-device restore compares this
+    // redacted projection before rehydrating any local-only credential state.
+    let removed_path = url.host().is_some() && url.path() != "/";
+    if removed_path {
+        url.set_path("/");
+    }
+    let removed_query = url.query().is_some();
+    if removed_query {
+        url.set_query(None);
+    }
+    let removed_fragment = url.fragment().is_some();
+    if removed_fragment {
+        url.set_fragment(None);
+    }
+
+    (had_userinfo || removed_path || removed_query || removed_fragment).then(|| url.into())
+}
+
+fn redact_toml_secrets(value: &mut toml::Value) {
+    match value {
+        toml::Value::Table(table) => {
+            table.retain(|key, value| {
+                if is_secret_json_key(key) {
+                    false
+                } else {
+                    redact_toml_secrets(value);
+                    true
+                }
+            });
+        }
+        toml::Value::Array(values) => {
+            for value in values {
+                redact_toml_secrets(value);
+            }
+        }
+        toml::Value::String(raw) => {
+            if let Some(redacted) = redact_url_secrets(raw) {
+                *raw = redacted;
+            }
+        }
+        _ => {}
+    }
+}
+
+fn redact_json_secrets(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            map.retain(|key, value| {
+                if is_secret_json_key(key) {
+                    false
+                } else {
+                    redact_json_secrets(value);
+                    true
+                }
+            });
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                redact_json_secrets(value);
+            }
+        }
+        serde_json::Value::String(raw) => {
+            if let Ok(mut nested) = serde_json::from_str::<serde_json::Value>(raw) {
+                redact_json_secrets(&mut nested);
+                if let Ok(redacted) = serde_json::to_string(&nested) {
+                    *raw = redacted;
+                }
+            } else if let Ok(mut nested) = toml::from_str::<toml::Value>(raw) {
+                redact_toml_secrets(&mut nested);
+                if let Ok(redacted) = toml::to_string(&nested) {
+                    *raw = redacted;
+                }
+            } else if let Some(redacted) = redact_url_secrets(raw) {
+                *raw = redacted;
+            }
+        }
+        _ => {}
+    }
+}
+
+fn sanitized_json_backup_text(
+    raw: Option<&str>,
+    invalid_fallback: Option<&str>,
+) -> Result<Option<String>, AppError> {
+    match raw {
+        Some(raw) => match serde_json::from_str::<serde_json::Value>(raw) {
+            Ok(mut value) => {
+                redact_json_secrets(&mut value);
+                Ok(Some(serde_json::to_string(&value).map_err(|_| {
+                    AppError::Database("failed to sanitize backup JSON".to_string())
+                })?))
+            }
+            Err(_) => Ok(invalid_fallback.map(str::to_string)),
+        },
+        None => Ok(None),
+    }
+}
+
+fn redacted_json_matches(
+    local: Option<&str>,
+    incoming: Option<&str>,
+    invalid_fallback: Option<&str>,
+) -> Result<bool, AppError> {
+    let projected_local = sanitized_json_backup_text(local, invalid_fallback)?;
+    let projected_incoming = sanitized_json_backup_text(incoming, invalid_fallback)?;
+    match (projected_local.as_deref(), projected_incoming.as_deref()) {
+        (None, None) => Ok(true),
+        (Some(projected), Some(incoming)) => {
+            let projected = serde_json::from_str::<serde_json::Value>(projected)
+                .map_err(|_| Database::credential_conflict())?;
+            let incoming = serde_json::from_str::<serde_json::Value>(incoming)
+                .map_err(|_| Database::credential_conflict())?;
+            Ok(projected == incoming)
+        }
+        _ => Ok(false),
+    }
+}
+
+fn json_backup_value_is_redacted(raw: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return false;
+    };
+    let mut redacted = value.clone();
+    redact_json_secrets(&mut redacted);
+    redacted == value
+}
+
 /// A database backup entry for the UI
 #[derive(Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -158,6 +362,7 @@ impl Database {
             "SELECT binding.id, binding.agent_module_id, binding.provider_id,
                     binding.enabled, binding.api_key_fingerprint,
                     binding.credential_slot, binding.credential_version,
+                    binding.route_protocol,
                     provider.enabled, provider.billing_kind, provider.token_sources,
                     provider.route_app_type, provider.route_config, provider.quota_config,
                     provider.legacy_app_type, provider.legacy_provider_id,
@@ -171,8 +376,12 @@ impl Database {
              FROM agent_provider_bindings AS binding
              JOIN usage_providers AS provider ON provider.id = binding.provider_id
              JOIN agent_modules AS agent ON agent.id = binding.agent_module_id
+             LEFT JOIN provider_api_credentials AS provider_credential
+                    ON provider_credential.provider_id = provider.id
              WHERE binding.api_key_fingerprint IS NOT NULL
                 OR binding.credential_slot IS NOT NULL
+                OR provider_credential.api_key_fingerprint IS NOT NULL
+                OR provider_credential.credential_slot IS NOT NULL
              ORDER BY binding.id",
         )?;
         let rows = statement.query_map([], |row| {
@@ -184,22 +393,61 @@ impl Database {
                 fingerprint: row.get(4)?,
                 credential_slot: row.get(5)?,
                 credential_version: row.get(6)?,
-                provider_enabled: row.get(7)?,
-                billing_kind: row.get(8)?,
-                token_sources: row.get(9)?,
-                route_app_type: row.get(10)?,
-                route_config: row.get(11)?,
-                quota_config: row.get(12)?,
-                legacy_app_type: row.get(13)?,
-                legacy_provider_id: row.get(14)?,
-                legacy_settings_config: row.get(15)?,
-                legacy_meta: row.get(16)?,
-                agent_archived_at: row.get(17)?,
+                route_protocol: row.get(7)?,
+                provider_enabled: row.get(8)?,
+                billing_kind: row.get(9)?,
+                token_sources: row.get(10)?,
+                route_app_type: row.get(11)?,
+                route_config: row.get(12)?,
+                quota_config: row.get(13)?,
+                legacy_app_type: row.get(14)?,
+                legacy_provider_id: row.get(15)?,
+                legacy_settings_config: row.get(16)?,
+                legacy_meta: row.get(17)?,
+                agent_archived_at: row.get(18)?,
             })
         })?;
 
         rows.collect::<Result<BTreeSet<_>, _>>()
             .map_err(AppError::from)
+    }
+
+    fn protected_provider_route_state(
+        conn: &Connection,
+        provider_id: &str,
+    ) -> Result<Option<ProtectedProviderRouteState>, AppError> {
+        conn.query_row(
+            "SELECT provider.id, provider.enabled, provider.billing_kind,
+                    provider.token_sources, provider.route_app_type,
+                    provider.route_config, provider.quota_config,
+                    provider.legacy_app_type, provider.legacy_provider_id,
+                    (SELECT legacy.settings_config FROM providers AS legacy
+                     WHERE legacy.id = provider.legacy_provider_id
+                       AND legacy.app_type = provider.legacy_app_type),
+                    (SELECT legacy.meta FROM providers AS legacy
+                     WHERE legacy.id = provider.legacy_provider_id
+                       AND legacy.app_type = provider.legacy_app_type)
+             FROM usage_providers AS provider
+             WHERE provider.id = ?1",
+            [provider_id],
+            |row| {
+                Ok(ProtectedProviderRouteState {
+                    provider_id: row.get(0)?,
+                    provider_enabled: row.get(1)?,
+                    billing_kind: row.get(2)?,
+                    token_sources: row.get(3)?,
+                    route_app_type: row.get(4)?,
+                    route_config: row.get(5)?,
+                    quota_config: row.get(6)?,
+                    legacy_app_type: row.get(7)?,
+                    legacy_provider_id: row.get(8)?,
+                    legacy_settings_config: row.get(9)?,
+                    legacy_meta: row.get(10)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(AppError::from)
     }
 
     fn credential_journal_state(
@@ -548,6 +796,430 @@ impl Database {
         Ok(())
     }
 
+    fn redacted_backup_version(conn: &Connection) -> Result<bool, AppError> {
+        if !Self::table_exists(conn, "settings")? {
+            return Ok(false);
+        }
+        let version = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = ?1",
+                [REDACTED_BACKUP_SETTING],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        match version.as_deref() {
+            None => Ok(false),
+            Some(REDACTED_BACKUP_VERSION) => Ok(true),
+            Some(_) => Err(Self::credential_conflict()),
+        }
+    }
+
+    fn remove_redacted_backup_marker(conn: &Connection) -> Result<(), AppError> {
+        conn.execute(
+            "DELETE FROM settings WHERE key = ?1",
+            [REDACTED_BACKUP_SETTING],
+        )?;
+        Ok(())
+    }
+
+    fn validate_redacted_json_column(
+        conn: &Connection,
+        table: &str,
+        column: &str,
+    ) -> Result<(), AppError> {
+        if !Self::table_exists(conn, table)? || !Self::has_column(conn, table, column)? {
+            return Err(Self::credential_conflict());
+        }
+        let mut statement = conn.prepare(&format!(
+            "SELECT \"{column}\" FROM \"{table}\" WHERE \"{column}\" IS NOT NULL"
+        ))?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+        for row in rows {
+            if !json_backup_value_is_redacted(&row?) {
+                return Err(Self::credential_conflict());
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_redacted_settings(conn: &Connection) -> Result<(), AppError> {
+        let mut statement = conn.prepare("SELECT key, value FROM settings")?;
+        let rows = statement.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+        })?;
+        for row in rows {
+            let (key, value) = row?;
+            if key != REDACTED_BACKUP_SETTING && is_secret_json_key(&key) {
+                return Err(Self::credential_conflict());
+            }
+            let normalized = normalized_secret_key(&key);
+            if matches!(key.as_str(), "global_proxy_url" | "universal_providers")
+                || (key.starts_with("common_config_")
+                    && !key.ends_with("_cleared")
+                    && normalized != "commonconfiglegacymigratedv1")
+            {
+                return Err(Self::credential_conflict());
+            }
+            let Some(value) = value else {
+                continue;
+            };
+            if serde_json::from_str::<serde_json::Value>(&value).is_ok()
+                && !json_backup_value_is_redacted(&value)
+            {
+                return Err(Self::credential_conflict());
+            }
+            if redact_url_secrets(&value).is_some() {
+                return Err(Self::credential_conflict());
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_redacted_url_column(
+        conn: &Connection,
+        table: &str,
+        column: &str,
+    ) -> Result<(), AppError> {
+        let mut statement = conn.prepare(&format!(
+            "SELECT \"{column}\" FROM \"{table}\" WHERE \"{column}\" IS NOT NULL"
+        ))?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+        for row in rows {
+            if redact_url_secrets(&row?).is_some() {
+                return Err(Self::credential_conflict());
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_redacted_backup_shape(conn: &Connection) -> Result<(), AppError> {
+        if !Self::credential_journal_state(conn)?.is_empty()
+            || !Self::provider_credential_journal_state(conn)?.is_empty()
+        {
+            return Err(Self::credential_conflict());
+        }
+
+        let binding_secrets: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM agent_provider_bindings
+             WHERE api_key_fingerprint IS NOT NULL OR credential_slot IS NOT NULL",
+            [],
+            |row| row.get(0),
+        )?;
+        let provider_secrets: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM provider_api_credentials
+             WHERE api_key_fingerprint IS NOT NULL OR credential_slot IS NOT NULL",
+            [],
+            |row| row.get(0),
+        )?;
+        let quota_secrets: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM usage_providers WHERE quota_config IS NOT NULL",
+            [],
+            |row| row.get(0),
+        )?;
+        if binding_secrets != 0 || provider_secrets != 0 || quota_secrets != 0 {
+            return Err(Self::credential_conflict());
+        }
+
+        let live_backups: i64 =
+            conn.query_row("SELECT COUNT(*) FROM proxy_live_backup", [], |row| {
+                row.get(0)
+            })?;
+        if live_backups != 0 {
+            return Err(Self::credential_conflict());
+        }
+
+        let unsafe_mcp: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM mcp_servers
+             WHERE server_config != '{}'
+                OR enabled_claude != 0 OR enabled_codex != 0
+                OR enabled_gemini != 0 OR enabled_opencode != 0
+                OR enabled_hermes != 0",
+            [],
+            |row| row.get(0),
+        )?;
+        let unsafe_proxy: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM proxy_config
+             WHERE proxy_enabled != 0 OR enabled != 0 OR auto_failover_enabled != 0",
+            [],
+            |row| row.get(0),
+        )?;
+        if unsafe_mcp != 0 || unsafe_proxy != 0 {
+            return Err(Self::credential_conflict());
+        }
+        if Self::has_column(conn, "proxy_config", "live_takeover_active")? {
+            let active: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM proxy_config WHERE live_takeover_active != 0",
+                [],
+                |row| row.get(0),
+            )?;
+            if active != 0 {
+                return Err(Self::credential_conflict());
+            }
+        }
+        let nonempty_meta: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM providers WHERE meta != '{}'",
+            [],
+            |row| row.get(0),
+        )?;
+        if nonempty_meta != 0 {
+            return Err(Self::credential_conflict());
+        }
+
+        for (table, column) in [
+            ("providers", "settings_config"),
+            ("providers", "meta"),
+            ("usage_providers", "route_config"),
+            ("mcp_servers", "server_config"),
+            ("quota_snapshots", "raw_payload"),
+        ] {
+            Self::validate_redacted_json_column(conn, table, column)?;
+        }
+        Self::validate_redacted_settings(conn)?;
+        Self::validate_redacted_url_column(conn, "provider_endpoints", "url")?;
+        for (table, column) in [
+            ("providers", "website_url"),
+            ("mcp_servers", "homepage"),
+            ("mcp_servers", "docs"),
+            ("skills", "readme_url"),
+        ] {
+            Self::validate_redacted_url_column(conn, table, column)?;
+        }
+        for (table, column, empty_allowed) in [
+            ("quota_fetch_state", "last_error", false),
+            ("provider_health", "last_error", false),
+            ("proxy_request_logs", "error_message", false),
+            ("stream_check_logs", "message", true),
+        ] {
+            if !Self::table_exists(conn, table)? || !Self::has_column(conn, table, column)? {
+                continue;
+            }
+            let condition = if empty_allowed {
+                format!("\"{column}\" != ''")
+            } else {
+                format!("\"{column}\" IS NOT NULL")
+            };
+            let unsafe_rows: i64 = conn.query_row(
+                &format!("SELECT COUNT(*) FROM \"{table}\" WHERE {condition}"),
+                [],
+                |row| row.get(0),
+            )?;
+            if unsafe_rows != 0 {
+                return Err(Self::credential_conflict());
+            }
+        }
+        Ok(())
+    }
+
+    fn redacted_binding_context_matches(
+        current: &ProtectedBindingState,
+        incoming: &ProtectedBindingState,
+    ) -> Result<bool, AppError> {
+        if !redacted_json_matches(
+            current.route_config.as_deref(),
+            incoming.route_config.as_deref(),
+            None,
+        )? || !redacted_json_matches(
+            current.legacy_settings_config.as_deref(),
+            incoming.legacy_settings_config.as_deref(),
+            Some("{}"),
+        )? {
+            return Ok(false);
+        }
+
+        let mut projected = current.clone();
+        projected.route_config = incoming.route_config.clone();
+        projected.quota_config = incoming.quota_config.clone();
+        projected.legacy_settings_config = incoming.legacy_settings_config.clone();
+        projected.legacy_meta = incoming.legacy_meta.clone();
+        Ok(projected == *incoming)
+    }
+
+    fn redacted_provider_context_matches(
+        current: &ProtectedProviderRouteState,
+        incoming: &ProtectedProviderRouteState,
+    ) -> Result<bool, AppError> {
+        if !redacted_json_matches(
+            current.route_config.as_deref(),
+            incoming.route_config.as_deref(),
+            None,
+        )? || !redacted_json_matches(
+            current.legacy_settings_config.as_deref(),
+            incoming.legacy_settings_config.as_deref(),
+            Some("{}"),
+        )? {
+            return Ok(false);
+        }
+
+        let mut projected = current.clone();
+        projected.route_config = incoming.route_config.clone();
+        projected.quota_config = incoming.quota_config.clone();
+        projected.legacy_settings_config = incoming.legacy_settings_config.clone();
+        projected.legacy_meta = incoming.legacy_meta.clone();
+        Ok(projected == *incoming)
+    }
+
+    fn restore_local_provider_auth_context(
+        local: &Connection,
+        incoming: &Connection,
+        provider_id: &str,
+    ) -> Result<(), AppError> {
+        let state = Self::protected_provider_route_state(local, provider_id)?
+            .ok_or_else(Self::credential_conflict)?;
+        match incoming.execute(
+            "UPDATE usage_providers
+             SET route_config = ?2, quota_config = ?3
+             WHERE id = ?1",
+            rusqlite::params![state.provider_id, state.route_config, state.quota_config],
+        ) {
+            Ok(1) => {}
+            Ok(_) | Err(_) => return Err(Self::credential_conflict()),
+        }
+        if let (Some(legacy_app_type), Some(legacy_provider_id)) =
+            (state.legacy_app_type, state.legacy_provider_id)
+        {
+            match incoming.execute(
+                "UPDATE providers
+                 SET settings_config = ?3, meta = ?4
+                 WHERE app_type = ?1 AND id = ?2",
+                rusqlite::params![
+                    legacy_app_type,
+                    legacy_provider_id,
+                    state.legacy_settings_config,
+                    state.legacy_meta,
+                ],
+            ) {
+                Ok(1) => {}
+                Ok(_) | Err(_) => return Err(Self::credential_conflict()),
+            }
+        }
+        Ok(())
+    }
+
+    fn rehydrate_local_credentials_for_redacted_backup(
+        local: &Connection,
+        incoming: &Connection,
+    ) -> Result<(), AppError> {
+        if !Self::credential_journal_state(local)?.is_empty()
+            || !Self::credential_journal_state(incoming)?.is_empty()
+            || !Self::provider_credential_journal_state(local)?.is_empty()
+            || !Self::provider_credential_journal_state(incoming)?.is_empty()
+        {
+            return Err(Self::credential_conflict());
+        }
+
+        let current_bindings = Self::protected_binding_state(local)?;
+        let current_provider_credentials = Self::protected_provider_credential_state(local)?
+            .into_iter()
+            .filter(|state| !state.is_pristine_placeholder())
+            .collect::<Vec<_>>();
+
+        for state in &current_bindings {
+            let has_binding_credential =
+                state.fingerprint.is_some() || state.credential_slot.is_some();
+            let updated = if has_binding_credential {
+                incoming.execute(
+                    "UPDATE agent_provider_bindings
+                     SET api_key_fingerprint = ?2, credential_slot = ?3,
+                         credential_version = ?4
+                     WHERE id = ?1 AND agent_module_id = ?5 AND provider_id = ?6",
+                    rusqlite::params![
+                        state.binding_id,
+                        state.fingerprint,
+                        state.credential_slot,
+                        state.credential_version,
+                        state.agent_module_id,
+                        state.provider_id,
+                    ],
+                )
+            } else {
+                // System bindings are seeded with per-database IDs. A Provider-level
+                // Keychain credential follows the logical Agent + Provider route, so
+                // preserve the local ID only after that exact route has matched.
+                incoming.execute(
+                    "UPDATE agent_provider_bindings
+                     SET id = ?1, api_key_fingerprint = NULL,
+                         credential_slot = NULL, credential_version = ?2
+                     WHERE agent_module_id = ?3 AND provider_id = ?4",
+                    rusqlite::params![
+                        state.binding_id,
+                        state.credential_version,
+                        state.agent_module_id,
+                        state.provider_id,
+                    ],
+                )
+            };
+            match updated {
+                Ok(1) => {}
+                Ok(_) | Err(_) => return Err(Self::credential_conflict()),
+            }
+        }
+        for state in &current_provider_credentials {
+            match incoming.execute(
+                "UPDATE provider_api_credentials
+                 SET api_key_fingerprint = ?2, credential_slot = ?3,
+                     credential_version = ?4, last_test_at = ?5,
+                     last_test_status = ?6, last_test_error_code = ?7,
+                     created_at = ?8, updated_at = ?9
+                 WHERE provider_id = ?1",
+                rusqlite::params![
+                    state.provider_id,
+                    state.fingerprint,
+                    state.credential_slot,
+                    state.credential_version,
+                    state.last_test_at,
+                    state.last_test_status,
+                    state.last_test_error_code,
+                    state.created_at,
+                    state.updated_at,
+                ],
+            ) {
+                Ok(1) => {}
+                Ok(_) | Err(_) => return Err(Self::credential_conflict()),
+            }
+        }
+
+        let incoming_bindings = Self::protected_binding_state(incoming)?;
+        let mut protected_provider_ids = BTreeSet::new();
+        for current in &current_bindings {
+            let Some(candidate) = incoming_bindings
+                .iter()
+                .find(|candidate| candidate.binding_id == current.binding_id)
+            else {
+                return Err(Self::credential_conflict());
+            };
+            if !Self::redacted_binding_context_matches(current, candidate)? {
+                return Err(Self::credential_conflict());
+            }
+            protected_provider_ids.insert(current.provider_id.clone());
+        }
+
+        for credential in &current_provider_credentials {
+            let current = Self::protected_provider_route_state(local, &credential.provider_id)?
+                .ok_or_else(Self::credential_conflict)?;
+            let incoming = Self::protected_provider_route_state(incoming, &credential.provider_id)?
+                .ok_or_else(Self::credential_conflict)?;
+            if !Self::redacted_provider_context_matches(&current, &incoming)? {
+                return Err(Self::credential_conflict());
+            }
+            protected_provider_ids.insert(credential.provider_id.clone());
+        }
+
+        for provider_id in protected_provider_ids {
+            Self::restore_local_provider_auth_context(local, incoming, &provider_id)?;
+        }
+        for agent_id in Self::ever_bound_agent_ids(local)? {
+            match incoming.execute(
+                "UPDATE agent_modules SET ever_bound = 1 WHERE id = ?1",
+                [&agent_id],
+            ) {
+                Ok(1) => {}
+                Ok(_) | Err(_) => return Err(Self::credential_conflict()),
+            }
+        }
+        Self::remove_redacted_backup_marker(incoming)?;
+        Ok(())
+    }
+
     fn authoritative_backup_dir(&self) -> Result<Option<PathBuf>, AppError> {
         let Some(database_path) = self.database_path() else {
             return Ok(None);
@@ -558,15 +1230,244 @@ impl Database {
         Ok(Some(parent.join("backups")))
     }
 
+    fn sanitize_json_backup_column(
+        conn: &Connection,
+        table: &str,
+        column: &str,
+        invalid_fallback: Option<&str>,
+    ) -> Result<(), AppError> {
+        if !Self::table_exists(conn, table)? || !Self::has_column(conn, table, column)? {
+            return Ok(());
+        }
+
+        let sql = format!("SELECT rowid, \"{column}\" FROM \"{table}\"");
+        let mut statement = conn.prepare(&sql)?;
+        let rows = statement.query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?))
+        })?;
+        let rows = rows.collect::<Result<Vec<_>, _>>()?;
+        drop(statement);
+
+        for (rowid, raw) in rows {
+            let sanitized = sanitized_json_backup_text(raw.as_deref(), invalid_fallback)?;
+            conn.execute(
+                &format!("UPDATE \"{table}\" SET \"{column}\" = ?1 WHERE rowid = ?2"),
+                rusqlite::params![sanitized, rowid],
+            )?;
+        }
+        Ok(())
+    }
+
+    fn sanitize_url_backup_column(
+        conn: &Connection,
+        table: &str,
+        column: &str,
+    ) -> Result<(), AppError> {
+        if !Self::table_exists(conn, table)? || !Self::has_column(conn, table, column)? {
+            return Ok(());
+        }
+        let mut statement = conn.prepare(&format!(
+            "SELECT rowid, \"{column}\" FROM \"{table}\" WHERE \"{column}\" IS NOT NULL"
+        ))?;
+        let rows = statement.query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let rows = rows.collect::<Result<Vec<_>, _>>()?;
+        drop(statement);
+        for (rowid, raw) in rows {
+            if let Some(redacted) = redact_url_secrets(&raw) {
+                conn.execute(
+                    &format!("UPDATE \"{table}\" SET \"{column}\" = ?1 WHERE rowid = ?2"),
+                    rusqlite::params![redacted, rowid],
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    fn sanitize_backup_settings(conn: &Connection) -> Result<(), AppError> {
+        if !Self::table_exists(conn, "settings")? {
+            return Ok(());
+        }
+        let mut statement = conn.prepare("SELECT key, value FROM settings")?;
+        let rows = statement.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+        })?;
+        let rows = rows.collect::<Result<Vec<_>, _>>()?;
+        drop(statement);
+
+        for (key, value) in rows {
+            let normalized = normalized_secret_key(&key);
+            if is_secret_json_key(&key) {
+                conn.execute("DELETE FROM settings WHERE key = ?1", [&key])?;
+                continue;
+            }
+            let is_common_config = key.starts_with("common_config_")
+                && !key.ends_with("_cleared")
+                && normalized != "commonconfiglegacymigratedv1";
+            let Some(value) = value else {
+                continue;
+            };
+            if is_common_config {
+                conn.execute("DELETE FROM settings WHERE key = ?1", [&key])?;
+                continue;
+            }
+            if matches!(key.as_str(), "global_proxy_url" | "universal_providers") {
+                conn.execute("DELETE FROM settings WHERE key = ?1", [&key])?;
+                continue;
+            }
+            if let Some(redacted) = sanitized_json_backup_text(Some(&value), None)? {
+                conn.execute(
+                    "UPDATE settings SET value = ?2 WHERE key = ?1",
+                    rusqlite::params![key, redacted],
+                )?;
+            } else if let Some(redacted) = redact_url_secrets(&value) {
+                conn.execute(
+                    "UPDATE settings SET value = ?2 WHERE key = ?1",
+                    rusqlite::params![key, redacted],
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    fn sanitize_backup_snapshot(conn: &Connection) -> Result<(), AppError> {
+        conn.execute_batch("PRAGMA secure_delete=ON;")?;
+        conn.execute_batch("SAVEPOINT sanitize_backup_snapshot;")?;
+        let result = (|| {
+            Self::sanitize_json_backup_column(conn, "providers", "settings_config", Some("{}"))?;
+            if Self::table_exists(conn, "providers")? {
+                conn.execute("UPDATE providers SET meta = '{}'", [])?;
+            }
+            Self::sanitize_json_backup_column(conn, "usage_providers", "route_config", None)?;
+            if Self::table_exists(conn, "mcp_servers")? {
+                conn.execute(
+                    "UPDATE mcp_servers
+                     SET server_config = '{}', enabled_claude = 0,
+                         enabled_codex = 0, enabled_gemini = 0,
+                         enabled_opencode = 0, enabled_hermes = 0",
+                    [],
+                )?;
+            }
+            Self::sanitize_url_backup_column(conn, "provider_endpoints", "url")?;
+            Self::sanitize_url_backup_column(conn, "providers", "website_url")?;
+            Self::sanitize_url_backup_column(conn, "mcp_servers", "homepage")?;
+            Self::sanitize_url_backup_column(conn, "mcp_servers", "docs")?;
+            Self::sanitize_url_backup_column(conn, "skills", "readme_url")?;
+            Self::sanitize_backup_settings(conn)?;
+
+            if Self::table_exists(conn, "usage_providers")? {
+                conn.execute("UPDATE usage_providers SET quota_config = NULL", [])?;
+            }
+            if Self::table_exists(conn, "quota_snapshots")? {
+                let append_only_trigger = conn
+                    .query_row(
+                        "SELECT sql FROM sqlite_master
+                         WHERE type = 'trigger'
+                           AND name = 'quota_snapshots_append_only_update'",
+                        [],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .optional()?;
+                conn.execute(
+                    "DROP TRIGGER IF EXISTS quota_snapshots_append_only_update",
+                    [],
+                )?;
+                conn.execute("UPDATE quota_snapshots SET raw_payload = '{}'", [])?;
+                if let Some(trigger_sql) = append_only_trigger {
+                    conn.execute_batch(&format!("{trigger_sql};"))?;
+                }
+            }
+            if Self::table_exists(conn, "proxy_live_backup")? {
+                conn.execute("DELETE FROM proxy_live_backup", [])?;
+            }
+            if Self::table_exists(conn, "proxy_config")? {
+                conn.execute(
+                    "UPDATE proxy_config
+                     SET proxy_enabled = 0, enabled = 0, auto_failover_enabled = 0",
+                    [],
+                )?;
+                if Self::has_column(conn, "proxy_config", "live_takeover_active")? {
+                    conn.execute("UPDATE proxy_config SET live_takeover_active = 0", [])?;
+                }
+            }
+            conn.execute(
+                "UPDATE settings SET value = 'false' WHERE key LIKE 'proxy_takeover_%'",
+                [],
+            )?;
+            for (table, column, replacement) in [
+                ("quota_fetch_state", "last_error", None),
+                ("provider_health", "last_error", None),
+                ("proxy_request_logs", "error_message", None),
+                ("stream_check_logs", "message", Some("")),
+            ] {
+                if Self::table_exists(conn, table)? && Self::has_column(conn, table, column)? {
+                    conn.execute(
+                        &format!("UPDATE \"{table}\" SET \"{column}\" = ?1"),
+                        [replacement],
+                    )?;
+                }
+            }
+            if Self::table_exists(conn, "agent_provider_bindings")? {
+                conn.execute(
+                    "UPDATE agent_provider_bindings
+                     SET api_key_fingerprint = NULL, credential_slot = NULL",
+                    [],
+                )?;
+            }
+            if Self::table_exists(conn, "provider_api_credentials")? {
+                conn.execute(
+                    "UPDATE provider_api_credentials
+                     SET api_key_fingerprint = NULL, credential_slot = NULL",
+                    [],
+                )?;
+            }
+            for table in [
+                "agent_credential_operations",
+                "provider_credential_operations",
+            ] {
+                if Self::table_exists(conn, table)? {
+                    conn.execute(&format!("DELETE FROM \"{table}\""), [])?;
+                }
+            }
+            conn.execute(
+                "INSERT INTO settings (key, value) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                rusqlite::params![REDACTED_BACKUP_SETTING, REDACTED_BACKUP_VERSION],
+            )?;
+            Ok(())
+        })();
+
+        match result {
+            Ok(()) => {
+                conn.execute_batch("RELEASE sanitize_backup_snapshot;")?;
+                Ok(())
+            }
+            Err(error) => {
+                let _ = conn.execute_batch(
+                    "ROLLBACK TO sanitize_backup_snapshot; RELEASE sanitize_backup_snapshot;",
+                );
+                Err(error)
+            }
+        }
+    }
+
+    fn sanitized_snapshot_for_backup(&self) -> Result<Connection, AppError> {
+        let snapshot = self.snapshot_to_memory()?;
+        Self::sanitize_backup_snapshot(&snapshot)?;
+        snapshot.execute_batch("VACUUM;")?;
+        Ok(snapshot)
+    }
+
     /// 导出为 SQLite 兼容的 SQL 文本（内存字符串，完整导出）
     pub fn export_sql_string(&self) -> Result<String, AppError> {
-        let snapshot = self.snapshot_to_memory()?;
+        let snapshot = self.sanitized_snapshot_for_backup()?;
         Self::dump_sql(&snapshot, &[])
     }
 
     /// Export SQL for sync (WebDAV), skipping local-only tables' data
     pub fn export_sql_string_for_sync(&self) -> Result<String, AppError> {
-        let snapshot = self.snapshot_to_memory()?;
+        let snapshot = self.sanitized_snapshot_for_backup()?;
         Self::dump_sql(&snapshot, SYNC_SKIP_TABLES)
     }
 
@@ -635,6 +1536,10 @@ impl Database {
         temp_conn
             .execute_batch(sql_content)
             .map_err(|e| AppError::Database(format!("执行 SQL 导入失败: {e}")))?;
+        let redacted_backup = Self::redacted_backup_version(&temp_conn)?;
+        if redacted_backup {
+            Self::validate_redacted_backup_shape(&temp_conn)?;
+        }
 
         // 补齐缺失表/索引并进行基础校验
         Self::create_tables_on_conn(&temp_conn)?;
@@ -644,16 +1549,22 @@ impl Database {
         Self::apply_schema_migrations_on_conn(&temp_conn)?;
         crate::usage::system_provider_migration::reconcile_system_provider_catalog(&temp_conn)?;
         crate::usage::system_provider_migration::validate_schema_v17_complete(&temp_conn)?;
+        crate::usage::budget_migration::normalize_daily_budgets(&temp_conn)?;
         Self::validate_basic_state(&temp_conn)?;
         Self::validate_import_schema_allowlist(&temp_conn)?;
         if let Some(local_snapshot) = local_snapshot.as_ref() {
             Self::restore_tables(local_snapshot, &temp_conn, preserve_tables)?;
-            Self::preserve_local_credentials_for_sync(local_snapshot, &temp_conn)?;
+            if !redacted_backup {
+                Self::preserve_local_credentials_for_sync(local_snapshot, &temp_conn)?;
+            }
         }
 
         // 使用 Backup 将临时库原子写回主库
         {
             let mut main_conn = lock_conn!(self.conn);
+            if redacted_backup {
+                Self::rehydrate_local_credentials_for_redacted_backup(&main_conn, &temp_conn)?;
+            }
             Self::preserve_system_provider_seed_marker(&main_conn, &temp_conn)?;
             Self::ensure_protected_credentials_preserved(&main_conn, &temp_conn)?;
             let backup = Backup::new(&temp_conn, &mut main_conn)
@@ -844,10 +1755,10 @@ impl Database {
         }
 
         {
-            let conn = lock_conn!(self.conn);
+            let snapshot = self.sanitized_snapshot_for_backup()?;
             let mut dest_conn =
                 Connection::open(&backup_path).map_err(|e| AppError::Database(e.to_string()))?;
-            let backup = Backup::new(&conn, &mut dest_conn)
+            let backup = Backup::new(&snapshot, &mut dest_conn)
                 .map_err(|e| AppError::Database(e.to_string()))?;
             backup
                 .step(-1)
@@ -917,7 +1828,7 @@ impl Database {
             .unwrap_or(0);
 
         output.push_str(&format!(
-            "{LLM_USAGE_BAR_SQL_EXPORT_HEADER}\n-- 生成时间: {timestamp}\n-- user_version: {user_version}\n"
+            "{LLM_USAGE_BAR_SQL_EXPORT_HEADER}\n{REDACTED_BACKUP_MARKER}\n-- 生成时间: {timestamp}\n-- user_version: {user_version}\n"
         ));
         output.push_str("PRAGMA foreign_keys=OFF;\n");
         output.push_str(&format!("PRAGMA user_version={user_version};\n"));
@@ -1123,6 +2034,10 @@ impl Database {
                 .step(-1)
                 .map_err(|e| AppError::Database(e.to_string()))?;
         }
+        let redacted_backup = Self::redacted_backup_version(&staged_conn)?;
+        if redacted_backup {
+            Self::validate_redacted_backup_shape(&staged_conn)?;
+        }
         Self::create_tables_on_conn(&staged_conn)?;
         if Self::get_user_version(&staged_conn)? == crate::database::SCHEMA_VERSION {
             crate::usage::system_provider_migration::reconcile_system_provider_catalog(
@@ -1132,11 +2047,15 @@ impl Database {
         Self::apply_schema_migrations_on_conn(&staged_conn)?;
         crate::usage::system_provider_migration::reconcile_system_provider_catalog(&staged_conn)?;
         crate::usage::system_provider_migration::validate_schema_v17_complete(&staged_conn)?;
+        crate::usage::budget_migration::normalize_daily_budgets(&staged_conn)?;
         Self::validate_import_schema_allowlist(&staged_conn)?;
 
         // Step 3: Preserve device-local credential lifecycle state, then restore.
         {
             let mut main_conn = lock_conn!(self.conn);
+            if redacted_backup {
+                Self::rehydrate_local_credentials_for_redacted_backup(&main_conn, &staged_conn)?;
+            }
             Self::preserve_system_provider_seed_marker(&main_conn, &staged_conn)?;
             Self::ensure_protected_credentials_preserved(&main_conn, &staged_conn)?;
             let backup = Backup::new(&staged_conn, &mut main_conn)
@@ -1252,7 +2171,10 @@ impl Database {
 
 #[cfg(test)]
 mod tests {
-    use super::{Database, LEGACY_CC_SWITCH_SQL_EXPORT_HEADER, LLM_USAGE_BAR_SQL_EXPORT_HEADER};
+    use super::{
+        redact_url_secrets, Database, LEGACY_CC_SWITCH_SQL_EXPORT_HEADER,
+        LLM_USAGE_BAR_SQL_EXPORT_HEADER,
+    };
     use crate::error::AppError;
     use crate::product_identity::DATABASE_FILE;
     use crate::settings::{update_settings, AppSettings};
@@ -1260,6 +2182,39 @@ mod tests {
     use rusqlite::params;
     use serial_test::serial;
     use std::ffi::OsString;
+
+    const BACKUP_SECRET_SENTINELS: &[&str] = &[
+        "legacy-api-secret",
+        "legacy-oauth-secret",
+        "route-api-secret",
+        "quota-api-secret",
+        "quota-aws-secret",
+        "raw-upstream-secret",
+        "binding-slot-secret",
+        "provider-slot-secret",
+        "toml-bearer-secret",
+        "url-password-secret",
+        "url-code-secret",
+        "url-path-secret",
+        "legacy-path-secret",
+        "route-path-secret",
+        "mcp-pat-secret",
+        "mcp-arg-secret",
+        "live-refresh-secret",
+        "gateway-setting-secret",
+        "proxy-password-secret",
+        "proxy-query-secret",
+        "common-config-secret",
+        "universal-provider-secret",
+        "opaque-setting-secret",
+        "endpoint-password-secret",
+        "endpoint-query-secret",
+        "endpoint-path-secret",
+        "quota-error-secret",
+        "health-error-secret",
+        "stream-error-secret",
+        "request-error-secret",
+    ];
 
     struct TestHomeRestore(Option<OsString>);
 
@@ -1333,6 +2288,22 @@ mod tests {
         .map_err(AppError::from)
     }
 
+    type OptionalProtectedTuple = (Option<Vec<u8>>, Option<String>, i64);
+
+    fn optional_protected_tuple(
+        db: &Database,
+        binding_id: &str,
+    ) -> Result<OptionalProtectedTuple, AppError> {
+        let conn = crate::database::lock_conn!(db.conn);
+        conn.query_row(
+            "SELECT api_key_fingerprint, credential_slot, credential_version
+             FROM agent_provider_bindings WHERE id = ?1",
+            [binding_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .map_err(AppError::from)
+    }
+
     fn set_provider_credential_state(
         db: &Database,
         provider_id: &str,
@@ -1387,9 +2358,406 @@ mod tests {
         Ok(())
     }
 
+    fn install_backup_secret_sentinels(db: &Database) -> Result<(), AppError> {
+        insert_protected_credential_state(
+            db,
+            "backup-secret-binding",
+            "binding-slot-secret",
+            7,
+            false,
+        )?;
+        set_provider_credential_state(
+            db,
+            "system-openrouter-api",
+            0x71,
+            "provider-slot-secret",
+            8,
+        )?;
+
+        let conn = crate::database::lock_conn!(db.conn);
+        conn.execute(
+            "UPDATE providers
+             SET settings_config = '{\"apiKey\":\"legacy-api-secret\",\"baseUrl\":\"https://safe.example/v1/legacy-path-secret\",\"config\":\"experimental_bearer_token = \\\"toml-bearer-secret\\\"\"}',
+                 meta = '{\"oauth\":{\"access_token\":\"legacy-oauth-secret\"},\"label\":\"safe metadata\"}',
+                 website_url = 'https://url-user:url-password-secret@safe.example/docs/url-path-secret?code=url-code-secret'
+             WHERE id = 'backup-provider' AND app_type = 'claude'",
+            [],
+        )?;
+        conn.execute(
+            "UPDATE usage_providers
+             SET route_config = '{\"base_url\":\"https://safe.example/v1/route-path-secret\",\"apiKey\":\"route-api-secret\"}',
+                 quota_config = '{\"api_key\":\"quota-api-secret\",\"secret_access_key\":\"quota-aws-secret\"}'
+             WHERE id = 'backup-usage-provider'",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO quota_snapshots (
+                 snapshot_id, provider_id, fetched_at, raw_payload, created_at
+             ) VALUES (
+                 'backup-raw-payload', 'system-chatgpt-subscription', 10,
+                 '{\"access_token\":\"raw-upstream-secret\",\"remaining\":51}', 10
+             )",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO mcp_servers (
+                 id, name, server_config, tags, enabled_claude, enabled_codex
+             ) VALUES (
+                 'backup-secret-mcp', 'Backup Secret MCP',
+                 '{\"env\":{\"GITHUB_PAT\":\"mcp-pat-secret\"},\"args\":[\"--token\",\"mcp-arg-secret\"]}',
+                 '[]', 1, 1
+             )",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO proxy_live_backup (app_type, original_config, backed_up_at)
+             VALUES ('codex', '{\"refresh_token\":\"live-refresh-secret\"}', 'now')",
+            [],
+        )?;
+        for (key, value) in [
+            ("claude_desktop_gateway_token", "gateway-setting-secret"),
+            (
+                "global_proxy_url",
+                "http://proxy-user:proxy-password-secret@127.0.0.1:8080?token=proxy-query-secret",
+            ),
+            (
+                "common_config_codex",
+                "experimental_bearer_token = \"common-config-secret\"",
+            ),
+            (
+                "universal_providers",
+                "[{\"id\":\"sentinel\",\"apiKey\":\"universal-provider-secret\"}]",
+            ),
+            ("oauth_credential", "opaque-setting-secret"),
+        ] {
+            conn.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES (?1, ?2)",
+                params![key, value],
+            )?;
+        }
+        conn.execute(
+            "INSERT INTO provider_endpoints (provider_id, app_type, url, added_at)
+             VALUES ('backup-provider', 'claude',
+                     'https://endpoint-user:endpoint-password-secret@safe.example/v1/endpoint-path-secret?signature=endpoint-query-secret',
+                     10)",
+            [],
+        )?;
+        conn.execute(
+            "INSERT OR REPLACE INTO quota_fetch_state (
+                 provider_id, last_attempt_at, last_error, stale
+             ) VALUES ('system-chatgpt-subscription', 10, 'quota-error-secret', 1)",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO provider_health (
+                 provider_id, app_type, last_error, updated_at
+             ) VALUES ('backup-provider', 'claude', 'health-error-secret', 'now')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO stream_check_logs (
+                 provider_id, provider_name, app_type, status, success,
+                 message, tested_at
+             ) VALUES (
+                 'backup-provider', 'Backup Provider', 'claude', 'error', 0,
+                 'stream-error-secret', 10
+             )",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO proxy_request_logs (
+                 request_id, provider_id, app_type, model, latency_ms,
+                 status_code, error_message, created_at
+             ) VALUES (
+                 'backup-error-request', 'backup-provider', 'claude', 'model', 1,
+                 500, 'request-error-secret', 10
+             )",
+            [],
+        )?;
+        conn.execute(
+            "UPDATE proxy_config
+             SET proxy_enabled = 1, enabled = 1, auto_failover_enabled = 1
+             WHERE app_type = 'codex'",
+            [],
+        )?;
+        Ok(())
+    }
+
     #[test]
-    fn ordinary_import_rejects_removing_local_provider_credential_metadata() -> Result<(), AppError>
+    fn url_redaction_removes_network_paths_that_may_embed_credentials() {
+        assert_eq!(
+            redact_url_secrets("https://safe.example/bot-token-secret/v1").as_deref(),
+            Some("https://safe.example/")
+        );
+        assert_eq!(redact_url_secrets("https://safe.example/"), None);
+    }
+
+    #[test]
+    fn sql_exports_redact_secret_bearing_database_fields() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        install_backup_secret_sentinels(&db)?;
+
+        for exported in [db.export_sql_string()?, db.export_sql_string_for_sync()?] {
+            for secret in BACKUP_SECRET_SENTINELS {
+                assert!(
+                    !exported.contains(secret),
+                    "SQL export leaked sentinel {secret}"
+                );
+            }
+            assert!(!exported.contains(&"5A".repeat(32)));
+            assert!(!exported.contains(&"71".repeat(32)));
+            assert!(exported.contains("https://safe.example/"));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn binary_backup_redacts_secret_bearing_database_fields() -> Result<(), AppError> {
+        let temp = tempfile::tempdir().expect("create binary backup test root");
+        let db_path = temp.path().join(DATABASE_FILE);
+        let db = Database::init_at(&db_path)?;
+        install_backup_secret_sentinels(&db)?;
+
+        let backup_path = db
+            .backup_database_file()?
+            .expect("file database produces a backup");
+        let backup = rusqlite::Connection::open(&backup_path)?;
+
+        let (settings_config, meta): (String, String) = backup.query_row(
+            "SELECT settings_config, meta FROM providers
+             WHERE id = 'backup-provider' AND app_type = 'claude'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert!(!settings_config.contains("legacy-api-secret"));
+        assert!(settings_config.contains("https://safe.example/"));
+        assert!(!meta.contains("legacy-oauth-secret"));
+        assert_eq!(meta, "{}");
+
+        let (route_config, quota_config): (String, Option<String>) = backup.query_row(
+            "SELECT route_config, quota_config FROM usage_providers
+             WHERE id = 'backup-usage-provider'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert!(!route_config.contains("route-api-secret"));
+        assert!(route_config.contains("https://safe.example/"));
+        assert_eq!(quota_config, None);
+        assert_eq!(
+            backup.query_row(
+                "SELECT raw_payload FROM quota_snapshots
+                 WHERE snapshot_id = 'backup-raw-payload'",
+                [],
+                |row| row.get::<_, String>(0),
+            )?,
+            "{}"
+        );
+        assert_eq!(
+            backup.query_row(
+                "SELECT api_key_fingerprint, credential_slot
+                 FROM agent_provider_bindings WHERE id = 'backup-secret-binding'",
+                [],
+                |row| Ok((
+                    row.get::<_, Option<Vec<u8>>>(0)?,
+                    row.get::<_, Option<String>>(1)?
+                )),
+            )?,
+            (None, None)
+        );
+        assert_eq!(
+            backup.query_row(
+                "SELECT api_key_fingerprint, credential_slot
+                 FROM provider_api_credentials WHERE provider_id = 'system-openrouter-api'",
+                [],
+                |row| Ok((
+                    row.get::<_, Option<Vec<u8>>>(0)?,
+                    row.get::<_, Option<String>>(1)?
+                )),
+            )?,
+            (None, None)
+        );
+        assert_eq!(
+            backup.query_row(
+                "SELECT server_config, enabled_claude, enabled_codex
+                 FROM mcp_servers WHERE id = 'backup-secret-mcp'",
+                [],
+                |row| Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, bool>(1)?,
+                    row.get::<_, bool>(2)?
+                )),
+            )?,
+            ("{}".to_string(), false, false)
+        );
+        assert_eq!(
+            backup.query_row("SELECT COUNT(*) FROM proxy_live_backup", [], |row| {
+                row.get::<_, i64>(0)
+            })?,
+            0
+        );
+        assert_eq!(
+            backup.query_row(
+                "SELECT proxy_enabled, enabled, auto_failover_enabled
+                 FROM proxy_config WHERE app_type = 'codex'",
+                [],
+                |row| Ok((
+                    row.get::<_, bool>(0)?,
+                    row.get::<_, bool>(1)?,
+                    row.get::<_, bool>(2)?
+                )),
+            )?,
+            (false, false, false)
+        );
+        drop(backup);
+        let bytes = std::fs::read(&backup_path).expect("read sanitized SQLite backup bytes");
+        for secret in BACKUP_SECRET_SENTINELS {
+            assert!(
+                !bytes
+                    .windows(secret.len())
+                    .any(|window| window == secret.as_bytes()),
+                "binary backup retained sentinel bytes for {secret}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn binary_restore_rehydrates_same_device_credentials_and_auth_context() -> Result<(), AppError>
     {
+        let temp = tempfile::tempdir().expect("create same-device restore root");
+        let db_path = temp.path().join(DATABASE_FILE);
+        let db = Database::init_at(&db_path)?;
+        insert_protected_credential_state(&db, "protected-binding", "local-slot", 3, false)?;
+        set_provider_credential_state(
+            &db,
+            "system-openrouter-api",
+            0x72,
+            "provider/system-openrouter-api/local",
+            4,
+        )?;
+        {
+            let conn = crate::database::lock_conn!(db.conn);
+            conn.execute(
+                "UPDATE providers
+                 SET settings_config = '{\"providerType\":\"custom\",\"apiKey\":\"local-legacy-key\"}',
+                     meta = '{\"access_token\":\"local-legacy-token\",\"label\":\"local\"}'
+                 WHERE id = 'backup-provider' AND app_type = 'claude'",
+                [],
+            )?;
+            conn.execute(
+                "UPDATE usage_providers
+                 SET route_config = '{\"base_url\":\"https://safe.example/v1\",\"apiKey\":\"local-route-key\"}',
+                     quota_config = '{\"api_key\":\"local-quota-key\"}',
+                     legacy_app_type = 'claude', legacy_provider_id = 'backup-provider'
+                 WHERE id = 'backup-usage-provider'",
+                [],
+            )?;
+        }
+        let backup_path = db
+            .backup_database_file()?
+            .expect("file database produces a backup");
+        let filename = backup_path
+            .file_name()
+            .expect("backup filename")
+            .to_string_lossy()
+            .into_owned();
+
+        db.restore_from_backup(&filename)?;
+
+        assert_eq!(
+            protected_tuple(&db, "protected-binding")?,
+            (vec![0x5a_u8; 32], "local-slot".to_string(), 3)
+        );
+        assert_eq!(
+            provider_credential_tuple(&db, "system-openrouter-api")?,
+            (
+                vec![0x72; 32],
+                "provider/system-openrouter-api/local".into(),
+                4,
+                Some(91),
+                Some("success".into()),
+            )
+        );
+        let conn = crate::database::lock_conn!(db.conn);
+        let (route_config, quota_config): (String, String) = conn.query_row(
+            "SELECT route_config, quota_config FROM usage_providers
+             WHERE id = 'backup-usage-provider'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert!(route_config.contains("local-route-key"));
+        assert!(quota_config.contains("local-quota-key"));
+        let (settings_config, meta): (String, String) = conn.query_row(
+            "SELECT settings_config, meta FROM providers
+             WHERE id = 'backup-provider' AND app_type = 'claude'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert!(settings_config.contains("local-legacy-key"));
+        assert!(meta.contains("local-legacy-token"));
+        Ok(())
+    }
+
+    #[test]
+    fn redacted_sql_import_rejects_a_binding_route_protocol_change() -> Result<(), AppError> {
+        let local = Database::memory()?;
+        insert_protected_credential_state(&local, "protected-binding", "local-slot", 1, false)?;
+        local.conn.lock().unwrap().execute(
+            "UPDATE agent_provider_bindings SET route_protocol = 'claude'
+             WHERE id = 'protected-binding'",
+            [],
+        )?;
+
+        let incoming = Database::memory()?;
+        insert_protected_credential_state(&incoming, "protected-binding", "remote-slot", 2, false)?;
+        incoming.conn.lock().unwrap().execute(
+            "UPDATE agent_provider_bindings SET route_protocol = 'codex'
+             WHERE id = 'protected-binding'",
+            [],
+        )?;
+
+        let error = local
+            .import_sql_string(&incoming.export_sql_string()?)
+            .expect_err("redacted import must not retarget the local slot protocol");
+        assert_eq!(error.to_string(), "credential_conflict");
+        Ok(())
+    }
+
+    #[test]
+    fn redacted_sql_import_protects_provider_level_binding_protocols() -> Result<(), AppError> {
+        let local = Database::memory()?;
+        set_provider_credential_state(
+            &local,
+            "system-openrouter-api",
+            0x72,
+            "provider/system-openrouter-api/local",
+            4,
+        )?;
+        let agent_id = local.conn.lock().unwrap().query_row(
+            "SELECT agent_module_id FROM agent_provider_bindings
+             WHERE provider_id = 'system-openrouter-api' ORDER BY agent_module_id LIMIT 1",
+            [],
+            |row| row.get::<_, String>(0),
+        )?;
+
+        let incoming = Database::memory()?;
+        insert_import_sentinel(&incoming, "provider-level-protocol-import")?;
+        incoming.conn.lock().unwrap().execute(
+            "UPDATE agent_provider_bindings SET route_protocol = 'tampered-protocol'
+             WHERE provider_id = 'system-openrouter-api' AND agent_module_id = ?1",
+            [&agent_id],
+        )?;
+
+        let error = local
+            .import_sql_string(&incoming.export_sql_string()?)
+            .expect_err("Provider-level keys must protect every logical binding protocol");
+        assert_eq!(error.to_string(), "credential_conflict");
+        Ok(())
+    }
+
+    #[test]
+    fn ordinary_redacted_import_preserves_local_provider_credential_metadata(
+    ) -> Result<(), AppError> {
         let local = Database::memory()?;
         set_provider_credential_state(
             &local,
@@ -1401,10 +2769,7 @@ mod tests {
         let incoming = Database::memory()?;
         insert_import_sentinel(&incoming, "provider-credential-ordinary-import")?;
 
-        let error = local
-            .import_sql_string(&incoming.export_sql_string()?)
-            .expect_err("ordinary import must not orphan a local Provider credential slot");
-        assert_eq!(error.to_string(), "credential_conflict");
+        local.import_sql_string(&incoming.export_sql_string()?)?;
         assert_eq!(
             provider_credential_tuple(&local, "system-openrouter-api")?,
             (
@@ -1628,7 +2993,7 @@ mod tests {
     }
 
     #[test]
-    fn sql_import_rejects_changing_a_local_protected_credential_tuple() -> Result<(), AppError> {
+    fn redacted_sql_import_keeps_the_local_protected_credential_tuple() -> Result<(), AppError> {
         let local = Database::memory()?;
         insert_protected_credential_state(&local, "protected-binding", "local-slot", 1, false)?;
 
@@ -1642,10 +3007,7 @@ mod tests {
         )?;
         let incoming_sql = incoming.export_sql_string()?;
 
-        let error = local
-            .import_sql_string(&incoming_sql)
-            .expect_err("import must preserve the complete local credential tuple");
-        assert_eq!(error.to_string(), "credential_conflict");
+        local.import_sql_string(&incoming_sql)?;
         assert_eq!(
             protected_tuple(&local, "protected-binding")?,
             (vec![0x5a_u8; 32], "local-slot".to_string(), 1)
@@ -1845,7 +3207,7 @@ mod tests {
     }
 
     #[test]
-    fn sql_import_rejects_a_remote_only_credential_journal_row() -> Result<(), AppError> {
+    fn redacted_sql_import_drops_remote_credentials_and_journal_rows() -> Result<(), AppError> {
         let local = Database::memory()?;
         {
             let conn = crate::database::lock_conn!(local.conn);
@@ -1866,9 +3228,97 @@ mod tests {
         )?;
         let incoming_sql = incoming.export_sql_string()?;
 
+        local.import_sql_string(&incoming_sql)?;
+        assert_eq!(
+            optional_protected_tuple(&local, "remote-protected-binding")?,
+            (None, None, 1)
+        );
+        let journal_count = local.conn.lock().unwrap().query_row(
+            "SELECT COUNT(*) FROM agent_credential_operations",
+            [],
+            |row| row.get::<_, i64>(0),
+        )?;
+        assert_eq!(journal_count, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn redacted_sql_import_rejects_an_injected_credential_journal_row() -> Result<(), AppError> {
+        let local = Database::memory()?;
+        let incoming = Database::memory()?;
+        insert_protected_credential_state(
+            &incoming,
+            "remote-protected-binding",
+            "remote-slot",
+            1,
+            false,
+        )?;
+        let payload = "INSERT INTO agent_credential_operations (
+             operation_id, binding_id, generation, operation_kind,
+             status, staging_slot, previous_slot, created_at, updated_at
+         ) VALUES (
+             'injected-remote-operation', 'remote-protected-binding', 1,
+             'replace', 'cleanup', 'injected-slot', NULL, 11, 12
+         );\n";
+        let tampered =
+            incoming
+                .export_sql_string()?
+                .replacen("COMMIT;\n", &format!("{payload}COMMIT;\n"), 1);
+
         let error = local
-            .import_sql_string(&incoming_sql)
-            .expect_err("a remote deletion intent must never execute on this device");
+            .import_sql_string(&tampered)
+            .expect_err("marked backups must reject an injected credential journal");
+        assert_eq!(error.to_string(), "credential_conflict");
+        Ok(())
+    }
+
+    #[test]
+    fn redacted_sql_import_rejects_an_injected_credential_slot() -> Result<(), AppError> {
+        let local = Database::memory()?;
+        let incoming = Database::memory()?;
+        insert_protected_credential_state(
+            &incoming,
+            "remote-protected-binding",
+            "remote-slot",
+            1,
+            false,
+        )?;
+        let tampered = incoming.export_sql_string()?.replacen(
+            "COMMIT;\n",
+            "UPDATE agent_provider_bindings
+             SET api_key_fingerprint = X'5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A',
+                 credential_slot = 'injected-slot'
+             WHERE id = 'remote-protected-binding';
+             COMMIT;\n",
+            1,
+        );
+
+        let error = local
+            .import_sql_string(&tampered)
+            .expect_err("marked backups must reject an injected Keychain slot");
+        assert_eq!(error.to_string(), "credential_conflict");
+        Ok(())
+    }
+
+    #[test]
+    fn redacted_sql_import_rejects_a_local_provider_credential_journal() -> Result<(), AppError> {
+        let local = Database::memory()?;
+        local.conn.lock().unwrap().execute(
+            "INSERT INTO provider_credential_operations (
+                 operation_id, provider_id, generation, operation_kind,
+                 status, staging_slot, previous_slot, created_at, updated_at
+             ) VALUES (
+                 'local-provider-operation', 'system-openrouter-api', 1,
+                 'set', 'pending', 'provider/staging/local', NULL, 10, 10
+             )",
+            [],
+        )?;
+        let incoming = Database::memory()?;
+        insert_import_sentinel(&incoming, "provider-journal-import")?;
+
+        let error = local
+            .import_sql_string(&incoming.export_sql_string()?)
+            .expect_err("restore must not discard local Provider credential lifecycle work");
         assert_eq!(error.to_string(), "credential_conflict");
         Ok(())
     }
@@ -1886,17 +3336,13 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_import_rejects_downgrading_ever_bound_tombstone() -> Result<(), AppError> {
+    fn ordinary_redacted_import_preserves_ever_bound_tombstone() -> Result<(), AppError> {
         let local = Database::memory()?;
         insert_custom_agent(&local, "formerly-bound-agent", true)?;
         let incoming = Database::memory()?;
         insert_custom_agent(&incoming, "formerly-bound-agent", false)?;
 
-        let error = local
-            .import_sql_string(&incoming.export_sql_string()?)
-            .expect_err("ordinary import must not make a formerly bound Agent hard-deletable");
-
-        assert_eq!(error.to_string(), "credential_conflict");
+        local.import_sql_string(&incoming.export_sql_string()?)?;
         assert!(agent_ever_bound(&local, "formerly-bound-agent")?);
         Ok(())
     }
@@ -2091,8 +3537,8 @@ mod tests {
 
         local.import_sql_string(&incoming.export_sql_string()?)?;
         assert_eq!(
-            protected_tuple(&local, "protected-binding")?,
-            (vec![0x5a_u8; 32], "restored-missing-slot".to_string(), 1)
+            optional_protected_tuple(&local, "protected-binding")?,
+            (None, None, 1)
         );
         Ok(())
     }
@@ -2100,10 +3546,10 @@ mod tests {
     #[test]
     fn sql_import_accepts_an_exact_superset_of_local_protected_state() -> Result<(), AppError> {
         let local = Database::memory()?;
-        insert_protected_credential_state(&local, "protected-binding", "local-slot", 1, true)?;
+        insert_protected_credential_state(&local, "protected-binding", "local-slot", 1, false)?;
 
         let incoming = Database::memory()?;
-        insert_protected_credential_state(&incoming, "protected-binding", "local-slot", 1, true)?;
+        insert_protected_credential_state(&incoming, "protected-binding", "local-slot", 1, false)?;
         {
             let conn = crate::database::lock_conn!(incoming.conn);
             conn.execute(
@@ -2142,8 +3588,8 @@ mod tests {
             (vec![0x5a_u8; 32], "local-slot".to_string(), 1)
         );
         assert_eq!(
-            protected_tuple(&local, "remote-protected-binding")?,
-            (vec![0x6b_u8; 32], "remote-slot".to_string(), 1)
+            optional_protected_tuple(&local, "remote-protected-binding")?,
+            (None, None, 1)
         );
         Ok(())
     }
@@ -2359,6 +3805,156 @@ mod tests {
                 .daily_budget_usd,
             None,
         );
+        Ok(())
+    }
+
+    fn insert_metered_budget_row(
+        db: &Database,
+        provider_id: &str,
+        raw_budget: &str,
+    ) -> Result<(), AppError> {
+        insert_metered_budget_row_for_conn(&db.conn.lock().unwrap(), provider_id, raw_budget)
+    }
+
+    fn insert_metered_budget_row_for_conn(
+        conn: &rusqlite::Connection,
+        provider_id: &str,
+        raw_budget: &str,
+    ) -> Result<(), AppError> {
+        conn.execute(
+            "INSERT INTO usage_providers (
+                 id, name, billing_kind, product_group_id, token_sources,
+                 enabled, needs_review, created_at, updated_at, daily_budget_usd
+             ) VALUES (?1, 'Budget Import Sentinel', 'metered', 'budget-import',
+                 '[\"proxy\"]', 1, 0, 10, 10, ?2)",
+            params![provider_id, raw_budget],
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn sql_import_rejects_invalid_daily_budget_without_replacing_live_state() -> Result<(), AppError>
+    {
+        let local = Database::memory()?;
+        insert_import_sentinel(&local, "live-budget-import-sentinel")?;
+        let incoming = Database::memory()?;
+        insert_import_sentinel(&incoming, "incoming-budget-import-sentinel")?;
+        insert_metered_budget_row(&incoming, "invalid-import-budget", "0")?;
+
+        let error = local
+            .import_sql_string(&incoming.export_sql_string()?)
+            .expect_err("zero daily budget must be rejected before replacing live state");
+        assert!(error.to_string().contains("invalid provider daily budget"));
+        assert!(local
+            .get_provider_by_id("live-budget-import-sentinel", "claude")?
+            .is_some());
+        assert!(local
+            .get_provider_by_id("incoming-budget-import-sentinel", "claude")?
+            .is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn sql_import_rejects_a_subscription_daily_budget_without_replacing_live_state(
+    ) -> Result<(), AppError> {
+        let local = Database::memory()?;
+        insert_import_sentinel(&local, "live-subscription-budget-sentinel")?;
+        let incoming = Database::memory()?;
+        incoming.conn.lock().unwrap().execute(
+            "UPDATE usage_providers SET daily_budget_usd = '10'
+             WHERE id = 'system-chatgpt-subscription'",
+            [],
+        )?;
+
+        let error = local
+            .import_sql_string(&incoming.export_sql_string()?)
+            .expect_err("subscription Providers must never accept a daily spend budget");
+        assert!(error.to_string().contains("invalid provider daily budget"));
+        assert!(local
+            .get_provider_by_id("live-subscription-budget-sentinel", "claude")?
+            .is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn sql_import_normalizes_valid_daily_budget_text() -> Result<(), AppError> {
+        let local = Database::memory()?;
+        let incoming = Database::memory()?;
+        insert_import_sentinel(&incoming, "normalized-budget-import-sentinel")?;
+        insert_metered_budget_row(&incoming, "normalized-import-budget", "42.7500")?;
+
+        local.import_sql_string(&incoming.export_sql_string()?)?;
+        let stored = local.conn.lock().unwrap().query_row(
+            "SELECT daily_budget_usd FROM usage_providers
+             WHERE id = 'normalized-import-budget'",
+            [],
+            |row| row.get::<_, String>(0),
+        )?;
+        assert_eq!(stored, "42.75");
+        Ok(())
+    }
+
+    #[test]
+    fn binary_restore_rejects_invalid_daily_budget_without_replacing_live_state(
+    ) -> Result<(), AppError> {
+        let temp = tempfile::tempdir().expect("create invalid budget restore root");
+        let db_path = temp.path().join(DATABASE_FILE);
+        let db = Database::init_at(&db_path)?;
+        insert_import_sentinel(&db, "live-binary-budget-sentinel")?;
+        let backup_path = db
+            .backup_database_file()?
+            .expect("file database produces a backup");
+        {
+            let backup = rusqlite::Connection::open(&backup_path)?;
+            insert_metered_budget_row_for_conn(&backup, "invalid-binary-restore-budget", "-1")?;
+        }
+        let filename = backup_path
+            .file_name()
+            .expect("backup filename")
+            .to_string_lossy()
+            .into_owned();
+
+        let error = db
+            .restore_from_backup(&filename)
+            .expect_err("negative daily budget must be rejected before restore");
+        assert!(error.to_string().contains("invalid provider daily budget"));
+        assert!(db
+            .get_provider_by_id("live-binary-budget-sentinel", "claude")?
+            .is_some());
+        assert!(db
+            .get_usage_provider("invalid-binary-restore-budget")?
+            .is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn binary_restore_rejects_a_subscription_daily_budget_without_replacing_live_state(
+    ) -> Result<(), AppError> {
+        let temp = tempfile::tempdir().expect("create subscription budget restore root");
+        let db_path = temp.path().join(DATABASE_FILE);
+        let db = Database::init_at(&db_path)?;
+        insert_import_sentinel(&db, "live-binary-subscription-budget-sentinel")?;
+        let backup_path = db
+            .backup_database_file()?
+            .expect("file database produces a backup");
+        rusqlite::Connection::open(&backup_path)?.execute(
+            "UPDATE usage_providers SET daily_budget_usd = '10'
+             WHERE id = 'system-chatgpt-subscription'",
+            [],
+        )?;
+        let filename = backup_path
+            .file_name()
+            .expect("backup filename")
+            .to_string_lossy()
+            .into_owned();
+
+        let error = db
+            .restore_from_backup(&filename)
+            .expect_err("binary restore must reject a subscription daily budget");
+        assert!(error.to_string().contains("invalid provider daily budget"));
+        assert!(db
+            .get_provider_by_id("live-binary-subscription-budget-sentinel", "claude")?
+            .is_some());
         Ok(())
     }
 
