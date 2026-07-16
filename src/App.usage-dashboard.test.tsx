@@ -1,7 +1,15 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setPendingMainWindowDestination } from "../tests/msw/handlers";
+import { commandCalls, emitTauriEvent } from "../tests/msw/tauriMocks";
 import App from "./App";
 import { setSettings } from "../tests/msw/state";
 import { usageDashboardApi } from "@/lib/api/usageDashboard";
@@ -12,6 +20,7 @@ const windowMocks = vi.hoisted(() => ({
   toggleMaximize: vi.fn(),
   close: vi.fn(),
 }));
+const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
 
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => windowMocks,
@@ -33,6 +42,22 @@ describe("Agent usage dashboard main path", () => {
     vi.restoreAllMocks();
     localStorage.clear();
     Object.values(windowMocks).forEach((mock) => mock.mockReset());
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: vi.fn(),
+    });
+  });
+
+  afterEach(() => {
+    if (originalScrollIntoView) {
+      HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
+    } else {
+      delete (
+        HTMLElement.prototype as Partial<HTMLElement> & {
+          scrollIntoView?: HTMLElement["scrollIntoView"];
+        }
+      ).scrollIntoView;
+    }
   });
 
   it("renders the five fixed Agents plus Custom without a global API tab", async () => {
@@ -117,5 +142,112 @@ describe("Agent usage dashboard main path", () => {
     expect(windowMocks.minimize).toHaveBeenCalledOnce();
     expect(windowMocks.toggleMaximize).toHaveBeenCalledOnce();
     expect(windowMocks.close).toHaveBeenCalledOnce();
+  });
+
+  it("drains a cold Provider destination into Providers and focuses its budget", async () => {
+    setPendingMainWindowDestination({
+      kind: "providerBudget",
+      providerId: "system-openrouter-api",
+    });
+    renderApp();
+
+    await waitFor(() =>
+      expect(
+        document.getElementById("provider-budget-input-system-openrouter-api"),
+      ).toBeInstanceOf(HTMLInputElement),
+    );
+    const input = document.getElementById(
+      "provider-budget-input-system-openrouter-api",
+    );
+    if (!(input instanceof HTMLInputElement)) {
+      throw new Error("targeted Provider budget input was not rendered");
+    }
+    await waitFor(() => expect(input).toHaveFocus());
+    expect(screen.getByRole("tab", { name: "Providers" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+  });
+
+  it("opens untargeted Provider settings without focusing a budget field", async () => {
+    setPendingMainWindowDestination({
+      kind: "providerBudget",
+      providerId: null,
+    });
+    renderApp();
+
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: "Providers" })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      ),
+    );
+    const budgetInputs = await screen.findAllByRole("spinbutton");
+    expect(budgetInputs.some((input) => input === document.activeElement)).toBe(
+      false,
+    );
+  });
+
+  it("applies a live exact-Agent destination once and closes Settings", async () => {
+    const user = userEvent.setup();
+    renderApp();
+
+    await screen.findByRole("tab", { name: "Codex" });
+    await waitFor(() =>
+      expect(commandCalls("take_pending_main_window_destination")).toHaveLength(
+        1,
+      ),
+    );
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+
+    setPendingMainWindowDestination({
+      kind: "usage",
+      agentModuleId: "opencode",
+    });
+    act(() => emitTauriEvent("main-window-navigate"));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(screen.getByRole("tab", { name: "OpenCode" })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
+    });
+    expect(localStorage.getItem("llm-usage-bar:last-agent-module-id")).toBe(
+      "opencode",
+    );
+  });
+
+  it("manual Settings always returns to Agents and clears an old Provider target", async () => {
+    const user = userEvent.setup();
+    renderApp();
+
+    await screen.findByRole("tab", { name: "Codex" });
+    await waitFor(() =>
+      expect(commandCalls("take_pending_main_window_destination")).toHaveLength(
+        1,
+      ),
+    );
+    setPendingMainWindowDestination({
+      kind: "providerBudget",
+      providerId: "system-openrouter-api",
+    });
+    act(() => emitTauriEvent("main-window-navigate"));
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: "Providers" })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      ),
+    );
+
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: "Agents" })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      ),
+    );
   });
 });

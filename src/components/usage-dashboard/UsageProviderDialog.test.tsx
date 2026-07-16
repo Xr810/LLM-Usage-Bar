@@ -1,7 +1,11 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { UsageProviderDialog } from "./UsageProviderDialog";
-import type { UsageProviderView } from "@/types/usageDashboard";
+import { usageDashboardApi } from "@/lib/api/usageDashboard";
+import type {
+  UsageProviderInput,
+  UsageProviderView,
+} from "@/types/usageDashboard";
 
 function provider(
   overrides: Partial<UsageProviderView> = {},
@@ -32,6 +36,7 @@ function provider(
     ],
     quotaSource: null,
     quotaIntervalSeconds: null,
+    dailyBudgetUsd: null,
     routeAppType: "codex",
     enabled: true,
     needsReview: false,
@@ -121,6 +126,84 @@ describe("UsageProviderDialog", () => {
     await waitFor(() => expect(onSave).toHaveBeenCalledOnce());
     expect(onSave.mock.calls[0][0]).not.toHaveProperty("bindings");
     expect(onSave.mock.calls[0][0]).not.toHaveProperty("dashboardModuleId");
+  });
+
+  it("never exposes or serializes protected quota configuration", async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    render(
+      <UsageProviderDialog
+        open
+        onOpenChange={vi.fn()}
+        onSave={onSave}
+        provider={provider({
+          billingKind: "subscription",
+          quotaSource: "codex",
+          quotaIntervalSeconds: 300,
+          routeAppType: null,
+        })}
+      />,
+    );
+
+    expect(screen.queryByLabelText(/quota credential json/i)).toBeNull();
+    expect(screen.queryByPlaceholderText(/apiKey/i)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledOnce());
+    expect(onSave.mock.calls[0][0]).not.toHaveProperty("quotaConfig");
+    expect(onSave.mock.calls[0][0]).not.toHaveProperty("dailyBudgetUsd");
+    expect(JSON.stringify(onSave.mock.calls[0][0])).not.toContain(
+      "quotaConfig",
+    );
+  });
+
+  it("rejects daily budgets sent through the generic Provider-save boundary", async () => {
+    const input = {
+      id: "wrong-budget-channel",
+      name: "Wrong Budget Channel",
+      billingKind: "metered",
+      productGroupId: "api",
+      tokenSources: ["proxy"],
+      sessionSourceBindings: [],
+      quotaSource: null,
+      quotaIntervalSeconds: null,
+      routeAppType: "codex",
+      routeConfig: null,
+      dailyBudgetUsd: "99",
+      enabled: true,
+    } as unknown as UsageProviderInput;
+
+    await expect(usageDashboardApi.saveProvider(input)).rejects.toThrow(
+      "renderer_daily_budget_forbidden",
+    );
+  });
+
+  it("has an MSW command boundary that rejects legacy quotaConfig payloads without echoing their value", async () => {
+    const sentinel = "legacy-renderer-quota-secret";
+    const input = {
+      id: "legacy-provider",
+      name: "Legacy Provider",
+      billingKind: "subscription",
+      productGroupId: "legacy",
+      tokenSources: ["session_log"],
+      sessionSourceBindings: ["codex"],
+      quotaSource: "codex",
+      quotaIntervalSeconds: 300,
+      routeAppType: null,
+      routeConfig: null,
+      quotaConfig: { apiKey: sentinel },
+      enabled: true,
+    } as unknown as UsageProviderInput;
+
+    let error: unknown;
+    try {
+      await usageDashboardApi.saveProvider(input);
+    } catch (cause) {
+      error = cause;
+    }
+
+    expect(error).toBeInstanceOf(Error);
+    expect(String(error)).toContain("renderer_quota_config_forbidden");
+    expect(String(error)).not.toContain(sentinel);
   });
 
   it("does not expose or resubmit a legacy route API key", async () => {

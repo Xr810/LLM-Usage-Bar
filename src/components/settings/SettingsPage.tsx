@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Dialog,
@@ -18,6 +18,8 @@ interface SettingsDialogProps {
   onOpenChange: (open: boolean) => void;
   onImportSuccess?: () => void | Promise<void>;
   defaultTab?: string;
+  defaultProviderId?: string;
+  onProviderTargetHandled?: () => void;
 }
 
 type SettingsTab = "agents" | "providers" | "proxy" | "diagnostics";
@@ -33,15 +35,27 @@ export function SettingsPage({
   open,
   onOpenChange,
   defaultTab,
+  defaultProviderId,
+  onProviderTargetHandled,
 }: SettingsDialogProps) {
   const { t } = useTranslation();
   const [tab, setTab] = useState<SettingsTab>(() =>
     resolveSettingsTab(defaultTab),
   );
+  const [targetProviderId, setTargetProviderId] = useState<string | null>(
+    defaultProviderId ?? null,
+  );
 
   useEffect(() => {
-    if (open) setTab(resolveSettingsTab(defaultTab));
-  }, [defaultTab, open]);
+    if (!open) return;
+    setTab(resolveSettingsTab(defaultTab));
+    setTargetProviderId(defaultProviderId ?? null);
+  }, [defaultProviderId, defaultTab, open]);
+
+  const handleProviderTargetHandled = useCallback(() => {
+    setTargetProviderId(null);
+    onProviderTargetHandled?.();
+  }, [onProviderTargetHandled]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -90,7 +104,10 @@ export function SettingsPage({
               <AgentsSettings />
             </TabsContent>
             <TabsContent value="providers">
-              <UsageProvidersSettings />
+              <UsageProvidersSettings
+                targetProviderId={targetProviderId ?? undefined}
+                onTargetHandled={handleProviderTargetHandled}
+              />
             </TabsContent>
             <TabsContent value="proxy">
               <ProxyRoutingSettings />

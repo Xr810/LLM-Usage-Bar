@@ -216,6 +216,44 @@ describe("SettingsPage integration", () => {
     expect(frontendSnapshot).not.toContain(upstreamKey);
   });
 
+  it("edits daily budgets only on metered Providers through the dedicated command", async () => {
+    const user = userEvent.setup();
+    renderSettings(true, "providers");
+
+    const chatGptCard = await screen.findByTestId(
+      "system-provider-system-chatgpt-subscription",
+    );
+    const openAiCard = screen.getByTestId("system-provider-system-openai-api");
+    expect(within(chatGptCard).queryByRole("spinbutton")).toBeNull();
+
+    const budget = within(openAiCard).getByRole("spinbutton", {
+      name: /openai api.*daily budget/i,
+    });
+    await user.type(budget, "12.34");
+    await user.click(
+      within(openAiCard).getByRole("button", { name: "Save budget" }),
+    );
+
+    await waitFor(async () => {
+      expect(
+        (await usageDashboardApi.listProviders()).find(
+          (provider) => provider.id === "system-openai-api",
+        )?.dailyBudgetUsd,
+      ).toBe("12.34");
+    });
+
+    await user.click(
+      within(openAiCard).getByRole("button", { name: "Clear budget" }),
+    );
+    await waitFor(async () => {
+      expect(
+        (await usageDashboardApi.listProviders()).find(
+          (provider) => provider.id === "system-openai-api",
+        )?.dailyBudgetUsd,
+      ).toBeNull();
+    });
+  });
+
   it.each(["general", "advanced", "mcp", "about", "unknown", "modules"])(
     "maps historical or unknown tab %s to Agents",
     async (defaultTab) => {

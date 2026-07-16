@@ -38,6 +38,7 @@ function provider(
     bindings: [],
     quotaSource: billingKind === "subscription" ? "codex" : null,
     quotaIntervalSeconds: billingKind === "subscription" ? 300 : null,
+    dailyBudgetUsd: billingKind === "metered" ? "10" : null,
     routeAppType: billingKind === "metered" ? "codex" : null,
     enabled: true,
     needsReview: false,

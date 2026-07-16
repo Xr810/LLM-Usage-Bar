@@ -34,6 +34,7 @@ vi.mock("@/lib/query/usageDashboard", () => ({
         ],
         quotaSource: "codex",
         quotaIntervalSeconds: 300,
+        dailyBudgetUsd: null,
         routeAppType: null,
         enabled: true,
         needsReview: false,
@@ -52,6 +53,7 @@ vi.mock("@/lib/query/usageDashboard", () => ({
         bindings: [],
         quotaSource: null,
         quotaIntervalSeconds: null,
+        dailyBudgetUsd: "10",
         routeAppType: "codex",
         enabled: false,
         needsReview: false,
@@ -102,6 +104,10 @@ vi.mock("@/components/usage-dashboard/UsageProviderDialog", () => ({
         </button>
       </div>
     ) : null,
+}));
+
+vi.mock("./ProviderDailyBudgetField", () => ({
+  ProviderDailyBudgetField: () => <div>Daily budget field</div>,
 }));
 
 describe("UsageProvidersSettings", () => {

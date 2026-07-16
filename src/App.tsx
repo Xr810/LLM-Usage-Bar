@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { Maximize2, Minus, Settings, X } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Button } from "@/components/ui/button";
@@ -11,16 +11,57 @@ import { useTranslation } from "react-i18next";
 import { useSettingsQuery } from "@/lib/query";
 import { useAgentModules } from "@/lib/query/usageDashboard";
 import { isMac } from "@/lib/platform";
+import { useMainWindowNavigation } from "@/hooks/useMainWindowNavigation";
 
 export default function App() {
   const { t } = useTranslation();
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsTarget, setSettingsTarget] = useState<{
+    open: boolean;
+    tab: string;
+    providerId: string | null;
+  }>({ open: false, tab: "agents", providerId: null });
   const { data: settings } = useSettingsQuery();
   const agents = useAgentModules();
   const { selectedAgent, selectAgent } = useAgentModuleSelection(
     agents.data ?? [],
   );
   const useAppWindowControls = settings?.useAppWindowControls ?? false;
+
+  const openManualSettings = useCallback(() => {
+    setSettingsTarget({ open: true, tab: "agents", providerId: null });
+  }, []);
+
+  const openProviderSettings = useCallback((providerId: string | null) => {
+    setSettingsTarget({ open: true, tab: "providers", providerId });
+  }, []);
+
+  const openUsage = useCallback(
+    (agentModuleId: string | null) => {
+      setSettingsTarget((current) => ({
+        ...current,
+        open: false,
+        providerId: null,
+      }));
+      if (agentModuleId !== null) selectAgent(agentModuleId);
+    },
+    [selectAgent],
+  );
+
+  const setSettingsOpen = useCallback((open: boolean) => {
+    setSettingsTarget((current) => ({ ...current, open }));
+  }, []);
+
+  const clearProviderTarget = useCallback(() => {
+    setSettingsTarget((current) =>
+      current.providerId === null ? current : { ...current, providerId: null },
+    );
+  }, []);
+
+  useMainWindowNavigation({
+    agents: agents.data ?? [],
+    openUsage,
+    openProviderSettings,
+  });
 
   const runWindowAction = async (
     action: "minimize" | "toggleMaximize" | "close",
@@ -59,11 +100,7 @@ export default function App() {
           className="flex items-center gap-1"
           style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
         >
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => setSettingsOpen(true)}
-          >
+          <Button size="sm" variant="outline" onClick={openManualSettings}>
             <Settings className="mr-2 h-4 w-4" />
             {t("common.settings", { defaultValue: "Settings" })}
           </Button>
@@ -130,7 +167,7 @@ export default function App() {
         ) : selectedAgent ? (
           <UsageDashboardPage
             selectedAgent={selectedAgent}
-            onOpenSettings={() => setSettingsOpen(true)}
+            onOpenSettings={openManualSettings}
           />
         ) : (
           <div className="rounded-lg border border-dashed p-8 text-center">
@@ -139,11 +176,7 @@ export default function App() {
                 defaultValue: "No visible Agents",
               })}
             </p>
-            <Button
-              className="mt-3"
-              size="sm"
-              onClick={() => setSettingsOpen(true)}
-            >
+            <Button className="mt-3" size="sm" onClick={openManualSettings}>
               {t("dashboardAgents.manage", {
                 defaultValue: "Manage Agents",
               })}
@@ -153,9 +186,11 @@ export default function App() {
       </main>
 
       <SettingsPage
-        open={settingsOpen}
+        open={settingsTarget.open}
         onOpenChange={setSettingsOpen}
-        defaultTab="agents"
+        defaultTab={settingsTarget.tab}
+        defaultProviderId={settingsTarget.providerId ?? undefined}
+        onProviderTargetHandled={clearProviderTarget}
       />
     </div>
   );

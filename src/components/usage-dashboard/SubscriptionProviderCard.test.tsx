@@ -36,6 +36,7 @@ function subscriptionUsage(): ProviderUsageView {
       bindings: [],
       quotaSource: "codex_oauth",
       quotaIntervalSeconds: 300,
+      dailyBudgetUsd: null,
       routeAppType: null,
       enabled: true,
       needsReview: false,
@@ -134,9 +135,7 @@ describe("SubscriptionProviderCard localized reset countdown", () => {
     expect(screen.queryByText("25% used")).toBeNull();
     expect(screen.queryByText("70% used")).toBeNull();
     expect(screen.queryByRole("status")).toBeNull();
-    expect(
-      screen.queryByRole("button", { name: "Refresh quota" }),
-    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Refresh quota" })).toBeNull();
     expect(
       screen.getByRole("button", { name: "Sync sessions" }),
     ).toBeInTheDocument();
@@ -157,8 +156,6 @@ describe("SubscriptionProviderCard localized reset countdown", () => {
     fireEvent.click(screen.getByRole("button", { name: "Refresh quota" }));
 
     expect(usage.provider.quotaSource).toBe("codex_oauth");
-    expect(onRefreshQuota).toHaveBeenCalledWith(
-      "system-chatgpt-subscription",
-    );
+    expect(onRefreshQuota).toHaveBeenCalledWith("system-chatgpt-subscription");
   });
 });

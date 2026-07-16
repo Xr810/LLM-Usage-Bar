@@ -8,12 +8,33 @@ const fixedProviders = [
   ["system-openai-api", "OpenAI API", "openai-api"],
   ["system-anthropic-api", "Anthropic API", "anthropic-api"],
   ["system-openrouter-api", "OpenRouter", "openrouter-api"],
-].map(([id, name, systemPresetKey]) => ({ id, name, systemPresetKey }));
+].map(([id, name, systemPresetKey]) => ({
+  id,
+  name,
+  systemPresetKey,
+  billingKind: systemPresetKey.endsWith("subscription")
+    ? "subscription"
+    : "metered",
+  dailyBudgetUsd: null,
+}));
 
 vi.mock("@/lib/query/usageDashboard", () => ({
   useUsageProviders: () => ({
     data: [
-      { id: "custom", name: "Custom Example", systemPresetKey: null },
+      {
+        id: "custom",
+        name: "Custom Example",
+        systemPresetKey: null,
+        billingKind: "metered",
+        dailyBudgetUsd: "5",
+      },
+      {
+        id: "custom-subscription",
+        name: "Custom Subscription",
+        systemPresetKey: null,
+        billingKind: "subscription",
+        dailyBudgetUsd: null,
+      },
       ...fixedProviders.slice().reverse(),
     ],
     isLoading: false,
@@ -27,8 +48,36 @@ vi.mock("@/lib/query/usageDashboard", () => ({
 }));
 
 vi.mock("./SystemProviderCard", () => ({
-  SystemProviderCard: ({ provider }: { provider: { name: string } }) => (
-    <div data-testid="fixed-provider-card">{provider.name}</div>
+  SystemProviderCard: ({
+    provider,
+    targetProviderId,
+  }: {
+    provider: { id: string; name: string };
+    targetProviderId?: string;
+  }) => (
+    <div
+      data-testid="fixed-provider-card"
+      data-provider-id={provider.id}
+      data-targeted={targetProviderId === provider.id}
+    >
+      {provider.name}
+    </div>
+  ),
+}));
+
+vi.mock("./ProviderDailyBudgetField", () => ({
+  ProviderDailyBudgetField: ({
+    providerId,
+    targeted,
+  }: {
+    providerId: string;
+    targeted?: boolean;
+  }) => (
+    <div
+      data-testid={`custom-budget-${providerId}`}
+      data-targeted={targeted}
+      className="budget-field"
+    />
   ),
 }));
 
@@ -61,4 +110,33 @@ it("renders the five fixed Provider cards in canonical order before custom Provi
   expect(
     screen.getByRole("button", { name: "Edit Custom Example" }),
   ).toBeInTheDocument();
+});
+
+it("forwards fixed and custom targets while keeping custom budget editors full-width and metered-only", () => {
+  const onTargetHandled = vi.fn();
+  const { rerender } = render(
+    <UsageProvidersSettings
+      targetProviderId="system-openrouter-api"
+      onTargetHandled={onTargetHandled}
+    />,
+  );
+
+  const fixedOpenRouter = screen
+    .getAllByTestId("fixed-provider-card")
+    .find(
+      (card) =>
+        card.getAttribute("data-provider-id") === "system-openrouter-api",
+    );
+  expect(fixedOpenRouter).toHaveAttribute("data-targeted", "true");
+
+  rerender(
+    <UsageProvidersSettings
+      targetProviderId="custom"
+      onTargetHandled={onTargetHandled}
+    />,
+  );
+  const customBudget = screen.getByTestId("custom-budget-custom");
+  expect(customBudget).toHaveAttribute("data-targeted", "true");
+  expect(customBudget.parentElement).toHaveClass("w-full");
+  expect(screen.queryByTestId("custom-budget-custom-subscription")).toBeNull();
 });

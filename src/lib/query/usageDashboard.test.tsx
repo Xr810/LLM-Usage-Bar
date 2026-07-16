@@ -43,7 +43,6 @@ const providerInput: UsageProviderInput = {
   quotaIntervalSeconds: null,
   routeAppType: "claude",
   routeConfig: { baseUrl: "https://example.com" },
-  quotaConfig: null,
   enabled: true,
 };
 
@@ -227,6 +226,7 @@ describe("usageDashboardApi wire contract", () => {
       input: providerInput,
     });
     expect(providerInput).not.toHaveProperty("dashboardModuleId");
+    expect(providerInput).not.toHaveProperty("quotaConfig");
   });
 });
 

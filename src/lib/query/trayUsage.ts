@@ -1,7 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { getTrayUsageSnapshot, refreshTrayUsage } from "@/lib/api/trayUsage";
+import {
+  getTrayUsageSnapshot,
+  refreshTrayUsage,
+  setProviderDailyBudget,
+} from "@/lib/api/trayUsage";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 import type { TrayUsageSnapshot } from "@/types/trayUsage";
+import type { UsageProviderView } from "@/types/usageDashboard";
+import { usageDashboardKeys } from "@/lib/query/usageDashboard";
 
 export const trayUsageKeys = {
   all: ["tray-usage"] as const,
@@ -31,6 +37,33 @@ export function useRefreshTrayUsage() {
     },
     onSuccess: (snapshot) => {
       queryClient.setQueryData(trayUsageKeys.snapshot(), snapshot);
+    },
+  });
+}
+
+export function useSetProviderDailyBudget() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      providerId,
+      dailyBudgetUsd,
+    }: {
+      providerId: string;
+      dailyBudgetUsd: string | null;
+    }) => setProviderDailyBudget(providerId, dailyBudgetUsd),
+    onSuccess: async (provider) => {
+      queryClient.setQueryData<UsageProviderView[]>(
+        usageDashboardKeys.providers(),
+        (current = []) =>
+          current.map((item) => (item.id === provider.id ? provider : item)),
+      );
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: trayUsageKeys.all }),
+        queryClient.invalidateQueries({
+          queryKey: usageDashboardKeys.dashboards(),
+        }),
+      ]);
     },
   });
 }

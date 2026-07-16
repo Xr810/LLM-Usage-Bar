@@ -103,6 +103,7 @@ function provider(
     bindings: [],
     quotaSource: billingKind === "subscription" ? "codex_oauth" : null,
     quotaIntervalSeconds: billingKind === "subscription" ? 300 : null,
+    dailyBudgetUsd: billingKind === "metered" ? "10" : null,
     routeAppType: billingKind === "metered" ? "codex" : null,
     enabled: true,
     needsReview: false,
@@ -405,9 +406,7 @@ describe("UsageDashboardPage", () => {
       mocks.refreshQuota
         .mockImplementationOnce(() => staleRefresh.promise)
         .mockRejectedValueOnce(new Error("Agent B refresh failed"));
-      const { rerender } = render(
-        <UsageDashboardPage selectedAgent={codex} />,
-      );
+      const { rerender } = render(<UsageDashboardPage selectedAgent={codex} />);
 
       fireEvent.click(screen.getByRole("button", { name: "Refresh quota" }));
       rerender(<UsageDashboardPage selectedAgent={claude} />);

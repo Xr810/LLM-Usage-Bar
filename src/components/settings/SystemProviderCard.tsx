@@ -15,14 +15,21 @@ import {
 } from "@/lib/query/usageDashboard";
 import type { UsageProviderView } from "@/types/usageDashboard";
 import { ClaudeCliAuthSection } from "./ClaudeCliAuthSection";
+import { ProviderDailyBudgetField } from "./ProviderDailyBudgetField";
 import { SystemProviderAgentBindings } from "./SystemProviderAgentBindings";
 import { SystemProviderApiKeyDialog } from "./SystemProviderApiKeyDialog";
 
 interface SystemProviderCardProps {
   provider: UsageProviderView;
+  targetProviderId?: string;
+  onTargetHandled?: () => void;
 }
 
-export function SystemProviderCard({ provider }: SystemProviderCardProps) {
+export function SystemProviderCard({
+  provider,
+  targetProviderId,
+  onTargetHandled,
+}: SystemProviderCardProps) {
   const { t } = useTranslation();
   const credentials = useSystemProviderCredentialActions();
   const setEnabled = useSetUsageProviderEnabled();
@@ -194,6 +201,16 @@ export function SystemProviderCard({ provider }: SystemProviderCardProps) {
               </div>
             ) : null}
           </div>
+        ) : null}
+
+        {provider.billingKind === "metered" ? (
+          <ProviderDailyBudgetField
+            providerId={provider.id}
+            providerName={provider.name}
+            value={provider.dailyBudgetUsd}
+            targeted={targetProviderId === provider.id}
+            onTargetHandled={onTargetHandled}
+          />
         ) : null}
 
         <SystemProviderAgentBindings provider={provider} />

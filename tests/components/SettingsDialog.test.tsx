@@ -9,7 +9,21 @@ vi.mock("@/components/settings/DashboardModulesSettings", () => ({
 }));
 
 vi.mock("@/components/settings/UsageProvidersSettings", () => ({
-  UsageProvidersSettings: () => <button type="button">Add Provider</button>,
+  UsageProvidersSettings: ({
+    targetProviderId,
+    onTargetHandled,
+  }: {
+    targetProviderId?: string;
+    onTargetHandled?: () => void;
+  }) => (
+    <div>
+      <button type="button">Add Provider</button>
+      <output aria-label="Provider target">{targetProviderId ?? "none"}</output>
+      <button type="button" onClick={onTargetHandled}>
+        Handle provider target
+      </button>
+    </div>
+  ),
 }));
 
 vi.mock("@/components/settings/ProxyRoutingSettings", () => ({
@@ -38,10 +52,16 @@ vi.mock("@/components/ui/dialog", () => ({
         </button>
       </div>
     ) : null,
-  DialogContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-  DialogHeader: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  DialogContent: ({ children }: { children: ReactNode }) => (
+    <div>{children}</div>
+  ),
+  DialogHeader: ({ children }: { children: ReactNode }) => (
+    <div>{children}</div>
+  ),
   DialogTitle: ({ children }: { children: ReactNode }) => <h2>{children}</h2>,
-  DialogDescription: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  DialogDescription: ({ children }: { children: ReactNode }) => (
+    <div>{children}</div>
+  ),
 }));
 
 describe("SettingsPage sections", () => {
@@ -49,7 +69,9 @@ describe("SettingsPage sections", () => {
     const user = userEvent.setup();
     render(<SettingsPage open onOpenChange={() => {}} defaultTab="advanced" />);
 
-    expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Settings" }),
+    ).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Agents" })).toHaveAttribute(
       "aria-selected",
       "true",
@@ -57,15 +79,21 @@ describe("SettingsPage sections", () => {
     expect(screen.getByText("Agent settings content")).toBeInTheDocument();
 
     await user.click(screen.getByRole("tab", { name: "Providers" }));
-    expect(screen.getByRole("button", { name: "Add Provider" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Add Provider" }),
+    ).toBeInTheDocument();
     expect(screen.queryByText("Agent settings content")).toBeNull();
 
     await user.click(screen.getByRole("tab", { name: "Proxy setup" }));
-    expect(screen.getByRole("button", { name: "Start proxy" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Start proxy" }),
+    ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Add Provider" })).toBeNull();
 
     await user.click(screen.getByRole("tab", { name: "Diagnostics" }));
-    expect(screen.getByText("Aggregate diagnostics content")).toBeInTheDocument();
+    expect(
+      screen.getByText("Aggregate diagnostics content"),
+    ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Start proxy" })).toBeNull();
   });
 
@@ -75,13 +103,18 @@ describe("SettingsPage sections", () => {
     ["providers", "Providers"],
     ["proxy", "Proxy setup"],
     ["diagnostics", "Diagnostics"],
-  ])("honors the valid or compatible %s default", (defaultTab, selectedName) => {
-    render(<SettingsPage open onOpenChange={() => {}} defaultTab={defaultTab} />);
-    expect(screen.getByRole("tab", { name: selectedName })).toHaveAttribute(
-      "aria-selected",
-      "true",
-    );
-  });
+  ])(
+    "honors the valid or compatible %s default",
+    (defaultTab, selectedName) => {
+      render(
+        <SettingsPage open onOpenChange={() => {}} defaultTab={defaultTab} />,
+      );
+      expect(screen.getByRole("tab", { name: selectedName })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
+    },
+  );
 
   it("does not mount settings sections while closed", () => {
     render(<SettingsPage open={false} onOpenChange={() => {}} />);
@@ -96,5 +129,35 @@ describe("SettingsPage sections", () => {
     render(<SettingsPage open onOpenChange={onOpenChange} />);
     fireEvent.click(screen.getByRole("button", { name: "close-dialog" }));
     expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("preserves a Provider target until the Provider DOM handles it", async () => {
+    const user = userEvent.setup();
+    const onProviderTargetHandled = vi.fn();
+    render(
+      <SettingsPage
+        open
+        onOpenChange={() => {}}
+        defaultTab="providers"
+        defaultProviderId="system-openrouter-api"
+        onProviderTargetHandled={onProviderTargetHandled}
+      />,
+    );
+
+    expect(screen.getByLabelText("Provider target")).toHaveTextContent(
+      "system-openrouter-api",
+    );
+
+    await user.click(screen.getByRole("tab", { name: "Agents" }));
+    await user.click(screen.getByRole("tab", { name: "Providers" }));
+    expect(screen.getByLabelText("Provider target")).toHaveTextContent(
+      "system-openrouter-api",
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "Handle provider target" }),
+    );
+    expect(screen.getByLabelText("Provider target")).toHaveTextContent("none");
+    expect(onProviderTargetHandled).toHaveBeenCalledOnce();
   });
 });

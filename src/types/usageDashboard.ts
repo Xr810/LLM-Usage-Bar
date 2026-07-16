@@ -96,7 +96,6 @@ export interface UsageProviderInput {
   quotaIntervalSeconds?: number | null;
   routeAppType?: string | null;
   routeConfig?: Record<string, unknown> | null;
-  quotaConfig?: Record<string, unknown> | null;
   enabled: boolean;
 }
 
@@ -110,6 +109,7 @@ export interface UsageProviderView {
   bindings: AgentProviderBindingView[];
   quotaSource: string | null;
   quotaIntervalSeconds: number | null;
+  dailyBudgetUsd: string | null;
   routeAppType: string | null;
   enabled: boolean;
   needsReview: boolean;

@@ -3,6 +3,7 @@ import type {
   MainWindowDestination,
   TrayUsageSnapshot,
 } from "@/types/trayUsage";
+import type { UsageProviderView } from "@/types/usageDashboard";
 
 export const getTrayUsageSnapshot = () =>
   invoke<TrayUsageSnapshot>("get_tray_usage_snapshot");
@@ -27,5 +28,14 @@ export const openMainFromTray = (destination: MainWindowDestination) =>
 
 export const takePendingMainWindowDestination = () =>
   invoke<MainWindowDestination | null>("take_pending_main_window_destination");
+
+export const setProviderDailyBudget = (
+  providerId: string,
+  dailyBudgetUsd: string | null,
+) =>
+  invoke<UsageProviderView>("set_provider_daily_budget", {
+    providerId,
+    dailyBudgetUsd,
+  });
 
 export const quitFromTray = () => invoke<void>("quit_from_tray");

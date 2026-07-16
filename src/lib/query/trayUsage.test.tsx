@@ -2,22 +2,29 @@ import type { ReactNode } from "react";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { http, HttpResponse } from "msw";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   getTrayUsageSnapshot,
   hideTrayPopover,
   openMainFromTray,
   quitFromTray,
+  setProviderDailyBudget,
   takePendingMainWindowDestination,
 } from "@/lib/api/trayUsage";
 import {
   trayUsageKeys,
   useRefreshTrayUsage,
+  useSetProviderDailyBudget,
   useTrayUsageEventBridge,
   useTrayUsageSnapshot,
 } from "@/lib/query/trayUsage";
+import { usageDashboardApi } from "@/lib/api/usageDashboard";
+import { usageDashboardKeys } from "@/lib/query/usageDashboard";
 import type { TrayUsageSnapshot } from "@/types/trayUsage";
-import { trayUsageSnapshotFixture } from "../../../tests/msw/handlers";
+import {
+  setPendingMainWindowDestination,
+  trayUsageSnapshotFixture,
+} from "../../../tests/msw/handlers";
 import { server } from "../../../tests/msw/server";
 import {
   commandCalls,
@@ -71,9 +78,79 @@ describe("tray usage wire contract", () => {
       ["quit_from_tray"],
     ]);
   });
+
+  it("models the cold main-window destination as mutable consume-once state", async () => {
+    setPendingMainWindowDestination({
+      kind: "providerBudget",
+      providerId: "system-openrouter-api",
+    });
+
+    await expect(takePendingMainWindowDestination()).resolves.toEqual({
+      kind: "providerBudget",
+      providerId: "system-openrouter-api",
+    });
+    await expect(takePendingMainWindowDestination()).resolves.toBeNull();
+  });
+
+  it("sends the dedicated daily-budget command without a version or numeric coercion", async () => {
+    await setProviderDailyBudget("system-openrouter-api", "025.50");
+    await setProviderDailyBudget("system-openrouter-api", null);
+
+    expect(commandCalls("set_provider_daily_budget")).toEqual([
+      [
+        "set_provider_daily_budget",
+        {
+          providerId: "system-openrouter-api",
+          dailyBudgetUsd: "025.50",
+        },
+      ],
+      [
+        "set_provider_daily_budget",
+        {
+          providerId: "system-openrouter-api",
+          dailyBudgetUsd: null,
+        },
+      ],
+    ]);
+    expect(
+      JSON.stringify(commandCalls("set_provider_daily_budget")),
+    ).not.toContain("expectedVersion");
+  });
 });
 
 describe("tray usage query bridge", () => {
+  it("updates the Provider cache and invalidates tray plus dashboard summaries after a budget save", async () => {
+    const client = createQueryClient();
+    const providers = await usageDashboardApi.listProviders();
+    client.setQueryData(usageDashboardKeys.providers(), providers);
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    const { result } = renderHook(() => useSetProviderDailyBudget(), {
+      wrapper: createQueryWrapper(client),
+    });
+
+    await act(async () => {
+      await result.current.mutateAsync({
+        providerId: "system-openrouter-api",
+        dailyBudgetUsd: "17.25",
+      });
+    });
+
+    expect(
+      client
+        .getQueryData<
+          Awaited<ReturnType<typeof usageDashboardApi.listProviders>>
+        >(usageDashboardKeys.providers())
+        ?.find((provider) => provider.id === "system-openrouter-api")
+        ?.dailyBudgetUsd,
+    ).toBe("17.25");
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: trayUsageKeys.all,
+    });
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: usageDashboardKeys.dashboards(),
+    });
+  });
+
   it("publishes an event payload directly into the snapshot cache", async () => {
     const wrapper = createQueryWrapper();
     const { result } = renderHook(

@@ -16,6 +16,7 @@ import {
   useUsageProviders,
 } from "@/lib/query/usageDashboard";
 import type { UsageProviderView } from "@/types/usageDashboard";
+import { ProviderDailyBudgetField } from "./ProviderDailyBudgetField";
 
 const SYSTEM_PROVIDER_ORDER = [
   "chatgpt-subscription",
@@ -25,7 +26,15 @@ const SYSTEM_PROVIDER_ORDER = [
   "openrouter-api",
 ];
 
-export function UsageProvidersSettings() {
+interface UsageProvidersSettingsProps {
+  targetProviderId?: string;
+  onTargetHandled?: () => void;
+}
+
+export function UsageProvidersSettings({
+  targetProviderId,
+  onTargetHandled,
+}: UsageProvidersSettingsProps = {}) {
   const { t } = useTranslation();
   const providersQuery = useUsageProviders();
   const saveProvider = useSaveUsageProvider();
@@ -100,7 +109,12 @@ export function UsageProvidersSettings() {
       ) : null}
 
       {systemProviders.map((provider) => (
-        <SystemProviderCard key={provider.id} provider={provider} />
+        <SystemProviderCard
+          key={provider.id}
+          provider={provider}
+          targetProviderId={targetProviderId}
+          onTargetHandled={onTargetHandled}
+        />
       ))}
 
       <Card>
@@ -182,6 +196,17 @@ export function UsageProvidersSettings() {
                     : t("common.enable", { defaultValue: "Enable" })}
                 </Button>
               </div>
+              {provider.billingKind === "metered" ? (
+                <div className="w-full">
+                  <ProviderDailyBudgetField
+                    providerId={provider.id}
+                    providerName={provider.name}
+                    value={provider.dailyBudgetUsd}
+                    targeted={targetProviderId === provider.id}
+                    onTargetHandled={onTargetHandled}
+                  />
+                </div>
+              ) : null}
             </div>
           ))}
           {!providersQuery.isLoading && customProviders.length === 0 ? (

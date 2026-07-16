@@ -9,7 +9,10 @@ import type {
   UsageProviderInput,
   UsageProviderView,
 } from "@/types/usageDashboard";
-import type { TrayUsageSnapshot } from "@/types/trayUsage";
+import type {
+  MainWindowDestination,
+  TrayUsageSnapshot,
+} from "@/types/trayUsage";
 import {
   addProvider,
   deleteProvider,
@@ -229,6 +232,7 @@ const initialUsageProvidersFixture: UsageProviderView[] = [
     ],
     quotaSource: "codex_oauth",
     quotaIntervalSeconds: 300,
+    dailyBudgetUsd: null,
     routeAppType: "codex",
     enabled: true,
     needsReview: false,
@@ -271,6 +275,7 @@ const initialUsageProvidersFixture: UsageProviderView[] = [
     ],
     quotaSource: null,
     quotaIntervalSeconds: null,
+    dailyBudgetUsd: null,
     routeAppType: null,
     enabled: true,
     needsReview: false,
@@ -352,6 +357,7 @@ const initialUsageProvidersFixture: UsageProviderView[] = [
             : [],
         quotaSource: null,
         quotaIntervalSeconds: null,
+        dailyBudgetUsd: null,
         routeAppType: id === "system-anthropic-api" ? "claude" : "codex",
         enabled: true,
         needsReview: false,
@@ -395,6 +401,7 @@ const initialUsageProvidersFixture: UsageProviderView[] = [
     ],
     quotaSource: "codex",
     quotaIntervalSeconds: 300,
+    dailyBudgetUsd: null,
     routeAppType: null,
     enabled: true,
     needsReview: false,
@@ -428,6 +435,7 @@ const initialUsageProvidersFixture: UsageProviderView[] = [
     ],
     quotaSource: "claude",
     quotaIntervalSeconds: 300,
+    dailyBudgetUsd: null,
     routeAppType: null,
     enabled: true,
     needsReview: false,
@@ -461,6 +469,7 @@ const initialUsageProvidersFixture: UsageProviderView[] = [
     ],
     quotaSource: "coding_plan",
     quotaIntervalSeconds: 300,
+    dailyBudgetUsd: null,
     routeAppType: null,
     enabled: true,
     needsReview: false,
@@ -494,6 +503,7 @@ const initialUsageProvidersFixture: UsageProviderView[] = [
     ],
     quotaSource: null,
     quotaIntervalSeconds: 0,
+    dailyBudgetUsd: null,
     routeAppType: null,
     enabled: true,
     needsReview: false,
@@ -540,6 +550,7 @@ const initialUsageProvidersFixture: UsageProviderView[] = [
     ],
     quotaSource: null,
     quotaIntervalSeconds: null,
+    dailyBudgetUsd: "10",
     routeAppType: "claude",
     enabled: true,
     needsReview: false,
@@ -586,6 +597,7 @@ const initialUsageProvidersFixture: UsageProviderView[] = [
     ],
     quotaSource: null,
     quotaIntervalSeconds: null,
+    dailyBudgetUsd: null,
     routeAppType: "codex",
     enabled: true,
     needsReview: false,
@@ -601,12 +613,20 @@ const cloneUsageFixture = <T>(value: T): T =>
 
 let agentModulesFixture = cloneUsageFixture(initialAgentModulesFixture);
 let usageProvidersFixture = cloneUsageFixture(initialUsageProvidersFixture);
+let pendingMainWindowDestination: MainWindowDestination | null = null;
 let nextAgentId = 1;
 let nextBindingId = 1;
+
+export const setPendingMainWindowDestination = (
+  destination: MainWindowDestination | null,
+) => {
+  pendingMainWindowDestination = destination;
+};
 
 export const resetUsageDashboardState = () => {
   agentModulesFixture = cloneUsageFixture(initialAgentModulesFixture);
   usageProvidersFixture = cloneUsageFixture(initialUsageProvidersFixture);
+  pendingMainWindowDestination = null;
   nextAgentId = 1;
   nextBindingId = 1;
   recomputeAgentBindingState();
@@ -803,9 +823,11 @@ export const handlers = [
   ),
   http.post(`${TAURI_ENDPOINT}/hide_tray_popover`, () => success(null)),
   http.post(`${TAURI_ENDPOINT}/open_main_from_tray`, () => success(null)),
-  http.post(`${TAURI_ENDPOINT}/take_pending_main_window_destination`, () =>
-    success(null),
-  ),
+  http.post(`${TAURI_ENDPOINT}/take_pending_main_window_destination`, () => {
+    const destination = pendingMainWindowDestination;
+    pendingMainWindowDestination = null;
+    return success(destination);
+  }),
   http.post(`${TAURI_ENDPOINT}/quit_from_tray`, () => success(null)),
   http.post(`${TAURI_ENDPOINT}/list_dashboard_modules`, () =>
     success(agentModulesFixture),
@@ -896,6 +918,33 @@ export const handlers = [
   ),
   http.post(`${TAURI_ENDPOINT}/list_usage_providers`, () =>
     success(usageProvidersFixture),
+  ),
+  http.post(
+    `${TAURI_ENDPOINT}/set_provider_daily_budget`,
+    async ({ request }) => {
+      const { providerId, dailyBudgetUsd } = await withJson<{
+        providerId: string;
+        dailyBudgetUsd: string | null;
+      }>(request);
+      const provider = usageProvidersFixture.find(
+        (candidate) => candidate.id === providerId,
+      );
+      const trimmed =
+        typeof dailyBudgetUsd === "string" ? dailyBudgetUsd.trim() : null;
+      if (
+        !provider ||
+        provider.billingKind !== "metered" ||
+        (dailyBudgetUsd !== null &&
+          (trimmed === "" ||
+            !Number.isFinite(Number(trimmed)) ||
+            Number(trimmed) <= 0))
+      ) {
+        return rejectUsageRequest("invalid_daily_budget");
+      }
+      provider.dailyBudgetUsd = trimmed;
+      provider.updatedAt += 1;
+      return success(provider);
+    },
   ),
   ...(
     ["set_system_provider_api_key", "replace_system_provider_api_key"] as const
@@ -995,7 +1044,18 @@ export const handlers = [
     }),
   ),
   http.post(`${TAURI_ENDPOINT}/save_usage_provider`, async ({ request }) => {
-    const { input } = await withJson<{ input: UsageProviderInput }>(request);
+    const { input } = await withJson<{
+      input: UsageProviderInput & Record<string, unknown>;
+    }>(request);
+    if (input && Object.prototype.hasOwnProperty.call(input, "quotaConfig")) {
+      return rejectUsageRequest("renderer_quota_config_forbidden");
+    }
+    if (
+      input &&
+      Object.prototype.hasOwnProperty.call(input, "dailyBudgetUsd")
+    ) {
+      return rejectUsageRequest("renderer_daily_budget_forbidden");
+    }
     if (
       !input?.id?.trim() ||
       !input.name?.trim() ||
@@ -1022,6 +1082,7 @@ export const handlers = [
       bindings: existing?.bindings ?? [],
       quotaSource: input.quotaSource ?? null,
       quotaIntervalSeconds: input.quotaIntervalSeconds ?? null,
+      dailyBudgetUsd: existing?.dailyBudgetUsd ?? null,
       routeAppType: input.routeAppType ?? null,
       enabled: input.enabled,
       needsReview: false,

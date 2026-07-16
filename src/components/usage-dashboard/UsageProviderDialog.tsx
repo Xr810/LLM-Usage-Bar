@@ -11,7 +11,6 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import type {
   BillingKind,
   SessionSource,
@@ -48,7 +47,6 @@ export function UsageProviderDialog({
   const [quotaIntervalSeconds, setQuotaIntervalSeconds] = useState("300");
   const [routeAppType, setRouteAppType] = useState("claude");
   const [baseUrl, setBaseUrl] = useState("");
-  const [quotaConfig, setQuotaConfig] = useState("");
   const [enabled, setEnabled] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -64,7 +62,6 @@ export function UsageProviderDialog({
     setQuotaIntervalSeconds(String(provider?.quotaIntervalSeconds ?? 300));
     setRouteAppType(provider?.routeAppType ?? "claude");
     setBaseUrl(provider?.routeBaseUrl ?? "");
-    setQuotaConfig("");
     setEnabled(provider?.enabled ?? true);
     setError(null);
   }, [open, provider]);
@@ -88,20 +85,6 @@ export function UsageProviderDialog({
       return;
     }
 
-    let parsedQuotaConfig: Record<string, unknown> | undefined;
-    if (billingKind === "subscription" && quotaConfig.trim()) {
-      try {
-        parsedQuotaConfig = JSON.parse(quotaConfig) as Record<string, unknown>;
-      } catch {
-        setError(
-          t("usageDashboard.invalidQuotaConfig", {
-            defaultValue: "Quota config must be valid JSON",
-          }),
-        );
-        return;
-      }
-    }
-
     const routeConfig =
       billingKind === "metered" &&
       baseUrl.trim() &&
@@ -123,7 +106,6 @@ export function UsageProviderDialog({
         billingKind === "subscription" ? parsedInterval : null,
       routeAppType: billingKind === "metered" ? routeAppType : null,
       routeConfig,
-      quotaConfig: parsedQuotaConfig,
       enabled,
     };
 
@@ -322,17 +304,6 @@ export function UsageProviderDialog({
                   onChange={(event) =>
                     setQuotaIntervalSeconds(event.target.value)
                   }
-                />
-              </Label>
-              <Label>
-                {t("usageDashboard.quotaConfig", {
-                  defaultValue:
-                    "Quota credential JSON (leave blank to keep stored config)",
-                })}
-                <Textarea
-                  value={quotaConfig}
-                  onChange={(event) => setQuotaConfig(event.target.value)}
-                  placeholder='{"apiKey":"..."}'
                 />
               </Label>
             </>

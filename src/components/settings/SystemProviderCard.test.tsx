@@ -6,6 +6,19 @@ import type { UsageProviderView } from "@/types/usageDashboard";
 vi.mock("./SystemProviderAgentBindings", () => ({
   SystemProviderAgentBindings: () => <div>Agent bindings</div>,
 }));
+vi.mock("./ProviderDailyBudgetField", () => ({
+  ProviderDailyBudgetField: ({
+    providerId,
+    targeted,
+  }: {
+    providerId: string;
+    targeted?: boolean;
+  }) => (
+    <div data-testid={`budget-${providerId}`} data-targeted={targeted}>
+      Daily budget
+    </div>
+  ),
+}));
 vi.mock("./ClaudeCliAuthSection", () => ({
   ClaudeCliAuthSection: () => <div>Claude auth</div>,
 }));
@@ -27,6 +40,8 @@ it("locks system identity and endpoint without Edit or Delete actions", () => {
         {
           id: "system-openai-api",
           name: "OpenAI API",
+          billingKind: "metered",
+          dailyBudgetUsd: null,
           systemAuthKind: "provider_api_key",
           canonicalEndpoint: "https://api.openai.com/v1",
           upstreamCredentialStatus: "missing",
@@ -42,4 +57,66 @@ it("locks system identity and endpoint without Edit or Delete actions", () => {
   expect(screen.getByText("https://api.openai.com/v1")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /edit/i })).toBeNull();
   expect(screen.queryByRole("button", { name: /delete/i })).toBeNull();
+});
+
+it("places a targeted budget editor after authentication and before Agent bindings for metered Providers", () => {
+  const onTargetHandled = vi.fn();
+  render(
+    <SystemProviderCard
+      provider={
+        {
+          id: "system-openai-api",
+          name: "OpenAI API",
+          billingKind: "metered",
+          dailyBudgetUsd: "10",
+          systemAuthKind: "provider_api_key",
+          canonicalEndpoint: "https://api.openai.com/v1",
+          upstreamCredentialStatus: "missing",
+          upstreamCredentialVersion: 0,
+          canClearUpstreamCredential: false,
+          bindings: [],
+          enabled: true,
+        } as unknown as UsageProviderView
+      }
+      targetProviderId="system-openai-api"
+      onTargetHandled={onTargetHandled}
+    />,
+  );
+
+  const cardText = document.body.textContent ?? "";
+  expect(screen.getByTestId("budget-system-openai-api")).toHaveAttribute(
+    "data-targeted",
+    "true",
+  );
+  expect(cardText.indexOf("Upstream API key required")).toBeLessThan(
+    cardText.indexOf("Daily budget"),
+  );
+  expect(cardText.indexOf("Daily budget")).toBeLessThan(
+    cardText.indexOf("Agent bindings"),
+  );
+});
+
+it("does not render a budget editor for subscription Providers", () => {
+  render(
+    <SystemProviderCard
+      provider={
+        {
+          id: "system-chatgpt-subscription",
+          name: "ChatGPT Plus/Pro",
+          billingKind: "subscription",
+          dailyBudgetUsd: null,
+          systemAuthKind: "codex_oauth",
+          canonicalEndpoint: null,
+          upstreamCredentialStatus: "not_required",
+          upstreamCredentialVersion: 0,
+          canClearUpstreamCredential: false,
+          bindings: [],
+          enabled: true,
+        } as unknown as UsageProviderView
+      }
+      targetProviderId="system-chatgpt-subscription"
+    />,
+  );
+
+  expect(screen.queryByText("Daily budget")).toBeNull();
 });

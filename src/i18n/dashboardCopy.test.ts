@@ -128,6 +128,11 @@ const requiredKeys = [
   "usageDashboard.expired",
   "usageDashboard.copyAgentLocalKey",
   "usageDashboard.rotateAgentLocalKey",
+  "usageDashboard.dailyBudgetLabel",
+  "usageDashboard.invalidDailyBudget",
+  "usageDashboard.dailyBudgetUpdateFailed",
+  "usageDashboard.saveDailyBudget",
+  "usageDashboard.clearDailyBudget",
   "trayUsage.overview",
   "trayUsage.agentTabs",
   "trayUsage.updated",
@@ -236,5 +241,14 @@ describe("Agent dashboard locale copy", () => {
     expect(trayKeys(zh)).toEqual(englishKeys);
     expect(trayKeys(zhTW)).toEqual(englishKeys);
     expect(trayKeys(ja)).toEqual(englishKeys);
+  });
+
+  it("does not expose renderer-owned quota credential copy", () => {
+    for (const locale of [en, zh, zhTW, ja]) {
+      expect(readKey(locale, "usageDashboard.quotaConfig")).toBeUndefined();
+      expect(
+        readKey(locale, "usageDashboard.invalidQuotaConfig"),
+      ).toBeUndefined();
+    }
   });
 });
