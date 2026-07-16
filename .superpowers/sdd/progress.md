@@ -23,7 +23,7 @@ ledger is retained below as historical evidence.
 | Task | State | Commit | Verification |
 | --- | --- | --- | --- |
 | 1. Schema v18 and daily budget persistence | completed | `09ee7d39`, `85102743` | focused migration/DAO/backup/database and identity-startup tests pass; independent re-review approved |
-| 2. Usage severity policy | pending | — | — |
+| 2. Usage severity policy | in progress | — | prerequisite fixes approved; RED/GREEN pending |
 | 3. Usage snapshot projection | pending | — | — |
 | 4. Refresh orchestration and stale snapshot | pending | — | — |
 | 5. Real menu-bar dot assets | pending | — | — |
@@ -37,8 +37,8 @@ ledger is retained below as historical evidence.
 
 | Task | State | Commit | Verification |
 | --- | --- | --- | --- |
-| A. Managed ChatGPT OAuth quota routing | in progress | — | root cause proven; RED/GREEN pending |
-| B. Truthful quota actions and deduplicated feedback | pending | — | behavior map complete; RED/GREEN pending |
+| A. Managed ChatGPT OAuth quota routing | completed | `04ddfd98` | command 1/1, catalog 1/1, quota 13/13, privacy 1/1; independent review approved |
+| B. Truthful quota actions and deduplicated feedback | completed | `313602c7`, `b1124c00` | page 10/10, card 3/3, typecheck; independent re-review approved |
 
 ## Active Review Notes
 
@@ -62,6 +62,36 @@ ledger is retained below as historical evidence.
 - Both affected identity/startup tests pass after the correction, the net diff
   passes `git diff --check`, and the same reviewer approved the complete Task 1
   range with no remaining findings.
+
+## Managed ChatGPT Quota Prerequisite Evidence
+
+- Live-state diagnosis proved the app-managed ChatGPT account, fixed Provider,
+  Codex binding, and usage events existed; fixed catalog reconciliation was
+  resetting `quota_source` and its interval to null before credential lookup.
+- Fixed ChatGPT now owns canonical `codex_oauth` / 300-second metadata; Claude
+  and the three fixed API Providers remain null. Repeated reconciliation repairs
+  the ChatGPT metadata while preserving budgets, enablement, timestamps, and
+  user-deleted bindings.
+- Production constructs one `CodexOAuthManager` Arc and shares it with both the
+  managed quota collector and `CodexOAuthState`. Legacy `claude`, `codex`, and
+  `coding_plan` collectors remain; no Claude OAuth collector or token path was
+  introduced.
+- The quota scheduler starts only after both managed states and the saved-proxy
+  HTTP client are initialized. Automated tests use fake or empty-account
+  collectors and make no outbound request.
+- OAuth refresh logs no longer interpolate raw account IDs, and managed errors
+  do not expose token-manager details or raw upstream response bodies.
+- Repeated identical quota errors render once, a later success clears only the
+  scoped action error, matching query/action messages deduplicate, and late
+  resolve/reject results from a prior Agent cannot change the active Agent's
+  feedback.
+- A subscription with no quota source ignores stale quota payloads, shows both
+  windows as unavailable, omits Refresh, and retains session synchronization.
+- Independent backend and frontend re-reviews approved with no remaining
+  Critical, Important, or Minor findings.
+- Fresh integration gate: database tests 54/54, usage-dashboard command tests
+  18/18, dashboard page 10/10, subscription card 3/3, and TypeScript typecheck
+  all pass.
 
 ---
 
