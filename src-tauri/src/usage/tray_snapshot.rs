@@ -1,9 +1,19 @@
-use super::domain::BillingKind;
-use super::status::{CostQuality, UsageStatus};
-use chrono::{DateTime, Local, LocalResult, NaiveDate, TimeZone};
+use super::aggregation::{aggregate_provider_range, ProviderRangeAggregate};
+use super::domain::{AgentModuleView, BillingKind, UsageProviderView};
+use super::status::{
+    classify_metered, classify_subscription, worst_status, CostQuality, SourceClassification,
+    UsageStatus,
+};
+use crate::database::Database;
+use crate::error::AppError;
+use chrono::{DateTime, Local, LocalResult, NaiveDate, SecondsFormat, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 const ROLLING_30_DAYS_SECONDS: i64 = 30 * 86_400;
+const INVALID_RESET_TIMESTAMP: &str = "invalid_reset_timestamp";
+const RESET_PENDING_REFRESH: &str = "reset_pending_refresh";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -152,13 +162,301 @@ where
     }
 }
 
+pub struct TrayUsageProjector {
+    db: Arc<Database>,
+}
+
+impl TrayUsageProjector {
+    pub fn new(db: Arc<Database>) -> Self {
+        Self { db }
+    }
+
+    pub fn project_at(&self, now: DateTime<Local>) -> Result<TrayUsageSnapshot, AppError> {
+        let generated_at = now.timestamp();
+        let windows = TrayUsageWindows::from_local_now(now)
+            .ok_or_else(|| AppError::Message("invalid_tray_usage_windows".to_string()))?;
+        let mut agents = self
+            .db
+            .list_agent_modules()?
+            .into_iter()
+            .filter(|agent| agent.visible && agent.archived_at.is_none())
+            .collect::<Vec<_>>();
+        agents.sort_by(|left, right| {
+            (left.sort_order, left.id.as_str()).cmp(&(right.sort_order, right.id.as_str()))
+        });
+        let providers = self
+            .db
+            .list_usage_providers()?
+            .into_iter()
+            .filter(|provider| provider.enabled)
+            .collect::<Vec<_>>();
+        let mut bindings_by_agent = BTreeMap::<String, BTreeSet<String>>::new();
+        for binding in self
+            .db
+            .list_agent_provider_bindings(None)?
+            .into_iter()
+            .filter(|binding| binding.enabled)
+        {
+            bindings_by_agent
+                .entry(binding.agent_module_id)
+                .or_default()
+                .insert(binding.provider_id);
+        }
+
+        let projected_agents = agents
+            .iter()
+            .map(|agent| {
+                self.project_agent(
+                    agent,
+                    &providers,
+                    bindings_by_agent.get(&agent.id),
+                    windows,
+                    generated_at,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let status = worst_status(projected_agents.iter().map(|agent| agent.status));
+
+        Ok(TrayUsageSnapshot {
+            status,
+            generated_at,
+            last_success_at: Some(generated_at),
+            stale: false,
+            refresh_error: None,
+            refresh_in_progress: false,
+            agents: projected_agents,
+        })
+    }
+
+    fn project_agent(
+        &self,
+        agent: &AgentModuleView,
+        providers: &[UsageProviderView],
+        bound_provider_ids: Option<&BTreeSet<String>>,
+        windows: TrayUsageWindows,
+        now_timestamp: i64,
+    ) -> Result<TrayAgentUsageView, AppError> {
+        let projected_providers = providers
+            .iter()
+            .filter(|provider| bound_provider_ids.is_some_and(|ids| ids.contains(&provider.id)))
+            .map(|provider| match provider.billing_kind {
+                BillingKind::Subscription => {
+                    let (subscription, classification) =
+                        self.project_subscription(provider, now_timestamp)?;
+                    Ok(TrayProviderUsageView {
+                        provider_id: provider.id.clone(),
+                        provider_name: provider.name.clone(),
+                        system_preset_key: provider.system_preset_key.clone(),
+                        billing_kind: provider.billing_kind,
+                        status: classification.status,
+                        warning_reason: classification.reason.map(str::to_string),
+                        subscription: Some(subscription),
+                        metered: None,
+                    })
+                }
+                BillingKind::Metered => {
+                    let (metered, classification) =
+                        self.project_metered(&agent.id, provider, windows)?;
+                    Ok(TrayProviderUsageView {
+                        provider_id: provider.id.clone(),
+                        provider_name: provider.name.clone(),
+                        system_preset_key: provider.system_preset_key.clone(),
+                        billing_kind: provider.billing_kind,
+                        status: classification.status,
+                        warning_reason: classification.reason.map(str::to_string),
+                        subscription: None,
+                        metered: Some(metered),
+                    })
+                }
+            })
+            .collect::<Result<Vec<_>, AppError>>()?;
+        let status = worst_status(projected_providers.iter().map(|provider| provider.status));
+
+        Ok(TrayAgentUsageView {
+            agent_module_id: agent.id.clone(),
+            name: agent.name.clone(),
+            sort_order: agent.sort_order,
+            status,
+            providers: projected_providers,
+        })
+    }
+
+    fn project_subscription(
+        &self,
+        provider: &UsageProviderView,
+        now_timestamp: i64,
+    ) -> Result<(TraySubscriptionUsageView, SourceClassification), AppError> {
+        let snapshot = if provider.quota_source.is_some() {
+            self.db.latest_quota_snapshot(&provider.id)?
+        } else {
+            None
+        };
+        let five_hour_used = snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.five_hour_utilization_percent.as_deref());
+        let seven_day_used = snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.seven_day_utilization_percent.as_deref());
+        let classification = classify_subscription(five_hour_used, seven_day_used);
+        let windows = [
+            (
+                "five_hour",
+                five_hour_used,
+                snapshot
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.five_hour_resets_at.as_deref()),
+            ),
+            (
+                "seven_day",
+                seven_day_used,
+                snapshot
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.seven_day_resets_at.as_deref()),
+            ),
+        ]
+        .into_iter()
+        .map(|(kind, used, resets_at)| subscription_window(kind, used, resets_at, now_timestamp))
+        .collect();
+
+        Ok((
+            TraySubscriptionUsageView {
+                plan_label: None,
+                windows,
+            },
+            classification,
+        ))
+    }
+
+    fn project_metered(
+        &self,
+        agent_module_id: &str,
+        provider: &UsageProviderView,
+        windows: TrayUsageWindows,
+    ) -> Result<(TrayMeteredUsageView, SourceClassification), AppError> {
+        let today = aggregate_provider_range(
+            &self.db,
+            agent_module_id,
+            &provider.id,
+            &provider.product_group_id,
+            windows.today_start_at,
+            windows.end_at,
+        )?;
+        let rolling_30_day = aggregate_provider_range(
+            &self.db,
+            agent_module_id,
+            &provider.id,
+            &provider.product_group_id,
+            windows.rolling_30_start_at,
+            windows.end_at,
+        )?;
+        let quality = cost_quality(&today);
+        let today_cost_usd = display_cost(&today);
+        let rolling_30_day_cost_usd = display_cost(&rolling_30_day);
+        let classification = classify_metered(
+            today_cost_usd.as_deref(),
+            provider.daily_budget_usd.as_deref(),
+            quality,
+        );
+        let total_tokens = checked_total_tokens(&rolling_30_day)?;
+
+        Ok((
+            TrayMeteredUsageView {
+                today_cost_usd,
+                rolling_30_day_cost_usd,
+                daily_budget_usd: provider.daily_budget_usd.clone(),
+                budget_consumed_percent: classification.consumed_percent.clone(),
+                total_tokens,
+                cost_quality: quality,
+            },
+            classification,
+        ))
+    }
+}
+
+fn subscription_window(
+    kind: &str,
+    used_percent: Option<&str>,
+    resets_at: Option<&str>,
+    now_timestamp: i64,
+) -> TrayQuotaWindowView {
+    let classification = classify_subscription(used_percent, None);
+    let (resets_at, reset_reason) = canonical_reset(resets_at, now_timestamp);
+    TrayQuotaWindowView {
+        kind: kind.to_string(),
+        used_percent: classification.used_percent,
+        remaining_percent: classification.remaining_percent,
+        resets_at,
+        status: classification.status,
+        unavailable_reason: classification.reason.or(reset_reason).map(str::to_string),
+    }
+}
+
+fn canonical_reset(
+    raw: Option<&str>,
+    now_timestamp: i64,
+) -> (Option<String>, Option<&'static str>) {
+    let Some(raw) = raw else {
+        return (None, None);
+    };
+    let Ok(parsed) = DateTime::parse_from_rfc3339(raw) else {
+        return (None, Some(INVALID_RESET_TIMESTAMP));
+    };
+    let reason = (parsed.timestamp() < now_timestamp).then_some(RESET_PENDING_REFRESH);
+    let canonical = parsed
+        .with_timezone(&Utc)
+        .to_rfc3339_opts(SecondsFormat::AutoSi, true);
+    (Some(canonical), reason)
+}
+
+fn display_cost(aggregate: &ProviderRangeAggregate) -> Option<String> {
+    if aggregate.event_count == 0 {
+        Some("0".to_string())
+    } else {
+        aggregate.total_cost_usd.clone()
+    }
+}
+
+fn checked_total_tokens(aggregate: &ProviderRangeAggregate) -> Result<u64, AppError> {
+    [
+        aggregate.input_tokens,
+        aggregate.output_tokens,
+        aggregate.cache_read_tokens,
+        aggregate.cache_creation_tokens,
+    ]
+    .into_iter()
+    .try_fold(0_u64, |total, value| {
+        total
+            .checked_add(value)
+            .ok_or_else(|| AppError::Database("usage aggregate overflow".to_string()))
+    })
+}
+
+fn cost_quality(aggregate: &ProviderRangeAggregate) -> CostQuality {
+    if aggregate.event_count == 0 {
+        CostQuality::Complete
+    } else if aggregate.cost_source_counts.unavailable == aggregate.event_count {
+        CostQuality::Unavailable
+    } else if aggregate.cost_source_counts.unavailable > 0 {
+        CostQuality::Partial
+    } else if aggregate.cost_source_counts.estimated > 0 {
+        CostQuality::Estimated
+    } else {
+        CostQuality::Complete
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::usage::domain::BillingKind;
+    use crate::database::Database;
+    use crate::usage::domain::{
+        BillingKind, CostSource, QuotaSnapshot, TokenSource, UsageEvent, UsageProviderInput,
+    };
     use crate::usage::status::{CostQuality, UsageStatus};
     use chrono::{Datelike, FixedOffset, LocalResult, NaiveDate, TimeZone};
+    use rusqlite::params;
     use serde_json::json;
+    use std::sync::Arc;
 
     const DAY_SECONDS: i64 = 86_400;
 
@@ -168,6 +466,638 @@ mod tests {
             .single()
             .unwrap()
             .timestamp()
+    }
+
+    fn clean_projector_database() -> Arc<Database> {
+        let db = Database::memory().unwrap();
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute("DELETE FROM agent_provider_bindings", [])
+                .unwrap();
+            conn.execute("UPDATE agent_modules SET visible = 0", [])
+                .unwrap();
+            conn.execute(
+                "UPDATE agent_modules SET visible = 1, sort_order = 0 WHERE id = 'codex'",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "UPDATE agent_modules SET visible = 1, sort_order = 1 WHERE id = 'claude-code'",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO agent_modules (
+                    id, name, sort_order, visible, is_fixed, archived_at, created_at, updated_at
+                 ) VALUES ('hidden-agent', 'Hidden', 2, 0, 0, NULL, 1, 1)",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO agent_modules (
+                    id, name, sort_order, visible, is_fixed, archived_at, created_at, updated_at
+                 ) VALUES ('archived-agent', 'Archived', 3, 1, 0, 2, 1, 2)",
+                [],
+            )
+            .unwrap();
+            conn.execute("UPDATE usage_providers SET enabled = 0", [])
+                .unwrap();
+        }
+        Arc::new(db)
+    }
+
+    fn provider(
+        id: &str,
+        billing_kind: BillingKind,
+        quota_source: Option<&str>,
+    ) -> UsageProviderInput {
+        UsageProviderInput {
+            id: id.to_string(),
+            name: id.to_string(),
+            billing_kind,
+            product_group_id: format!("group-{id}"),
+            token_sources: match billing_kind {
+                BillingKind::Subscription => vec![TokenSource::SessionLog],
+                BillingKind::Metered => vec![TokenSource::Proxy],
+            },
+            session_source_bindings: None,
+            quota_source: quota_source.map(str::to_string),
+            quota_interval_seconds: quota_source.map(|_| 300),
+            route_app_type: None,
+            route_config: None,
+            quota_config: None,
+            enabled: true,
+        }
+    }
+
+    fn bind(db: &Database, id: &str, agent_id: &str, provider_id: &str, enabled: bool) {
+        let conn = db.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO agent_provider_bindings (
+                id, agent_module_id, provider_id, enabled,
+                api_key_fingerprint, credential_slot, credential_version,
+                created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, NULL, NULL, 0, 1, 1)",
+            params![id, agent_id, provider_id, enabled],
+        )
+        .unwrap();
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn event(
+        event_id: &str,
+        agent_id: &str,
+        provider_id: &str,
+        product_group_id: &str,
+        occurred_at: i64,
+        input_tokens: u64,
+        output_tokens: u64,
+        cache_read_tokens: u64,
+        cache_creation_tokens: u64,
+        total_cost_usd: Option<&str>,
+        cost_source: CostSource,
+    ) -> UsageEvent {
+        UsageEvent {
+            event_id: event_id.to_string(),
+            source: TokenSource::Proxy,
+            provider_id: provider_id.to_string(),
+            agent_module_id: Some(agent_id.to_string()),
+            product_group_id: product_group_id.to_string(),
+            occurred_at,
+            model: "fixture-model".to_string(),
+            input_tokens,
+            output_tokens,
+            cache_read_tokens,
+            cache_creation_tokens,
+            request_id: None,
+            session_id: None,
+            upstream_correlation_id: None,
+            input_cost_usd: None,
+            output_cost_usd: None,
+            cache_read_cost_usd: None,
+            cache_creation_cost_usd: None,
+            total_cost_usd: total_cost_usd.map(str::to_string),
+            cost_source,
+            legacy_request_id: None,
+            created_at: occurred_at,
+        }
+    }
+
+    fn quota_snapshot(
+        provider_id: &str,
+        fetched_at: i64,
+        five_hour_used: Option<&str>,
+        five_hour_resets_at: Option<&str>,
+        seven_day_used: Option<&str>,
+        seven_day_resets_at: Option<&str>,
+        raw_payload: serde_json::Value,
+    ) -> QuotaSnapshot {
+        QuotaSnapshot {
+            snapshot_id: format!("snapshot-{provider_id}-{fetched_at}"),
+            provider_id: provider_id.to_string(),
+            fetched_at,
+            five_hour_utilization_percent: five_hour_used.map(str::to_string),
+            five_hour_resets_at: five_hour_resets_at.map(str::to_string),
+            seven_day_utilization_percent: seven_day_used.map(str::to_string),
+            seven_day_resets_at: seven_day_resets_at.map(str::to_string),
+            manual_resets_remaining: None,
+            raw_payload,
+            created_at: fetched_at,
+        }
+    }
+
+    fn find_provider<'a>(
+        snapshot: &'a TrayUsageSnapshot,
+        agent_id: &str,
+        provider_id: &str,
+    ) -> &'a TrayProviderUsageView {
+        snapshot
+            .agents
+            .iter()
+            .find(|agent| agent.agent_module_id == agent_id)
+            .and_then(|agent| {
+                agent
+                    .providers
+                    .iter()
+                    .find(|provider| provider.provider_id == provider_id)
+            })
+            .unwrap_or_else(|| panic!("missing {agent_id}/{provider_id}"))
+    }
+
+    #[test]
+    fn projector_filters_visible_enabled_bindings_preserves_dao_order_and_aggregates_per_agent() {
+        let db = clean_projector_database();
+        let now = Local.timestamp_opt(2_000_000_000, 0).single().unwrap();
+        let windows = TrayUsageWindows::from_local_now(now).unwrap();
+        let future_reset = chrono::DateTime::from_timestamp(now.timestamp() + 3_600, 0)
+            .unwrap()
+            .to_rfc3339();
+
+        for input in [
+            provider("a-subscription", BillingKind::Subscription, Some("fixture")),
+            provider("b-metered", BillingKind::Metered, None),
+            provider("c-no-budget", BillingKind::Metered, None),
+            provider("d-no-source", BillingKind::Subscription, None),
+            provider("y-disabled-binding", BillingKind::Metered, None),
+            provider("z-disabled-provider", BillingKind::Metered, None),
+        ] {
+            db.save_usage_provider(&input).unwrap();
+        }
+        db.set_provider_daily_budget("b-metered", Some("10"))
+            .unwrap();
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE usage_providers SET enabled = 0 WHERE id = 'z-disabled-provider'",
+                [],
+            )
+            .unwrap();
+        }
+
+        // Deliberately insert bindings out of Provider DAO order.
+        bind(&db, "codex-d", "codex", "d-no-source", true);
+        bind(&db, "codex-z", "codex", "z-disabled-provider", true);
+        bind(&db, "codex-c", "codex", "c-no-budget", true);
+        bind(&db, "codex-b", "codex", "b-metered", true);
+        bind(&db, "codex-a", "codex", "a-subscription", true);
+        bind(&db, "codex-y", "codex", "y-disabled-binding", false);
+        bind(&db, "claude-b", "claude-code", "b-metered", true);
+        bind(&db, "claude-a", "claude-code", "a-subscription", true);
+        bind(&db, "hidden-b", "hidden-agent", "b-metered", true);
+        bind(&db, "archived-b", "archived-agent", "b-metered", true);
+
+        let session_only = db
+            .list_agent_provider_bindings(Some("codex"))
+            .unwrap()
+            .into_iter()
+            .find(|binding| binding.provider_id == "a-subscription")
+            .unwrap();
+        assert!(session_only.enabled);
+        assert!(!session_only.effective_enabled);
+
+        db.append_quota_success(&quota_snapshot(
+            "a-subscription",
+            now.timestamp() - 10,
+            Some("81"),
+            Some(&future_reset),
+            Some("40"),
+            Some(&future_reset),
+            json!({"fixture": true}),
+        ))
+        .unwrap();
+        db.append_quota_success(&quota_snapshot(
+            "d-no-source",
+            now.timestamp() - 10,
+            Some("ignored-percent-secret-sentinel"),
+            Some("ignored-reset-secret"),
+            Some("ignored-percent-secret-sentinel"),
+            Some("ignored-reset-secret"),
+            json!({"ignored": "ignored-payload-secret"}),
+        ))
+        .unwrap();
+
+        db.insert_usage_event(&event(
+            "metered-today",
+            "codex",
+            "b-metered",
+            "group-b-metered",
+            now.timestamp(),
+            1,
+            2,
+            3,
+            4,
+            Some("8.75"),
+            CostSource::Upstream,
+        ))
+        .unwrap();
+        db.insert_usage_event(&event(
+            "metered-before-today",
+            "codex",
+            "b-metered",
+            "group-b-metered",
+            windows.today_start_at - 1,
+            10,
+            20,
+            30,
+            40,
+            Some("10"),
+            CostSource::Estimated,
+        ))
+        .unwrap();
+        db.insert_usage_event(&event(
+            "disabled-provider-event",
+            "codex",
+            "z-disabled-provider",
+            "group-z-disabled-provider",
+            now.timestamp(),
+            9_999,
+            9_999,
+            9_999,
+            9_999,
+            Some("9999"),
+            CostSource::Upstream,
+        ))
+        .unwrap();
+
+        let snapshot = TrayUsageProjector::new(db.clone()).project_at(now).unwrap();
+
+        assert_eq!(snapshot.generated_at, now.timestamp());
+        assert_eq!(snapshot.last_success_at, Some(now.timestamp()));
+        assert_eq!(snapshot.status, UsageStatus::Red);
+        assert_eq!(
+            snapshot
+                .agents
+                .iter()
+                .map(|agent| agent.agent_module_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["codex", "claude-code"],
+        );
+        assert_eq!(
+            snapshot.agents[0]
+                .providers
+                .iter()
+                .map(|provider| provider.provider_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a-subscription", "b-metered", "c-no-budget", "d-no-source",],
+        );
+
+        let subscription = find_provider(&snapshot, "codex", "a-subscription");
+        assert_eq!(subscription.status, UsageStatus::Red);
+        assert_eq!(subscription.subscription.as_ref().unwrap().plan_label, None,);
+
+        let metered = find_provider(&snapshot, "codex", "b-metered")
+            .metered
+            .as_ref()
+            .unwrap();
+        assert_eq!(metered.today_cost_usd.as_deref(), Some("8.75"));
+        assert_eq!(metered.rolling_30_day_cost_usd.as_deref(), Some("18.75"),);
+        assert_eq!(metered.total_tokens, 110);
+        assert_eq!(metered.cost_quality, CostQuality::Complete);
+
+        let no_budget = find_provider(&snapshot, "codex", "c-no-budget");
+        assert_eq!(no_budget.status, UsageStatus::Unknown);
+        assert_eq!(
+            no_budget.warning_reason.as_deref(),
+            Some("daily_budget_missing")
+        );
+        assert_eq!(
+            no_budget
+                .metered
+                .as_ref()
+                .unwrap()
+                .today_cost_usd
+                .as_deref(),
+            Some("0"),
+        );
+        assert_eq!(
+            no_budget.metered.as_ref().unwrap().cost_quality,
+            CostQuality::Complete,
+        );
+
+        let no_source = find_provider(&snapshot, "codex", "d-no-source");
+        assert_eq!(no_source.status, UsageStatus::Unknown);
+        assert_eq!(
+            no_source.warning_reason.as_deref(),
+            Some("quota_unavailable")
+        );
+        assert!(no_source
+            .subscription
+            .as_ref()
+            .unwrap()
+            .windows
+            .iter()
+            .all(|window| window.used_percent.is_none() && window.resets_at.is_none()));
+
+        let shared_metered = find_provider(&snapshot, "claude-code", "b-metered")
+            .metered
+            .as_ref()
+            .unwrap();
+        assert_eq!(shared_metered.today_cost_usd.as_deref(), Some("0"));
+        assert_eq!(shared_metered.rolling_30_day_cost_usd.as_deref(), Some("0"));
+        assert_eq!(shared_metered.total_tokens, 0);
+
+        let serialized = serde_json::to_string(&snapshot).unwrap();
+        assert!(!serialized.contains("ignored-percent-secret-sentinel"));
+        assert!(!serialized.contains("ignored-reset-secret"));
+        assert!(!serialized.contains("ignored-payload-secret"));
+    }
+
+    #[test]
+    fn projector_cost_quality_distinguishes_zero_unavailable_partial_and_estimated() {
+        let db = clean_projector_database();
+        let now = Local.timestamp_opt(2_000_000_000, 0).single().unwrap();
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE agent_modules SET visible = 0 WHERE id = 'claude-code'",
+                [],
+            )
+            .unwrap();
+        }
+
+        for id in [
+            "a-zero",
+            "b-unavailable",
+            "c-partial-low",
+            "d-partial-high",
+            "e-estimated",
+        ] {
+            db.save_usage_provider(&provider(id, BillingKind::Metered, None))
+                .unwrap();
+            db.set_provider_daily_budget(id, Some("10")).unwrap();
+            bind(&db, &format!("binding-{id}"), "codex", id, true);
+        }
+
+        let insert = |event_id: &str,
+                      provider_id: &str,
+                      total_cost: Option<&str>,
+                      source: CostSource,
+                      tokens: u64| {
+            db.insert_usage_event(&event(
+                event_id,
+                "codex",
+                provider_id,
+                &format!("group-{provider_id}"),
+                now.timestamp(),
+                tokens,
+                tokens,
+                tokens,
+                tokens,
+                total_cost,
+                source,
+            ))
+            .unwrap();
+        };
+        insert(
+            "unavailable",
+            "b-unavailable",
+            None,
+            CostSource::Unavailable,
+            1,
+        );
+        insert(
+            "partial-low-numeric",
+            "c-partial-low",
+            Some("4"),
+            CostSource::Upstream,
+            1,
+        );
+        insert(
+            "partial-low-missing",
+            "c-partial-low",
+            None,
+            CostSource::Unavailable,
+            2,
+        );
+        insert(
+            "partial-high-numeric",
+            "d-partial-high",
+            Some("8"),
+            CostSource::Upstream,
+            1,
+        );
+        insert(
+            "partial-high-missing",
+            "d-partial-high",
+            None,
+            CostSource::Unavailable,
+            2,
+        );
+        insert(
+            "estimated",
+            "e-estimated",
+            Some("5"),
+            CostSource::Estimated,
+            1,
+        );
+
+        let snapshot = TrayUsageProjector::new(db.clone()).project_at(now).unwrap();
+
+        let zero = find_provider(&snapshot, "codex", "a-zero");
+        assert_eq!(zero.status, UsageStatus::Green);
+        assert_eq!(
+            zero.metered.as_ref().unwrap().cost_quality,
+            CostQuality::Complete
+        );
+        assert_eq!(
+            zero.metered.as_ref().unwrap().today_cost_usd.as_deref(),
+            Some("0"),
+        );
+        assert_eq!(
+            zero.metered
+                .as_ref()
+                .unwrap()
+                .rolling_30_day_cost_usd
+                .as_deref(),
+            Some("0"),
+        );
+
+        let unavailable = find_provider(&snapshot, "codex", "b-unavailable");
+        assert_eq!(unavailable.status, UsageStatus::Unknown);
+        assert_eq!(
+            unavailable.metered.as_ref().unwrap().cost_quality,
+            CostQuality::Unavailable,
+        );
+        assert_eq!(unavailable.metered.as_ref().unwrap().today_cost_usd, None);
+
+        let partial_low = find_provider(&snapshot, "codex", "c-partial-low");
+        assert_eq!(partial_low.status, UsageStatus::Unknown);
+        assert_eq!(partial_low.warning_reason.as_deref(), Some("partial_cost"));
+        assert_eq!(
+            partial_low.metered.as_ref().unwrap().cost_quality,
+            CostQuality::Partial,
+        );
+
+        let partial_high = find_provider(&snapshot, "codex", "d-partial-high");
+        assert_eq!(partial_high.status, UsageStatus::Red);
+        assert_eq!(partial_high.warning_reason.as_deref(), Some("partial_cost"));
+        assert_eq!(partial_high.metered.as_ref().unwrap().total_tokens, 12);
+
+        let estimated = find_provider(&snapshot, "codex", "e-estimated");
+        assert_eq!(estimated.status, UsageStatus::Yellow);
+        assert_eq!(
+            estimated.metered.as_ref().unwrap().cost_quality,
+            CostQuality::Estimated,
+        );
+        assert_eq!(snapshot.status, UsageStatus::Red);
+    }
+
+    #[test]
+    fn projector_canonicalizes_resets_and_never_serializes_persisted_secrets() {
+        let db = clean_projector_database();
+        let now = Local.timestamp_opt(2_000_000_000, 0).single().unwrap();
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE agent_modules SET visible = 0 WHERE id = 'claude-code'",
+                [],
+            )
+            .unwrap();
+        }
+
+        let mut private_provider = provider(
+            "a-private-subscription",
+            BillingKind::Subscription,
+            Some("fixture"),
+        );
+        private_provider.route_config = Some(json!({
+            "api_key": "route-config-secret-sentinel"
+        }));
+        private_provider.quota_config = Some(json!({
+            "token": "quota-config-secret-sentinel"
+        }));
+        db.save_usage_provider(&private_provider).unwrap();
+        bind(
+            &db,
+            "private-binding",
+            "codex",
+            "a-private-subscription",
+            true,
+        );
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE agent_provider_bindings
+                 SET api_key_fingerprint = ?2, credential_slot = ?3,
+                     credential_version = 1, route_protocol = ?4
+                 WHERE id = ?1",
+                params![
+                    "private-binding",
+                    vec![0x41_u8; 32],
+                    "binding-credential-secret-sentinel",
+                    "binding-route-secret-sentinel",
+                ],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO provider_api_credentials (
+                    provider_id, api_key_fingerprint, credential_slot,
+                    credential_version, last_test_at, last_test_status,
+                    last_test_error_code, created_at, updated_at
+                 ) VALUES (?1, ?2, ?3, 1, 1, 'failed', ?4, 1, 1)",
+                params![
+                    "a-private-subscription",
+                    vec![0x42_u8; 32],
+                    "provider-credential-secret-sentinel",
+                    "provider-test-secret-sentinel",
+                ],
+            )
+            .unwrap();
+        }
+
+        let past_reset = chrono::DateTime::from_timestamp(now.timestamp() - 1, 0)
+            .unwrap()
+            .to_rfc3339();
+        db.append_quota_success(&quota_snapshot(
+            "a-private-subscription",
+            now.timestamp() - 10,
+            Some("50"),
+            Some(&past_reset),
+            Some("55"),
+            Some("reset-secret-sentinel"),
+            json!({"token": "raw-payload-secret-sentinel"}),
+        ))
+        .unwrap();
+        db.record_quota_failure(
+            "a-private-subscription",
+            now.timestamp(),
+            "quota-fetch-error-secret-sentinel",
+        )
+        .unwrap();
+
+        let snapshot = TrayUsageProjector::new(db.clone()).project_at(now).unwrap();
+        let provider = find_provider(&snapshot, "codex", "a-private-subscription");
+        let subscription = provider.subscription.as_ref().unwrap();
+        assert_eq!(subscription.plan_label, None);
+        assert_eq!(subscription.windows.len(), 2);
+        assert_eq!(
+            subscription.windows[0].unavailable_reason.as_deref(),
+            Some("reset_pending_refresh"),
+        );
+        assert!(subscription.windows[0]
+            .resets_at
+            .as_deref()
+            .is_some_and(|value| value.ends_with('Z')));
+        assert_eq!(subscription.windows[1].resets_at, None);
+        assert_eq!(
+            subscription.windows[1].unavailable_reason.as_deref(),
+            Some("invalid_reset_timestamp"),
+        );
+        let exact_now_reset = chrono::DateTime::from_timestamp(now.timestamp(), 0)
+            .unwrap()
+            .to_rfc3339();
+        let (canonical_exact_now, exact_now_reason) =
+            canonical_reset(Some(&exact_now_reset), now.timestamp());
+        assert!(canonical_exact_now.is_some());
+        assert_eq!(exact_now_reason, None);
+        let invalid_usage_with_past_reset = subscription_window(
+            "fixture",
+            Some("invalid-percent-secret-sentinel"),
+            Some(&past_reset),
+            now.timestamp(),
+        );
+        assert_eq!(
+            invalid_usage_with_past_reset.unavailable_reason.as_deref(),
+            Some("invalid_quota_percent"),
+        );
+        assert!(!serde_json::to_string(&invalid_usage_with_past_reset)
+            .unwrap()
+            .contains("invalid-percent-secret-sentinel"));
+
+        let serialized = serde_json::to_string(&snapshot).unwrap();
+        for secret in [
+            "route-config-secret-sentinel",
+            "quota-config-secret-sentinel",
+            "binding-credential-secret-sentinel",
+            "binding-route-secret-sentinel",
+            "provider-credential-secret-sentinel",
+            "provider-test-secret-sentinel",
+            "raw-payload-secret-sentinel",
+            "quota-fetch-error-secret-sentinel",
+            "reset-secret-sentinel",
+        ] {
+            assert!(!serialized.contains(secret), "{secret}: {serialized}");
+        }
     }
 
     #[test]

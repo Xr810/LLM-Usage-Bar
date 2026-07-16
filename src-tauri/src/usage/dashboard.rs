@@ -1,5 +1,6 @@
 use crate::database::Database;
 use crate::error::AppError;
+use crate::usage::aggregation::aggregate_provider_range;
 use crate::usage::domain::{
     BillingKind, CostSourceCounts, ProductUsageView, ProviderUsageView, QuotaStatusView,
     TokenSource, UsageDashboardView, UsageProviderView,
@@ -190,93 +191,14 @@ impl<'a> UsageDashboardService<'a> {
         end_at: i64,
         include_quota: bool,
     ) -> Result<ProviderUsageView, AppError> {
-        let conn = self
-            .db
-            .conn
-            .lock()
-            .map_err(|error| AppError::Database(format!("Mutex lock failed: {error}")))?;
-        let mut statement = conn.prepare(
-            "SELECT input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
-                    total_cost_usd, cost_source
-             FROM usage_events AS event
-             WHERE event.provider_id = ?1
-               AND event.product_group_id = ?2
-               AND event.occurred_at >= ?3 AND event.occurred_at < ?4
-               AND event.agent_module_id = ?5
-               AND NOT EXISTS (
-                   SELECT 1
-                   FROM usage_event_links AS link
-                   JOIN usage_events AS canonical
-                     ON canonical.event_id = link.canonical_event_id
-                   JOIN usage_events AS duplicate
-                     ON duplicate.event_id = link.duplicate_event_id
-                   WHERE duplicate.event_id = event.event_id
-                     AND canonical.source = 'proxy'
-                     AND duplicate.source = 'session_log'
-                     AND canonical.provider_id = duplicate.provider_id
-                     AND canonical.agent_module_id IS NOT NULL
-                     AND canonical.agent_module_id = duplicate.agent_module_id
-               )
-             ORDER BY event.occurred_at, event.event_id",
+        let aggregate = aggregate_provider_range(
+            self.db,
+            agent_module_id,
+            &provider.id,
+            product_group_id,
+            start_at,
+            end_at,
         )?;
-        let rows = statement.query_map(
-            params![
-                provider.id,
-                product_group_id,
-                start_at,
-                end_at,
-                agent_module_id
-            ],
-            |row| {
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, i64>(1)?,
-                    row.get::<_, i64>(2)?,
-                    row.get::<_, i64>(3)?,
-                    row.get::<_, Option<String>>(4)?,
-                    row.get::<_, String>(5)?,
-                ))
-            },
-        )?;
-
-        let mut event_count = 0_u64;
-        let mut input_tokens = 0_u64;
-        let mut output_tokens = 0_u64;
-        let mut cache_read_tokens = 0_u64;
-        let mut cache_creation_tokens = 0_u64;
-        let mut total_cost = Decimal::ZERO;
-        let mut has_cost = false;
-        let mut cost_source_counts = CostSourceCounts::default();
-        for row in rows {
-            let (input, output, cache_read, cache_creation, cost, source) = row?;
-            event_count = checked_sum(event_count, 1)?;
-            input_tokens = checked_sum(input_tokens, non_negative(input, "input_tokens")?)?;
-            output_tokens = checked_sum(output_tokens, non_negative(output, "output_tokens")?)?;
-            cache_read_tokens = checked_sum(
-                cache_read_tokens,
-                non_negative(cache_read, "cache_read_tokens")?,
-            )?;
-            cache_creation_tokens = checked_sum(
-                cache_creation_tokens,
-                non_negative(cache_creation, "cache_creation_tokens")?,
-            )?;
-            if let Some(cost) = cost {
-                total_cost = checked_cost_sum(total_cost, parse_decimal(&cost)?)?;
-                has_cost = true;
-            }
-            match source.as_str() {
-                "upstream" => cost_source_counts.upstream += 1,
-                "estimated" => cost_source_counts.estimated += 1,
-                "unavailable" => cost_source_counts.unavailable += 1,
-                _ => {
-                    return Err(AppError::Database(format!(
-                        "invalid usage cost source: {source}"
-                    )))
-                }
-            }
-        }
-        drop(statement);
-        drop(conn);
 
         let (quota, quota_fetch_state) =
             if provider.billing_kind == BillingKind::Subscription && include_quota {
@@ -298,13 +220,13 @@ impl<'a> UsageDashboardService<'a> {
         Ok(ProviderUsageView {
             provider: provider.clone(),
             shared_account: self.shared_provider_ids.contains(&provider.id),
-            event_count,
-            input_tokens,
-            output_tokens,
-            cache_read_tokens,
-            cache_creation_tokens,
-            total_cost_usd: has_cost.then(|| total_cost.normalize().to_string()),
-            cost_source_counts,
+            event_count: aggregate.event_count,
+            input_tokens: aggregate.input_tokens,
+            output_tokens: aggregate.output_tokens,
+            cache_read_tokens: aggregate.cache_read_tokens,
+            cache_creation_tokens: aggregate.cache_creation_tokens,
+            total_cost_usd: aggregate.total_cost_usd,
+            cost_source_counts: aggregate.cost_source_counts,
             quota,
             quota_fetch_state,
         })
@@ -376,10 +298,6 @@ impl<'a> UsageDashboardService<'a> {
             .collect::<Result<BTreeSet<_>, _>>()?;
         Ok(provider_ids)
     }
-}
-
-fn non_negative(value: i64, field: &str) -> Result<u64, AppError> {
-    u64::try_from(value).map_err(|_| AppError::Database(format!("negative usage value in {field}")))
 }
 
 fn checked_sum(left: u64, right: u64) -> Result<u64, AppError> {
