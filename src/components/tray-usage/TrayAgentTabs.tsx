@@ -36,7 +36,7 @@ export function TrayAgentTabs({
             value="overview"
             id="tray-agent-tab-overview"
             aria-controls={panelId}
-            className="tray-agent-tab h-8 min-w-0 max-w-[148px] px-3 text-xs"
+            className="tray-agent-tab h-8 min-w-0 max-w-[148px] px-3 text-xs data-[state=inactive]:opacity-100"
           >
             {overviewLabel}
           </TabsTrigger>
@@ -52,7 +52,7 @@ export function TrayAgentTabs({
               id={`tray-agent-tab-${index}`}
               aria-controls={panelId}
               title={agent.name}
-              className="tray-agent-tab h-8 min-w-0 max-w-[168px] px-3 text-xs"
+              className="tray-agent-tab h-8 min-w-0 max-w-[168px] px-3 text-xs data-[state=inactive]:opacity-100"
             >
               <span className="truncate">{agent.name}</span>
             </TabsTrigger>

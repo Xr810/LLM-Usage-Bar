@@ -548,6 +548,11 @@ describe("TrayUsagePopoverView", () => {
         contrastRatio(selectedTabStyle.color, selectedTabStyle.backgroundColor),
       ).toBeGreaterThanOrEqual(4.5);
 
+      const inactiveTab = screen.getByRole("tab", { name: "Codex" });
+      expect(inactiveTab).toHaveClass("data-[state=inactive]:opacity-100");
+      const inactiveTabStyle = getComputedStyle(inactiveTab);
+      expect(Number.parseFloat(inactiveTabStyle.opacity)).toBe(1);
+
       for (const label of ["Cyan test", "Yellow test"]) {
         const progressStyle = getComputedStyle(
           screen.getByRole("progressbar", { name: label }),
