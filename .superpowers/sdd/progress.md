@@ -23,8 +23,8 @@ ledger is retained below as historical evidence.
 | Task | State | Commit | Verification |
 | --- | --- | --- | --- |
 | 1. Schema v18 and daily budget persistence | completed | `09ee7d39`, `85102743` | focused migration/DAO/backup/database and identity-startup tests pass; independent re-review approved |
-| 2. Usage severity policy | in progress | — | prerequisite fixes approved; RED/GREEN pending |
-| 3. Usage snapshot projection | pending | — | — |
+| 2. Usage severity policy | completed | `cfa60cad` | status 16/16, tray model 10/10, fmt/diff; independent review approved |
+| 3. Usage snapshot projection | in progress | — | status/window contract approved; RED/GREEN pending |
 | 4. Refresh orchestration and stale snapshot | pending | — | — |
 | 5. Real menu-bar dot assets | pending | — | — |
 | 6. macOS tray and popover window contract | pending | — | — |
@@ -92,6 +92,29 @@ ledger is retained below as historical evidence.
 - Fresh integration gate: database tests 54/54, usage-dashboard command tests
   18/18, dashboard page 10/10, subscription card 3/3, and TypeScript typecheck
   all pass.
+
+## Active Task 2 Evidence
+
+- Exact Decimal classification covers subscription remaining boundaries and
+  metered budget-consumption boundaries without floating-point rounding.
+- Subscription values clamp to 0...100 and select the highest valid used window;
+  malformed windows cannot erase a valid alert.
+- Complete and estimated costs classify normally; partial costs can prove only
+  yellow/red; unavailable, missing, malformed, or invalid values remain unknown.
+- `worst_status` treats unknown as absence of evidence, so it never lowers or
+  hides a known green/yellow/red state.
+- Query windows use local calendar midnight and an exclusive `now + 1` end that
+  includes the current integer second. Deterministic calendar-seam tests prove
+  23-hour spring-forward and 25-hour fall-back days without adding a dependency.
+- The tray DTO wire model is lowercase/camelCase and contains only approved
+  presentation fields. Task 3 owns real projector sentinel tests for its String
+  reason/error construction boundary.
+- Fresh focused verification passes 16/16 status tests and 10/10 tray model
+  tests plus Rust format and diff checks. Independent review approved with no
+  Critical, Important, or Minor findings.
+- Task 3 must convert the optional local-window result to `AppError` explicitly
+  and retain `generated_at = now.timestamp()` rather than the `now + 1` query
+  boundary.
 
 ---
 
