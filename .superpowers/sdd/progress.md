@@ -7,6 +7,8 @@ ledger is retained below as historical evidence.
 ## Active Baseline
 
 - Plan: `docs/superpowers/plans/2026-07-15-menu-bar-usage-popover-implementation.md`
+- Managed ChatGPT quota prerequisite:
+  `docs/superpowers/plans/2026-07-16-codex-managed-quota-integration.md`
 - Base commit: `b42b4b8e` (`docs: add menu bar usage popover implementation plan`)
 - Preflight correction: `b9a51b32` (`docs: align popover plan with production dependency injection`)
 - Frontend focused baseline: `src/i18n/dashboardCopy.test.ts` passes 5/5.
@@ -20,7 +22,7 @@ ledger is retained below as historical evidence.
 
 | Task | State | Commit | Verification |
 | --- | --- | --- | --- |
-| 1. Schema v18 and daily budget persistence | in progress | — | baseline passed; RED/GREEN pending |
+| 1. Schema v18 and daily budget persistence | completed | `09ee7d39`, `85102743` | focused migration/DAO/backup/database and identity-startup tests pass; independent re-review approved |
 | 2. Usage severity policy | pending | — | — |
 | 3. Usage snapshot projection | pending | — | — |
 | 4. Refresh orchestration and stale snapshot | pending | — | — |
@@ -31,6 +33,13 @@ ledger is retained below as historical evidence.
 | 9. Daily budget settings | pending | — | — |
 | 10. Full verification and visual QA | pending | — | — |
 
+## Active Prerequisite Ledger
+
+| Task | State | Commit | Verification |
+| --- | --- | --- | --- |
+| A. Managed ChatGPT OAuth quota routing | in progress | — | root cause proven; RED/GREEN pending |
+| B. Truthful quota actions and deduplicated feedback | pending | — | behavior map complete; RED/GREEN pending |
+
 ## Active Review Notes
 
 - A task is complete only after focused verification and independent review.
@@ -39,6 +48,20 @@ ledger is retained below as historical evidence.
 - Subscription severity is green above 50%, yellow from 20% through 50%, and
   red below 20%; metered severity is green below 50% of budget, yellow from 50%
   through below 80%, and red at or above 80%.
+
+## Active Task 1 Evidence
+
+- Schema v18 adds only nullable `usage_providers.daily_budget_usd TEXT`; normal
+  Provider saves, enable/disable changes, and system reconciliation preserve it.
+- Positive Decimal values are normalized before storage; invalid, non-positive,
+  special, or overflowing values fail without echoing the input.
+- Focused migration, Provider DAO, backup/restore, and database tests pass.
+- Independent review found one adjacent fixed-v13 startup-fixture review gate
+  still pinned to schema 17. The original implementer corrected it to 18 without
+  changing the fixture's v13 source schema.
+- Both affected identity/startup tests pass after the correction, the net diff
+  passes `git diff --check`, and the same reviewer approved the complete Task 1
+  range with no remaining findings.
 
 ---
 
