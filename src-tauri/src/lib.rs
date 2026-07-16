@@ -36,6 +36,7 @@ mod settings;
 mod store;
 
 mod tray;
+pub mod tray_status;
 pub mod usage;
 mod usage_events;
 mod usage_script;
@@ -1155,7 +1156,9 @@ pub fn run() {
 
             // 构建托盘
             let mut tray_builder = TrayIconBuilder::with_id(tray::TRAY_ID)
-                .tooltip("LLM Usage Bar") // 鼠标悬停提示
+                .tooltip(tray_status::tray_status_tooltip(
+                    usage::status::UsageStatus::Unknown,
+                ))
                 .on_tray_icon_event(|tray, event| match event {
                     // 鼠标悬停/点击到托盘图标时，后台异步刷新用量缓存，
                     // 让用户下一次（或快速打开菜单的那一刻）看到较新的数字。
@@ -1174,11 +1177,20 @@ pub fn run() {
                 })
                 .show_menu_on_left_click(true);
 
-            // 使用平台对应的托盘图标（macOS 使用模板图标适配深浅色）
+            // macOS starts with the safe Unknown status color. The legacy
+            // template image remains a decode fallback only.
             #[cfg(target_os = "macos")]
             {
-                if let Some(icon) = macos_tray_icon() {
-                    tray_builder = tray_builder.icon(icon).icon_as_template(true);
+                let unknown_icon = tray_status::decode_status_icon(
+                    usage::status::UsageStatus::Unknown,
+                );
+                if unknown_icon.is_err() {
+                    log::warn!("Failed to load bundled Unknown tray status icon");
+                }
+                if let Some((icon, is_template)) =
+                    tray_status::select_initial_status_icon(unknown_icon, macos_tray_icon)
+                {
+                    tray_builder = tray_builder.icon(icon).icon_as_template(is_template);
                 } else if let Some(icon) = app.default_window_icon() {
                     log::warn!("Falling back to default window icon for tray");
                     tray_builder = tray_builder.icon(icon.clone());
