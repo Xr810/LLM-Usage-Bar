@@ -27,8 +27,8 @@ ledger is retained below as historical evidence.
 | 3. Usage snapshot projection | completed | `53f9e61e` | aggregation 1/1, tray 13/13, dashboard 11/11, status 16/16, DAO/commands/fmt/diff; independent review approved |
 | 4. Refresh orchestration and stale snapshot | completed | `e0d1c49a` | service 14/14, store 3/3, quota 13/13, session 9/9, fmt/diff; independent review approved |
 | 5. Real menu-bar dot assets and refresh publication | completed | `61d31ad4`, `62017929` | focused command/event/quota/scheduler/store/service suites, integration, strict Clippy, fmt/diff; independent re-review approved |
-| 6. macOS tray and popover window contract | in progress | — | backend lifecycle implementation starting |
-| 7. Popover renderer shell and payload | pending | — | — |
+| 6. macOS tray and popover window contract | completed | `122a084a` | focused lifecycle/tray/command suites, production check, strict Clippy, fmt/diff; independent re-review approved |
+| 7. Popover renderer shell and payload | in progress | — | frontend data/window-surface implementation starting |
 | 8. Compact usage popover UI | pending | — | — |
 | 9. Daily budget settings | pending | — | — |
 | 10. Full verification and visual QA | pending | — | — |
@@ -191,6 +191,29 @@ ledger is retained below as historical evidence.
   dashboard commands 22/22, usage events 19/19, tray commands 5/5, related tray
   service 24/24, and integration 4/4, plus strict Clippy, Rust format, and diff
   checks. Independent re-review approved with no remaining findings.
+
+## Active Task 6 Evidence
+
+- macOS left-button Down toggles one lazy 380x520 transparent, undecorated,
+  fixed-size `tray-popover`; button Up is ignored, while right-button Down hides
+  the popover and preserves the existing native menu.
+- Physical-pixel placement centers below the tray anchor and clamps to the active
+  work area across 1x, 2x, undersized, edge, and negative-origin monitor cases.
+  Blur and close hide only the popover, and window-state persistence deny-lists
+  it so main-window geometry remains isolated.
+- macOS now launches menu-bar first with Accessory activation policy. Explicit
+  details/settings navigation, native Show Main, Reopen, deep links, and
+  single-instance activation share one main-window reveal path; a minimized
+  main window is returned to menu-bar-only mode without affecting other OSes.
+- Pending typed destinations are installed before a lightweight main renderer
+  can mount, consumed once, and rolled back by pointer identity on reveal
+  failure. A failed older attempt cannot erase a newer concurrent destination.
+- Renderer-facing window errors remain fixed codes, the popover capability is
+  limited to `core:default`, and no command holds Tauri State across an await.
+- Fresh verification passes popover 12/12, event lifecycle 1/1, minimize policy
+  1/1, tray 26/26, no-window tray survival 1/1, and tray commands 5/5, plus
+  production library check, strict Clippy, Rust format, and diff checks.
+  Independent re-review approved with no remaining findings.
 
 ---
 
