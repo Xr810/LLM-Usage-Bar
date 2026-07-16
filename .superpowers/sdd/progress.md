@@ -28,8 +28,8 @@ ledger is retained below as historical evidence.
 | 4. Refresh orchestration and stale snapshot | completed | `e0d1c49a` | service 14/14, store 3/3, quota 13/13, session 9/9, fmt/diff; independent review approved |
 | 5. Real menu-bar dot assets and refresh publication | completed | `61d31ad4`, `62017929` | focused command/event/quota/scheduler/store/service suites, integration, strict Clippy, fmt/diff; independent re-review approved |
 | 6. macOS tray and popover window contract | completed | `122a084a` | focused lifecycle/tray/command suites, production check, strict Clippy, fmt/diff; independent re-review approved |
-| 7. Popover renderer shell and payload | in progress | — | frontend data/window-surface implementation starting |
-| 8. Compact usage popover UI | pending | — | — |
+| 7. Popover renderer shell and payload | completed | `f0c7d8bf` | focused 8/8, regressions 17/17, typecheck/build/format/diff; independent review approved |
+| 8. Compact usage popover UI | in progress | — | screenshot-grounded functional UI implementation starting |
 | 9. Daily budget settings | pending | — | — |
 | 10. Full verification and visual QA | pending | — | — |
 
@@ -214,6 +214,26 @@ ledger is retained below as historical evidence.
   1/1, tray 26/26, no-window tray survival 1/1, and tray commands 5/5, plus
   production library check, strict Clippy, Rust format, and diff checks.
   Independent re-review approved with no remaining findings.
+
+## Active Task 7 Evidence
+
+- The TypeScript snapshot contract mirrors the renderer-safe Rust serde shape
+  exactly, retains decimal percentages and USD values as strings, and contains
+  no Provider configuration or credential fields.
+- Typed tray IPC covers cached reads, one shared in-flight refresh, hide, typed
+  main-window navigation, pending-destination consumption, and quit. The query
+  bridge writes events and successful refreshes into one cache key, skips IPC
+  while the backend reports an active refresh, and preserves cached data on
+  failure.
+- The Tauri bootstrap selects `tray-popover` before config-error recovery,
+  database-upgrade UI, updater context, toaster, or the main App render. Main and
+  browser-preview paths remain unchanged, and the pure surface router has no
+  global Tauri dependency.
+- Task 8 receives only a minimal real popover surface stub; no interim visual
+  language or static chrome was invented before the screenshot-driven slice.
+- Fresh verification passes Task 7 tests 8/8 and related query/event/App
+  regressions 17/17, plus TypeScript, production renderer build, changed-file
+  Prettier, and diff checks. Independent review approved with no findings.
 
 ---
 
