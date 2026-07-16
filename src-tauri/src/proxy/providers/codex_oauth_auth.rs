@@ -56,6 +56,7 @@ const POLLING_SAFETY_MARGIN_SECS: u64 = 3;
 
 /// Historical User-Agent retained for OAuth server compatibility.
 const CODEX_USER_AGENT: &str = crate::product_identity::LEGACY_CODEX_OAUTH_USER_AGENT;
+const TOKEN_REFRESH_LOG_MESSAGE: &str = "[CodexOAuth] access_token refresh required";
 
 /// Codex OAuth 错误
 #[derive(Debug, thiserror::Error)]
@@ -508,7 +509,7 @@ impl CodexOAuthManager {
             }
         }
 
-        log::info!("[CodexOAuth] 账号 {account_id} 的 access_token 需要刷新");
+        log::info!("{TOKEN_REFRESH_LOG_MESSAGE}");
 
         let refresh_lock = self.get_refresh_lock(account_id).await;
         let _guard = refresh_lock.lock().await;
@@ -973,6 +974,15 @@ mod tests {
     #[test]
     fn codex_oauth_user_agent_preserves_legacy_wire_bytes() {
         assert_eq!(CODEX_USER_AGENT, "cc-switch-codex-oauth");
+    }
+
+    #[test]
+    fn token_refresh_log_message_is_identity_free() {
+        assert_eq!(
+            TOKEN_REFRESH_LOG_MESSAGE,
+            "[CodexOAuth] access_token refresh required"
+        );
+        assert!(!TOKEN_REFRESH_LOG_MESSAGE.contains("account_id"));
     }
 
     #[test]

@@ -5,6 +5,7 @@ pub const CLAUDE_SUBSCRIPTION_ID: &str = "system-claude-subscription";
 pub const OPENAI_API_ID: &str = "system-openai-api";
 pub const ANTHROPIC_API_ID: &str = "system-anthropic-api";
 pub const OPENROUTER_API_ID: &str = "system-openrouter-api";
+pub const MANAGED_CODEX_QUOTA_SOURCE: &str = "codex_oauth";
 
 pub struct SystemProviderDefinition {
     pub id: &'static str,
@@ -14,6 +15,8 @@ pub struct SystemProviderDefinition {
     pub product_group_id: &'static str,
     pub token_sources: &'static [TokenSource],
     pub auth_kind: SystemProviderAuthKind,
+    pub quota_source: Option<&'static str>,
+    pub quota_interval_seconds: Option<u64>,
     pub upstream_protocol: Option<&'static str>,
     pub route_config: Option<serde_json::Value>,
 }
@@ -28,6 +31,8 @@ pub fn system_provider_definitions() -> Vec<SystemProviderDefinition> {
             product_group_id: "chatgpt-subscription",
             token_sources: &[TokenSource::Proxy, TokenSource::SessionLog],
             auth_kind: SystemProviderAuthKind::CodexOauth,
+            quota_source: Some(MANAGED_CODEX_QUOTA_SOURCE),
+            quota_interval_seconds: Some(300),
             upstream_protocol: Some("codex"),
             route_config: None,
         },
@@ -39,6 +44,8 @@ pub fn system_provider_definitions() -> Vec<SystemProviderDefinition> {
             product_group_id: "claude-subscription",
             token_sources: &[TokenSource::SessionLog],
             auth_kind: SystemProviderAuthKind::ClaudeCli,
+            quota_source: None,
+            quota_interval_seconds: None,
             upstream_protocol: None,
             route_config: None,
         },
@@ -50,6 +57,8 @@ pub fn system_provider_definitions() -> Vec<SystemProviderDefinition> {
             product_group_id: "openai-api",
             token_sources: &[TokenSource::Proxy],
             auth_kind: SystemProviderAuthKind::ProviderApiKey,
+            quota_source: None,
+            quota_interval_seconds: None,
             upstream_protocol: Some("codex"),
             route_config: Some(serde_json::json!({
                 "base_url": "https://api.openai.com/v1",
@@ -65,6 +74,8 @@ pub fn system_provider_definitions() -> Vec<SystemProviderDefinition> {
             product_group_id: "anthropic-api",
             token_sources: &[TokenSource::Proxy],
             auth_kind: SystemProviderAuthKind::ProviderApiKey,
+            quota_source: None,
+            quota_interval_seconds: None,
             upstream_protocol: Some("claude"),
             route_config: Some(serde_json::json!({
                 "base_url": "https://api.anthropic.com",
@@ -80,6 +91,8 @@ pub fn system_provider_definitions() -> Vec<SystemProviderDefinition> {
             product_group_id: "openrouter-api",
             token_sources: &[TokenSource::Proxy],
             auth_kind: SystemProviderAuthKind::ProviderApiKey,
+            quota_source: None,
+            quota_interval_seconds: None,
             upstream_protocol: Some("codex"),
             route_config: Some(serde_json::json!({
                 "base_url": "https://openrouter.ai/api/v1",

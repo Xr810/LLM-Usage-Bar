@@ -4,11 +4,15 @@
 //! 第一层：仅读取凭据，不实现登录/刷新。
 
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::sync::RwLock;
 
 use std::collections::HashMap;
 
 use crate::config;
+use crate::proxy::providers::codex_oauth_auth::CodexOAuthManager;
+use crate::usage::system_providers::MANAGED_CODEX_QUOTA_SOURCE;
 
 // ── 数据类型 ──────────────────────────────────────────────
 
@@ -664,11 +668,51 @@ fn unix_ts_to_iso(ts: i64) -> Option<String> {
     chrono::DateTime::from_timestamp(ts, 0).map(|dt| dt.to_rfc3339())
 }
 
-/// 查询 Codex / ChatGPT 反代订阅额度
+/// 使用 LLM Usage Bar 自管账号查询 ChatGPT 订阅额度。
 ///
-/// 参数化 `tool_label` 和 `expired_message` 让该函数可被两个调用点共用：
-/// - `"codex"` + "Please re-login with Codex CLI."（CLI 凭据路径）
-/// - `"codex_oauth"` + "Please re-login via LLM Usage Bar."（应用自管 OAuth 路径）
+/// 账号和 token 解析必须在 manager guard 内完成；实际 HTTP 请求前释放 guard，
+/// 避免一个慢请求阻塞其他 OAuth 状态操作。
+pub(crate) async fn query_managed_codex_oauth_quota(
+    manager: &Arc<RwLock<CodexOAuthManager>>,
+    requested_account_id: Option<&str>,
+) -> Result<SubscriptionQuota, String> {
+    let manager = manager.read().await;
+    let account_id = match requested_account_id
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+    {
+        Some(id) => Some(id.to_string()),
+        None => manager.default_account_id().await,
+    };
+    let Some(account_id) = account_id else {
+        return Ok(SubscriptionQuota::not_found(MANAGED_CODEX_QUOTA_SOURCE));
+    };
+
+    let access_token = match manager.get_valid_token_for_account(&account_id).await {
+        Ok(token) => token,
+        Err(_) => {
+            return Ok(SubscriptionQuota::error(
+                MANAGED_CODEX_QUOTA_SOURCE,
+                CredentialStatus::Expired,
+                "Codex OAuth token unavailable. Please re-login via LLM Usage Bar.".to_string(),
+            ));
+        }
+    };
+    drop(manager);
+
+    query_codex_quota(
+        &access_token,
+        Some(&account_id),
+        MANAGED_CODEX_QUOTA_SOURCE,
+        "Codex OAuth access token expired or rejected. Please re-login via LLM Usage Bar.",
+    )
+    .await
+}
+
+/// 查询 Codex / ChatGPT 反代订阅额度。
+///
+/// 参数化 `tool_label` 和 `expired_message` 让 CLI 与应用自管 OAuth 路径复用
+/// 同一个 wham/usage 协议实现。
 pub(crate) async fn query_codex_quota(
     access_token: &str,
     account_id: Option<&str>,
@@ -703,11 +747,10 @@ pub(crate) async fn query_codex_quota(
     }
 
     if !status.is_success() {
-        let body = resp.text().await.unwrap_or_default();
         return Ok(SubscriptionQuota::error(
             tool_label,
             CredentialStatus::Valid,
-            format!("API error (HTTP {status}): {body}"),
+            format!("API error (HTTP {status})"),
         ));
     }
 

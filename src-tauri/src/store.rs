@@ -33,10 +33,25 @@ impl AppState {
         db: Arc<Database>,
         credential_store: Arc<dyn CredentialStore>,
     ) -> Self {
+        let quota_service = Arc::new(QuotaService::new(db.clone()));
         Self::new_with_services(
             db,
             credential_store,
             Arc::new(ClaudeCliAuthService::production()),
+            quota_service,
+        )
+    }
+
+    pub fn new_with_credential_store_and_quota_service(
+        db: Arc<Database>,
+        credential_store: Arc<dyn CredentialStore>,
+        quota_service: Arc<QuotaService>,
+    ) -> Self {
+        Self::new_with_services(
+            db,
+            credential_store,
+            Arc::new(ClaudeCliAuthService::production()),
+            quota_service,
         )
     }
 
@@ -46,10 +61,12 @@ impl AppState {
         credential_store: Arc<dyn CredentialStore>,
         runner: Arc<dyn ClaudeAuthCommandRunner>,
     ) -> Self {
+        let quota_service = Arc::new(QuotaService::new(db.clone()));
         Self::new_with_services(
             db,
             credential_store,
             Arc::new(ClaudeCliAuthService::new(runner)),
+            quota_service,
         )
     }
 
@@ -57,6 +74,7 @@ impl AppState {
         db: Arc<Database>,
         credential_store: Arc<dyn CredentialStore>,
         claude_cli_auth_service: Arc<ClaudeCliAuthService>,
+        quota_service: Arc<QuotaService>,
     ) -> Self {
         let proxy_service =
             ProxyService::new_with_credential_store(db.clone(), credential_store.clone());
@@ -66,7 +84,6 @@ impl AppState {
                 db.clone(),
                 binding_credential_service.clone(),
             ));
-        let quota_service = Arc::new(QuotaService::new(db.clone()));
         let session_usage_service = Arc::new(SessionUsageService::new(db.clone()));
 
         Self {

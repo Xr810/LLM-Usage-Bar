@@ -1825,11 +1825,65 @@ mod migration_v16_to_v17 {
             [],
         )
         .expect("user removes a default binding");
+        conn.execute(
+            "UPDATE usage_providers SET daily_budget_usd = '25.5'
+             WHERE id = 'system-openai-api'",
+            [],
+        )
+        .expect("user configures a metered system Provider budget");
+
+        let assert_catalog_metadata = || {
+            let chatgpt = conn
+                .query_row(
+                    "SELECT quota_source, quota_interval_seconds
+                     FROM usage_providers WHERE id = 'system-chatgpt-subscription'",
+                    [],
+                    |row| {
+                        Ok((
+                            row.get::<_, Option<String>>(0)?,
+                            row.get::<_, Option<u64>>(1)?,
+                        ))
+                    },
+                )
+                .unwrap();
+            assert_eq!(chatgpt.0.as_deref(), Some("codex_oauth"));
+            assert_eq!(chatgpt.1, Some(300));
+
+            let claude = conn
+                .query_row(
+                    "SELECT quota_source, quota_interval_seconds
+                     FROM usage_providers WHERE id = 'system-claude-subscription'",
+                    [],
+                    |row| {
+                        Ok((
+                            row.get::<_, Option<String>>(0)?,
+                            row.get::<_, Option<u64>>(1)?,
+                        ))
+                    },
+                )
+                .unwrap();
+            assert_eq!(claude.0, None);
+            assert_eq!(claude.1, None);
+
+            assert_eq!(
+                conn.query_row(
+                    "SELECT daily_budget_usd FROM usage_providers
+                     WHERE id = 'system-openai-api'",
+                    [],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .unwrap()
+                .as_deref(),
+                Some("25.5")
+            );
+        };
 
         crate::usage::system_provider_migration::reconcile_system_provider_catalog(&conn)
             .expect("reconcile canonical card metadata");
+        assert_catalog_metadata();
         crate::usage::system_provider_migration::reconcile_system_provider_catalog(&conn)
             .expect("repeat catalog reconciliation");
+        assert_catalog_metadata();
 
         assert_eq!(
             super::scalar_i64(

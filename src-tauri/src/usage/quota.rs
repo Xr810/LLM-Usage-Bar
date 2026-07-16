@@ -1,12 +1,15 @@
 use crate::database::Database;
 use crate::error::AppError;
+use crate::proxy::providers::codex_oauth_auth::CodexOAuthManager;
 use crate::services::coding_plan::get_coding_plan_quota;
 use crate::services::subscription::{
-    get_subscription_quota, SubscriptionQuota, TIER_FIVE_HOUR, TIER_SEVEN_DAY, TIER_WEEKLY_LIMIT,
+    get_subscription_quota, query_managed_codex_oauth_quota, SubscriptionQuota, TIER_FIVE_HOUR,
+    TIER_SEVEN_DAY, TIER_WEEKLY_LIMIT,
 };
 use crate::usage::domain::{
     BillingKind, QuotaFetchState, QuotaSnapshot, QuotaStatusView, UsageProviderStored,
 };
+use crate::usage::system_providers::MANAGED_CODEX_QUOTA_SOURCE;
 use futures::future::BoxFuture;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -16,7 +19,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::async_runtime::JoinHandle;
-use tokio::sync::{watch, Mutex as AsyncMutex};
+use tokio::sync::{watch, Mutex as AsyncMutex, RwLock};
 use uuid::Uuid;
 
 pub const DEFAULT_QUOTA_INTERVAL_SECONDS: u64 = 300;
@@ -112,6 +115,23 @@ impl QuotaCollector for CodingPlanQuotaCollector {
     }
 }
 
+struct ManagedCodexOAuthQuotaCollector {
+    manager: Arc<RwLock<CodexOAuthManager>>,
+}
+
+impl QuotaCollector for ManagedCodexOAuthQuotaCollector {
+    fn source(&self) -> &'static str {
+        MANAGED_CODEX_QUOTA_SOURCE
+    }
+
+    fn collect<'a>(
+        &'a self,
+        _provider: &'a UsageProviderStored,
+    ) -> BoxFuture<'a, Result<SubscriptionQuota, String>> {
+        Box::pin(async move { query_managed_codex_oauth_quota(&self.manager, None).await })
+    }
+}
+
 #[derive(Clone)]
 pub struct QuotaService {
     db: Arc<Database>,
@@ -127,14 +147,26 @@ struct QuotaFlight {
 
 impl QuotaService {
     pub fn new(db: Arc<Database>) -> Self {
-        Self::with_collectors(
-            db,
-            vec![
-                Arc::new(SubscriptionQuotaCollector { source: "claude" }),
-                Arc::new(SubscriptionQuotaCollector { source: "codex" }),
-                Arc::new(CodingPlanQuotaCollector),
-            ],
-        )
+        Self::with_collectors(db, Self::legacy_collectors())
+    }
+
+    pub fn production(
+        db: Arc<Database>,
+        codex_oauth_manager: Arc<RwLock<CodexOAuthManager>>,
+    ) -> Self {
+        let mut collectors = Self::legacy_collectors();
+        collectors.push(Arc::new(ManagedCodexOAuthQuotaCollector {
+            manager: codex_oauth_manager,
+        }));
+        Self::with_collectors(db, collectors)
+    }
+
+    fn legacy_collectors() -> Vec<Arc<dyn QuotaCollector>> {
+        vec![
+            Arc::new(SubscriptionQuotaCollector { source: "claude" }),
+            Arc::new(SubscriptionQuotaCollector { source: "codex" }),
+            Arc::new(CodingPlanQuotaCollector),
+        ]
     }
 
     pub fn with_collectors(db: Arc<Database>, collectors: Vec<Arc<dyn QuotaCollector>>) -> Self {
@@ -282,7 +314,8 @@ impl QuotaService {
         provider: &UsageProviderStored,
         quota_source: &str,
     ) -> Result<(), AppError> {
-        if !matches!(quota_source, "claude" | "codex") {
+        if !matches!(quota_source, "claude" | "codex") && quota_source != MANAGED_CODEX_QUOTA_SOURCE
+        {
             return Ok(());
         }
         let conflict = self.db.list_usage_providers()?.into_iter().any(|other| {
@@ -490,14 +523,17 @@ fn now_timestamp() -> Result<i64, AppError> {
 mod tests {
     use super::*;
     use crate::database::Database;
+    use crate::proxy::providers::codex_oauth_auth::CodexOAuthManager;
     use crate::services::subscription::{
         CredentialStatus, QuotaTier, SubscriptionQuota, TIER_FIVE_HOUR, TIER_SEVEN_DAY,
     };
     use crate::usage::domain::{BillingKind, TokenSource, UsageProviderInput};
+    use crate::usage::system_providers::CHATGPT_SUBSCRIPTION_ID;
     use serde_json::json;
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
+    use tokio::sync::RwLock;
 
     fn successful_quota(tool: &str) -> SubscriptionQuota {
         SubscriptionQuota {
@@ -542,6 +578,13 @@ mod tests {
             quota_config: Some(json!({"manualResetsRemaining": 2})),
             enabled,
         }
+    }
+
+    fn isolated_quota_test_db() -> Arc<Database> {
+        let db = Arc::new(Database::memory().unwrap());
+        db.set_usage_provider_enabled(CHATGPT_SUBSCRIPTION_ID, false)
+            .unwrap();
+        db
     }
 
     struct FakeCollector {
@@ -624,6 +667,44 @@ mod tests {
         assert_eq!(quota_interval_seconds(Some(60)).unwrap(), Some(60));
     }
 
+    #[tokio::test]
+    async fn production_preserves_legacy_collectors_and_adds_only_managed_codex_oauth() {
+        let data_dir = std::env::temp_dir().join(format!(
+            "llm-usage-bar-empty-codex-oauth-{}",
+            Uuid::new_v4()
+        ));
+        let manager = Arc::new(RwLock::new(CodexOAuthManager::new(data_dir)));
+        assert_eq!(Arc::strong_count(&manager), 1);
+
+        let db = Arc::new(Database::memory().unwrap());
+        db.reconcile_system_providers().unwrap();
+        let service = QuotaService::production(db.clone(), manager.clone());
+        let mut sources = service
+            .collectors
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        sources.sort_unstable();
+
+        assert_eq!(sources, ["claude", "codex", "codex_oauth", "coding_plan"]);
+        assert!(!service.collectors.contains_key("claude_oauth"));
+        assert_eq!(Arc::strong_count(&manager), 2);
+
+        let provider = db
+            .get_usage_provider(crate::usage::system_providers::CHATGPT_SUBSCRIPTION_ID)
+            .unwrap()
+            .unwrap();
+        let quota = service.collectors[MANAGED_CODEX_QUOTA_SOURCE]
+            .collect(&provider)
+            .await
+            .unwrap();
+        assert!(!quota.success);
+        assert!(matches!(
+            quota.credential_status,
+            CredentialStatus::NotFound
+        ));
+    }
+
     #[test]
     fn claude_codex_and_coding_plan_share_window_normalization() {
         for tool in ["claude", "codex", "coding_plan"] {
@@ -646,7 +727,7 @@ mod tests {
 
     #[test]
     fn scheduler_can_start_without_an_ambient_tokio_runtime() {
-        let service = Arc::new(QuotaService::new(Arc::new(Database::memory().unwrap())));
+        let service = Arc::new(QuotaService::new(isolated_quota_test_db()));
 
         let scheduler = service.start_scheduler();
 
@@ -655,7 +736,7 @@ mod tests {
 
     #[tokio::test]
     async fn success_appends_and_failure_preserves_success_without_tight_retry() {
-        let db = Arc::new(Database::memory().unwrap());
+        let db = isolated_quota_test_db();
         db.save_usage_provider(&provider("sub", BillingKind::Subscription, true))
             .unwrap();
         let collector = Arc::new(FakeCollector::new(vec![
@@ -691,7 +772,7 @@ mod tests {
 
     #[tokio::test]
     async fn manual_refresh_collects_once_and_rejects_metered_or_disabled() {
-        let db = Arc::new(Database::memory().unwrap());
+        let db = isolated_quota_test_db();
         for input in [
             provider("sub", BillingKind::Subscription, true),
             provider("metered", BillingKind::Metered, true),
@@ -713,7 +794,7 @@ mod tests {
 
     #[tokio::test]
     async fn zero_interval_disables_scheduled_collection() {
-        let db = Arc::new(Database::memory().unwrap());
+        let db = isolated_quota_test_db();
         let mut input = provider("sub", BillingKind::Subscription, true);
         input.quota_interval_seconds = Some(0);
         db.save_usage_provider(&input).unwrap();
@@ -726,7 +807,7 @@ mod tests {
 
     #[tokio::test]
     async fn configuration_failures_wait_for_the_full_interval() {
-        let db = Arc::new(Database::memory().unwrap());
+        let db = isolated_quota_test_db();
         let mut input = provider("sub", BillingKind::Subscription, true);
         input.quota_source = Some("unsupported".to_string());
         db.save_usage_provider(&input).unwrap();
@@ -748,7 +829,7 @@ mod tests {
 
     #[tokio::test]
     async fn normalization_failures_wait_for_the_full_interval() {
-        let db = Arc::new(Database::memory().unwrap());
+        let db = isolated_quota_test_db();
         db.save_usage_provider(&provider("sub", BillingKind::Subscription, true))
             .unwrap();
         let mut invalid = successful_quota("claude");
@@ -772,31 +853,37 @@ mod tests {
 
     #[tokio::test]
     async fn machine_local_quota_source_cannot_be_attributed_to_two_providers() {
-        let db = Arc::new(Database::memory().unwrap());
-        for id in ["first", "second"] {
-            let mut input = provider(id, BillingKind::Subscription, true);
-            input.quota_source = Some("claude".to_string());
-            db.save_usage_provider(&input).unwrap();
-        }
-        let service = QuotaService::with_collectors(db.clone(), vec![]);
+        for source in ["claude", "codex", "codex_oauth"] {
+            let db = isolated_quota_test_db();
+            for id in ["first", "second"] {
+                let mut input = provider(id, BillingKind::Subscription, true);
+                input.quota_source = Some(source.to_string());
+                db.save_usage_provider(&input).unwrap();
+            }
+            let service = QuotaService::with_collectors(db.clone(), vec![]);
 
-        let cycle = service.refresh_due_at(500).await.unwrap();
-        assert_eq!(cycle.attempted, 2);
-        assert_eq!(cycle.errors.len(), 2);
-        for id in ["first", "second"] {
-            let state = db.get_quota_fetch_state(id).unwrap().unwrap();
-            assert_eq!(state.last_attempt_at, Some(500));
-            assert!(state
-                .last_error
-                .as_deref()
-                .unwrap_or_default()
-                .contains("exactly one enabled provider"));
+            let cycle = service.refresh_due_at(500).await.unwrap();
+            assert_eq!(cycle.attempted, 2, "{source}");
+            assert_eq!(cycle.errors.len(), 2, "{source}");
+            for id in ["first", "second"] {
+                let state = db.get_quota_fetch_state(id).unwrap().unwrap();
+                assert_eq!(state.last_attempt_at, Some(500), "{source}/{id}");
+                assert!(
+                    state
+                        .last_error
+                        .as_deref()
+                        .unwrap_or_default()
+                        .contains("exactly one enabled provider"),
+                    "{source}/{id}: {:?}",
+                    state.last_error
+                );
+            }
         }
     }
 
     #[tokio::test]
     async fn concurrent_manual_refreshes_share_one_provider_snapshot() {
-        let db = Arc::new(Database::memory().unwrap());
+        let db = isolated_quota_test_db();
         db.save_usage_provider(&provider("sub", BillingKind::Subscription, true))
             .unwrap();
         let collector = Arc::new(YieldingCollector::default());
@@ -827,7 +914,7 @@ mod tests {
 
     #[tokio::test]
     async fn manual_and_scheduler_refresh_share_the_same_provider_flight() {
-        let db = Arc::new(Database::memory().unwrap());
+        let db = isolated_quota_test_db();
         db.save_usage_provider(&provider("sub", BillingKind::Subscription, true))
             .unwrap();
         let collector = Arc::new(YieldingCollector::default());

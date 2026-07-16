@@ -163,17 +163,17 @@ pub(crate) fn reconcile_system_provider_catalog(conn: &Connection) -> Result<(),
                  legacy_provider_id, created_at, updated_at, system_preset_key
              ) VALUES (
                  ?1, ?2, ?3, ?4, ?5,
-                 NULL, NULL, ?6, ?7,
+                 ?6, ?7, ?8, ?9,
                  NULL, 1, 0, NULL,
-                 NULL, ?8, ?8, ?9
+                 NULL, ?10, ?10, ?11
              )
              ON CONFLICT(id) DO UPDATE SET
                  name = excluded.name,
                  billing_kind = excluded.billing_kind,
                  product_group_id = excluded.product_group_id,
                  token_sources = excluded.token_sources,
-                 quota_source = NULL,
-                 quota_interval_seconds = NULL,
+                 quota_source = excluded.quota_source,
+                 quota_interval_seconds = excluded.quota_interval_seconds,
                  route_app_type = excluded.route_app_type,
                  route_config = excluded.route_config,
                  quota_config = NULL,
@@ -187,6 +187,8 @@ pub(crate) fn reconcile_system_provider_catalog(conn: &Connection) -> Result<(),
                 billing_kind_value(definition.billing_kind),
                 definition.product_group_id,
                 token_sources,
+                definition.quota_source,
+                definition.quota_interval_seconds,
                 definition.upstream_protocol,
                 route_config,
                 now,

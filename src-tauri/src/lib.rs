@@ -727,9 +727,22 @@ pub fn run() {
                 }
             }
 
+            use crate::proxy::providers::codex_oauth_auth::CodexOAuthManager;
+            use tokio::sync::RwLock;
+
+            let app_config_dir = crate::config::get_app_config_dir();
+            let codex_oauth_manager =
+                Arc::new(RwLock::new(CodexOAuthManager::new(app_config_dir)));
+            let quota_service = Arc::new(usage::quota::QuotaService::production(
+                db.clone(),
+                codex_oauth_manager.clone(),
+            ));
             let credential_store = crate::credentials::production_credential_store();
-            let app_state = AppState::new_with_credential_store(db, credential_store);
-            app_state.start_quota_scheduler();
+            let app_state = AppState::new_with_credential_store_and_quota_service(
+                db,
+                credential_store,
+                quota_service,
+            );
 
             // 设置 AppHandle 用于代理故障转移时的 UI 更新
             app_state.proxy_service.set_app_handle(app.handle().clone());
@@ -1194,6 +1207,8 @@ pub fn run() {
             );
             // 将同一个实例注入到全局状态，避免重复创建导致的不一致
             app.manage(app_state);
+            app.manage(commands::CodexOAuthState(codex_oauth_manager));
+            log::info!("✓ CodexOAuthManager initialized");
 
             // 从数据库加载日志配置并应用
             {
@@ -1222,18 +1237,6 @@ pub fn run() {
                 let copilot_auth_manager = CopilotAuthManager::new(app_config_dir);
                 app.manage(CopilotAuthState(Arc::new(RwLock::new(copilot_auth_manager))));
                 log::info!("✓ CopilotAuthManager initialized");
-            }
-
-            // 初始化 CodexOAuthManager (ChatGPT Plus/Pro 反代)
-            {
-                use crate::proxy::providers::codex_oauth_auth::CodexOAuthManager;
-                use commands::CodexOAuthState;
-                use tokio::sync::RwLock;
-
-                let app_config_dir = crate::config::get_app_config_dir();
-                let codex_oauth_manager = CodexOAuthManager::new(app_config_dir);
-                app.manage(CodexOAuthState(Arc::new(RwLock::new(codex_oauth_manager))));
-                log::info!("✓ CodexOAuthManager initialized");
             }
 
             // 初始化全局出站代理 HTTP 客户端
@@ -1266,6 +1269,8 @@ pub fn run() {
                     }
                 }
             }
+
+            app.state::<AppState>().start_quota_scheduler();
 
             // 异常退出恢复 + 代理状态自动恢复
             let app_handle = app.handle().clone();

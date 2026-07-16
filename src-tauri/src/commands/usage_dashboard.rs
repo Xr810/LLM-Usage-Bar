@@ -14,7 +14,9 @@ use crate::usage::domain::{
 };
 use crate::usage::quota::QuotaRefreshResult;
 use crate::usage::session::ProviderSessionSyncResult;
-use crate::usage::system_providers::{CHATGPT_SUBSCRIPTION_ID, CLAUDE_SUBSCRIPTION_ID};
+use crate::usage::system_providers::{
+    CHATGPT_SUBSCRIPTION_ID, CLAUDE_SUBSCRIPTION_ID, MANAGED_CODEX_QUOTA_SOURCE,
+};
 use std::collections::{BTreeMap, BTreeSet};
 use tauri::State;
 
@@ -931,10 +933,15 @@ mod tests {
     use super::*;
     use crate::credentials::{CredentialStore, CredentialStoreError, SecretString};
     use crate::database::Database;
+    use crate::services::subscription::{
+        CredentialStatus, QuotaTier, SubscriptionQuota, TIER_FIVE_HOUR, TIER_SEVEN_DAY,
+    };
     use crate::usage::domain::{
         AgentModuleInput, AgentProviderBindingInput, BillingKind, BindingCredentialStatus,
         CostSource, TokenSource, UsageEvent, UsageProviderInput,
     };
+    use crate::usage::quota::{QuotaCollector, QuotaService};
+    use futures::future::BoxFuture;
     use serde_json::json;
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -974,6 +981,126 @@ mod tests {
             self.items.lock().unwrap().remove(slot);
             Ok(())
         }
+    }
+
+    #[derive(Default)]
+    struct ManagedCodexQuotaCollector {
+        calls: AtomicUsize,
+    }
+
+    impl QuotaCollector for ManagedCodexQuotaCollector {
+        fn source(&self) -> &'static str {
+            MANAGED_CODEX_QUOTA_SOURCE
+        }
+
+        fn collect<'a>(
+            &'a self,
+            _provider: &'a crate::usage::domain::UsageProviderStored,
+        ) -> BoxFuture<'a, Result<SubscriptionQuota, String>> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async {
+                Ok(SubscriptionQuota {
+                    tool: MANAGED_CODEX_QUOTA_SOURCE.to_string(),
+                    credential_status: CredentialStatus::Valid,
+                    credential_message: None,
+                    success: true,
+                    tiers: vec![
+                        QuotaTier {
+                            name: TIER_FIVE_HOUR.to_string(),
+                            utilization: 15.0,
+                            resets_at: Some("2026-07-16T10:00:00Z".to_string()),
+                            used_value_usd: None,
+                            max_value_usd: None,
+                        },
+                        QuotaTier {
+                            name: TIER_SEVEN_DAY.to_string(),
+                            utilization: 35.0,
+                            resets_at: Some("2026-07-23T00:00:00Z".to_string()),
+                            used_value_usd: None,
+                            max_value_usd: None,
+                        },
+                    ],
+                    extra_usage: None,
+                    error: None,
+                    queried_at: Some(1),
+                })
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn fixed_chatgpt_refresh_survives_catalog_reconciliation() {
+        let db = Arc::new(Database::memory().unwrap());
+        db.reconcile_system_providers().unwrap();
+        let collector = Arc::new(ManagedCodexQuotaCollector::default());
+        let quota_service = Arc::new(QuotaService::with_collectors(
+            db.clone(),
+            vec![collector.clone()],
+        ));
+        let state = AppState::new_with_credential_store_and_quota_service(
+            db.clone(),
+            Arc::new(MemoryCredentialStore::default()),
+            quota_service,
+        );
+
+        let first = refresh_provider_quota_test_hook(&state, CHATGPT_SUBSCRIPTION_ID)
+            .await
+            .unwrap();
+        assert_eq!(
+            first.snapshot.five_hour_utilization_percent.as_deref(),
+            Some("15")
+        );
+        assert_eq!(
+            first.snapshot.seven_day_utilization_percent.as_deref(),
+            Some("35")
+        );
+        assert!(!first.fetch_state.stale);
+        assert!(first.fetch_state.last_error.is_none());
+        assert_eq!(
+            db.latest_quota_snapshot(CHATGPT_SUBSCRIPTION_ID)
+                .unwrap()
+                .unwrap()
+                .snapshot_id,
+            first.snapshot.snapshot_id
+        );
+        assert_eq!(
+            db.get_quota_fetch_state(CHATGPT_SUBSCRIPTION_ID)
+                .unwrap()
+                .unwrap(),
+            first.fetch_state
+        );
+
+        db.reconcile_system_providers().unwrap();
+        let provider = db
+            .get_usage_provider(CHATGPT_SUBSCRIPTION_ID)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            provider.quota_source.as_deref(),
+            Some(MANAGED_CODEX_QUOTA_SOURCE)
+        );
+        assert_eq!(provider.quota_interval_seconds, Some(300));
+
+        let second = refresh_provider_quota_test_hook(&state, CHATGPT_SUBSCRIPTION_ID)
+            .await
+            .unwrap();
+        assert_eq!(collector.calls.load(Ordering::SeqCst), 2);
+        assert_ne!(second.snapshot.snapshot_id, first.snapshot.snapshot_id);
+        assert_eq!(
+            db.conn
+                .lock()
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM quota_snapshots
+                     WHERE provider_id = ?1 AND snapshot_id = ?2",
+                    rusqlite::params![CHATGPT_SUBSCRIPTION_ID, second.snapshot.snapshot_id],
+                    |row| row.get::<_, u64>(0),
+                )
+                .unwrap(),
+            1
+        );
+        assert!(!second.fetch_state.stale);
+        assert!(second.fetch_state.last_error.is_none());
     }
 
     #[tokio::test]
