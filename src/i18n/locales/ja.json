@@ -199,7 +199,7 @@
     "providerCount_other": "{{count}} Providers",
     "nameFor": "{{name}} の名前",
     "saveNamed": "{{name}} を保存",
-    "moveUp": "{{name}} を上へ移動",
+    "reorderNamed": "{{name}} を並べ替え",
     "moveDown": "{{name}} を下へ移動",
     "hideNamed": "{{name}} を非表示",
     "showNamed": "{{name}} を表示",

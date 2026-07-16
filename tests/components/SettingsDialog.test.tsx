@@ -1,5 +1,5 @@
-import type { ReactNode } from "react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import type { ButtonHTMLAttributes, ReactNode } from "react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { SettingsPage } from "@/components/settings/SettingsPage";
@@ -35,25 +35,18 @@ vi.mock("@/components/settings/UsageDiagnosticsPanel", () => ({
 }));
 
 vi.mock("@/components/ui/dialog", () => ({
-  Dialog: ({
-    open,
-    onOpenChange,
-    children,
-  }: {
-    open: boolean;
-    onOpenChange: (open: boolean) => void;
-    children: ReactNode;
-  }) =>
-    open ? (
-      <div data-testid="dialog-root">
-        {children}
-        <button type="button" onClick={() => onOpenChange(false)}>
-          close-dialog
-        </button>
-      </div>
-    ) : null,
+  Dialog: ({ open, children }: { open: boolean; children: ReactNode }) =>
+    open ? <div data-testid="dialog-root">{children}</div> : null,
   DialogContent: ({ children }: { children: ReactNode }) => (
     <div>{children}</div>
+  ),
+  DialogClose: ({
+    children,
+    ...props
+  }: ButtonHTMLAttributes<HTMLButtonElement>) => (
+    <button type="button" {...props}>
+      {children}
+    </button>
   ),
   DialogHeader: ({ children }: { children: ReactNode }) => (
     <div>{children}</div>
@@ -124,11 +117,9 @@ describe("SettingsPage sections", () => {
     expect(screen.queryByText("Aggregate diagnostics content")).toBeNull();
   });
 
-  it("forwards close requests", () => {
-    const onOpenChange = vi.fn();
-    render(<SettingsPage open onOpenChange={onOpenChange} />);
-    fireEvent.click(screen.getByRole("button", { name: "close-dialog" }));
-    expect(onOpenChange).toHaveBeenCalledWith(false);
+  it("renders an accessible close control", () => {
+    render(<SettingsPage open onOpenChange={() => {}} />);
+    expect(screen.getByRole("button", { name: "Close" })).toBeInTheDocument();
   });
 
   it("preserves a Provider target until the Provider DOM handles it", async () => {

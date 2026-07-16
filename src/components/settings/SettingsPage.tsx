@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { X } from "lucide-react";
 import {
   Dialog,
+  DialogClose,
   DialogContent,
   DialogDescription,
   DialogHeader,
@@ -60,7 +62,13 @@ export function SettingsPage({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex h-[90vh] max-w-6xl flex-col overflow-hidden">
-        <DialogHeader>
+        <DialogHeader className="relative pr-14">
+          <DialogClose
+            className="absolute right-5 top-5 rounded-full p-1.5 transition-colors hover:bg-muted focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2"
+            aria-label={t("common.close", { defaultValue: "Close" })}
+          >
+            <X className="size-4 text-muted-foreground" />
+          </DialogClose>
           <DialogTitle>
             {t("settings.title", { defaultValue: "Settings" })}
           </DialogTitle>

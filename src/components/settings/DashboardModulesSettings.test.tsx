@@ -5,8 +5,58 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentsSettings } from "./DashboardModulesSettings";
+
+type DragEndHandler = (event: {
+  active: { id: string };
+  over: { id: string } | null;
+}) => void;
+
+const dndMocks = vi.hoisted(() => ({
+  onDragEnd: undefined as DragEndHandler | undefined,
+  onKeyDown: vi.fn(),
+}));
+
+vi.mock("@dnd-kit/core", () => ({
+  DndContext: ({
+    children,
+    onDragEnd,
+  }: {
+    children: ReactNode;
+    onDragEnd: DragEndHandler;
+  }) => {
+    dndMocks.onDragEnd = onDragEnd;
+    return <div data-testid="agent-dnd-context">{children}</div>;
+  },
+  closestCenter: vi.fn(),
+  KeyboardSensor: class KeyboardSensor {},
+  PointerSensor: class PointerSensor {},
+  useSensor: vi.fn(() => ({})),
+  useSensors: vi.fn((...sensors: unknown[]) => sensors),
+}));
+
+vi.mock("@dnd-kit/sortable", () => ({
+  SortableContext: ({ children }: { children: ReactNode }) => <>{children}</>,
+  arrayMove: <T,>(items: T[], oldIndex: number, newIndex: number) => {
+    const reordered = [...items];
+    const [item] = reordered.splice(oldIndex, 1);
+    reordered.splice(newIndex, 0, item);
+    return reordered;
+  },
+  horizontalListSortingStrategy: vi.fn(),
+  sortableKeyboardCoordinates: vi.fn(),
+  useSortable: ({ id }: { id: string }) => ({
+    setNodeRef: vi.fn(),
+    setActivatorNodeRef: vi.fn(),
+    attributes: { "data-sortable-id": id },
+    listeners: { onKeyDown: dndMocks.onKeyDown },
+    transform: null,
+    transition: undefined,
+    isDragging: false,
+  }),
+}));
 
 const mocks = vi.hoisted(() => ({
   agents: [] as Array<Record<string, unknown>>,
@@ -139,10 +189,23 @@ describe("AgentsSettings", () => {
     ]) {
       mock.mockReset().mockResolvedValue(undefined);
     }
+    dndMocks.onDragEnd = undefined;
+    dndMocks.onKeyDown.mockReset();
   });
 
-  it("keeps fixed Agent identity immutable while allowing reorder and hide", async () => {
+  it("shows Agents in one compact row without arrow reorder controls", async () => {
     render(<AgentsSettings />);
+
+    const sorter = screen.getByTestId("agent-sorter");
+    expect(sorter).toHaveClass("flex-nowrap");
+    expect(within(sorter).getAllByTestId(/^agent-sort-/)).toHaveLength(3);
+    expect(within(sorter).getByText("Codex")).toBeInTheDocument();
+    expect(within(sorter).getByText("Claude Code")).toBeInTheDocument();
+    expect(within(sorter).getByText("Research Agent")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Move Codex up" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Move Codex down" }),
+    ).toBeNull();
 
     const fixed = screen.getByTestId("agent-settings-codex");
     expect(within(fixed).getByText("Fixed Agent")).toBeInTheDocument();
@@ -151,17 +214,6 @@ describe("AgentsSettings", () => {
       within(fixed).queryByRole("button", { name: "Delete Codex" }),
     ).toBeNull();
 
-    fireEvent.click(
-      within(fixed).getByRole("button", { name: "Move Codex down" }),
-    );
-    await waitFor(() =>
-      expect(mocks.reorderAgents).toHaveBeenCalledWith([
-        "claude-code",
-        "codex",
-        "custom-research",
-      ]),
-    );
-
     fireEvent.click(within(fixed).getByRole("button", { name: "Hide Codex" }));
     await waitFor(() =>
       expect(mocks.setVisibility).toHaveBeenCalledWith({
@@ -169,6 +221,40 @@ describe("AgentsSettings", () => {
         visible: false,
       }),
     );
+  });
+
+  it("persists the navigation order after an Agent is dragged", async () => {
+    render(<AgentsSettings />);
+
+    expect(dndMocks.onDragEnd).toBeTypeOf("function");
+    dndMocks.onDragEnd?.({
+      active: { id: "codex" },
+      over: { id: "claude-code" },
+    });
+
+    await waitFor(() =>
+      expect(mocks.reorderAgents).toHaveBeenCalledWith([
+        "claude-code",
+        "codex",
+        "custom-research",
+      ]),
+    );
+  });
+
+  it("keeps selection separate from the accessible drag handle", () => {
+    render(<AgentsSettings />);
+
+    const selectionButton = screen.getByTestId("agent-sort-codex");
+    const dragHandle = screen.getByRole("button", { name: "Reorder Codex" });
+
+    expect(selectionButton).not.toHaveAttribute("data-sortable-id");
+    expect(dragHandle).toHaveAttribute("data-sortable-id", "codex");
+
+    fireEvent.keyDown(selectionButton, { key: "Enter" });
+    expect(dndMocks.onKeyDown).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(dragHandle, { key: "Enter" });
+    expect(dndMocks.onKeyDown).toHaveBeenCalledTimes(1);
   });
 
   it("explicitly creates, renames, and deletes Custom Agents regardless of Provider count", async () => {
@@ -189,6 +275,7 @@ describe("AgentsSettings", () => {
       }),
     );
 
+    fireEvent.click(screen.getByTestId("agent-sort-custom-research"));
     const custom = screen.getByTestId("agent-settings-custom-research");
     fireEvent.change(within(custom).getByLabelText("Name for Research Agent"), {
       target: { value: "Research Team" },

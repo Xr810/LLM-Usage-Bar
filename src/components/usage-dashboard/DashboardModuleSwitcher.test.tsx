@@ -90,21 +90,18 @@ describe("AgentSwitcher", () => {
     expect(onSelect).toHaveBeenCalledWith("opencode");
   });
 
-  it("provides a More menu when many Agents overflow", async () => {
-    const onSelect = vi.fn();
-    const user = userEvent.setup();
+  it("does not render a redundant More menu when every Agent remains directly selectable", () => {
     render(
       <AgentSwitcher
         agents={Array.from({ length: 6 }, (_, index) =>
           agent(`agent-${index + 1}`, `Agent ${index + 1}`, index + 1),
         )}
         selectedAgentId="agent-1"
-        onSelect={onSelect}
+        onSelect={vi.fn()}
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: "More Agents" }));
-    await user.click(screen.getByRole("menuitem", { name: "Agent 6" }));
-    expect(onSelect).toHaveBeenCalledWith("agent-6");
+    expect(screen.getAllByRole("tab")).toHaveLength(6);
+    expect(screen.queryByRole("button", { name: "More Agents" })).toBeNull();
   });
 });
