@@ -176,6 +176,34 @@ describe("tray usage query bridge", () => {
     expect(commandCalls("get_tray_usage_snapshot")).toHaveLength(1);
   });
 
+  it("polls a startup refresh until the backend cache reaches a terminal snapshot", async () => {
+    let reads = 0;
+    server.use(
+      http.post("http://tauri.local/get_tray_usage_snapshot", () => {
+        reads += 1;
+        return HttpResponse.json({
+          ...trayUsageSnapshotFixture,
+          refreshInProgress: reads === 1,
+        } satisfies TrayUsageSnapshot);
+      }),
+    );
+
+    const { result } = renderHook(() => useTrayUsageSnapshot(), {
+      wrapper: createQueryWrapper(),
+    });
+
+    await waitFor(() =>
+      expect(result.current.data?.refreshInProgress).toBe(true),
+    );
+    await waitFor(
+      () => expect(result.current.data?.refreshInProgress).toBe(false),
+      { timeout: 2_000 },
+    );
+    expect(reads).toBe(2);
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(reads).toBe(2);
+  });
+
   it("deduplicates consecutive refresh mutations into one IPC", async () => {
     const client = createQueryClient();
     const { result } = renderHook(() => useRefreshTrayUsage(), {

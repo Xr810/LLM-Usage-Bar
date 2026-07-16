@@ -20,6 +20,12 @@ export function useTrayUsageSnapshot() {
     queryFn: getTrayUsageSnapshot,
     staleTime: Infinity,
     refetchOnWindowFocus: false,
+    // A popover opened during the startup refresh can read the transient
+    // `refreshInProgress` snapshot before its event listener is attached. Poll
+    // the cache-only command until the backend clears that flag so a missed
+    // terminal event cannot leave Refresh disabled for the whole window life.
+    refetchInterval: (query) =>
+      query.state.data?.refreshInProgress ? 500 : false,
   });
 }
 
