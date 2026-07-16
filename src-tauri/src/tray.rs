@@ -868,8 +868,19 @@ pub fn refresh_tray_menu(app: &tauri::AppHandle) {
 }
 
 #[cfg(target_os = "macos")]
+static MACOS_DOCK_VISIBLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(all(target_os = "macos", not(test)))]
+pub fn is_macos_dock_visible() -> bool {
+    MACOS_DOCK_VISIBLE.load(std::sync::atomic::Ordering::Acquire)
+}
+
+#[cfg(target_os = "macos")]
 pub fn apply_tray_policy(app: &tauri::AppHandle, dock_visible: bool) {
     use tauri::ActivationPolicy;
+
+    MACOS_DOCK_VISIBLE.store(dock_visible, std::sync::atomic::Ordering::Release);
 
     let desired_policy = if dock_visible {
         ActivationPolicy::Regular
@@ -896,26 +907,13 @@ pub fn handle_tray_menu_event(app: &tauri::AppHandle, event_id: &str) {
 
     match event_id {
         "show_main" => {
-            if let Some(window) = app.get_webview_window("main") {
-                #[cfg(target_os = "windows")]
-                {
-                    let _ = window.set_skip_taskbar(false);
-                }
-                let _ = window.unminimize();
-                let _ = window.show();
-                let _ = window.set_focus();
-                #[cfg(target_os = "linux")]
-                {
-                    crate::linux_fix::nudge_main_window(window.clone());
-                }
-                #[cfg(target_os = "macos")]
-                {
-                    apply_tray_policy(app, true);
-                }
-            } else if crate::lightweight::is_lightweight_mode() {
-                if let Err(e) = crate::lightweight::exit_lightweight_mode(app) {
-                    log::error!("退出轻量模式重建窗口失败: {e}");
-                }
+            if let Err(error) = crate::tray_popover::open_main_window(
+                app,
+                crate::tray_popover::MainWindowDestination::Usage {
+                    agent_module_id: None,
+                },
+            ) {
+                log::error!("打开主界面失败: {error}");
             }
         }
         "open_website" => {

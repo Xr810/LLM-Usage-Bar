@@ -36,6 +36,7 @@ mod settings;
 mod store;
 
 mod tray;
+mod tray_popover;
 pub mod tray_status;
 pub mod usage;
 mod usage_events;
@@ -374,14 +375,9 @@ fn handle_deeplink_url(
             }
 
             if focus_main_window {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.unminimize();
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                    #[cfg(target_os = "linux")]
-                    {
-                        linux_fix::nudge_main_window(window.clone());
-                    }
+                if let Err(error) = crate::tray_popover::reveal_main_window(app) {
+                    log::error!("✗ Failed to reveal main window: {error}");
+                } else {
                     log::info!("✓ Window shown and focused");
                 }
             }
@@ -439,6 +435,78 @@ fn macos_tray_icon() -> Option<Image<'static>> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WindowEventKind {
+    FocusLost,
+    CloseRequested,
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WindowEventRoute {
+    HidePopover,
+    HandleMainClose,
+    Ignore,
+}
+
+fn classify_window_event_route(label: &str, event: WindowEventKind) -> WindowEventRoute {
+    if label == tray_popover::TRAY_POPOVER_LABEL {
+        return match event {
+            WindowEventKind::FocusLost | WindowEventKind::CloseRequested => {
+                WindowEventRoute::HidePopover
+            }
+            WindowEventKind::Other => WindowEventRoute::Ignore,
+        };
+    }
+
+    if label == "main" && event == WindowEventKind::CloseRequested {
+        WindowEventRoute::HandleMainClose
+    } else {
+        WindowEventRoute::Ignore
+    }
+}
+
+fn should_hide_minimized_main(dock_visible: bool, is_minimized: bool) -> bool {
+    dock_visible && is_minimized
+}
+
+#[cfg(all(target_os = "macos", not(test)))]
+static STOP_MAIN_WINDOW_VISIBILITY_MONITOR: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(all(target_os = "macos", not(test)))]
+fn start_main_window_visibility_monitor(app: tauri::AppHandle) {
+    use std::sync::atomic::Ordering;
+
+    STOP_MAIN_WINDOW_VISIBILITY_MONITOR.store(false, Ordering::Release);
+    tauri::async_runtime::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_millis(300));
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            if STOP_MAIN_WINDOW_VISIBILITY_MONITOR.load(Ordering::Acquire) {
+                break;
+            }
+            let dock_visible = crate::tray::is_macos_dock_visible();
+            if !dock_visible {
+                continue;
+            }
+            let Some(main) = app.get_webview_window("main") else {
+                continue;
+            };
+            if should_hide_minimized_main(dock_visible, main.is_minimized().unwrap_or(false)) {
+                let _ = main.hide();
+                crate::tray::apply_tray_policy(&app, false);
+            }
+        }
+    });
+}
+
+#[cfg(all(target_os = "macos", not(test)))]
+fn stop_main_window_visibility_monitor() {
+    STOP_MAIN_WINDOW_VISIBILITY_MONITOR.store(true, std::sync::atomic::Ordering::Release);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // 设置 panic hook，在应用崩溃时记录日志到 <app_config_dir>/crash.log（默认 ~/.llm-usage-bar/crash.log）
@@ -474,15 +542,9 @@ pub fn run() {
                 log::info!("ℹ No deep link URL found in args (this is expected on macOS when launched via system)");
             }
 
-            // Show and focus window regardless
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.unminimize();
-                let _ = window.show();
-                let _ = window.set_focus();
-                #[cfg(target_os = "linux")]
-                {
-                    linux_fix::nudge_main_window(window.clone());
-                }
+            // Show and focus window regardless.
+            if let Err(error) = crate::tray_popover::reveal_main_window(app) {
+                log::error!("Failed to reveal main window: {error}");
             }
         }));
     }
@@ -492,34 +554,55 @@ pub fn run() {
         .plugin(tauri_plugin_deep_link::init())
         // 拦截窗口关闭：根据设置决定是否最小化到托盘
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                // 数据库版本过新的恢复模式下没有托盘可唤回，关闭即退出，避免应用隐身后台
-                let in_db_recovery = crate::init_status::get_init_error()
-                    .map(|p| p.kind.as_deref() == Some("db_version_too_new"))
-                    .unwrap_or(false);
-                if in_db_recovery {
-                    api.prevent_close();
-                    window.app_handle().exit(0);
+            let event_kind = match event {
+                tauri::WindowEvent::Focused(false) => WindowEventKind::FocusLost,
+                tauri::WindowEvent::CloseRequested { .. } => WindowEventKind::CloseRequested,
+                _ => WindowEventKind::Other,
+            };
+            match classify_window_event_route(window.label(), event_kind) {
+                WindowEventRoute::HidePopover => {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                    }
+                    if let Err(error) = window.hide() {
+                        log::warn!("failed to hide tray popover window: {error}");
+                    }
                     return;
                 }
+                WindowEventRoute::HandleMainClose => {}
+                WindowEventRoute::Ignore => return,
+            }
 
-                let settings = crate::settings::get_settings();
+            let tauri::WindowEvent::CloseRequested { api, .. } = event else {
+                return;
+            };
 
-                if settings.minimize_to_tray_on_close {
-                    api.prevent_close();
-                    let _ = window.hide();
-                    #[cfg(target_os = "windows")]
-                    {
-                        let _ = window.set_skip_taskbar(true);
-                    }
-                    #[cfg(target_os = "macos")]
-                    {
-                        tray::apply_tray_policy(window.app_handle(), false);
-                    }
-                } else {
-                    api.prevent_close();
-                    window.app_handle().exit(0);
+            // 数据库版本过新的恢复模式下没有托盘可唤回，关闭即退出，避免应用隐身后台
+            let in_db_recovery = crate::init_status::get_init_error()
+                .map(|p| p.kind.as_deref() == Some("db_version_too_new"))
+                .unwrap_or(false);
+            if in_db_recovery {
+                api.prevent_close();
+                window.app_handle().exit(0);
+                return;
+            }
+
+            let settings = crate::settings::get_settings();
+
+            if settings.minimize_to_tray_on_close {
+                api.prevent_close();
+                let _ = window.hide();
+                #[cfg(target_os = "windows")]
+                {
+                    let _ = window.set_skip_taskbar(true);
                 }
+                #[cfg(target_os = "macos")]
+                {
+                    tray::apply_tray_policy(window.app_handle(), false);
+                }
+            } else {
+                api.prevent_close();
+                window.app_handle().exit(0);
             }
         })
         .plugin(tauri_plugin_process::init())
@@ -529,6 +612,7 @@ pub fn run() {
         .plugin(
             tauri_plugin_window_state::Builder::default()
                 .with_state_flags(window_state_flags())
+                .with_denylist(&[tray_popover::TRAY_POPOVER_LABEL])
                 .build(),
         )
         .setup(|app| {
@@ -1159,23 +1243,64 @@ pub fn run() {
                 .tooltip(tray_status::tray_status_tooltip(
                     usage::status::UsageStatus::Unknown,
                 ))
-                .on_tray_icon_event(|tray, event| match event {
-                    // 鼠标悬停/点击到托盘图标时，后台异步刷新用量缓存，
-                    // 让用户下一次（或快速打开菜单的那一刻）看到较新的数字。
-                    // refresh_all_usage_in_tray 内部有 10 秒防抖。
-                    TrayIconEvent::Enter { .. } | TrayIconEvent::Click { .. } => {
-                        let app = tray.app_handle().clone();
-                        tauri::async_runtime::spawn(async move {
-                            crate::tray::refresh_all_usage_in_tray(&app).await;
-                        });
+                .on_tray_icon_event(|tray, event| {
+                    match event {
+                        // 悬停只做后台软刷新，不创建或显示任何窗口。
+                        // refresh_all_usage_in_tray 内部有 10 秒防抖。
+                        TrayIconEvent::Enter { .. } => {
+                            let app = tray.app_handle().clone();
+                            tauri::async_runtime::spawn(async move {
+                                crate::tray::refresh_all_usage_in_tray(&app).await;
+                            });
+                        }
+                        TrayIconEvent::Click {
+                            rect,
+                            button,
+                            button_state,
+                            ..
+                        } => {
+                            #[cfg(target_os = "macos")]
+                            match crate::tray_popover::classify_tray_click(button, button_state) {
+                                crate::tray_popover::TrayClickAction::TogglePopover => {
+                                    if let Err(error) = crate::tray_popover::toggle(
+                                        tray.app_handle(),
+                                        rect,
+                                    ) {
+                                        log::warn!("failed to toggle tray popover: {error}");
+                                    }
+                                }
+                                crate::tray_popover::TrayClickAction::HidePopover => {
+                                    let _ = crate::tray_popover::hide(tray.app_handle());
+                                }
+                                crate::tray_popover::TrayClickAction::Ignore => {}
+                            }
+
+                            #[cfg(not(target_os = "macos"))]
+                            {
+                                let _ = (rect, button, button_state);
+                                let app = tray.app_handle().clone();
+                                tauri::async_runtime::spawn(async move {
+                                    crate::tray::refresh_all_usage_in_tray(&app).await;
+                                });
+                            }
+                        }
+                        _ => log::debug!("unhandled event {event:?}"),
                     }
-                    _ => log::debug!("unhandled event {event:?}"),
                 })
                 .menu(&menu)
                 .on_menu_event(|app, event| {
                     tray::handle_tray_menu_event(app, &event.id.0);
-                })
-                .show_menu_on_left_click(true);
+                });
+
+            #[cfg(target_os = "macos")]
+            {
+                tray_builder = tray_builder.show_menu_on_left_click(false);
+            }
+
+            #[cfg(not(target_os = "macos"))]
+            {
+                tray_builder = tray_builder.show_menu_on_left_click(true);
+            }
 
             // macOS starts with the safe Unknown status color. The legacy
             // template image remains a decode fallback only.
@@ -1493,37 +1618,50 @@ pub fn run() {
                 }
             }
 
-            // 静默启动：根据设置决定是否显示主窗口
-            let settings = crate::settings::get_settings();
+            // macOS 始终以菜单栏优先模式启动；Windows/Linux 保留原静默启动设置。
             if let Some(window) = app.get_webview_window("main") {
-                // 在窗口首次显示前同步装饰状态，避免前端加载后再切换导致标题栏闪烁
-                // 仅 Linux 生效：解决 Wayland 下系统窗口按钮不可用的问题
-                #[cfg(target_os = "linux")]
-                let _ = window.set_decorations(!settings.use_app_window_controls);
-                if settings.silent_startup {
-                    // 静默启动模式：保持窗口隐藏
+                #[cfg(target_os = "macos")]
+                {
                     let _ = window.hide();
-                    #[cfg(target_os = "windows")]
-                    let _ = window.set_skip_taskbar(true);
-                    #[cfg(target_os = "macos")]
                     tray::apply_tray_policy(app.handle(), false);
-                    log::info!("静默启动模式：主窗口已隐藏");
-                } else {
-                    // 正常启动模式：显示窗口
-                    let _ = window.show();
-                    log::info!("正常启动模式：主窗口已显示");
+                    log::info!("macOS 菜单栏模式：主窗口已隐藏");
+                }
 
-                    // Linux: 解决首次启动 UI 无响应问题（Tauri #10746 + wry #637）。
-                    // 启动时 webview 未获取焦点 + surface 尺寸协商失败，导致点击无效。
-                    // 这里做 set_focus + 伪 resize，等价于无视觉版本的"最大化-还原"。
+                #[cfg(not(target_os = "macos"))]
+                {
+                    let settings = crate::settings::get_settings();
+
+                    // 在窗口首次显示前同步装饰状态，避免前端加载后再切换导致标题栏闪烁
+                    // 仅 Linux 生效：解决 Wayland 下系统窗口按钮不可用的问题
                     #[cfg(target_os = "linux")]
-                    {
-                        linux_fix::nudge_main_window(window.clone());
+                    let _ = window.set_decorations(!settings.use_app_window_controls);
+
+                    if settings.silent_startup {
+                        // 静默启动模式：保持窗口隐藏
+                        let _ = window.hide();
+                        #[cfg(target_os = "windows")]
+                        let _ = window.set_skip_taskbar(true);
+                        log::info!("静默启动模式：主窗口已隐藏");
+                    } else {
+                        // 正常启动模式：显示窗口
+                        let _ = window.show();
+                        log::info!("正常启动模式：主窗口已显示");
+
+                        // Linux: 解决首次启动 UI 无响应问题（Tauri #10746 + wry #637）。
+                        // 启动时 webview 未获取焦点 + surface 尺寸协商失败，导致点击无效。
+                        // 这里做 set_focus + 伪 resize，等价于无视觉版本的"最大化-还原"。
+                        #[cfg(target_os = "linux")]
+                        {
+                            linux_fix::nudge_main_window(window.clone());
+                        }
                     }
                 }
             }
 
-
+            #[cfg(all(target_os = "macos", not(test)))]
+            {
+                start_main_window_visibility_monitor(app.handle().clone());
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1561,6 +1699,10 @@ pub fn run() {
             commands::get_tray_usage_snapshot,
             commands::refresh_tray_usage,
             commands::set_provider_daily_budget,
+            commands::hide_tray_popover,
+            commands::open_main_from_tray,
+            commands::take_pending_main_window_destination,
+            commands::quit_from_tray,
             commands::get_providers,
             commands::get_current_provider,
             commands::add_provider,
@@ -1925,6 +2067,9 @@ pub fn run() {
                 ExitRequestAction::CleanupAndExit => {}
             }
 
+            #[cfg(all(target_os = "macos", not(test)))]
+            stop_main_window_visibility_monitor();
+
             log::info!("收到用户主动退出请求 (code={code:?})，开始清理...");
             api.prevent_exit();
 
@@ -1953,19 +2098,13 @@ pub fn run() {
             match event {
                 // macOS 在 Dock 图标被点击并重新激活应用时会触发 Reopen 事件，这里手动恢复主窗口
                 RunEvent::Reopen { .. } => {
-                    if let Some(window) = app_handle.get_webview_window("main") {
-                        #[cfg(target_os = "windows")]
-                        {
-                            let _ = window.set_skip_taskbar(false);
-                        }
-                        let _ = window.unminimize();
-                        let _ = window.show();
-                        let _ = window.set_focus();
-                        tray::apply_tray_policy(app_handle, true);
-                    } else if crate::lightweight::is_lightweight_mode() {
-                        if let Err(e) = crate::lightweight::exit_lightweight_mode(app_handle) {
-                            log::error!("退出轻量模式重建窗口失败: {e}");
-                        }
+                    if let Err(error) = tray_popover::open_main_window(
+                        app_handle,
+                        tray_popover::MainWindowDestination::Usage {
+                            agent_module_id: None,
+                        },
+                    ) {
+                        log::error!("macOS reopen failed to reveal main window: {error}");
                     }
                 }
                 // 处理通过旧版兼容 URL 协议触发的打开事件
@@ -2018,14 +2157,18 @@ pub fn run() {
                                 }
                             }
 
-                            // 确保主窗口可见
-                            if let Some(window) = app_handle.get_webview_window("main") {
-                                let _ = window.unminimize();
-                                let _ = window.show();
-                                let _ = window.set_focus();
+                            // 确保主窗口与 Dock 策略一起恢复。
+                            if let Err(error) =
+                                tray_popover::reveal_main_window(app_handle)
+                            {
+                                log::error!("Failed to reveal main window: {error}");
                             }
                         }
                     }
+                }
+                RunEvent::Exit => {
+                    #[cfg(all(target_os = "macos", not(test)))]
+                    stop_main_window_visibility_monitor();
                 }
                 _ => {}
             }
@@ -2496,7 +2639,9 @@ pub fn restart_process(app_handle: &tauri::AppHandle) -> ! {
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_exit_request, DatabaseRuntimePreflight, ExitRequestAction, PreparedDatabaseRuntime,
+        classify_exit_request, classify_window_event_route, should_hide_minimized_main,
+        DatabaseRuntimePreflight, ExitRequestAction, PreparedDatabaseRuntime, WindowEventKind,
+        WindowEventRoute,
     };
     use crate::database::DatabaseIdentityOutcome;
     use crate::error::AppError;
@@ -2612,6 +2757,42 @@ mod tests {
     #[test]
     fn no_code_keeps_app_alive_in_tray() {
         assert_eq!(classify_exit_request(None), ExitRequestAction::StayInTray);
+    }
+
+    #[test]
+    fn popover_focus_loss_and_close_hide_without_entering_main_close_logic() {
+        assert_eq!(
+            classify_window_event_route("tray-popover", WindowEventKind::FocusLost),
+            WindowEventRoute::HidePopover,
+        );
+        assert_eq!(
+            classify_window_event_route("tray-popover", WindowEventKind::CloseRequested),
+            WindowEventRoute::HidePopover,
+        );
+        assert_eq!(
+            classify_window_event_route("tray-popover", WindowEventKind::Other),
+            WindowEventRoute::Ignore,
+        );
+        assert_eq!(
+            classify_window_event_route("main", WindowEventKind::FocusLost),
+            WindowEventRoute::Ignore,
+        );
+        assert_eq!(
+            classify_window_event_route("main", WindowEventKind::CloseRequested),
+            WindowEventRoute::HandleMainClose,
+        );
+        assert_eq!(
+            classify_window_event_route("secondary", WindowEventKind::CloseRequested),
+            WindowEventRoute::Ignore,
+        );
+    }
+
+    #[test]
+    fn main_visibility_monitor_only_hides_a_minimized_window_while_regular() {
+        assert!(should_hide_minimized_main(true, true));
+        assert!(!should_hide_minimized_main(true, false));
+        assert!(!should_hide_minimized_main(false, true));
+        assert!(!should_hide_minimized_main(false, false));
     }
 
     #[test]

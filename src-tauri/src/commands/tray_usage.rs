@@ -1,5 +1,6 @@
 use crate::error::AppError;
 use crate::store::AppState;
+pub use crate::tray_popover::MainWindowDestination;
 use crate::usage::domain::UsageProviderView;
 use crate::usage::tray_snapshot::TrayUsageSnapshot;
 use std::future::Future;
@@ -7,6 +8,29 @@ use std::sync::Arc;
 use tauri::{AppHandle, State};
 
 type SnapshotPublisher = Arc<dyn for<'a> Fn(&'a TrayUsageSnapshot) + Send + Sync + 'static>;
+
+#[tauri::command]
+pub fn hide_tray_popover(app: AppHandle) -> Result<(), AppError> {
+    crate::tray_popover::hide(&app)
+}
+
+#[tauri::command]
+pub fn open_main_from_tray(
+    app: AppHandle,
+    destination: MainWindowDestination,
+) -> Result<(), AppError> {
+    crate::tray_popover::open_main_window(&app, destination)
+}
+
+#[tauri::command]
+pub fn take_pending_main_window_destination() -> Result<Option<MainWindowDestination>, AppError> {
+    crate::tray_popover::take_pending_main_window_destination()
+}
+
+#[tauri::command]
+pub fn quit_from_tray(app: AppHandle) {
+    app.exit(0);
+}
 
 #[tauri::command]
 pub async fn get_tray_usage_snapshot(
