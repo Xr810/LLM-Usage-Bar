@@ -1,5 +1,5 @@
-import type { ReactNode } from "react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import type { ButtonHTMLAttributes, ReactNode } from "react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { SettingsPage } from "@/components/settings/SettingsPage";
@@ -21,27 +21,26 @@ vi.mock("@/components/settings/UsageDiagnosticsPanel", () => ({
 }));
 
 vi.mock("@/components/ui/dialog", () => ({
-  Dialog: ({
-    open,
-    onOpenChange,
+  Dialog: ({ open, children }: { open: boolean; children: ReactNode }) =>
+    open ? <div data-testid="dialog-root">{children}</div> : null,
+  DialogContent: ({ children }: { children: ReactNode }) => (
+    <div>{children}</div>
+  ),
+  DialogClose: ({
     children,
-  }: {
-    open: boolean;
-    onOpenChange: (open: boolean) => void;
-    children: ReactNode;
-  }) =>
-    open ? (
-      <div data-testid="dialog-root">
-        {children}
-        <button type="button" onClick={() => onOpenChange(false)}>
-          close-dialog
-        </button>
-      </div>
-    ) : null,
-  DialogContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-  DialogHeader: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+    ...props
+  }: ButtonHTMLAttributes<HTMLButtonElement>) => (
+    <button type="button" {...props}>
+      {children}
+    </button>
+  ),
+  DialogHeader: ({ children }: { children: ReactNode }) => (
+    <div>{children}</div>
+  ),
   DialogTitle: ({ children }: { children: ReactNode }) => <h2>{children}</h2>,
-  DialogDescription: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  DialogDescription: ({ children }: { children: ReactNode }) => (
+    <div>{children}</div>
+  ),
 }));
 
 describe("SettingsPage sections", () => {
@@ -49,7 +48,9 @@ describe("SettingsPage sections", () => {
     const user = userEvent.setup();
     render(<SettingsPage open onOpenChange={() => {}} defaultTab="advanced" />);
 
-    expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Settings" }),
+    ).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Agents" })).toHaveAttribute(
       "aria-selected",
       "true",
@@ -57,15 +58,21 @@ describe("SettingsPage sections", () => {
     expect(screen.getByText("Agent settings content")).toBeInTheDocument();
 
     await user.click(screen.getByRole("tab", { name: "Providers" }));
-    expect(screen.getByRole("button", { name: "Add Provider" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Add Provider" }),
+    ).toBeInTheDocument();
     expect(screen.queryByText("Agent settings content")).toBeNull();
 
     await user.click(screen.getByRole("tab", { name: "Proxy setup" }));
-    expect(screen.getByRole("button", { name: "Start proxy" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Start proxy" }),
+    ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Add Provider" })).toBeNull();
 
     await user.click(screen.getByRole("tab", { name: "Diagnostics" }));
-    expect(screen.getByText("Aggregate diagnostics content")).toBeInTheDocument();
+    expect(
+      screen.getByText("Aggregate diagnostics content"),
+    ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Start proxy" })).toBeNull();
   });
 
@@ -75,13 +82,18 @@ describe("SettingsPage sections", () => {
     ["providers", "Providers"],
     ["proxy", "Proxy setup"],
     ["diagnostics", "Diagnostics"],
-  ])("honors the valid or compatible %s default", (defaultTab, selectedName) => {
-    render(<SettingsPage open onOpenChange={() => {}} defaultTab={defaultTab} />);
-    expect(screen.getByRole("tab", { name: selectedName })).toHaveAttribute(
-      "aria-selected",
-      "true",
-    );
-  });
+  ])(
+    "honors the valid or compatible %s default",
+    (defaultTab, selectedName) => {
+      render(
+        <SettingsPage open onOpenChange={() => {}} defaultTab={defaultTab} />,
+      );
+      expect(screen.getByRole("tab", { name: selectedName })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
+    },
+  );
 
   it("does not mount settings sections while closed", () => {
     render(<SettingsPage open={false} onOpenChange={() => {}} />);
@@ -91,10 +103,8 @@ describe("SettingsPage sections", () => {
     expect(screen.queryByText("Aggregate diagnostics content")).toBeNull();
   });
 
-  it("forwards close requests", () => {
-    const onOpenChange = vi.fn();
-    render(<SettingsPage open onOpenChange={onOpenChange} />);
-    fireEvent.click(screen.getByRole("button", { name: "close-dialog" }));
-    expect(onOpenChange).toHaveBeenCalledWith(false);
+  it("renders an accessible close control", () => {
+    render(<SettingsPage open onOpenChange={() => {}} />);
+    expect(screen.getByRole("button", { name: "Close" })).toBeInTheDocument();
   });
 });

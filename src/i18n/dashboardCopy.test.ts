@@ -30,7 +30,7 @@ const requiredKeys = [
   "dashboardAgents.providerCount_other",
   "dashboardAgents.nameFor",
   "dashboardAgents.saveNamed",
-  "dashboardAgents.moveUp",
+  "dashboardAgents.reorderNamed",
   "dashboardAgents.moveDown",
   "dashboardAgents.hideNamed",
   "dashboardAgents.showNamed",

@@ -99,6 +99,31 @@ describe("Agent usage dashboard main path", () => {
     );
   });
 
+  it("returns to the selected Agent when the Settings close control is clicked", async () => {
+    const user = userEvent.setup();
+    renderApp();
+
+    const claude = await screen.findByRole("tab", { name: "Claude Code" });
+    await user.click(claude);
+    expect(claude).toHaveAttribute("aria-selected", "true");
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+
+    expect(
+      await screen.findByRole("heading", { name: "Settings" }),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Close" }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("heading", { name: "Settings" })).toBeNull(),
+    );
+    expect(claude).toHaveAttribute("aria-selected", "true");
+    expect(localStorage.getItem("llm-usage-bar:last-agent-module-id")).toBe(
+      "claude-code",
+    );
+    expect(screen.getByText("Claude Team")).toBeInTheDocument();
+    expect(screen.getByText("Azure API")).toBeInTheDocument();
+  });
+
   it("keeps a draggable title area and gates native window controls by settings", async () => {
     setSettings({ useAppWindowControls: true, language: "en" });
     const { container } = renderApp();

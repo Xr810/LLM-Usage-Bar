@@ -27,10 +27,12 @@ describe("SettingsPage integration", () => {
     const user = userEvent.setup();
     renderSettings();
 
+    await user.click(await screen.findByTestId("agent-sort-custom-research"));
     expect(
       await screen.findByDisplayValue("Research Agent"),
     ).toBeInTheDocument();
     expect(screen.getAllByText("Official Subscription")).not.toHaveLength(0);
+    await user.click(screen.getByTestId("agent-sort-opencode"));
     expect(
       within(screen.getByTestId("agent-settings-opencode")).getByText(
         "2 Providers",
@@ -67,14 +69,15 @@ describe("SettingsPage integration", () => {
   it("keeps Agent and protected-key mutations observable without retaining the key", async () => {
     const user = userEvent.setup();
     const view = renderSettings();
-    await screen.findByDisplayValue("Research Agent");
+    await screen.findByTestId("agent-sort-custom-research");
 
     await user.type(screen.getByLabelText("Custom Agent name"), "MSW Custom");
     await user.click(
       screen.getByRole("button", { name: "Create Custom Agent" }),
     );
-    expect(await screen.findByDisplayValue("MSW Custom")).toBeInTheDocument();
+    expect(await screen.findByText("MSW Custom")).toBeInTheDocument();
 
+    await user.click(screen.getByTestId("agent-sort-hermes"));
     await user.selectOptions(
       screen.getByRole("combobox", { name: "Add Provider for Hermes" }),
       "openrouter-api",
@@ -89,7 +92,7 @@ describe("SettingsPage integration", () => {
       within(binding).getByRole("button", { name: "Set API key" }),
     );
 
-    const dialog = screen.getByRole("dialog");
+    const dialog = screen.getByRole("dialog", { name: "Set API key" });
     const input = within(dialog).getByLabelText("API key");
     const bindingKey = "transient-msw-key";
     await user.type(input, bindingKey);
@@ -221,7 +224,7 @@ describe("SettingsPage integration", () => {
     async (defaultTab) => {
       renderSettings(true, defaultTab);
       expect(
-        await screen.findByDisplayValue("Research Agent"),
+        await screen.findByTestId("agent-sort-custom-research"),
       ).toBeInTheDocument();
       expect(screen.getByRole("tab", { name: "Agents" })).toHaveAttribute(
         "aria-selected",

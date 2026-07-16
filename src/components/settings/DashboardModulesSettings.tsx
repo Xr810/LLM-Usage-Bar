@@ -1,6 +1,25 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  arrayMove,
+  horizontalListSortingStrategy,
+  sortableKeyboardCoordinates,
+  useSortable,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import { GripVertical } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
+import { ProviderIcon } from "@/components/ProviderIcon";
 import {
   Card,
   CardContent,
@@ -29,17 +48,15 @@ import type {
   AgentProviderBindingView,
   UsageProviderView,
 } from "@/types/usageDashboard";
+import { cn } from "@/lib/utils";
 import { AgentProviderBindingRow } from "./AgentProviderBindingRow";
 
 interface AgentRowProps {
   agent: AgentModuleView;
-  index: number;
-  count: number;
   providers: UsageProviderView[];
   bindings: AgentProviderBindingView[];
   isPending: boolean;
   onSave: (input: AgentModuleInput) => Promise<unknown>;
-  onMove: (index: number, offset: -1 | 1) => Promise<unknown>;
   onVisibility: (agent: AgentModuleView) => Promise<unknown>;
   onDelete: (agentModuleId: string) => Promise<unknown>;
   onSaveBinding: (input: AgentProviderBindingInput) => Promise<unknown>;
@@ -60,15 +77,156 @@ interface AgentRowProps {
   ) => Promise<unknown>;
 }
 
+const AGENT_ICONS: Record<string, string> = {
+  codex: "openai",
+  "claude-code": "claude",
+  opencode: "opencode",
+  openclaw: "openclaw",
+  hermes: "hermes",
+};
+
+interface AgentSorterProps {
+  agents: AgentModuleView[];
+  selectedAgentId: string;
+  disabled: boolean;
+  onSelect: (agentModuleId: string) => void;
+  onReorder: (agentModuleIds: string[]) => void;
+}
+
+function AgentSorter({
+  agents,
+  selectedAgentId,
+  disabled,
+  onSelect,
+  onReorder,
+}: AgentSorterProps) {
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: { distance: 8 },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    }),
+  );
+
+  const handleDragEnd = ({ active, over }: DragEndEvent) => {
+    if (disabled || !over || active.id === over.id) return;
+
+    const oldIndex = agents.findIndex((agent) => agent.id === active.id);
+    const newIndex = agents.findIndex((agent) => agent.id === over.id);
+    if (oldIndex < 0 || newIndex < 0) return;
+
+    onReorder(arrayMove(agents, oldIndex, newIndex).map((agent) => agent.id));
+  };
+
+  return (
+    <DndContext
+      sensors={sensors}
+      collisionDetection={closestCenter}
+      onDragEnd={handleDragEnd}
+    >
+      <SortableContext
+        items={agents.map((agent) => agent.id)}
+        strategy={horizontalListSortingStrategy}
+      >
+        <div className="max-w-full overflow-x-auto pb-1">
+          <div
+            data-testid="agent-sorter"
+            className="flex min-w-max flex-nowrap gap-2"
+          >
+            {agents.map((agent) => (
+              <SortableAgentButton
+                key={agent.id}
+                agent={agent}
+                selected={agent.id === selectedAgentId}
+                disabled={disabled}
+                onSelect={onSelect}
+              />
+            ))}
+          </div>
+        </div>
+      </SortableContext>
+    </DndContext>
+  );
+}
+
+interface SortableAgentButtonProps {
+  agent: AgentModuleView;
+  selected: boolean;
+  disabled: boolean;
+  onSelect: (agentModuleId: string) => void;
+}
+
+function SortableAgentButton({
+  agent,
+  selected,
+  disabled,
+  onSelect,
+}: SortableAgentButtonProps) {
+  const { t } = useTranslation();
+  const {
+    setNodeRef,
+    setActivatorNodeRef,
+    attributes,
+    listeners,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: agent.id, disabled });
+  const style: CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={cn("flex h-10 shrink-0", isDragging && "opacity-50")}
+    >
+      <Button
+        type="button"
+        size="sm"
+        variant={selected ? "default" : "outline"}
+        data-testid={`agent-sort-${agent.id}`}
+        aria-pressed={selected}
+        disabled={disabled}
+        className="h-10 shrink-0 gap-2 rounded-r-none px-3"
+        onClick={() => onSelect(agent.id)}
+      >
+        <ProviderIcon
+          icon={AGENT_ICONS[agent.id]}
+          name={agent.name}
+          size={16}
+        />
+        <span>{agent.name}</span>
+      </Button>
+      <Button
+        ref={setActivatorNodeRef}
+        type="button"
+        size="icon"
+        variant={selected ? "default" : "outline"}
+        {...attributes}
+        aria-label={t("dashboardAgents.reorderNamed", {
+          name: agent.name,
+          defaultValue: `Reorder ${agent.name}`,
+        })}
+        disabled={disabled}
+        className="-ml-px h-10 w-8 shrink-0 touch-none rounded-l-none px-0 cursor-grab active:cursor-grabbing focus-visible:z-10"
+        {...listeners}
+      >
+        <GripVertical aria-hidden="true" className="h-4 w-4" />
+      </Button>
+    </div>
+  );
+}
+
 function AgentRow({
   agent,
-  index,
-  count,
   providers,
   bindings,
   isPending,
   onSave,
-  onMove,
   onVisibility,
   onDelete,
   onSaveBinding,
@@ -94,7 +252,7 @@ function AgentRow({
       data-testid={`agent-settings-${agent.id}`}
       className="space-y-4 rounded-lg border p-4"
     >
-      <div className="grid gap-3 lg:grid-cols-[minmax(180px,1fr)_auto_auto] lg:items-center">
+      <div className="grid gap-3 lg:grid-cols-[minmax(180px,1fr)_auto] lg:items-center">
         <div className="space-y-2">
           {agent.isFixed ? (
             <div className="font-medium">{agent.name}</div>
@@ -139,7 +297,7 @@ function AgentRow({
           </div>
         </div>
 
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-2 lg:justify-end">
           {!agent.isFixed ? (
             <Button
               size="sm"
@@ -161,33 +319,6 @@ function AgentRow({
               {t("common.save", { defaultValue: "Save" })}
             </Button>
           ) : null}
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={isPending || index === 0}
-            aria-label={t("dashboardAgents.moveUp", {
-              name: agent.name,
-              defaultValue: `Move ${agent.name} up`,
-            })}
-            onClick={() => void onMove(index, -1)}
-          >
-            ↑
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={isPending || index === count - 1}
-            aria-label={t("dashboardAgents.moveDown", {
-              name: agent.name,
-              defaultValue: `Move ${agent.name} down`,
-            })}
-            onClick={() => void onMove(index, 1)}
-          >
-            ↓
-          </Button>
-        </div>
-
-        <div className="flex flex-wrap gap-2 lg:justify-end">
           <Button
             size="sm"
             variant="outline"
@@ -323,6 +454,7 @@ export function AgentsSettings() {
   const credentialActions = useAgentProviderBindingCredentialActions();
   const [newName, setNewName] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [selectedAgentId, setSelectedAgentId] = useState("");
 
   const agents = useMemo(
     () =>
@@ -333,6 +465,7 @@ export function AgentsSettings() {
   );
   const providers = providersQuery.data ?? [];
   const bindings = bindingsQuery.data ?? [];
+  const selectedAgent = agents.find((agent) => agent.id === selectedAgentId);
   const isPending =
     saveAgent.isPending ||
     reorderAgents.isPending ||
@@ -352,18 +485,9 @@ export function AgentsSettings() {
     }
   };
 
-  const move = async (index: number, offset: -1 | 1) => {
-    const nextIndex = index + offset;
-    if (nextIndex < 0 || nextIndex >= agents.length) return;
-    const reordered = [...agents];
-    [reordered[index], reordered[nextIndex]] = [
-      reordered[nextIndex],
-      reordered[index],
-    ];
-    await run(() =>
-      reorderAgents.mutateAsync(reordered.map((agent) => agent.id)),
-    );
-  };
+  useEffect(() => {
+    if (!selectedAgent) setSelectedAgentId(agents[0]?.id ?? "");
+  }, [agents, selectedAgent]);
 
   const queryErrors = [
     agentsQuery.error,
@@ -388,6 +512,15 @@ export function AgentsSettings() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
+          <AgentSorter
+            agents={agents}
+            selectedAgentId={selectedAgentId}
+            disabled={isPending}
+            onSelect={setSelectedAgentId}
+            onReorder={(agentModuleIds) =>
+              void run(() => reorderAgents.mutateAsync(agentModuleIds))
+            }
+          />
           <div className="flex flex-wrap items-end gap-2">
             <Label className="min-w-[220px] flex-1">
               {t("dashboardAgents.customName", {
@@ -444,19 +577,16 @@ export function AgentsSettings() {
         <div>{t("common.loading", { defaultValue: "Loading" })}</div>
       ) : null}
       <div className="space-y-3">
-        {agents.map((agent, index) => (
+        {selectedAgent ? (
           <AgentRow
-            key={agent.id}
-            agent={agent}
-            index={index}
-            count={agents.length}
+            key={selectedAgent.id}
+            agent={selectedAgent}
             providers={providers}
             bindings={bindings.filter(
-              (binding) => binding.agentModuleId === agent.id,
+              (binding) => binding.agentModuleId === selectedAgent.id,
             )}
             isPending={isPending}
             onSave={(input) => run(() => saveAgent.mutateAsync(input))}
-            onMove={move}
             onVisibility={(current) =>
               run(() =>
                 setVisibility.mutateAsync({
@@ -481,7 +611,7 @@ export function AgentsSettings() {
             onReplaceApiKey={credentialActions.replaceApiKey}
             onClearApiKey={credentialActions.clearApiKey}
           />
-        ))}
+        ) : null}
       </div>
     </div>
   );

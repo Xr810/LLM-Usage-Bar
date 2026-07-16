@@ -196,7 +196,7 @@
     "providerCount_other": "{{count}} Providers",
     "nameFor": "Name for {{name}}",
     "saveNamed": "Save {{name}}",
-    "moveUp": "Move {{name}} up",
+    "reorderNamed": "Reorder {{name}}",
     "moveDown": "Move {{name}} down",
     "hideNamed": "Hide {{name}}",
     "showNamed": "Show {{name}}",

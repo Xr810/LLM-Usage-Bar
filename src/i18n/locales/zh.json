@@ -196,7 +196,7 @@
     "providerCount_other": "{{count}} 个 Provider",
     "nameFor": "{{name}} 的名称",
     "saveNamed": "保存 {{name}}",
-    "moveUp": "上移 {{name}}",
+    "reorderNamed": "重新排序 {{name}}",
     "moveDown": "下移 {{name}}",
     "hideNamed": "隐藏 {{name}}",
     "showNamed": "显示 {{name}}",
