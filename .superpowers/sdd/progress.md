@@ -29,8 +29,8 @@ ledger is retained below as historical evidence.
 | 5. Real menu-bar dot assets and refresh publication | completed | `61d31ad4`, `62017929` | focused command/event/quota/scheduler/store/service suites, integration, strict Clippy, fmt/diff; independent re-review approved |
 | 6. macOS tray and popover window contract | completed | `122a084a` | focused lifecycle/tray/command suites, production check, strict Clippy, fmt/diff; independent re-review approved |
 | 7. Popover renderer shell and payload | completed | `f0c7d8bf` | focused 8/8, regressions 17/17, typecheck/build/format/diff; independent review approved |
-| 8. Compact usage popover UI | in progress | — | screenshot-grounded functional UI implementation starting |
-| 9. Daily budget settings | pending | — | — |
+| 8. Compact usage popover UI | completed | `1b5b7cb7` | focused 74/74, regressions 25/25, typecheck/build/format/diff; final independent review approved |
+| 9. Daily budget settings | in progress | — | renderer-safe Provider save boundary and budget/navigation TDD underway |
 | 10. Full verification and visual QA | pending | — | — |
 
 ## Active Prerequisite Ledger
@@ -234,6 +234,32 @@ ledger is retained below as historical evidence.
 - Fresh verification passes Task 7 tests 8/8 and related query/event/App
   regressions 17/17, plus TypeScript, production renderer build, changed-file
   Prettier, and diff checks. Independent review approved with no findings.
+
+## Active Task 8 Evidence
+
+- The 380x520 renderer recreates the supplied reference hierarchy with compact
+  horizontal Agent tabs, a strong account header, distinct subscription and API
+  sections, native semantic progress, and a persistent two-column action footer.
+  It reuses the existing Provider icons, Radix/Tailwind components, and Lucide
+  assets without adding SVG, emoji, gradients, or glass treatments.
+- Overview and Agent-local views use the same cached snapshot. Provider rows keep
+  their Agent and Provider identities, invalid numeric data never becomes a fake
+  zero, and missing budgets/unavailable costs route to their exact typed main-window
+  destinations.
+- The controller deduplicates Strict Mode refreshes, refreshes again on later show
+  cycles, hides at most once per cycle, blocks concurrent navigation, and releases
+  guards only for a failure from the same cycle.
+- Raw refresh, warning, and unavailable strings are never rendered. Four fixed
+  quota reason codes map to localized copy; past reset times use a standalone
+  pending-refresh state. Only the aggregate badge is a live status region.
+- Production CSS and keyboard tests prove the exact frame, real Radix arrow/tab
+  traversal, focus clearance, wrapping footer labels, and light/dark contrast.
+  The progress boundary is 4.12:1 against its track; active-tab text is 5.41:1 in
+  light mode and 5.17:1 in dark mode.
+- Fresh verification passes Task 8 tests 74/74 and Task 7/dashboard regressions
+  25/25, plus TypeScript, renderer build, changed-file Prettier, and diff checks.
+  Final independent review approved with no P0-P2 findings. Real macOS interaction
+  and source-versus-implementation screenshot comparison remain owned by Task 10.
 
 ---
 
