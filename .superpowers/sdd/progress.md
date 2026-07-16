@@ -30,8 +30,8 @@ ledger is retained below as historical evidence.
 | 6. macOS tray and popover window contract | completed | `122a084a` | focused lifecycle/tray/command suites, production check, strict Clippy, fmt/diff; independent re-review approved |
 | 7. Popover renderer shell and payload | completed | `f0c7d8bf` | focused 8/8, regressions 17/17, typecheck/build/format/diff; independent review approved |
 | 8. Compact usage popover UI | completed | `1b5b7cb7` | focused 74/74, regressions 25/25, typecheck/build/format/diff; final independent review approved |
-| 9. Daily budget settings | in progress | — | renderer-safe Provider save boundary and budget/navigation TDD underway |
-| 10. Full verification and visual QA | pending | — | — |
+| 9. Daily budget settings | completed | `426d1176`, `d0a5ded1` | Rust boundary 25/25; frontend affected 108/108, typecheck/build/format/diff; three independent reviews approved |
+| 10. Full verification and visual QA | in progress | — | full suites, real isolated macOS interaction, and source comparison starting |
 
 ## Active Prerequisite Ledger
 
@@ -260,6 +260,33 @@ ledger is retained below as historical evidence.
   25/25, plus TypeScript, renderer build, changed-file Prettier, and diff checks.
   Final independent review approved with no P0-P2 findings. Real macOS interaction
   and source-versus-implementation screenshot comparison remain owned by Task 10.
+
+## Active Task 9 Evidence
+
+- The Tauri `save_usage_provider` command now accepts a dedicated strict
+  camelCase DTO with `deny_unknown_fields`; it has no quota configuration field
+  and converts to the internal domain input with `quota_config: None`. Existing
+  protected quota configuration is preserved by the DAO while new renderer-created
+  Providers receive none.
+- Boundary tests reject `quotaConfig` object/null and `quota_config` injection
+  without echoing a secret sentinel. Returned public Provider views contain no
+  quota configuration. The internal domain/DAO/collector path remains intact.
+- A real no-validate USD form edits only metered Provider budgets, preserves the
+  user's trimmed decimal string, rejects empty/non-finite/non-positive input,
+  supports clear-to-null, disables while pending, and renders only fixed localized
+  error copy. Subscription Providers never render the field.
+- The renderer no longer owns `quotaConfig`: its TypeScript input, dialog state,
+  parser, control, payload, and all four locale strings are removed. The MSW wire
+  boundary rejects any legacy injected property without echoing its value.
+- Cold and live typed destinations share a consume-once queue. Exact Agent targets
+  wait until visible and non-archived; later actionable Provider targets cannot be
+  blocked by an unavailable Agent. Provider targets open the Providers tab, scroll
+  and focus exactly once after data/DOM readiness; manual Settings clears old
+  targets and usage navigation closes Settings.
+- Fresh verification passes Rust command tests 25/25, all affected frontend tests
+  108/108, TypeScript, renderer build, Rust format/check/production Clippy,
+  changed-file Prettier, and diff checks. Rust security, budget/quota, and navigation
+  independent reviews all approved with no remaining high-priority findings.
 
 ---
 
