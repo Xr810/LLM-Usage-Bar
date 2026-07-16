@@ -25,8 +25,8 @@ ledger is retained below as historical evidence.
 | 1. Schema v18 and daily budget persistence | completed | `09ee7d39`, `85102743` | focused migration/DAO/backup/database and identity-startup tests pass; independent re-review approved |
 | 2. Usage severity policy | completed | `cfa60cad` | status 16/16, tray model 10/10, fmt/diff; independent review approved |
 | 3. Usage snapshot projection | completed | `53f9e61e` | aggregation 1/1, tray 13/13, dashboard 11/11, status 16/16, DAO/commands/fmt/diff; independent review approved |
-| 4. Refresh orchestration and stale snapshot | in progress | — | refined TDD handoff prepared from live AppState/quota/session control flow |
-| 5. Real menu-bar dot assets | pending | — | — |
+| 4. Refresh orchestration and stale snapshot | completed | `e0d1c49a` | service 14/14, store 3/3, quota 13/13, session 9/9, fmt/diff; independent review approved |
+| 5. Real menu-bar dot assets | in progress | — | live tray/event/asset handoff being finalized |
 | 6. macOS tray and popover window contract | pending | — | — |
 | 7. Popover renderer shell and payload | pending | — | — |
 | 8. Compact usage popover UI | pending | — | — |
@@ -141,6 +141,34 @@ ledger is retained below as historical evidence.
 - The execution-plan projector example now records `now.timestamp()` separately
   from the exclusive `now + 1` query boundary and retains Provider DAO `Vec`
   order, matching the independently approved implementation.
+
+## Active Task 4 Evidence
+
+- Production reuses the exact managed `QuotaService` and single
+  `SessionUsageService` Arcs from the existing `AppState` constructor funnel;
+  a fake collector test proves tray refresh reaches the injected quota service.
+- One Provider-list snapshot selects enabled subscription quota sources and
+  enabled Providers with real session-source bindings exactly once. Every
+  selected attempt is polled; session scans run through `spawn_blocking`,
+  warnings alone succeed, and join/service/result errors fail the tray cycle.
+- A non-blocking atomic CAS admits one refresh. Ordered projection,
+  whole-cache replacement, lease completion, and publication prevent duplicate
+  collection and reversed callbacks while never invoking a callback under the
+  cache lock.
+- Ordinary rebuilds and external failures retain an active manual lease. A
+  failed source cycle preserves the latest complete safe body and last-success
+  time, changes only freshness/error/progress fields, and exposes only the fixed
+  `tray_usage_refresh_failed` code.
+- Cancellation drops the armed lease and cached reads overlay the atomic state,
+  so progress cannot remain stuck. Production samples its injected clock after
+  source work and after acquiring commit order, including refreshes that cross
+  local midnight.
+- Fresh verification passes tray service 14/14, Store 3/3, quota 13/13,
+  session 9/9, Rust format, and diff checks. Independent adversarial review
+  approved `e0d1c49a` with no Critical, Important, or Minor findings.
+- Follow-up `96eee32a` scopes the managed quota constant to tests. The relevant
+  command suite passes 18/18 and strict library Clippy with `-D warnings` is
+  restored, alongside Rust format and diff checks.
 
 ---
 

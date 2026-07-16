@@ -812,6 +812,14 @@ git commit -m "feat: project authoritative tray usage snapshot"
 
 ### Task 4: Add a cache-backed refresh service that preserves the last alert
 
+> **Execution correction (2026-07-16):** the approved implementation uses an
+> atomic CAS refresh lease plus a separate ordered commit/publish lock. Cache
+> locks are released before callbacks; normal rebuilds preserve an active
+> refresh; cancellation clears the atomic lease; and production samples its
+> clock after source work and immediately before projection. Task 5, rather
+> than Task 4, owns the concrete cancellable midnight scheduler. These rules
+> supersede the simplified mutex/cache callback examples below.
+
 **Files:**
 
 - Create: `src-tauri/src/services/tray_usage.rs`
