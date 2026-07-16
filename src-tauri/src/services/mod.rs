@@ -27,6 +27,7 @@ pub mod subscription;
 pub mod sync_protocol;
 pub mod system_provider_connection;
 pub mod tray_usage;
+pub mod tray_usage_scheduler;
 pub mod usage_cache;
 pub mod usage_stats;
 pub mod webdav;

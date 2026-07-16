@@ -48,6 +48,15 @@ pub struct QuotaSchedulerCycle {
     pub errors: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuotaSchedulerOutcome {
+    Completed { attempted: u32, had_errors: bool },
+    Failed,
+}
+
+pub type QuotaCycleCallback =
+    Arc<dyn Fn(QuotaSchedulerOutcome) -> BoxFuture<'static, ()> + Send + Sync + 'static>;
+
 /// Object-safe boundary around existing quota HTTP/parsing implementations.
 /// The adapter returns their common `SubscriptionQuota` representation so this
 /// module only owns normalization and persistence semantics.
@@ -362,7 +371,30 @@ impl QuotaService {
         Ok(cycle)
     }
 
-    pub fn start_scheduler(self: Arc<Self>) -> QuotaSchedulerHandle {
+    async fn run_scheduler_cycle_at(&self, now: i64, after_cycle: &QuotaCycleCallback) {
+        let outcome = match self.refresh_due_at(now).await {
+            Ok(cycle) => {
+                let had_errors = !cycle.errors.is_empty();
+                if had_errors {
+                    log::warn!("quota scheduler refresh failed");
+                }
+                QuotaSchedulerOutcome::Completed {
+                    attempted: cycle.attempted,
+                    had_errors,
+                }
+            }
+            Err(_) => {
+                log::warn!("quota scheduler cycle failed");
+                QuotaSchedulerOutcome::Failed
+            }
+        };
+        after_cycle(outcome).await;
+    }
+
+    pub fn start_scheduler(
+        self: Arc<Self>,
+        after_cycle: QuotaCycleCallback,
+    ) -> QuotaSchedulerHandle {
         let (cancel_tx, mut cancel_rx) = watch::channel(false);
         let task = tauri::async_runtime::spawn(async move {
             let mut interval =
@@ -376,21 +408,13 @@ impl QuotaService {
                         }
                     }
                     _ = interval.tick() => {
-                        let now = match now_timestamp() {
-                            Ok(now) => now,
-                            Err(error) => {
-                                log::warn!("quota scheduler clock failed: {error}");
-                                continue;
-                            }
+                        let Some(now) = scheduler_time_or_failure(
+                            now_timestamp(),
+                            &after_cycle,
+                        ).await else {
+                            continue;
                         };
-                        match self.refresh_due_at(now).await {
-                            Ok(cycle) => {
-                                for error in cycle.errors {
-                                    log::warn!("quota scheduler refresh failed: {error}");
-                                }
-                            }
-                            Err(error) => log::warn!("quota scheduler cycle failed: {error}"),
-                        }
+                        self.run_scheduler_cycle_at(now, &after_cycle).await;
                     }
                 }
             }
@@ -398,6 +422,20 @@ impl QuotaService {
         QuotaSchedulerHandle {
             cancel_tx,
             task: Some(task),
+        }
+    }
+}
+
+async fn scheduler_time_or_failure(
+    now: Result<i64, AppError>,
+    after_cycle: &QuotaCycleCallback,
+) -> Option<i64> {
+    match now {
+        Ok(now) => Some(now),
+        Err(_) => {
+            log::warn!("quota scheduler clock failed");
+            after_cycle(QuotaSchedulerOutcome::Failed).await;
+            None
         }
     }
 }
@@ -729,9 +767,159 @@ mod tests {
     fn scheduler_can_start_without_an_ambient_tokio_runtime() {
         let service = Arc::new(QuotaService::new(isolated_quota_test_db()));
 
-        let scheduler = service.start_scheduler();
+        let scheduler = service.start_scheduler(Arc::new(|_| Box::pin(async {})));
 
         drop(scheduler);
+    }
+
+    #[tokio::test]
+    async fn scheduler_cycle_callback_reports_zero_attempt_success_once() {
+        let service = QuotaService::new(isolated_quota_test_db());
+        let outcomes = Arc::new(Mutex::new(Vec::new()));
+        let captured = outcomes.clone();
+        let after_cycle: QuotaCycleCallback = Arc::new(move |outcome| {
+            let captured = captured.clone();
+            Box::pin(async move {
+                captured.lock().expect("captured outcomes").push(outcome);
+            })
+        });
+
+        service.run_scheduler_cycle_at(100, &after_cycle).await;
+
+        assert_eq!(
+            *outcomes.lock().expect("captured outcomes"),
+            vec![QuotaSchedulerOutcome::Completed {
+                attempted: 0,
+                had_errors: false,
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn scheduler_cycle_waits_for_async_callback_completion() {
+        let service = Arc::new(QuotaService::new(isolated_quota_test_db()));
+        let callback_started = Arc::new(tokio::sync::Notify::new());
+        let release_callback = Arc::new(tokio::sync::Notify::new());
+        let callback_finished = Arc::new(AtomicUsize::new(0));
+        let after_cycle: QuotaCycleCallback = {
+            let callback_started = callback_started.clone();
+            let release_callback = release_callback.clone();
+            let callback_finished = callback_finished.clone();
+            Arc::new(move |_| {
+                let callback_started = callback_started.clone();
+                let release_callback = release_callback.clone();
+                let callback_finished = callback_finished.clone();
+                Box::pin(async move {
+                    callback_started.notify_one();
+                    release_callback.notified().await;
+                    callback_finished.fetch_add(1, Ordering::SeqCst);
+                })
+            })
+        };
+
+        let cycle = tokio::spawn({
+            let service = service.clone();
+            async move {
+                service.run_scheduler_cycle_at(100, &after_cycle).await;
+            }
+        });
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            callback_started.notified(),
+        )
+        .await
+        .expect("callback should start");
+        assert_eq!(callback_finished.load(Ordering::SeqCst), 0);
+
+        release_callback.notify_one();
+        tokio::time::timeout(std::time::Duration::from_secs(1), cycle)
+            .await
+            .expect("scheduler cycle should finish after its callback")
+            .expect("scheduler cycle task should not panic");
+        assert_eq!(callback_finished.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn scheduler_cycle_callback_reports_provider_errors_without_details() {
+        const SECRET_SENTINEL: &str = "sk-secret-scheduler-provider-error";
+        let db = isolated_quota_test_db();
+        db.save_usage_provider(&provider("sub", BillingKind::Subscription, true))
+            .unwrap();
+        let collector = Arc::new(FakeCollector::new(vec![Err(SECRET_SENTINEL.to_string())]));
+        let service = QuotaService::with_collectors(db, vec![collector]);
+        let outcomes = Arc::new(Mutex::new(Vec::new()));
+        let captured = outcomes.clone();
+        let after_cycle: QuotaCycleCallback = Arc::new(move |outcome| {
+            let captured = captured.clone();
+            Box::pin(async move {
+                captured.lock().expect("captured outcomes").push(outcome);
+            })
+        });
+
+        service.run_scheduler_cycle_at(100, &after_cycle).await;
+
+        let outcomes = outcomes.lock().expect("captured outcomes");
+        assert_eq!(
+            outcomes.as_slice(),
+            [QuotaSchedulerOutcome::Completed {
+                attempted: 1,
+                had_errors: true,
+            }]
+        );
+        assert!(!format!("{outcomes:?}").contains(SECRET_SENTINEL));
+    }
+
+    #[tokio::test]
+    async fn scheduler_cycle_callback_reports_top_level_failure_once() {
+        let db = isolated_quota_test_db();
+        db.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "ALTER TABLE usage_providers RENAME TO unavailable_usage_providers",
+                [],
+            )
+            .unwrap();
+        let service = QuotaService::with_collectors(db, vec![]);
+        let outcomes = Arc::new(Mutex::new(Vec::new()));
+        let captured = outcomes.clone();
+        let after_cycle: QuotaCycleCallback = Arc::new(move |outcome| {
+            let captured = captured.clone();
+            Box::pin(async move {
+                captured.lock().expect("captured outcomes").push(outcome);
+            })
+        });
+
+        service.run_scheduler_cycle_at(100, &after_cycle).await;
+
+        let outcomes = outcomes.lock().expect("captured outcomes");
+        assert_eq!(outcomes.as_slice(), [QuotaSchedulerOutcome::Failed]);
+        assert!(!format!("{outcomes:?}").contains("usage_providers"));
+    }
+
+    #[tokio::test]
+    async fn scheduler_clock_failure_reports_sanitized_failure_once() {
+        let outcomes = Arc::new(Mutex::new(Vec::new()));
+        let captured = outcomes.clone();
+        let after_cycle: QuotaCycleCallback = Arc::new(move |outcome| {
+            let captured = captured.clone();
+            Box::pin(async move {
+                captured.lock().expect("captured outcomes").push(outcome);
+            })
+        });
+
+        let now = scheduler_time_or_failure(
+            Err(AppError::Message(
+                "system clock before unix epoch: secret-clock-details".to_string(),
+            )),
+            &after_cycle,
+        )
+        .await;
+
+        assert_eq!(now, None);
+        let outcomes = outcomes.lock().expect("captured outcomes");
+        assert_eq!(outcomes.as_slice(), [QuotaSchedulerOutcome::Failed]);
+        assert!(!format!("{outcomes:?}").contains("secret-clock-details"));
     }
 
     #[tokio::test]

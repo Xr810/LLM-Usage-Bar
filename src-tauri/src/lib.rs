@@ -1282,7 +1282,67 @@ pub fn run() {
                 }
             }
 
-            app.state::<AppState>().start_quota_scheduler();
+            let quota_callback_app = app.handle().clone();
+            let quota_after_cycle: usage::quota::QuotaCycleCallback = Arc::new(move |outcome| {
+                let app_handle = quota_callback_app.clone();
+                Box::pin(async move {
+                    let service = {
+                        let Some(state) = app_handle.try_state::<AppState>() else {
+                            log::warn!("tray usage state is unavailable after quota cycle");
+                            return;
+                        };
+                        state.tray_usage_service.clone()
+                    };
+
+                    let publish_app = app_handle.clone();
+                    let publish = move |snapshot: &usage::tray_snapshot::TrayUsageSnapshot| {
+                        tray_status::publish_tray_usage(&publish_app, snapshot);
+                    };
+                    match outcome {
+                        usage::quota::QuotaSchedulerOutcome::Completed {
+                            had_errors: false,
+                            ..
+                        } => {
+                            service.rebuild_from_persisted(publish).await;
+                        }
+                        usage::quota::QuotaSchedulerOutcome::Completed {
+                            had_errors: true, ..
+                        }
+                        | usage::quota::QuotaSchedulerOutcome::Failed => {
+                            service
+                                .mark_refresh_failed_at(chrono::Local::now().timestamp(), publish)
+                                .await;
+                        }
+                    }
+                    usage_events::emit_dashboard_invalidated_only();
+                })
+            });
+            if !app
+                .state::<AppState>()
+                .start_quota_scheduler(quota_after_cycle)
+            {
+                log::warn!("quota scheduler was already started");
+            }
+
+            let tray_publisher_app = app.handle().clone();
+            let tray_publisher: services::tray_usage_scheduler::TraySnapshotPublisher =
+                Arc::new(move |snapshot| {
+                    tray_status::publish_tray_usage(&tray_publisher_app, snapshot);
+                    usage_events::emit_dashboard_invalidated_only();
+                });
+            if !app
+                .state::<AppState>()
+                .start_midnight_scheduler(tray_publisher.clone())
+            {
+                log::warn!("tray usage midnight scheduler was already started");
+            }
+
+            let startup_tray_service = app.state::<AppState>().tray_usage_service.clone();
+            tauri::async_runtime::spawn(async move {
+                startup_tray_service
+                    .rebuild_from_persisted(move |snapshot| tray_publisher(snapshot))
+                    .await;
+            });
 
             // 异常退出恢复 + 代理状态自动恢复
             let app_handle = app.handle().clone();
@@ -1498,6 +1558,9 @@ pub fn run() {
             commands::get_usage_events,
             commands::refresh_provider_quota,
             commands::sync_provider_session_usage,
+            commands::get_tray_usage_snapshot,
+            commands::refresh_tray_usage,
+            commands::set_provider_daily_budget,
             commands::get_providers,
             commands::get_current_provider,
             commands::add_provider,
@@ -1985,12 +2048,24 @@ pub fn run() {
 /// 确保 Claude Code/Codex/Gemini 的配置不会处于损坏状态。
 /// 使用 stop_with_restore_keep_state 保留 settings 表中的代理状态，下次启动时自动恢复。
 pub async fn cleanup_before_exit(app_handle: &tauri::AppHandle) {
-    if let Some(state) = app_handle.try_state::<store::AppState>() {
-        state.stop_quota_scheduler().await;
-        let proxy_service = &state.proxy_service;
+    let cleanup_resources = app_handle.try_state::<store::AppState>().map(|state| {
+        (
+            state.take_quota_scheduler(),
+            state.take_midnight_scheduler(),
+            state.db.clone(),
+            state.proxy_service.clone(),
+        )
+    });
+    if let Some((quota_scheduler, midnight_scheduler, db, proxy_service)) = cleanup_resources {
+        if let Some(scheduler) = quota_scheduler {
+            scheduler.stop().await;
+        }
+        if let Some(scheduler) = midnight_scheduler {
+            scheduler.stop().await;
+        }
 
         // 退出时也需要兜底：代理可能已崩溃/未运行，但 Live 接管残留仍在（占位符/备份）。
-        let has_backups = match state.db.has_any_live_backup().await {
+        let has_backups = match db.has_any_live_backup().await {
             Ok(v) => v,
             Err(e) => {
                 log::error!("退出时检查 Live 备份失败: {e}");

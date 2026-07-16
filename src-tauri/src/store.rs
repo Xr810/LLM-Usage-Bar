@@ -3,10 +3,13 @@ use crate::database::Database;
 #[cfg(test)]
 use crate::services::claude_cli_auth::ClaudeAuthCommandRunner;
 use crate::services::{
-    tray_usage::TrayUsageService, ClaudeCliAuthService, ProxyService,
-    SystemProviderConnectionService, UsageCache,
+    tray_usage::TrayUsageService,
+    tray_usage_scheduler::{
+        start_local_midnight_scheduler, TraySnapshotPublisher, TrayUsageSchedulerHandle,
+    },
+    ClaudeCliAuthService, ProxyService, SystemProviderConnectionService, UsageCache,
 };
-use crate::usage::quota::{QuotaSchedulerHandle, QuotaService};
+use crate::usage::quota::{QuotaCycleCallback, QuotaSchedulerHandle, QuotaService};
 use crate::usage::session::SessionUsageService;
 use std::sync::{Arc, Mutex};
 
@@ -23,6 +26,7 @@ pub struct AppState {
     pub session_usage_service: Arc<SessionUsageService>,
     pub tray_usage_service: Arc<TrayUsageService>,
     quota_scheduler: Mutex<Option<QuotaSchedulerHandle>>,
+    midnight_scheduler: Mutex<Option<TrayUsageSchedulerHandle>>,
 }
 
 impl AppState {
@@ -105,29 +109,66 @@ impl AppState {
             session_usage_service,
             tray_usage_service,
             quota_scheduler: Mutex::new(None),
+            midnight_scheduler: Mutex::new(None),
         }
     }
 
-    pub fn start_quota_scheduler(&self) {
+    pub fn start_quota_scheduler(&self, after_cycle: QuotaCycleCallback) -> bool {
         let Ok(mut scheduler) = self.quota_scheduler.lock() else {
             log::error!("quota scheduler lock is poisoned");
-            return;
+            return false;
         };
-        if scheduler.is_none() {
-            *scheduler = Some(self.quota_service.clone().start_scheduler());
+        if scheduler.is_some() {
+            return false;
         }
+        *scheduler = Some(self.quota_service.clone().start_scheduler(after_cycle));
+        true
     }
 
     pub async fn stop_quota_scheduler(&self) {
-        let scheduler = match self.quota_scheduler.lock() {
+        if let Some(scheduler) = self.take_quota_scheduler() {
+            scheduler.stop().await;
+        }
+    }
+
+    pub(crate) fn take_quota_scheduler(&self) -> Option<QuotaSchedulerHandle> {
+        match self.quota_scheduler.lock() {
             Ok(mut scheduler) => scheduler.take(),
             Err(_) => {
                 log::error!("quota scheduler lock is poisoned");
                 None
             }
+        }
+    }
+
+    pub fn start_midnight_scheduler(&self, publish: TraySnapshotPublisher) -> bool {
+        let Ok(mut scheduler) = self.midnight_scheduler.lock() else {
+            log::error!("tray usage midnight scheduler lock is poisoned");
+            return false;
         };
-        if let Some(scheduler) = scheduler {
+        if scheduler.is_some() {
+            return false;
+        }
+        *scheduler = Some(start_local_midnight_scheduler(
+            self.tray_usage_service.clone(),
+            publish,
+        ));
+        true
+    }
+
+    pub async fn stop_midnight_scheduler(&self) {
+        if let Some(scheduler) = self.take_midnight_scheduler() {
             scheduler.stop().await;
+        }
+    }
+
+    pub(crate) fn take_midnight_scheduler(&self) -> Option<TrayUsageSchedulerHandle> {
+        match self.midnight_scheduler.lock() {
+            Ok(mut scheduler) => scheduler.take(),
+            Err(_) => {
+                log::error!("tray usage midnight scheduler lock is poisoned");
+                None
+            }
         }
     }
 }
@@ -205,5 +246,47 @@ mod tests {
             )
             .await;
         assert_eq!(collector.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn scheduler_handles_start_once_stop_idempotently_and_can_restart() {
+        let state = AppState::new(Arc::new(Database::memory().unwrap()));
+
+        assert!(state.start_quota_scheduler(Arc::new(|_| Box::pin(async {}))));
+        assert!(!state.start_quota_scheduler(Arc::new(|_| Box::pin(async {}))));
+        state.stop_quota_scheduler().await;
+        state.stop_quota_scheduler().await;
+        assert!(state.start_quota_scheduler(Arc::new(|_| Box::pin(async {}))));
+        state.stop_quota_scheduler().await;
+
+        let publisher: TraySnapshotPublisher = Arc::new(|_| {});
+        assert!(state.start_midnight_scheduler(publisher.clone()));
+        assert!(!state.start_midnight_scheduler(publisher.clone()));
+        state.stop_midnight_scheduler().await;
+        state.stop_midnight_scheduler().await;
+        assert!(state.start_midnight_scheduler(publisher));
+        state.stop_midnight_scheduler().await;
+    }
+
+    #[tokio::test]
+    async fn scheduler_handles_can_be_detached_before_awaiting_shutdown() {
+        let state = AppState::new(Arc::new(Database::memory().unwrap()));
+        let publisher: TraySnapshotPublisher = Arc::new(|_| {});
+        assert!(state.start_quota_scheduler(Arc::new(|_| Box::pin(async {}))));
+        assert!(state.start_midnight_scheduler(publisher.clone()));
+
+        let quota = state
+            .take_quota_scheduler()
+            .expect("quota scheduler should detach");
+        let midnight = state
+            .take_midnight_scheduler()
+            .expect("midnight scheduler should detach");
+
+        assert!(state.start_quota_scheduler(Arc::new(|_| Box::pin(async {}))));
+        assert!(state.start_midnight_scheduler(publisher));
+        quota.stop().await;
+        midnight.stop().await;
+        state.stop_quota_scheduler().await;
+        state.stop_midnight_scheduler().await;
     }
 }

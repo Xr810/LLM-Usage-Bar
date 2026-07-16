@@ -15,8 +15,10 @@ use crate::usage::domain::{
 use crate::usage::quota::QuotaRefreshResult;
 use crate::usage::session::ProviderSessionSyncResult;
 use crate::usage::system_providers::{CHATGPT_SUBSCRIPTION_ID, CLAUDE_SUBSCRIPTION_ID};
+use crate::usage::tray_snapshot::TrayUsageSnapshot;
+use chrono::{DateTime, Local};
 use std::collections::{BTreeMap, BTreeSet};
-use tauri::State;
+use tauri::{AppHandle, State};
 
 #[tauri::command]
 pub fn list_dashboard_modules(
@@ -265,12 +267,24 @@ pub fn get_usage_events(
 
 #[tauri::command]
 pub async fn refresh_provider_quota(
+    app: AppHandle,
     state: State<'_, AppState>,
     provider_id: String,
 ) -> Result<QuotaRefreshResult, String> {
-    refresh_provider_quota_test_hook(&state, &provider_id)
-        .await
-        .map_err(|error| error.to_string())
+    let publisher_app = app.clone();
+    refresh_provider_quota_with_sinks_test_hook(
+        &state,
+        &provider_id,
+        move |snapshot| crate::tray_status::publish_tray_usage(&publisher_app, snapshot),
+        crate::usage_events::emit_dashboard_invalidated_only,
+        Local::now,
+    )
+    .await
+    .map_err(quota_refresh_command_error_payload)
+}
+
+fn quota_refresh_command_error_payload(_error: AppError) -> String {
+    "quota_refresh_failed".to_string()
 }
 
 #[tauri::command]
@@ -291,14 +305,48 @@ pub fn save_dashboard_module_test_hook(
     state: &AppState,
     input: AgentModuleInput,
 ) -> Result<AgentModuleView, AppError> {
-    state.db.save_dashboard_module(&input)
+    save_dashboard_module_with_invalidation_test_hook(
+        state,
+        input,
+        crate::usage_events::notify_dashboard_invalidated,
+    )
+}
+
+fn save_dashboard_module_with_invalidation_test_hook<I>(
+    state: &AppState,
+    input: AgentModuleInput,
+    invalidate: I,
+) -> Result<AgentModuleView, AppError>
+where
+    I: FnOnce(),
+{
+    let module = state.db.save_dashboard_module(&input)?;
+    invalidate();
+    Ok(module)
 }
 
 pub fn reorder_dashboard_modules_test_hook(
     state: &AppState,
     module_ids: Vec<String>,
 ) -> Result<Vec<AgentModuleView>, AppError> {
-    state.db.reorder_dashboard_modules(&module_ids)
+    reorder_dashboard_modules_with_invalidation_test_hook(
+        state,
+        module_ids,
+        crate::usage_events::notify_dashboard_invalidated,
+    )
+}
+
+fn reorder_dashboard_modules_with_invalidation_test_hook<I>(
+    state: &AppState,
+    module_ids: Vec<String>,
+    invalidate: I,
+) -> Result<Vec<AgentModuleView>, AppError>
+where
+    I: FnOnce(),
+{
+    let modules = state.db.reorder_dashboard_modules(&module_ids)?;
+    invalidate();
+    Ok(modules)
 }
 
 pub fn set_dashboard_module_visibility_test_hook(
@@ -306,13 +354,50 @@ pub fn set_dashboard_module_visibility_test_hook(
     module_id: &str,
     visible: bool,
 ) -> Result<AgentModuleView, AppError> {
-    state.db.set_dashboard_module_visibility(module_id, visible)
+    set_dashboard_module_visibility_with_invalidation_test_hook(
+        state,
+        module_id,
+        visible,
+        crate::usage_events::notify_dashboard_invalidated,
+    )
+}
+
+fn set_dashboard_module_visibility_with_invalidation_test_hook<I>(
+    state: &AppState,
+    module_id: &str,
+    visible: bool,
+    invalidate: I,
+) -> Result<AgentModuleView, AppError>
+where
+    I: FnOnce(),
+{
+    let module = state
+        .db
+        .set_dashboard_module_visibility(module_id, visible)?;
+    invalidate();
+    Ok(module)
 }
 
 pub async fn delete_dashboard_module_test_hook(
     state: &AppState,
     module_id: &str,
 ) -> Result<(), AppError> {
+    delete_dashboard_module_with_invalidation_test_hook(
+        state,
+        module_id,
+        crate::usage_events::notify_dashboard_invalidated,
+    )
+    .await
+}
+
+async fn delete_dashboard_module_with_invalidation_test_hook<I>(
+    state: &AppState,
+    module_id: &str,
+    invalidate: I,
+) -> Result<(), AppError>
+where
+    I: FnOnce(),
+{
     let module = state
         .db
         .get_agent_module_including_archived(module_id)?
@@ -374,7 +459,7 @@ pub async fn delete_dashboard_module_test_hook(
     if let Some(error) = first_error {
         return Err(error);
     }
-    crate::usage_events::notify_dashboard_invalidated();
+    invalidate();
     Ok(())
 }
 
@@ -750,9 +835,26 @@ pub async fn save_usage_provider_test_hook(
     state: &AppState,
     input: UsageProviderInput,
 ) -> Result<UsageProviderView, AppError> {
+    save_usage_provider_with_invalidation_test_hook(
+        state,
+        input,
+        crate::usage_events::notify_dashboard_invalidated,
+    )
+    .await
+}
+
+async fn save_usage_provider_with_invalidation_test_hook<I>(
+    state: &AppState,
+    input: UsageProviderInput,
+    invalidate: I,
+) -> Result<UsageProviderView, AppError>
+where
+    I: FnOnce(),
+{
     let mut provider = state.db.save_usage_provider(&input)?;
     let bindings_by_provider = verified_bindings_by_provider(state).await?;
     hydrate_provider_bindings(&mut provider, &bindings_by_provider);
+    invalidate();
     Ok(provider)
 }
 
@@ -761,7 +863,26 @@ pub fn set_usage_provider_enabled_test_hook(
     provider_id: &str,
     enabled: bool,
 ) -> Result<(), AppError> {
-    state.db.set_usage_provider_enabled(provider_id, enabled)
+    set_usage_provider_enabled_with_invalidation_test_hook(
+        state,
+        provider_id,
+        enabled,
+        crate::usage_events::notify_dashboard_invalidated,
+    )
+}
+
+fn set_usage_provider_enabled_with_invalidation_test_hook<I>(
+    state: &AppState,
+    provider_id: &str,
+    enabled: bool,
+    invalidate: I,
+) -> Result<(), AppError>
+where
+    I: FnOnce(),
+{
+    state.db.set_usage_provider_enabled(provider_id, enabled)?;
+    invalidate();
+    Ok(())
 }
 
 pub fn get_route_bindings_test_hook(state: &AppState) -> Result<Vec<RouteBinding>, AppError> {
@@ -843,7 +964,39 @@ pub async fn refresh_provider_quota_test_hook(
     state: &AppState,
     provider_id: &str,
 ) -> Result<QuotaRefreshResult, AppError> {
-    state.quota_service.refresh_provider(provider_id).await
+    refresh_provider_quota_with_sinks_test_hook(state, provider_id, |_| {}, || {}, Local::now).await
+}
+
+pub(crate) async fn refresh_provider_quota_with_sinks_test_hook<P, I, N>(
+    state: &AppState,
+    provider_id: &str,
+    publish: P,
+    invalidate: I,
+    completion_now: N,
+) -> Result<QuotaRefreshResult, AppError>
+where
+    P: Fn(&TrayUsageSnapshot) + Send + Sync,
+    I: FnOnce(),
+    N: FnOnce() -> DateTime<Local>,
+{
+    match state.quota_service.refresh_provider(provider_id).await {
+        Ok(result) => {
+            state
+                .tray_usage_service
+                .rebuild_from_persisted(publish)
+                .await;
+            invalidate();
+            Ok(result)
+        }
+        Err(error) => {
+            state
+                .tray_usage_service
+                .mark_refresh_failed_at(completion_now().timestamp(), publish)
+                .await;
+            invalidate();
+            Err(error)
+        }
+    }
 }
 
 pub fn sync_provider_session_usage_test_hook(
@@ -939,7 +1092,9 @@ mod tests {
         CostSource, TokenSource, UsageEvent, UsageProviderInput,
     };
     use crate::usage::quota::{QuotaCollector, QuotaService};
+    use crate::usage::status::UsageStatus;
     use crate::usage::system_providers::MANAGED_CODEX_QUOTA_SOURCE;
+    use chrono::{Local, TimeZone};
     use futures::future::BoxFuture;
     use serde_json::json;
     use std::collections::HashMap;
@@ -1015,6 +1170,57 @@ mod tests {
                             name: TIER_SEVEN_DAY.to_string(),
                             utilization: 35.0,
                             resets_at: Some("2026-07-23T00:00:00Z".to_string()),
+                            used_value_usd: None,
+                            max_value_usd: None,
+                        },
+                    ],
+                    extra_usage: None,
+                    error: None,
+                    queried_at: Some(1),
+                })
+            })
+        }
+    }
+
+    const QUOTA_FAILURE_SENTINEL: &str =
+        "provider-error-secret-sentinel /Users/example/private/quota.json";
+
+    #[derive(Default)]
+    struct CriticalThenFailingQuotaCollector {
+        calls: AtomicUsize,
+    }
+
+    impl QuotaCollector for CriticalThenFailingQuotaCollector {
+        fn source(&self) -> &'static str {
+            MANAGED_CODEX_QUOTA_SOURCE
+        }
+
+        fn collect<'a>(
+            &'a self,
+            _provider: &'a crate::usage::domain::UsageProviderStored,
+        ) -> BoxFuture<'a, Result<SubscriptionQuota, String>> {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move {
+                if call > 0 {
+                    return Err(QUOTA_FAILURE_SENTINEL.to_string());
+                }
+                Ok(SubscriptionQuota {
+                    tool: MANAGED_CODEX_QUOTA_SOURCE.to_string(),
+                    credential_status: CredentialStatus::Valid,
+                    credential_message: None,
+                    success: true,
+                    tiers: vec![
+                        QuotaTier {
+                            name: TIER_FIVE_HOUR.to_string(),
+                            utilization: 95.0,
+                            resets_at: Some("2100-01-01T00:00:00Z".to_string()),
+                            used_value_usd: None,
+                            max_value_usd: None,
+                        },
+                        QuotaTier {
+                            name: TIER_SEVEN_DAY.to_string(),
+                            utilization: 95.0,
+                            resets_at: Some("2100-01-02T00:00:00Z".to_string()),
                             used_value_usd: None,
                             max_value_usd: None,
                         },
@@ -1968,34 +2174,308 @@ mod tests {
         assert!(!usage.shared_account);
     }
 
-    #[test]
-    fn every_binding_and_key_mutation_hook_invalidates_the_global_dashboard() {
-        let source = include_str!("usage_dashboard.rs");
-        let production = source.split("#[cfg(test)]").next().unwrap();
-        let notifier = ["crate::usage_events::notify_", "dashboard_invalidated();"].concat();
-        assert_eq!(
-            production.matches(&notifier).count(),
-            12,
-            "module cleanup plus binding, local-key, and Provider-key mutations must each notify exactly once"
-        );
+    #[tokio::test]
+    async fn metadata_mutations_invalidate_once_only_after_success() {
+        let state = AppState::new(Arc::new(Database::memory().unwrap()));
+        let invalidations = Arc::new(AtomicUsize::new(0));
+
+        let created = save_dashboard_module_with_invalidation_test_hook(
+            &state,
+            AgentModuleInput {
+                id: None,
+                name: "Notification Agent".to_string(),
+                sort_order: 5,
+                visible: true,
+            },
+            {
+                let invalidations = invalidations.clone();
+                move || {
+                    invalidations.fetch_add(1, Ordering::SeqCst);
+                }
+            },
+        )
+        .unwrap();
+
+        let mut ids = state
+            .db
+            .list_dashboard_modules()
+            .unwrap()
+            .into_iter()
+            .map(|module| module.id)
+            .collect::<Vec<_>>();
+        ids.reverse();
+        reorder_dashboard_modules_with_invalidation_test_hook(&state, ids, {
+            let invalidations = invalidations.clone();
+            move || {
+                invalidations.fetch_add(1, Ordering::SeqCst);
+            }
+        })
+        .unwrap();
+
+        set_dashboard_module_visibility_with_invalidation_test_hook(&state, &created.id, false, {
+            let invalidations = invalidations.clone();
+            move || {
+                invalidations.fetch_add(1, Ordering::SeqCst);
+            }
+        })
+        .unwrap();
+
+        save_usage_provider_with_invalidation_test_hook(
+            &state,
+            direct_provider("metadata-notification-provider"),
+            {
+                let invalidations = invalidations.clone();
+                move || {
+                    invalidations.fetch_add(1, Ordering::SeqCst);
+                }
+            },
+        )
+        .await
+        .unwrap();
+
+        set_usage_provider_enabled_with_invalidation_test_hook(
+            &state,
+            "metadata-notification-provider",
+            false,
+            {
+                let invalidations = invalidations.clone();
+                move || {
+                    invalidations.fetch_add(1, Ordering::SeqCst);
+                }
+            },
+        )
+        .unwrap();
+
+        assert_eq!(invalidations.load(Ordering::SeqCst), 5);
     }
 
-    #[test]
-    fn every_successful_custom_agent_delete_reaches_invalidation() {
-        let source = include_str!("usage_dashboard.rs");
-        let delete_hook = source
-            .split("pub async fn delete_dashboard_module_test_hook")
-            .nth(1)
-            .unwrap()
-            .split("pub async fn list_agent_provider_bindings_test_hook")
-            .next()
+    #[tokio::test]
+    async fn failed_metadata_mutations_do_not_invalidate() {
+        let state = AppState::new(Arc::new(Database::memory().unwrap()));
+        let invalidations = Arc::new(AtomicUsize::new(0));
+
+        let invalidator = || {
+            let invalidations = invalidations.clone();
+            move || {
+                invalidations.fetch_add(1, Ordering::SeqCst);
+            }
+        };
+        save_dashboard_module_with_invalidation_test_hook(
+            &state,
+            AgentModuleInput {
+                id: None,
+                name: "  ".to_string(),
+                sort_order: 5,
+                visible: true,
+            },
+            invalidator(),
+        )
+        .unwrap_err();
+        reorder_dashboard_modules_with_invalidation_test_hook(
+            &state,
+            vec!["codex".to_string()],
+            invalidator(),
+        )
+        .unwrap_err();
+        set_dashboard_module_visibility_with_invalidation_test_hook(
+            &state,
+            "missing-agent",
+            false,
+            invalidator(),
+        )
+        .unwrap_err();
+        save_usage_provider_with_invalidation_test_hook(
+            &state,
+            direct_provider(CHATGPT_SUBSCRIPTION_ID),
+            invalidator(),
+        )
+        .await
+        .unwrap_err();
+        set_usage_provider_enabled_with_invalidation_test_hook(
+            &state,
+            "missing-provider",
+            false,
+            invalidator(),
+        )
+        .unwrap_err();
+
+        assert_eq!(invalidations.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn custom_agent_delete_invalidates_once_and_failed_delete_does_not() {
+        let state = AppState::new(Arc::new(Database::memory().unwrap()));
+        let custom = state
+            .db
+            .save_dashboard_module(&AgentModuleInput {
+                id: None,
+                name: "Delete Notification Agent".to_string(),
+                sort_order: 5,
+                visible: true,
+            })
+            .unwrap();
+        let invalidations = Arc::new(AtomicUsize::new(0));
+
+        delete_dashboard_module_with_invalidation_test_hook(&state, &custom.id, {
+            let invalidations = invalidations.clone();
+            move || {
+                invalidations.fetch_add(1, Ordering::SeqCst);
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(invalidations.load(Ordering::SeqCst), 1);
+
+        delete_dashboard_module_with_invalidation_test_hook(&state, "codex", {
+            let invalidations = invalidations.clone();
+            move || {
+                invalidations.fetch_add(1, Ordering::SeqCst);
+            }
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(invalidations.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn manual_provider_quota_success_rebuilds_publishes_and_event_invalidates_once() {
+        let db = Arc::new(Database::memory().unwrap());
+        db.reconcile_system_providers().unwrap();
+        let collector = Arc::new(CriticalThenFailingQuotaCollector::default());
+        let quota_service = Arc::new(QuotaService::with_collectors(
+            db.clone(),
+            vec![collector.clone()],
+        ));
+        let state = AppState::new_with_credential_store_and_quota_service(
+            db,
+            Arc::new(MemoryCredentialStore::default()),
+            quota_service,
+        );
+        let published = Arc::new(Mutex::new(Vec::new()));
+        let invalidations = Arc::new(AtomicUsize::new(0));
+
+        let result = refresh_provider_quota_with_sinks_test_hook(
+            &state,
+            CHATGPT_SUBSCRIPTION_ID,
+            {
+                let published = published.clone();
+                move |snapshot| published.lock().unwrap().push(snapshot.clone())
+            },
+            {
+                let invalidations = invalidations.clone();
+                move || {
+                    invalidations.fetch_add(1, Ordering::SeqCst);
+                }
+            },
+            || panic!("the completion clock is failure-only"),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(collector.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            result.snapshot.five_hour_utilization_percent.as_deref(),
+            Some("95")
+        );
+        let published = published.lock().unwrap();
+        assert_eq!(published.len(), 1);
+        assert_eq!(published[0].status, UsageStatus::Red);
+        assert!(!published[0].stale);
+        assert_eq!(invalidations.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn manual_provider_quota_failure_publishes_stale_preserved_alert_and_invalidates_once() {
+        let db = Arc::new(Database::memory().unwrap());
+        db.reconcile_system_providers().unwrap();
+        let collector = Arc::new(CriticalThenFailingQuotaCollector::default());
+        let quota_service = Arc::new(QuotaService::with_collectors(
+            db.clone(),
+            vec![collector.clone()],
+        ));
+        let state = AppState::new_with_credential_store_and_quota_service(
+            db,
+            Arc::new(MemoryCredentialStore::default()),
+            quota_service,
+        );
+        refresh_provider_quota_test_hook(&state, CHATGPT_SUBSCRIPTION_ID)
+            .await
+            .unwrap();
+        let before = state.tray_usage_service.cached_snapshot().await;
+        assert_eq!(before.status, UsageStatus::Red);
+        assert!(!before.stale);
+
+        let published = Arc::new(Mutex::new(Vec::new()));
+        let invalidations = Arc::new(AtomicUsize::new(0));
+        let completion_at = Local.timestamp_opt(2_000_000_000, 0).single().unwrap();
+        let error = refresh_provider_quota_with_sinks_test_hook(
+            &state,
+            CHATGPT_SUBSCRIPTION_ID,
+            {
+                let published = published.clone();
+                move |snapshot| published.lock().unwrap().push(snapshot.clone())
+            },
+            {
+                let invalidations = invalidations.clone();
+                move || {
+                    invalidations.fetch_add(1, Ordering::SeqCst);
+                }
+            },
+            move || completion_at,
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.to_string(), QUOTA_FAILURE_SENTINEL);
+        assert_eq!(collector.calls.load(Ordering::SeqCst), 2);
+        let published = published.lock().unwrap();
+        assert_eq!(published.len(), 1);
+        assert_eq!(published[0].status, before.status);
+        assert_eq!(published[0].agents, before.agents);
+        assert_eq!(published[0].last_success_at, before.last_success_at);
+        assert_eq!(published[0].generated_at, completion_at.timestamp());
+        assert!(published[0].stale);
+        assert_eq!(
+            published[0].refresh_error.as_deref(),
+            Some("tray_usage_refresh_failed")
+        );
+        assert_eq!(invalidations.load(Ordering::SeqCst), 1);
+        let serialized = serde_json::to_string(&published[0]).unwrap();
+        assert!(!serialized.contains(QUOTA_FAILURE_SENTINEL));
+        assert!(!serialized.contains("quota_config"));
+    }
+
+    #[tokio::test]
+    async fn tauri_quota_refresh_error_payload_hides_collector_secret() {
+        let db = Arc::new(Database::memory().unwrap());
+        db.reconcile_system_providers().unwrap();
+        let collector = Arc::new(CriticalThenFailingQuotaCollector::default());
+        let quota_service = Arc::new(QuotaService::with_collectors(
+            db.clone(),
+            vec![collector.clone()],
+        ));
+        let state = AppState::new_with_credential_store_and_quota_service(
+            db,
+            Arc::new(MemoryCredentialStore::default()),
+            quota_service,
+        );
+        refresh_provider_quota_test_hook(&state, CHATGPT_SUBSCRIPTION_ID)
+            .await
             .unwrap();
 
-        assert!(
-            !delete_hook.contains("return Ok(())"),
-            "hard-delete must not bypass the common successful-exit invalidation"
-        );
-        assert!(delete_hook
-            .contains("crate::usage_events::notify_dashboard_invalidated();\n    Ok(())"));
+        let internal_error = refresh_provider_quota_with_sinks_test_hook(
+            &state,
+            CHATGPT_SUBSCRIPTION_ID,
+            |_| {},
+            || {},
+            Local::now,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(internal_error.to_string(), QUOTA_FAILURE_SENTINEL);
+
+        let command_payload = quota_refresh_command_error_payload(internal_error);
+        assert_eq!(command_payload, "quota_refresh_failed");
+        assert!(!command_payload.contains(QUOTA_FAILURE_SENTINEL));
     }
 }
