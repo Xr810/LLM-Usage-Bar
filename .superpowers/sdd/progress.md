@@ -24,8 +24,8 @@ ledger is retained below as historical evidence.
 | --- | --- | --- | --- |
 | 1. Schema v18 and daily budget persistence | completed | `09ee7d39`, `85102743` | focused migration/DAO/backup/database and identity-startup tests pass; independent re-review approved |
 | 2. Usage severity policy | completed | `cfa60cad` | status 16/16, tray model 10/10, fmt/diff; independent review approved |
-| 3. Usage snapshot projection | in progress | — | status/window contract approved; RED/GREEN pending |
-| 4. Refresh orchestration and stale snapshot | pending | — | — |
+| 3. Usage snapshot projection | completed | `53f9e61e` | aggregation 1/1, tray 13/13, dashboard 11/11, status 16/16, DAO/commands/fmt/diff; independent review approved |
+| 4. Refresh orchestration and stale snapshot | in progress | — | refined TDD handoff prepared from live AppState/quota/session control flow |
 | 5. Real menu-bar dot assets | pending | — | — |
 | 6. macOS tray and popover window contract | pending | — | — |
 | 7. Popover renderer shell and payload | pending | — | — |
@@ -115,6 +115,32 @@ ledger is retained below as historical evidence.
 - Task 3 must convert the optional local-window result to `AppError` explicitly
   and retain `generated_at = now.timestamp()` rather than the `now + 1` query
   boundary.
+
+## Active Task 3 Evidence
+
+- Shared range aggregation preserves the dashboard's exact half-open query,
+  linked proxy/session duplicate exclusion, checked token/source counts, and
+  Decimal USD summation; the existing dashboard remains byte-for-byte stable
+  in its focused fixtures.
+- The persisted-state projector keeps Agent `(sort_order, id)` and Provider DAO
+  order, filters visible active Agents plus enabled Providers/bindings, and uses
+  requested `binding.enabled` rather than proxy-only `effective_enabled`.
+- Subscription quota ignores historical snapshots when no quota source is
+  configured. Percentages and reset timestamps are parsed before projection,
+  reset output is canonical UTC RFC3339, and all reasons are fixed codes.
+- Metered projection covers exact today/rolling-30-day Decimal costs, missing
+  budgets, zero/unavailable/estimated/partial cost quality, and a checked sum of
+  all four rolling token fields. Shared Providers remain Agent-scoped for usage.
+- Real database sentinels prove that raw quota payloads/fetch errors, route and
+  quota config, binding/provider credential metadata, and malformed utilization
+  or reset strings never enter the serialized tray DTO.
+- Fresh focused verification passes aggregation 1/1, tray snapshot 13/13,
+  dashboard 11/11, severity 16/16, related DAO 65/65, and usage-dashboard
+  commands 18/18, plus Rust format and diff checks. Independent review approved
+  `53f9e61e` with no Critical, Important, or Minor findings.
+- The execution-plan projector example now records `now.timestamp()` separately
+  from the exclusive `now + 1` query boundary and retains Provider DAO `Vec`
+  order, matching the independently approved implementation.
 
 ---
 

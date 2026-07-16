@@ -733,7 +733,11 @@ impl TrayUsageProjector {
         &self,
         now: DateTime<Local>,
     ) -> Result<TrayUsageSnapshot, AppError> {
-        let windows = TrayUsageWindows::from_local_now(now)?;
+        let generated_at = now.timestamp();
+        let windows = TrayUsageWindows::from_local_now(now)
+            .ok_or_else(|| AppError::Message(
+                "invalid_tray_usage_windows".to_string(),
+            ))?;
         let agents = self.db.list_agent_modules()?
             .into_iter()
             .filter(|agent| agent.visible && agent.archived_at.is_none())
@@ -741,8 +745,7 @@ impl TrayUsageProjector {
         let providers = self.db.list_usage_providers()?
             .into_iter()
             .filter(|provider| provider.enabled)
-            .map(|provider| (provider.id.clone(), provider))
-            .collect::<BTreeMap<_, _>>();
+            .collect::<Vec<_>>();
         let bindings = self.db.list_agent_provider_bindings(None)?
             .into_iter()
             .filter(|binding| binding.enabled)
@@ -754,8 +757,8 @@ impl TrayUsageProjector {
 
         Ok(TrayUsageSnapshot {
             status: worst_status(projected_agent_statuses),
-            generated_at: windows.end_at,
-            last_success_at: Some(windows.end_at),
+            generated_at,
+            last_success_at: Some(generated_at),
             stale: false,
             refresh_error: None,
             refresh_in_progress: false,
