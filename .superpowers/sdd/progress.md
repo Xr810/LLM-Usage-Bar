@@ -26,8 +26,8 @@ ledger is retained below as historical evidence.
 | 2. Usage severity policy | completed | `cfa60cad` | status 16/16, tray model 10/10, fmt/diff; independent review approved |
 | 3. Usage snapshot projection | completed | `53f9e61e` | aggregation 1/1, tray 13/13, dashboard 11/11, status 16/16, DAO/commands/fmt/diff; independent review approved |
 | 4. Refresh orchestration and stale snapshot | completed | `e0d1c49a` | service 14/14, store 3/3, quota 13/13, session 9/9, fmt/diff; independent review approved |
-| 5. Real menu-bar dot assets | in progress | — | live tray/event/asset handoff being finalized |
-| 6. macOS tray and popover window contract | pending | — | — |
+| 5. Real menu-bar dot assets and refresh publication | completed | `61d31ad4`, `62017929` | focused command/event/quota/scheduler/store/service suites, integration, strict Clippy, fmt/diff; independent re-review approved |
+| 6. macOS tray and popover window contract | in progress | — | backend lifecycle implementation starting |
 | 7. Popover renderer shell and payload | pending | — | — |
 | 8. Compact usage popover UI | pending | — | — |
 | 9. Daily budget settings | pending | — | — |
@@ -169,6 +169,28 @@ ledger is retained below as historical evidence.
 - Follow-up `96eee32a` scopes the managed quota constant to tests. The relevant
   command suite passes 18/18 and strict library Clippy with `-D warnings` is
   restored, alongside Rust format and diff checks.
+
+## Active Task 5 Evidence
+
+- Four generated 18x18 RGBA macOS assets provide exact green, yellow, red, and
+  neutral status dots. One publisher applies icon, accessible tooltip, and the
+  renderer-safe snapshot event from the same status value; non-macOS icon
+  behavior remains unchanged.
+- Cache-only read, guarded refresh, and daily-budget commands publish in commit
+  order. Direct rebuild paths emit only the dashboard unit event, while normal
+  metadata/log mutations use an independent 200ms persisted-projection debounce.
+- Quota outcomes are sanitized and awaited by the scheduler, including clock
+  and top-level failures. The local-midnight loop derives calendar boundaries,
+  caps polling at 15 minutes, handles short/long days, and cancels both waits and
+  in-flight rebuilds.
+- Exit cleanup detaches scheduler handles and clones owned services before any
+  await. Manual quota command errors map to the fixed `quota_refresh_failed`
+  renderer payload; injected collector/config sentinels remain absent from DTOs,
+  events, logs, and command errors.
+- Fresh verification passes quota 18/18, midnight scheduler 10/10, Store 5/5,
+  dashboard commands 22/22, usage events 19/19, tray commands 5/5, related tray
+  service 24/24, and integration 4/4, plus strict Clippy, Rust format, and diff
+  checks. Independent re-review approved with no remaining findings.
 
 ---
 
