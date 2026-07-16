@@ -226,6 +226,7 @@ pub struct UsageProviderStored {
     pub created_at: i64,
     pub updated_at: i64,
     pub system_preset_key: Option<String>,
+    pub daily_budget_usd: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -256,6 +257,7 @@ pub struct UsageProviderView {
     pub can_clear_upstream_credential: bool,
     pub last_connection_test_at: Option<i64>,
     pub last_connection_test_status: Option<String>,
+    pub daily_budget_usd: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

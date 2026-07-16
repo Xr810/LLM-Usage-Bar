@@ -1580,7 +1580,7 @@ mod migration_v16_to_v17 {
         )
         .expect("migrate v16 to v17");
 
-        assert_eq!(Database::get_user_version(&conn).unwrap(), 17);
+        assert_eq!(Database::get_user_version(&conn).unwrap(), SCHEMA_VERSION);
 
         let system_rows = conn
             .prepare(
@@ -1985,18 +1985,178 @@ mod migration_v16_to_v17 {
     }
 
     #[test]
-    fn migration_continues_from_v12_through_complete_v17() {
+    fn migration_continues_from_v12_through_complete_v18() {
         let conn = super::true_v12_usage_fixture();
         Database::apply_schema_migrations_on_conn_with_roots(
             &conn,
             &super::migration_v15_to_v16::roots(),
         )
-        .expect("migrate continuously from v12 through v17");
-        assert_eq!(Database::get_user_version(&conn).unwrap(), 17);
+        .expect("migrate continuously from v12 through v18");
+        assert_eq!(Database::get_user_version(&conn).unwrap(), SCHEMA_VERSION);
         assert!(Database::has_column(&conn, "usage_providers", "system_preset_key").unwrap());
+        assert!(Database::has_column(&conn, "usage_providers", "daily_budget_usd").unwrap());
         assert!(Database::has_column(&conn, "agent_provider_bindings", "route_protocol").unwrap());
         assert!(Database::table_exists(&conn, "provider_api_credentials").unwrap());
         assert!(Database::table_exists(&conn, "provider_credential_operations").unwrap());
+    }
+}
+
+mod migration_v17_to_v18 {
+    use super::*;
+    use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+
+    fn v17_usage_fixture() -> Connection {
+        let conn = super::migration_v15_to_v16::v15_usage_fixture();
+        crate::usage::agent_module_migration::migrate_v15_to_v16(&conn)
+            .expect("create complete v16 fixture");
+        Database::set_user_version(&conn, 16).expect("set v16 fixture version");
+        crate::usage::system_provider_migration::migrate_v16_to_v17(&conn)
+            .expect("create complete v17 fixture");
+        Database::set_user_version(&conn, 17).expect("set v17 fixture version");
+        crate::usage::system_provider_migration::validate_schema_v17_complete(&conn)
+            .expect("validate complete v17 fixture");
+        conn
+    }
+
+    #[test]
+    fn migration_v17_to_v18_adds_nullable_daily_budget_and_reconciliation_preserves_it() {
+        let conn = v17_usage_fixture();
+        conn.execute(
+            "INSERT INTO usage_providers (
+                 id, name, billing_kind, product_group_id, token_sources,
+                 quota_source, quota_interval_seconds, route_app_type, route_config,
+                 quota_config, enabled, needs_review, legacy_app_type,
+                 legacy_provider_id, created_at, updated_at
+             ) VALUES (
+                 'custom-metered', 'Custom Metered', 'metered', 'custom-metered',
+                 '[\"proxy\"]', NULL, NULL, NULL, NULL, NULL,
+                 1, 0, NULL, NULL, 41, 42
+             )",
+            [],
+        )
+        .expect("insert custom v17 Provider");
+        crate::usage::system_provider_migration::reconcile_system_provider_catalog(&conn)
+            .expect("reconcile v17 system Provider catalog");
+
+        Database::apply_schema_migrations_on_conn_with_roots(
+            &conn,
+            &super::migration_v15_to_v16::roots(),
+        )
+        .expect("migrate v17 to v18");
+
+        assert_eq!(Database::get_user_version(&conn).unwrap(), 18);
+        assert!(Database::has_column(&conn, "usage_providers", "daily_budget_usd").unwrap());
+        assert_eq!(
+            conn.query_row(
+                "SELECT upper(type), \"notnull\", dflt_value
+                 FROM pragma_table_info('usage_providers')
+                 WHERE name = 'daily_budget_usd'",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                },
+            )
+            .unwrap(),
+            ("TEXT".to_string(), 0, None),
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT daily_budget_usd FROM usage_providers WHERE id = 'custom-metered'",
+                [],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .unwrap(),
+            None,
+        );
+
+        conn.execute(
+            "UPDATE usage_providers SET daily_budget_usd = '25.5'
+             WHERE id = 'system-openai-api'",
+            [],
+        )
+        .unwrap();
+        crate::usage::system_provider_migration::reconcile_system_provider_catalog(&conn)
+            .expect("reconcile v18 system Provider catalog");
+        assert_eq!(
+            conn.query_row(
+                "SELECT daily_budget_usd FROM usage_providers
+                 WHERE id = 'system-openai-api'",
+                [],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .unwrap(),
+            Some("25.5".to_string()),
+        );
+    }
+
+    #[test]
+    fn migration_v17_to_v18_rolls_back_column_and_version_on_failure() {
+        let conn = v17_usage_fixture();
+        conn.authorizer(Some(|context: AuthContext<'_>| match context.action {
+            AuthAction::Pragma {
+                pragma_name: "user_version",
+                pragma_value: Some("18"),
+            } => Authorization::Deny,
+            _ => Authorization::Allow,
+        }))
+        .expect("install forced v18 migration failure");
+
+        let error = crate::usage::budget_migration::migrate_v17_to_v18(&conn)
+            .expect_err("forced v18 migration failure must roll back");
+
+        conn.authorizer(None::<fn(AuthContext<'_>) -> Authorization>)
+            .expect("clear forced v18 migration failure");
+        assert!(error.to_string().contains("not authorized"), "{error}");
+        assert_eq!(Database::get_user_version(&conn).unwrap(), 17);
+        assert!(!Database::has_column(&conn, "usage_providers", "daily_budget_usd").unwrap());
+    }
+
+    #[test]
+    fn migration_chain_rolls_back_to_v0_when_v18_step_fails() {
+        let conn = Connection::open_in_memory().expect("open v0 fixture");
+        conn.execute_batch("PRAGMA foreign_keys = ON;")
+            .expect("enable foreign keys");
+        Database::create_tables_on_conn(&conn).expect("create application tables");
+        assert_eq!(Database::get_user_version(&conn).unwrap(), 0);
+        conn.authorizer(Some(|context: AuthContext<'_>| match context.action {
+            AuthAction::Pragma {
+                pragma_name: "user_version",
+                pragma_value: Some("18"),
+            } => Authorization::Deny,
+            _ => Authorization::Allow,
+        }))
+        .expect("install forced v18 chain failure");
+
+        let error = Database::apply_schema_migrations_on_conn_with_roots(
+            &conn,
+            &super::migration_v15_to_v16::roots(),
+        )
+        .expect_err("forced v18 chain failure must roll back every migration");
+
+        conn.authorizer(None::<fn(AuthContext<'_>) -> Authorization>)
+            .expect("clear forced v18 chain failure");
+        assert!(error.to_string().contains("not authorized"), "{error}");
+        assert_eq!(Database::get_user_version(&conn).unwrap(), 0);
+        assert!(!Database::has_column(&conn, "usage_providers", "daily_budget_usd").unwrap());
+    }
+
+    #[test]
+    fn current_v18_validator_rejects_database_missing_daily_budget_column() {
+        let conn = v17_usage_fixture();
+        Database::set_user_version(&conn, 18).expect("claim incomplete v18 schema");
+
+        let error = Database::apply_schema_migrations_on_conn_with_roots(
+            &conn,
+            &super::migration_v15_to_v16::roots(),
+        )
+        .expect_err("v18 completeness validation must fail closed");
+
+        assert!(error.to_string().contains("incomplete schema v18"));
+        assert!(!Database::has_column(&conn, "usage_providers", "daily_budget_usd").unwrap());
     }
 }
 

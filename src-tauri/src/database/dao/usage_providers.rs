@@ -7,8 +7,10 @@ use crate::usage::domain::{
 };
 use crate::usage::system_providers::{system_binding_route_protocol, system_provider_definitions};
 use rusqlite::{params, types::Type, OptionalExtension, Row};
+use rust_decimal::Decimal;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
 use url::Url;
 
@@ -19,6 +21,15 @@ fn now_timestamp() -> Result<i64, AppError> {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs() as i64)
         .map_err(|error| AppError::Database(format!("system clock before unix epoch: {error}")))
+}
+
+fn canonicalize_daily_budget(raw: &str) -> Result<String, AppError> {
+    let value = Decimal::from_str(raw.trim())
+        .map_err(|_| AppError::Message("invalid_daily_budget".to_string()))?;
+    if value <= Decimal::ZERO {
+        return Err(AppError::Message("invalid_daily_budget".to_string()));
+    }
+    Ok(value.normalize().to_string())
 }
 
 fn billing_kind_value(kind: BillingKind) -> &'static str {
@@ -62,13 +73,14 @@ fn provider_from_row(row: &Row<'_>) -> rusqlite::Result<UsageProviderStored> {
         created_at: row.get(14)?,
         updated_at: row.get(15)?,
         system_preset_key: row.get(16)?,
+        daily_budget_usd: row.get(17)?,
     })
 }
 
 const PROVIDER_COLUMNS: &str = "id, name, billing_kind, product_group_id, token_sources,
     quota_source, quota_interval_seconds, route_app_type, route_config, quota_config,
     enabled, needs_review, legacy_app_type, legacy_provider_id, created_at, updated_at,
-    system_preset_key";
+    system_preset_key, daily_budget_usd";
 
 const PROVIDER_ORDER_BY: &str = "CASE system_preset_key
     WHEN 'chatgpt-subscription' THEN 0
@@ -252,6 +264,11 @@ fn provider_view(
         .system_preset_key
         .as_ref()
         .and(route_base_url.clone());
+    let daily_budget_usd = provider
+        .daily_budget_usd
+        .as_deref()
+        .map(canonicalize_daily_budget)
+        .transpose()?;
 
     Ok(UsageProviderView {
         id: provider.id.clone(),
@@ -281,6 +298,7 @@ fn provider_view(
         can_clear_upstream_credential: credential_configured,
         last_connection_test_at: credential_metadata.last_test_at,
         last_connection_test_status: credential_metadata.last_test_status,
+        daily_budget_usd,
     })
 }
 
@@ -477,6 +495,48 @@ impl Database {
         let bindings = source_bindings_for_provider(&transaction, &input.id)?;
         let agent_bindings = bindings_for_provider_on_conn(&transaction, &input.id)?;
         let view = provider_view(&transaction, &stored, bindings, agent_bindings)?;
+        transaction.commit()?;
+        Ok(view)
+    }
+
+    pub fn set_provider_daily_budget(
+        &self,
+        provider_id: &str,
+        value: Option<&str>,
+    ) -> Result<UsageProviderView, AppError> {
+        let canonical = value.map(canonicalize_daily_budget).transpose()?;
+        let mut conn = lock_conn!(self.conn);
+        let transaction = conn.transaction()?;
+        let billing_kind = transaction
+            .query_row(
+                "SELECT billing_kind FROM usage_providers WHERE id = ?1",
+                [provider_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .ok_or_else(|| AppError::Message("usage_provider_not_found".to_string()))?;
+        if billing_kind != "metered" {
+            return Err(AppError::Message(
+                "daily_budget_requires_metered_provider".to_string(),
+            ));
+        }
+        transaction.execute(
+            "UPDATE usage_providers
+             SET daily_budget_usd = ?2, updated_at = ?3
+             WHERE id = ?1",
+            params![provider_id, canonical, now_timestamp()?],
+        )?;
+        let stored = transaction.query_row(
+            &format!("SELECT {PROVIDER_COLUMNS} FROM usage_providers WHERE id = ?1"),
+            [provider_id],
+            provider_from_row,
+        )?;
+        let view = provider_view(
+            &transaction,
+            &stored,
+            source_bindings_for_provider(&transaction, provider_id)?,
+            bindings_for_provider_on_conn(&transaction, provider_id)?,
+        )?;
         transaction.commit()?;
         Ok(view)
     }
@@ -709,6 +769,147 @@ mod tests {
             quota_config: Some(json!({"access_token": "quota-secret"})),
             enabled: true,
         }
+    }
+
+    #[test]
+    fn daily_budget_canonicalizes_positive_decimals_and_clears() {
+        let db = Database::memory().unwrap();
+        db.save_usage_provider(&provider(
+            "metered",
+            BillingKind::Metered,
+            vec![TokenSource::Proxy],
+        ))
+        .unwrap();
+
+        for (raw, canonical) in [("1", "1"), ("001.2500", "1.25"), ("0.000001", "0.000001")] {
+            let view = db.set_provider_daily_budget("metered", Some(raw)).unwrap();
+            assert_eq!(view.daily_budget_usd.as_deref(), Some(canonical));
+        }
+
+        assert_eq!(
+            db.set_provider_daily_budget("metered", None)
+                .unwrap()
+                .daily_budget_usd,
+            None,
+        );
+        assert_eq!(
+            db.get_usage_provider("metered")
+                .unwrap()
+                .unwrap()
+                .daily_budget_usd,
+            None,
+        );
+    }
+
+    #[test]
+    fn daily_budget_rejects_invalid_values_and_subscription_providers() {
+        let db = Database::memory().unwrap();
+        db.save_usage_provider(&provider(
+            "metered",
+            BillingKind::Metered,
+            vec![TokenSource::Proxy],
+        ))
+        .unwrap();
+        db.save_usage_provider(&provider(
+            "subscription",
+            BillingKind::Subscription,
+            vec![TokenSource::SessionLog],
+        ))
+        .unwrap();
+
+        for raw in ["", "0", "-1", "NaN", "inf", "1e999999"] {
+            assert!(
+                db.set_provider_daily_budget("metered", Some(raw)).is_err(),
+                "{raw}"
+            );
+        }
+        assert!(db
+            .set_provider_daily_budget("subscription", Some("20"))
+            .is_err());
+        assert_eq!(
+            db.get_usage_provider("metered")
+                .unwrap()
+                .unwrap()
+                .daily_budget_usd,
+            None,
+        );
+    }
+
+    #[test]
+    fn provider_save_preserves_daily_budget_and_safe_view_redacts_quota_config() {
+        let db = Database::memory().unwrap();
+        let mut input = provider("metered", BillingKind::Metered, vec![TokenSource::Proxy]);
+        input.quota_config = Some(json!({
+            "access_token": "daily-budget-quota-secret-sentinel"
+        }));
+        db.save_usage_provider(&input).unwrap();
+        db.set_provider_daily_budget("metered", Some("9.5"))
+            .unwrap();
+
+        input.name = "Changed without budget input".to_string();
+        input.quota_config = None;
+        let view = db.save_usage_provider(&input).unwrap();
+        assert_eq!(view.daily_budget_usd.as_deref(), Some("9.5"));
+        assert_eq!(
+            db.get_usage_provider("metered")
+                .unwrap()
+                .unwrap()
+                .daily_budget_usd
+                .as_deref(),
+            Some("9.5"),
+        );
+
+        let serialized = serde_json::to_value(&view).unwrap();
+        assert_eq!(serialized["dailyBudgetUsd"], json!("9.5"));
+        assert!(serialized.get("quotaConfig").is_none());
+        assert!(!serialized
+            .to_string()
+            .contains("daily-budget-quota-secret-sentinel"));
+        assert!(serde_json::to_value(&input)
+            .unwrap()
+            .get("dailyBudgetUsd")
+            .is_none());
+    }
+
+    #[test]
+    fn safe_provider_view_normalizes_persisted_budget_and_rejects_invalid_rows() {
+        let db = Database::memory().unwrap();
+        db.save_usage_provider(&provider(
+            "metered",
+            BillingKind::Metered,
+            vec![TokenSource::Proxy],
+        ))
+        .unwrap();
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE usage_providers SET daily_budget_usd = '001.2500'
+                 WHERE id = 'metered'",
+                [],
+            )
+            .unwrap();
+        }
+        let view = db
+            .list_usage_providers()
+            .unwrap()
+            .into_iter()
+            .find(|provider| provider.id == "metered")
+            .unwrap();
+        assert_eq!(view.daily_budget_usd.as_deref(), Some("1.25"));
+
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE usage_providers SET daily_budget_usd = 'not-a-budget'
+                 WHERE id = 'metered'",
+                [],
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            db.list_usage_providers().unwrap_err().to_string(),
+            "invalid_daily_budget"
+        );
     }
 
     #[test]

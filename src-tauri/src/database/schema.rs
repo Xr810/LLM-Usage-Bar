@@ -555,6 +555,13 @@ impl Database {
                         crate::usage::system_provider_migration::migrate_v16_to_v17(conn)?;
                         Self::set_user_version(conn, 17)?;
                     }
+                    17 => {
+                        log::info!("迁移数据库从 v17 到 v18（添加 Provider 每日用量预算）");
+                        crate::usage::system_provider_migration::validate_schema_v17_complete(
+                            conn,
+                        )?;
+                        crate::usage::budget_migration::migrate_v17_to_v18(conn)?;
+                    }
                     _ => {
                         return Err(AppError::Database(format!(
                             "未知的数据库版本 {version}，无法迁移到 {SCHEMA_VERSION}"
@@ -567,8 +574,11 @@ impl Database {
                 Self::validate_schema_v15_complete(conn)?;
                 crate::usage::agent_module_migration::validate_schema_v16_complete(conn)?;
             }
-            if version == 17 {
+            if version >= 17 {
                 crate::usage::system_provider_migration::validate_schema_v17_complete(conn)?;
+            }
+            if version == 18 {
+                crate::usage::budget_migration::validate_schema_v18_complete(conn)?;
             }
             Ok(())
         })();

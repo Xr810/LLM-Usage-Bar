@@ -1256,6 +1256,7 @@ mod tests {
     use crate::error::AppError;
     use crate::product_identity::DATABASE_FILE;
     use crate::settings::{update_settings, AppSettings};
+    use crate::usage::domain::{BillingKind, TokenSource, UsageProviderInput};
     use rusqlite::params;
     use serial_test::serial;
     use std::ffi::OsString;
@@ -2309,6 +2310,55 @@ mod tests {
 
         assert!(sql.starts_with(&format!("{LLM_USAGE_BAR_SQL_EXPORT_HEADER}\n")));
         assert!(!sql.starts_with(&format!("{LEGACY_CC_SWITCH_SQL_EXPORT_HEADER}\n")));
+        Ok(())
+    }
+
+    #[test]
+    fn provider_daily_budgets_round_trip_through_production_sql_backup() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        db.conn.lock().unwrap().execute(
+            "INSERT INTO providers (id, app_type, name, settings_config, meta)
+             VALUES ('budget-backup-sentinel', 'claude', 'Budget Backup', '{}', '{}')",
+            [],
+        )?;
+        for id in ["backup-metered", "backup-metered-null"] {
+            db.save_usage_provider(&UsageProviderInput {
+                id: id.to_string(),
+                name: format!("Provider {id}"),
+                billing_kind: BillingKind::Metered,
+                product_group_id: "backup".to_string(),
+                token_sources: vec![TokenSource::Proxy],
+                session_source_bindings: None,
+                quota_source: None,
+                quota_interval_seconds: None,
+                route_app_type: None,
+                route_config: None,
+                quota_config: None,
+                enabled: true,
+            })?;
+        }
+        db.set_provider_daily_budget("backup-metered", Some("42.7500"))?;
+
+        let archive = db.export_sql_string()?;
+        assert!(archive.contains("\"daily_budget_usd\""));
+        let restored = Database::memory()?;
+        restored.import_sql_string(&archive)?;
+
+        assert_eq!(
+            restored
+                .get_usage_provider("backup-metered")?
+                .unwrap()
+                .daily_budget_usd
+                .as_deref(),
+            Some("42.75"),
+        );
+        assert_eq!(
+            restored
+                .get_usage_provider("backup-metered-null")?
+                .unwrap()
+                .daily_budget_usd,
+            None,
+        );
         Ok(())
     }
 
