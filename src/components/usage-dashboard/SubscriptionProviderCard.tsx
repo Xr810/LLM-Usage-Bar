@@ -38,8 +38,9 @@ export function SubscriptionProviderCard({
   isSyncingSessions = false,
 }: Props) {
   const { t, i18n } = useTranslation();
-  const quota = usage.quota;
-  const fetchState = usage.quotaFetchState;
+  const canRefreshQuota = Boolean(usage.provider.quotaSource);
+  const quota = canRefreshQuota ? usage.quota : null;
+  const fetchState = canRefreshQuota ? usage.quotaFetchState : null;
   const totalTokens =
     usage.inputTokens +
     usage.outputTokens +
@@ -214,16 +215,18 @@ export function SubscriptionProviderCard({
           </div>
         ) : null}
         <div className="flex flex-wrap gap-2">
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={isRefreshingQuota}
-            onClick={() => void onRefreshQuota(usage.provider.id)}
-          >
-            {t("usageDashboard.refreshQuota", {
-              defaultValue: "Refresh quota",
-            })}
-          </Button>
+          {canRefreshQuota ? (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={isRefreshingQuota}
+              onClick={() => void onRefreshQuota(usage.provider.id)}
+            >
+              {t("usageDashboard.refreshQuota", {
+                defaultValue: "Refresh quota",
+              })}
+            </Button>
+          ) : null}
           <Button
             size="sm"
             variant="outline"

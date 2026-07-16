@@ -1,4 +1,10 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentModuleView,
@@ -85,7 +91,7 @@ function provider(
     tokenSources: billingKind === "subscription" ? ["session_log"] : ["proxy"],
     sessionSourceBindings: billingKind === "subscription" ? ["codex"] : [],
     bindings: [],
-    quotaSource: billingKind === "subscription" ? "codex" : null,
+    quotaSource: billingKind === "subscription" ? "codex_oauth" : null,
     quotaIntervalSeconds: billingKind === "subscription" ? 300 : null,
     routeAppType: billingKind === "metered" ? "codex" : null,
     enabled: true,
@@ -310,5 +316,70 @@ describe("UsageDashboardPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Sync sessions" }));
     expect(await screen.findByText("session warning")).toBeInTheDocument();
     expect(await screen.findByText("session error")).toBeInTheDocument();
+  });
+
+  it("replaces repeated quota errors and clears them after a successful refresh", async () => {
+    mocks.dashboard.mockReturnValue({
+      data: dashboardData(),
+      isLoading: false,
+      error: new Error("dashboard failed"),
+    });
+    mocks.refreshQuota
+      .mockRejectedValueOnce(new Error("refresh failed"))
+      .mockRejectedValueOnce(new Error("refresh failed"))
+      .mockResolvedValueOnce({});
+    render(<UsageDashboardPage selectedAgent={codex} />);
+
+    const refreshButton = screen.getByRole("button", {
+      name: "Refresh quota",
+    });
+
+    await act(async () => {
+      fireEvent.click(refreshButton);
+      await Promise.resolve();
+    });
+    expect(
+      screen.getAllByRole("alert", { name: "refresh failed" }),
+    ).toHaveLength(1);
+
+    await act(async () => {
+      fireEvent.click(refreshButton);
+      await Promise.resolve();
+    });
+    expect(
+      screen.getAllByRole("alert", { name: "refresh failed" }),
+    ).toHaveLength(1);
+
+    await act(async () => {
+      fireEvent.click(refreshButton);
+      await Promise.resolve();
+    });
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("alert", { name: "refresh failed" }),
+      ).toBeNull(),
+    );
+    expect(
+      screen.getByRole("alert", { name: "dashboard failed" }),
+    ).toBeInTheDocument();
+  });
+
+  it("deduplicates matching query and action errors", async () => {
+    mocks.dashboard.mockReturnValue({
+      data: dashboardData(),
+      isLoading: false,
+      error: new Error("shared failure"),
+    });
+    mocks.refreshQuota.mockRejectedValueOnce(new Error("shared failure"));
+    render(<UsageDashboardPage selectedAgent={codex} />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Refresh quota" }));
+      await Promise.resolve();
+    });
+
+    expect(
+      screen.getAllByRole("alert", { name: "shared failure" }),
+    ).toHaveLength(1);
   });
 });

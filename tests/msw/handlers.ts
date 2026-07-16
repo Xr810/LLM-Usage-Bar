@@ -160,7 +160,7 @@ const initialUsageProvidersFixture: UsageProviderView[] = [
         updatedAt: 1,
       },
     ],
-    quotaSource: "codex",
+    quotaSource: "codex_oauth",
     quotaIntervalSeconds: 300,
     routeAppType: "codex",
     enabled: true,

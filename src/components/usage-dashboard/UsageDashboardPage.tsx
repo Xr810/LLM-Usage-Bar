@@ -71,10 +71,13 @@ export function UsageDashboardPage({
     const operationAgentId = selectedAgentId;
     try {
       await operation();
+      if (activeAgentId.current !== operationAgentId) return;
+      setFeedbackAgentId(operationAgentId);
+      setErrors([]);
     } catch (cause) {
       if (activeAgentId.current !== operationAgentId) return;
       setFeedbackAgentId(operationAgentId);
-      setErrors((current) => [...current, errorText(cause)]);
+      setErrors([errorText(cause)]);
     }
   };
   const sync = async (providerId: string) => {
@@ -94,6 +97,10 @@ export function UsageDashboardPage({
   };
 
   const queryErrors = dashboard.error ? [errorText(dashboard.error)] : [];
+  const renderedErrors = [
+    ...queryErrors,
+    ...(feedbackAgentId === selectedAgentId ? errors : []),
+  ].filter((message, index, messages) => messages.indexOf(message) === index);
 
   return (
     <div className="space-y-4 pb-6">
@@ -132,12 +139,9 @@ export function UsageDashboardPage({
           <AlertDescription>{warning}</AlertDescription>
         </Alert>
       ))}
-      {[
-        ...queryErrors,
-        ...(feedbackAgentId === selectedAgentId ? errors : []),
-      ].map((message, index) => (
+      {renderedErrors.map((message) => (
         <Alert
-          key={`${message}-${index}`}
+          key={message}
           variant="destructive"
           aria-label={message}
         >

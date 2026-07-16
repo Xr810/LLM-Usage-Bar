@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderUsageView } from "@/types/usageDashboard";
 import { SubscriptionProviderCard } from "./SubscriptionProviderCard";
@@ -27,14 +27,14 @@ vi.mock("react-i18next", () => ({
 function subscriptionUsage(): ProviderUsageView {
   return {
     provider: {
-      id: "subscription",
-      name: "Subscription",
+      id: "system-chatgpt-subscription",
+      name: "ChatGPT Plus/Pro",
       billingKind: "subscription",
       productGroupId: "codex",
       tokenSources: ["session_log"],
       sessionSourceBindings: ["codex"],
       bindings: [],
-      quotaSource: "codex",
+      quotaSource: "codex_oauth",
       quotaIntervalSeconds: 300,
       routeAppType: null,
       enabled: true,
@@ -93,5 +93,72 @@ describe("SubscriptionProviderCard localized reset countdown", () => {
 
     expect(screen.getByText(/2 天 后/)).toBeInTheDocument();
     expect(screen.queryByText(/2d/)).toBeNull();
+  });
+
+  it("ignores stale quota payloads when quota collection is unavailable", () => {
+    const usage = subscriptionUsage();
+    usage.provider.id = "system-claude-subscription";
+    usage.provider.name = "Claude Pro/Max";
+    usage.provider.productGroupId = "claude-subscription";
+    usage.provider.sessionSourceBindings = ["claude"];
+    usage.provider.quotaSource = null;
+    usage.provider.quotaIntervalSeconds = null;
+    usage.provider.systemPresetKey = "claude-subscription";
+    usage.provider.systemAuthKind = "claude_cli";
+    usage.quota = {
+      ...usage.quota!,
+      fiveHourUtilizationPercent: "25",
+      sevenDayUtilizationPercent: "70",
+    };
+    usage.quotaFetchState = {
+      providerId: usage.provider.id,
+      lastAttemptAt: 10,
+      lastSuccessAt: 9,
+      lastError: "stale quota error",
+      stale: true,
+    };
+
+    render(
+      <SubscriptionProviderCard
+        usage={usage}
+        onRefreshQuota={vi.fn()}
+        onSyncSessions={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getAllByText(
+        "This subscription does not provide this quota window",
+      ),
+    ).toHaveLength(2);
+    expect(screen.queryByText("25% used")).toBeNull();
+    expect(screen.queryByText("70% used")).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Refresh quota" }),
+    ).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Sync sessions" }),
+    ).toBeInTheDocument();
+  });
+
+  it("refreshes ChatGPT quota through the managed Codex OAuth source", () => {
+    const usage = subscriptionUsage();
+    const onRefreshQuota = vi.fn().mockResolvedValue({});
+
+    render(
+      <SubscriptionProviderCard
+        usage={usage}
+        onRefreshQuota={onRefreshQuota}
+        onSyncSessions={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh quota" }));
+
+    expect(usage.provider.quotaSource).toBe("codex_oauth");
+    expect(onRefreshQuota).toHaveBeenCalledWith(
+      "system-chatgpt-subscription",
+    );
   });
 });
