@@ -1,6 +1,5 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import App from "./App";
 import { DatabaseUpgrade } from "./components/DatabaseUpgrade";
 import { UpdateProvider } from "./contexts/UpdateContext";
 import "./index.css";
@@ -14,7 +13,9 @@ import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { message } from "@tauri-apps/plugin-dialog";
 import { exit } from "@tauri-apps/plugin-process";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { isTauriRuntime } from "@/lib/platform";
+import { WindowSurface } from "./windowSurface";
 
 // 根据平台添加 body class，便于平台特定样式
 try {
@@ -88,6 +89,22 @@ async function bootstrap() {
     return;
   }
 
+  const root = ReactDOM.createRoot(document.getElementById("root")!);
+  const windowLabel = getCurrentWebviewWindow().label;
+  if (windowLabel === "tray-popover") {
+    document.documentElement.dataset.windowSurface = "tray-popover";
+    root.render(
+      <React.StrictMode>
+        <QueryClientProvider client={queryClient}>
+          <ThemeProvider defaultTheme="system" storageKey="llm-usage-bar:theme">
+            <WindowSurface windowLabel={windowLabel} />
+          </ThemeProvider>
+        </QueryClientProvider>
+      </React.StrictMode>,
+    );
+    return;
+  }
+
   // 监听后端的配置加载错误事件：仅提醒用户并强制退出，不修改任何配置文件
   try {
     void listen("configLoadError", async (evt) => {
@@ -104,7 +121,7 @@ async function bootstrap() {
     )) as ConfigLoadErrorPayload | null;
     if (initError && initError.kind === "db_version_too_new") {
       // 数据库版本过新：渲染应用内「升级应用」恢复界面，不进入正常 App
-      ReactDOM.createRoot(document.getElementById("root")!).render(
+      root.render(
         <React.StrictMode>
           <ThemeProvider defaultTheme="system" storageKey="llm-usage-bar:theme">
             <DatabaseUpgrade payload={initError} />
@@ -124,12 +141,12 @@ async function bootstrap() {
     console.error("拉取初始化错误失败", e);
   }
 
-  ReactDOM.createRoot(document.getElementById("root")!).render(
+  root.render(
     <React.StrictMode>
       <QueryClientProvider client={queryClient}>
         <ThemeProvider defaultTheme="system" storageKey="llm-usage-bar:theme">
           <UpdateProvider>
-            <App />
+            <WindowSurface windowLabel={windowLabel} />
             <Toaster />
           </UpdateProvider>
         </ThemeProvider>

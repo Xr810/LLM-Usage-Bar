@@ -9,6 +9,7 @@ import type {
   UsageProviderInput,
   UsageProviderView,
 } from "@/types/usageDashboard";
+import type { TrayUsageSnapshot } from "@/types/trayUsage";
 import {
   addProvider,
   deleteProvider,
@@ -34,6 +35,72 @@ import {
 } from "./state";
 
 const TAURI_ENDPOINT = "http://tauri.local";
+
+export const trayUsageSnapshotFixture: TrayUsageSnapshot = {
+  status: "green",
+  generatedAt: 1_000,
+  lastSuccessAt: 1_000,
+  stale: false,
+  refreshError: null,
+  refreshInProgress: false,
+  agents: [
+    {
+      agentModuleId: "codex",
+      name: "Codex",
+      sortOrder: 1,
+      status: "green",
+      providers: [
+        {
+          providerId: "system-chatgpt-subscription",
+          providerName: "ChatGPT Plus/Pro",
+          systemPresetKey: "chatgpt-subscription",
+          billingKind: "subscription",
+          status: "green",
+          warningReason: null,
+          subscription: {
+            planLabel: "Plus",
+            windows: [
+              {
+                kind: "five_hour",
+                usedPercent: "12",
+                remainingPercent: "88",
+                resetsAt: "2026-07-16T12:00:00Z",
+                status: "green",
+                unavailableReason: null,
+              },
+              {
+                kind: "seven_day",
+                usedPercent: "30",
+                remainingPercent: "70",
+                resetsAt: "2026-07-20T00:00:00Z",
+                status: "green",
+                unavailableReason: null,
+              },
+            ],
+          },
+          metered: null,
+        },
+        {
+          providerId: "system-openai-api",
+          providerName: "OpenAI API",
+          systemPresetKey: "openai-api",
+          billingKind: "metered",
+          status: "green",
+          warningReason: null,
+          subscription: null,
+          metered: {
+            todayCostUsd: "2.5",
+            rolling30DayCostUsd: "40.25",
+            dailyBudgetUsd: "10",
+            budgetConsumedPercent: "25",
+            totalTokens: 12_345,
+            costQuality: "complete",
+          },
+        },
+      ],
+    },
+  ],
+};
 
 const withJson = async <T>(request: Request): Promise<T> => {
   try {
@@ -728,6 +795,18 @@ const dashboardGroupsForAgent = (agentModuleId: string, endAt: number) => {
 };
 
 export const handlers = [
+  http.post(`${TAURI_ENDPOINT}/get_tray_usage_snapshot`, () =>
+    success(trayUsageSnapshotFixture),
+  ),
+  http.post(`${TAURI_ENDPOINT}/refresh_tray_usage`, () =>
+    success(trayUsageSnapshotFixture),
+  ),
+  http.post(`${TAURI_ENDPOINT}/hide_tray_popover`, () => success(null)),
+  http.post(`${TAURI_ENDPOINT}/open_main_from_tray`, () => success(null)),
+  http.post(`${TAURI_ENDPOINT}/take_pending_main_window_destination`, () =>
+    success(null),
+  ),
+  http.post(`${TAURI_ENDPOINT}/quit_from_tray`, () => success(null)),
   http.post(`${TAURI_ENDPOINT}/list_dashboard_modules`, () =>
     success(agentModulesFixture),
   ),
