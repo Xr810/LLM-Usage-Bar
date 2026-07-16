@@ -128,6 +128,50 @@ const requiredKeys = [
   "usageDashboard.expired",
   "usageDashboard.copyAgentLocalKey",
   "usageDashboard.rotateAgentLocalKey",
+  "trayUsage.overview",
+  "trayUsage.agentTabs",
+  "trayUsage.updated",
+  "trayUsage.neverUpdated",
+  "trayUsage.stale",
+  "trayUsage.refreshFailed",
+  "trayUsage.healthy",
+  "trayUsage.warning",
+  "trayUsage.critical",
+  "trayUsage.unknown",
+  "trayUsage.subscription",
+  "trayUsage.apiSpending",
+  "trayUsage.remaining",
+  "trayUsage.resets",
+  "trayUsage.pendingRefresh",
+  "trayUsage.invalidQuotaPercent",
+  "trayUsage.quotaUnavailable",
+  "trayUsage.invalidResetTimestamp",
+  "trayUsage.resetPendingRefresh",
+  "trayUsage.today",
+  "trayUsage.rolling30Days",
+  "trayUsage.tokens",
+  "trayUsage.ofBudget",
+  "trayUsage.setDailyBudget",
+  "trayUsage.setProviderBudget",
+  "trayUsage.completeData",
+  "trayUsage.estimatedData",
+  "trayUsage.partialData",
+  "trayUsage.unavailableData",
+  "trayUsage.openDetails",
+  "trayUsage.openProviderDetails",
+  "trayUsage.refresh",
+  "trayUsage.refreshing",
+  "trayUsage.settings",
+  "trayUsage.quit",
+  "trayUsage.empty",
+  "trayUsage.loading",
+  "trayUsage.fiveHourAllowance",
+  "trayUsage.sevenDayAllowance",
+  "trayUsage.dailyBudget",
+  "trayUsage.providerAllowance",
+  "trayUsage.providerAllowanceForAgent",
+  "trayUsage.providerForAgent",
+  "trayUsage.plan",
   "usageDashboard.claudeConnected",
   "usageDashboard.claudeQuotaUnavailable",
   "usageDashboard.noProvidersConfigured",
@@ -170,11 +214,27 @@ describe("Agent dashboard locale copy", () => {
       "dashboardAgents.settingsDescription",
       "agentProxySetup.readOnly",
       "usageDiagnostics.description",
+      "trayUsage.refreshFailed",
+      "trayUsage.setProviderBudget",
+      "trayUsage.providerAllowanceForAgent",
+      "trayUsage.invalidQuotaPercent",
     ]) {
       const english = readKey(en, key);
       expect(readKey(zh, key), key).not.toBe(english);
       expect(readKey(zhTW, key), key).not.toBe(english);
       expect(readKey(ja, key), key).not.toBe(english);
     }
+  });
+
+  it("keeps the tray usage object shape identical in every locale", () => {
+    const trayKeys = (locale: object) =>
+      Object.keys(
+        (locale as Record<string, Record<string, unknown>>).trayUsage ?? {},
+      ).sort();
+    const englishKeys = trayKeys(en);
+
+    expect(trayKeys(zh)).toEqual(englishKeys);
+    expect(trayKeys(zhTW)).toEqual(englishKeys);
+    expect(trayKeys(ja)).toEqual(englishKeys);
   });
 });

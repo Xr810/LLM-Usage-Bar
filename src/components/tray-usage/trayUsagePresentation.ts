@@ -1,0 +1,210 @@
+import type {
+  TrayCostQuality,
+  TrayProviderUsageView,
+  TrayUsageStatus,
+} from "@/types/trayUsage";
+
+export type TrayUsageTranslate = (
+  key: string,
+  options?: Record<string, unknown> & { defaultValue?: string },
+) => unknown;
+
+export interface TrayProviderRow {
+  agentModuleId: string;
+  agentName: string;
+  provider: TrayProviderUsageView;
+}
+
+const PLACEHOLDER = "—";
+
+function parseNonNegativeNumber(value: string | null): number | null {
+  if (value == null || value.trim() === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+export function formatUsd(value: string | null, locale: string): string {
+  const parsed = parseNonNegativeNumber(value);
+  if (parsed == null) return PLACEHOLDER;
+
+  return new Intl.NumberFormat(locale, {
+    style: "currency",
+    currency: "USD",
+    currencyDisplay: "narrowSymbol",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(parsed);
+}
+
+export function formatPercent(value: string | null): string {
+  const parsed = parseNonNegativeNumber(value);
+  if (parsed == null) return PLACEHOLDER;
+
+  return `${new Intl.NumberFormat("en-US", {
+    maximumFractionDigits: 2,
+  }).format(parsed)}%`;
+}
+
+export function clampPercentForProgress(value: string | null): number {
+  const parsed = parseNonNegativeNumber(value);
+  return parsed == null ? 0 : Math.min(100, parsed);
+}
+
+export function hasUsablePercent(value: string | null): boolean {
+  return parseNonNegativeNumber(value) != null;
+}
+
+export function hasUsableUsd(value: string | null): boolean {
+  return parseNonNegativeNumber(value) != null;
+}
+
+export function hasUsableBudget(value: string | null): boolean {
+  const parsed = parseNonNegativeNumber(value);
+  return parsed != null && parsed > 0;
+}
+
+export function formatCount(value: number, locale: string): string {
+  if (!Number.isSafeInteger(value) || value < 0) return PLACEHOLDER;
+  return new Intl.NumberFormat(locale).format(value);
+}
+
+export function formatTokenCount(value: number, _locale: string): string {
+  if (!Number.isSafeInteger(value) || value < 0) return PLACEHOLDER;
+  return new Intl.NumberFormat("en-US", {
+    notation: "compact",
+    maximumFractionDigits: 1,
+  }).format(value);
+}
+
+export function formatResetTime(
+  value: string | null,
+  now: Date,
+  locale: string,
+  pendingText = "Pending refresh",
+): { text: string; pending: boolean } {
+  if (value == null) return { text: PLACEHOLDER, pending: false };
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) {
+    return { text: PLACEHOLDER, pending: false };
+  }
+
+  const remainingMs = timestamp - now.getTime();
+  if (remainingMs <= 0) return { text: pendingText, pending: true };
+
+  const minute = 60_000;
+  const hour = 60 * minute;
+  const day = 24 * hour;
+  const formatter = new Intl.RelativeTimeFormat(locale, { numeric: "always" });
+
+  if (remainingMs >= day) {
+    return {
+      text: formatter.format(Math.ceil(remainingMs / day), "day"),
+      pending: false,
+    };
+  }
+  if (remainingMs >= hour) {
+    return {
+      text: formatter.format(Math.ceil(remainingMs / hour), "hour"),
+      pending: false,
+    };
+  }
+  return {
+    text: formatter.format(
+      Math.max(1, Math.ceil(remainingMs / minute)),
+      "minute",
+    ),
+    pending: false,
+  };
+}
+
+export function formatUpdatedTime(
+  value: number | null,
+  now: Date,
+  locale: string,
+): string | null {
+  if (value == null || !Number.isSafeInteger(value) || value < 0) return null;
+
+  const differenceSeconds = value - now.getTime() / 1_000;
+  const absoluteSeconds = Math.abs(differenceSeconds);
+  const formatter = new Intl.RelativeTimeFormat(locale, { numeric: "always" });
+
+  if (absoluteSeconds >= 86_400) {
+    return formatter.format(Math.round(differenceSeconds / 86_400), "day");
+  }
+  if (absoluteSeconds >= 3_600) {
+    return formatter.format(Math.round(differenceSeconds / 3_600), "hour");
+  }
+  if (absoluteSeconds >= 60) {
+    return formatter.format(Math.round(differenceSeconds / 60), "minute");
+  }
+  return formatter.format(Math.round(differenceSeconds), "second");
+}
+
+export function statusLabel(
+  status: TrayUsageStatus,
+  t: TrayUsageTranslate,
+): string {
+  const labels: Record<TrayUsageStatus, [string, string]> = {
+    green: ["trayUsage.healthy", "Healthy"],
+    yellow: ["trayUsage.warning", "Warning"],
+    red: ["trayUsage.critical", "Critical"],
+    unknown: ["trayUsage.unknown", "Data unavailable"],
+  };
+  const [key, defaultValue] = labels[status];
+  return String(t(key, { defaultValue }));
+}
+
+export function costQualityLabel(
+  quality: TrayCostQuality,
+  t: TrayUsageTranslate,
+): string {
+  const labels: Record<TrayCostQuality, [string, string]> = {
+    complete: ["trayUsage.completeData", "Complete"],
+    estimated: ["trayUsage.estimatedData", "Estimated"],
+    partial: ["trayUsage.partialData", "Partial data"],
+    unavailable: ["trayUsage.unavailableData", "Unavailable"],
+  };
+  const [key, defaultValue] = labels[quality];
+  return String(t(key, { defaultValue }));
+}
+
+const QUOTA_UNAVAILABLE_REASON_LABELS: Readonly<
+  Record<string, [key: string, defaultValue: string]>
+> = {
+  invalid_quota_percent: [
+    "trayUsage.invalidQuotaPercent",
+    "Usage percentage unavailable",
+  ],
+  quota_unavailable: ["trayUsage.quotaUnavailable", "Quota data unavailable"],
+  invalid_reset_timestamp: [
+    "trayUsage.invalidResetTimestamp",
+    "Reset time unavailable",
+  ],
+  reset_pending_refresh: [
+    "trayUsage.resetPendingRefresh",
+    "Waiting for refreshed quota",
+  ],
+};
+
+export function quotaUnavailableReasonLabel(
+  reason: string | null,
+  t: TrayUsageTranslate,
+): string | null {
+  if (reason == null) return null;
+  const label = QUOTA_UNAVAILABLE_REASON_LABELS[reason];
+  if (!label) return null;
+  const [key, defaultValue] = label;
+  return String(t(key, { defaultValue }));
+}
+
+const PROVIDER_ICON_MAP: Readonly<Record<string, string>> = {
+  "chatgpt-subscription": "openai",
+  "claude-subscription": "claude",
+  "openai-api": "openai",
+  "anthropic-api": "anthropic",
+  "openrouter-api": "openrouter",
+};
+
+export function providerIconName(preset: string | null): string | undefined {
+  return preset == null ? undefined : PROVIDER_ICON_MAP[preset];
+}
