@@ -1694,6 +1694,8 @@ pub fn run() {
             commands::set_route_binding,
             commands::get_usage_dashboard,
             commands::get_usage_events,
+            commands::get_provider_usage_dashboard,
+            commands::get_provider_usage_events,
             commands::refresh_provider_quota,
             commands::sync_provider_session_usage,
             commands::get_tray_usage_snapshot,

@@ -1387,6 +1387,36 @@ export const handlers = [
       productGroups: dashboardGroupsForAgent(agentModuleId, endAt),
     });
   }),
+  http.post(
+    `${TAURI_ENDPOINT}/get_provider_usage_dashboard`,
+    async ({ request }) => {
+      const { startAt, endAt } = await withJson<{
+        startAt: number;
+        endAt: number;
+      }>(request);
+      if (typeof startAt !== "number" || typeof endAt !== "number") {
+        return HttpResponse.json("invalid_provider_dashboard_request", {
+          status: 400,
+        });
+      }
+      return success({
+        startAt,
+        endAt,
+        warnings: [],
+        providers: usageProvidersFixture
+          .filter((provider) => provider.enabled)
+          .map((provider, index) =>
+            provider.billingKind === "subscription"
+              ? subscriptionUsage(provider.id, endAt, 100 + index)
+              : meteredUsage(
+                  provider.id,
+                  200 + index,
+                  provider.id === "anthropic-api" ? null : "1.25",
+                ),
+          ),
+      });
+    },
+  ),
   http.post(`${TAURI_ENDPOINT}/get_usage_events`, async ({ request }) => {
     const { agentModuleId, providerId } = await withJson<{
       agentModuleId: string;
@@ -1458,6 +1488,44 @@ export const handlers = [
       pageSize: 5,
     });
   }),
+  http.post(
+    `${TAURI_ENDPOINT}/get_provider_usage_events`,
+    async ({ request }) => {
+      const { providerId } = await withJson<{ providerId: string }>(request);
+      usageProvider(providerId);
+      return success({
+        items: [
+          {
+            eventId: `event-${providerId}`,
+            source: "proxy",
+            providerId,
+            agentModuleId: null,
+            productGroupId: usageProvider(providerId).productGroupId,
+            occurredAt: 5,
+            model: "provider-model",
+            inputTokens: 50,
+            outputTokens: 10,
+            cacheReadTokens: 0,
+            cacheCreationTokens: 0,
+            requestId: "request-provider",
+            sessionId: null,
+            upstreamCorrelationId: null,
+            inputCostUsd: "1.00",
+            outputCostUsd: "0.25",
+            cacheReadCostUsd: null,
+            cacheCreationCostUsd: null,
+            totalCostUsd: "1.25",
+            costSource: "upstream",
+            legacyRequestId: null,
+            createdAt: 5,
+          },
+        ],
+        total: 1,
+        page: 1,
+        pageSize: 5,
+      });
+    },
+  ),
   http.post(`${TAURI_ENDPOINT}/is_proxy_running`, () => success(false)),
   http.post(`${TAURI_ENDPOINT}/get_migration_result`, () => success(false)),
   http.post(`${TAURI_ENDPOINT}/get_skills_migration_result`, () =>

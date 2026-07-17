@@ -1,5 +1,8 @@
 # Agent Provider Switching Foundation Implementation Plan
 
+> **Superseded 2026-07-17:** Do not implement. See
+> [`2026-07-17-provider-only-monitoring.md`](2026-07-17-provider-only-monitoring.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Establish physical schema v19 and the fail-closed backend primitives that make per-Agent current selection, account provenance, dynamic proxy audiences, protected transactions, recovery, sync review, and guarded mutation possible.

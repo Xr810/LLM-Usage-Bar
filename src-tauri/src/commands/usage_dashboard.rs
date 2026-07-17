@@ -8,9 +8,10 @@ use crate::store::AppState;
 use crate::usage::dashboard::UsageDashboardService;
 use crate::usage::domain::{
     AgentModuleInput, AgentModuleView, AgentProviderBindingInput, AgentProviderBindingView,
-    AgentProxyRouteSetup, AgentProxySetupInfo, LocalBindingKeyReveal, RouteBinding,
-    SystemProviderAuthKind, UnassignedUsageDiagnostics, UsageDashboardView, UsageEventPage,
-    UsageProviderInput, UsageProviderView,
+    AgentProxyRouteSetup, AgentProxySetupInfo, LocalBindingKeyReveal,
+    ProviderMonitoringDashboardView, RouteBinding, SystemProviderAuthKind,
+    UnassignedUsageDiagnostics, UsageDashboardView, UsageEventPage, UsageProviderInput,
+    UsageProviderView,
 };
 use crate::usage::quota::QuotaRefreshResult;
 use crate::usage::session::ProviderSessionSyncResult;
@@ -281,6 +282,15 @@ pub async fn get_usage_dashboard(
 }
 
 #[tauri::command]
+pub fn get_provider_usage_dashboard(
+    state: State<'_, AppState>,
+    start_at: i64,
+    end_at: i64,
+) -> Result<ProviderMonitoringDashboardView, AppError> {
+    get_provider_usage_dashboard_test_hook(&state, start_at, end_at)
+}
+
+#[tauri::command]
 pub fn get_usage_events(
     state: State<'_, AppState>,
     agent_module_id: String,
@@ -299,6 +309,18 @@ pub fn get_usage_events(
         page,
         page_size,
     )
+}
+
+#[tauri::command]
+pub fn get_provider_usage_events(
+    state: State<'_, AppState>,
+    provider_id: String,
+    start_at: i64,
+    end_at: i64,
+    page: u64,
+    page_size: u64,
+) -> Result<UsageEventPage, AppError> {
+    get_provider_usage_events_test_hook(&state, &provider_id, start_at, end_at, page, page_size)
 }
 
 #[tauri::command]
@@ -972,6 +994,14 @@ pub async fn get_usage_dashboard_test_hook(
     Ok(dashboard)
 }
 
+pub fn get_provider_usage_dashboard_test_hook(
+    state: &AppState,
+    start_at: i64,
+    end_at: i64,
+) -> Result<ProviderMonitoringDashboardView, AppError> {
+    UsageDashboardService::new(&state.db).get_provider_dashboard(start_at, end_at)
+}
+
 pub fn get_usage_events_test_hook(
     state: &AppState,
     agent_module_id: &str,
@@ -1001,6 +1031,27 @@ pub fn get_usage_events_test_hook(
         page,
         page_size,
     )
+}
+
+pub fn get_provider_usage_events_test_hook(
+    state: &AppState,
+    provider_id: &str,
+    start_at: i64,
+    end_at: i64,
+    page: u64,
+    page_size: u64,
+) -> Result<UsageEventPage, AppError> {
+    validate_range(start_at, end_at)?;
+    if state.db.get_usage_provider(provider_id)?.is_none() {
+        return Err(AppError::Message("usage provider not found".to_string()));
+    }
+    let page =
+        u32::try_from(page).map_err(|_| AppError::Message("page is too large".to_string()))?;
+    let page_size = u32::try_from(page_size)
+        .map_err(|_| AppError::Message("page size is too large".to_string()))?;
+    state
+        .db
+        .list_usage_events(provider_id, start_at, end_at, page, page_size)
 }
 
 pub async fn refresh_provider_quota_test_hook(

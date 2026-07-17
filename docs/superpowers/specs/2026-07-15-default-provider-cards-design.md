@@ -1,5 +1,9 @@
 # Fixed Default Provider Cards Design
 
+> **Scope update 2026-07-17:** Fixed Provider cards remain, but all default Agent
+> bindings and Agent-specific credential behavior are superseded by
+> [`2026-07-17-provider-only-monitoring-design.md`](2026-07-17-provider-only-monitoring-design.md).
+
 **Date:** 2026-07-15
 **Status:** Approved
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 import {
@@ -21,10 +21,6 @@ export function TrayUsagePopover() {
   const queryClient = useQueryClient();
   const { data, isLoading } = useTrayUsageSnapshot();
   const refresh = useRefreshTrayUsage();
-  const [selectedAgentId, setSelectedAgentId] = useState<"overview" | string>(
-    "overview",
-  );
-  const [focusRequestKey, setFocusRequestKey] = useState(0);
   const hiddenForCycle = useRef(false);
   const navigationInProgress = useRef(false);
   const showCycle = useRef(0);
@@ -36,16 +32,6 @@ export function TrayUsagePopover() {
     queryClient.setQueryData(initialRefreshKey, true);
     refresh.mutate();
   }, [queryClient, refresh.mutate]);
-
-  useEffect(() => {
-    if (
-      selectedAgentId !== "overview" &&
-      data &&
-      !data.agents.some((agent) => agent.agentModuleId === selectedAgentId)
-    ) {
-      setSelectedAgentId("overview");
-    }
-  }, [data, selectedAgentId]);
 
   const requestHide = useCallback(() => {
     if (hiddenForCycle.current || navigationInProgress.current) return;
@@ -65,7 +51,6 @@ export function TrayUsagePopover() {
     showCycle.current += 1;
     hiddenForCycle.current = false;
     navigationInProgress.current = false;
-    setFocusRequestKey((current) => current + 1);
     if (!refresh.isPending && !data?.refreshInProgress) {
       refresh.mutate();
     }
@@ -97,8 +82,8 @@ export function TrayUsagePopover() {
     });
   };
 
-  const openDetails = (agentModuleId: string | null) => {
-    openDestination({ kind: "usage", agentModuleId });
+  const openDetails = () => {
+    openDestination({ kind: "usage", agentModuleId: null });
   };
 
   const openSettings = (providerId: string | null) => {
@@ -109,10 +94,7 @@ export function TrayUsagePopover() {
     <TrayUsagePopoverView
       snapshot={data ?? null}
       loading={isLoading}
-      selectedAgentId={selectedAgentId}
-      onSelectAgent={setSelectedAgentId}
       refreshing={refresh.isPending || Boolean(data?.refreshInProgress)}
-      focusRequestKey={focusRequestKey}
       onRefresh={() => refresh.mutate()}
       onOpenDetails={openDetails}
       onOpenSettings={openSettings}

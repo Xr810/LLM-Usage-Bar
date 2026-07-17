@@ -1,5 +1,8 @@
 # Built-In Agent Provider Switching Implementation Plan
 
+> **Superseded 2026-07-17:** Do not implement. See
+> [`2026-07-17-provider-only-monitoring.md`](2026-07-17-provider-only-monitoring.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make Codex, Claude Code, OpenCode, OpenClaw, and Hermes perform real, verified Provider/model switches through the v19 coordinator while preserving legacy Provider/Profile/takeover behavior behind the same ownership and recovery rules.

@@ -16,7 +16,6 @@ import {
 import type { UsageProviderView } from "@/types/usageDashboard";
 import { ClaudeCliAuthSection } from "./ClaudeCliAuthSection";
 import { ProviderDailyBudgetField } from "./ProviderDailyBudgetField";
-import { SystemProviderAgentBindings } from "./SystemProviderAgentBindings";
 import { SystemProviderApiKeyDialog } from "./SystemProviderApiKeyDialog";
 
 interface SystemProviderCardProps {
@@ -168,7 +167,7 @@ export function SystemProviderCard({
                         window.confirm(
                           t("usageDashboard.clearUpstreamKeyConfirmation", {
                             defaultValue:
-                              "Clear this upstream API key? Bound Agents will stop working.",
+                              "Clear this Provider API key? Monitoring that requires it will stop.",
                           }),
                         )
                       ) {
@@ -213,7 +212,6 @@ export function SystemProviderCard({
           />
         ) : null}
 
-        <SystemProviderAgentBindings provider={provider} />
         {failed ? (
           <div role="alert" className="text-sm text-destructive">
             {t("usageDashboard.providerActionFailed", {

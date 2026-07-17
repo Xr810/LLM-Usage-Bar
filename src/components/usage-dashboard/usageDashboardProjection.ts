@@ -5,6 +5,7 @@ import type {
   QuotaFetchState,
   QuotaStatusView,
   UsageDashboardView,
+  ProviderMonitoringDashboardView,
 } from "@/types/usageDashboard";
 
 export type MeteredCostStatus =
@@ -12,6 +13,15 @@ export type MeteredCostStatus =
 
 export interface AgentUsageProjection {
   agent: AgentModuleView;
+  subscriptionProviders: ProviderUsageView[];
+  meteredProviders: ProviderUsageView[];
+  meteredTotalTokens: number;
+  meteredRequestCount: number;
+  meteredTotalCostUsd: string | null;
+  meteredCostStatus: MeteredCostStatus;
+}
+
+export interface ProviderDashboardProjection {
   subscriptionProviders: ProviderUsageView[];
   meteredProviders: ProviderUsageView[];
   meteredTotalTokens: number;
@@ -161,6 +171,57 @@ export function projectAgentDashboard(
 
   return {
     agent,
+    subscriptionProviders,
+    meteredProviders,
+    meteredTotalTokens: meteredProviders.reduce(
+      (sum, usage) =>
+        sum +
+        usage.inputTokens +
+        usage.outputTokens +
+        usage.cacheReadTokens +
+        usage.cacheCreationTokens,
+      0,
+    ),
+    meteredRequestCount: meteredProviders.reduce(
+      (sum, usage) => sum + usage.eventCount,
+      0,
+    ),
+    meteredTotalCostUsd,
+    meteredCostStatus,
+  };
+}
+
+export function projectProviderDashboard(
+  dashboard: ProviderMonitoringDashboardView,
+): ProviderDashboardProjection {
+  const providers = mergeProviderRows(dashboard.providers);
+  const subscriptionProviders = providers.filter(
+    (usage) => usage.provider.billingKind === "subscription",
+  );
+  const meteredProviders = providers.filter(
+    (usage) => usage.provider.billingKind === "metered",
+  );
+  const knownCosts = meteredProviders
+    .map((usage) => usage.totalCostUsd)
+    .filter((value): value is string => value != null);
+  const meteredTotalCostUsd = addDecimalStrings(knownCosts);
+  const hasUnavailable = meteredProviders.some(
+    (usage) =>
+      usage.totalCostUsd == null || usage.costSourceCounts.unavailable > 0,
+  );
+  const hasEstimated = meteredProviders.some(
+    (usage) => usage.costSourceCounts.estimated > 0,
+  );
+  const meteredCostStatus: MeteredCostStatus =
+    meteredTotalCostUsd == null
+      ? "unavailable"
+      : hasUnavailable
+        ? "partial"
+        : hasEstimated
+          ? "estimated"
+          : "complete";
+
+  return {
     subscriptionProviders,
     meteredProviders,
     meteredTotalTokens: meteredProviders.reduce(

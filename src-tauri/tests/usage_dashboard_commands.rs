@@ -1,4 +1,5 @@
 use llm_usage_bar_lib::{
+    get_provider_usage_dashboard_test_hook, get_provider_usage_events_test_hook,
     get_route_bindings_test_hook, get_unassigned_usage_diagnostics_test_hook,
     get_usage_dashboard_test_hook, get_usage_events_test_hook,
     list_agent_provider_bindings_test_hook, list_usage_providers_test_hook,
@@ -136,6 +137,18 @@ async fn nine_command_adapters_validate_and_never_serialize_provider_secrets() {
     );
 
     state.db.insert_usage_event(&event()).unwrap();
+    let provider_dashboard = get_provider_usage_dashboard_test_hook(&state, 0, 100).unwrap();
+    let provider_row = provider_dashboard
+        .providers
+        .iter()
+        .find(|row| row.provider.id == "metered")
+        .unwrap();
+    assert_eq!(provider_row.input_tokens, 10);
+    assert_eq!(provider_row.total_cost_usd.as_deref(), Some("0.3"));
+    let provider_events =
+        get_provider_usage_events_test_hook(&state, "metered", 0, 100, 1, 10).unwrap();
+    assert_eq!(provider_events.total, 1);
+    assert_eq!(provider_events.items[0].event_id, "event");
     let dashboard = get_usage_dashboard_test_hook(&state, 0, 100, "claude-code")
         .await
         .unwrap();

@@ -187,6 +187,13 @@ export interface UsageDashboardView {
   warnings: string[];
 }
 
+export interface ProviderMonitoringDashboardView {
+  startAt: number;
+  endAt: number;
+  providers: ProviderUsageView[];
+  warnings: string[];
+}
+
 export interface UsageEvent {
   eventId: string;
   source: TokenSource;

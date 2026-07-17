@@ -1,5 +1,5 @@
-use super::aggregation::{aggregate_provider_range, ProviderRangeAggregate};
-use super::domain::{AgentModuleView, BillingKind, UsageProviderView};
+use super::aggregation::{aggregate_provider_account_range, ProviderRangeAggregate};
+use super::domain::{BillingKind, UsageProviderView};
 use super::status::{
     classify_metered, classify_subscription, worst_status, CostQuality, SourceClassification,
     UsageStatus,
@@ -8,7 +8,6 @@ use crate::database::Database;
 use crate::error::AppError;
 use chrono::{DateTime, Local, LocalResult, NaiveDate, SecondsFormat, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 const ROLLING_30_DAYS_SECONDS: i64 = 30 * 86_400;
@@ -175,47 +174,25 @@ impl TrayUsageProjector {
         let generated_at = now.timestamp();
         let windows = TrayUsageWindows::from_local_now(now)
             .ok_or_else(|| AppError::Message("invalid_tray_usage_windows".to_string()))?;
-        let mut agents = self
-            .db
-            .list_agent_modules()?
-            .into_iter()
-            .filter(|agent| agent.visible && agent.archived_at.is_none())
-            .collect::<Vec<_>>();
-        agents.sort_by(|left, right| {
-            (left.sort_order, left.id.as_str()).cmp(&(right.sort_order, right.id.as_str()))
-        });
-        let providers = self
+        let mut providers = self
             .db
             .list_usage_providers()?
             .into_iter()
             .filter(|provider| provider.enabled)
             .collect::<Vec<_>>();
-        let mut bindings_by_agent = BTreeMap::<String, BTreeSet<String>>::new();
-        for binding in self
-            .db
-            .list_agent_provider_bindings(None)?
-            .into_iter()
-            .filter(|binding| binding.enabled)
-        {
-            bindings_by_agent
-                .entry(binding.agent_module_id)
-                .or_default()
-                .insert(binding.provider_id);
-        }
-
-        let projected_agents = agents
-            .iter()
-            .map(|agent| {
-                self.project_agent(
-                    agent,
-                    &providers,
-                    bindings_by_agent.get(&agent.id),
-                    windows,
-                    generated_at,
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let status = worst_status(projected_agents.iter().map(|agent| agent.status));
+        providers.sort_by(|left, right| {
+            (left.name.to_lowercase(), left.id.as_str())
+                .cmp(&(right.name.to_lowercase(), right.id.as_str()))
+        });
+        let projected_providers = self.project_providers(&providers, windows, generated_at)?;
+        let status = worst_status(projected_providers.iter().map(|provider| provider.status));
+        let projected_agents = vec![TrayAgentUsageView {
+            agent_module_id: "providers".to_string(),
+            name: "Providers".to_string(),
+            sort_order: 0,
+            status,
+            providers: projected_providers,
+        }];
 
         Ok(TrayUsageSnapshot {
             status,
@@ -228,17 +205,14 @@ impl TrayUsageProjector {
         })
     }
 
-    fn project_agent(
+    fn project_providers(
         &self,
-        agent: &AgentModuleView,
         providers: &[UsageProviderView],
-        bound_provider_ids: Option<&BTreeSet<String>>,
         windows: TrayUsageWindows,
         now_timestamp: i64,
-    ) -> Result<TrayAgentUsageView, AppError> {
-        let projected_providers = providers
+    ) -> Result<Vec<TrayProviderUsageView>, AppError> {
+        providers
             .iter()
-            .filter(|provider| bound_provider_ids.is_some_and(|ids| ids.contains(&provider.id)))
             .map(|provider| match provider.billing_kind {
                 BillingKind::Subscription => {
                     let (subscription, classification) =
@@ -255,8 +229,7 @@ impl TrayUsageProjector {
                     })
                 }
                 BillingKind::Metered => {
-                    let (metered, classification) =
-                        self.project_metered(&agent.id, provider, windows)?;
+                    let (metered, classification) = self.project_metered(provider, windows)?;
                     Ok(TrayProviderUsageView {
                         provider_id: provider.id.clone(),
                         provider_name: provider.name.clone(),
@@ -269,16 +242,7 @@ impl TrayUsageProjector {
                     })
                 }
             })
-            .collect::<Result<Vec<_>, AppError>>()?;
-        let status = worst_status(projected_providers.iter().map(|provider| provider.status));
-
-        Ok(TrayAgentUsageView {
-            agent_module_id: agent.id.clone(),
-            name: agent.name.clone(),
-            sort_order: agent.sort_order,
-            status,
-            providers: projected_providers,
-        })
+            .collect::<Result<Vec<_>, AppError>>()
     }
 
     fn project_subscription(
@@ -329,23 +293,18 @@ impl TrayUsageProjector {
 
     fn project_metered(
         &self,
-        agent_module_id: &str,
         provider: &UsageProviderView,
         windows: TrayUsageWindows,
     ) -> Result<(TrayMeteredUsageView, SourceClassification), AppError> {
-        let today = aggregate_provider_range(
+        let today = aggregate_provider_account_range(
             &self.db,
-            agent_module_id,
             &provider.id,
-            &provider.product_group_id,
             windows.today_start_at,
             windows.end_at,
         )?;
-        let rolling_30_day = aggregate_provider_range(
+        let rolling_30_day = aggregate_provider_account_range(
             &self.db,
-            agent_module_id,
             &provider.id,
-            &provider.product_group_id,
             windows.rolling_30_start_at,
             windows.end_at,
         )?;
@@ -608,24 +567,23 @@ mod tests {
 
     fn find_provider<'a>(
         snapshot: &'a TrayUsageSnapshot,
-        agent_id: &str,
+        _agent_id: &str,
         provider_id: &str,
     ) -> &'a TrayProviderUsageView {
         snapshot
             .agents
             .iter()
-            .find(|agent| agent.agent_module_id == agent_id)
-            .and_then(|agent| {
+            .find_map(|agent| {
                 agent
                     .providers
                     .iter()
                     .find(|provider| provider.provider_id == provider_id)
             })
-            .unwrap_or_else(|| panic!("missing {agent_id}/{provider_id}"))
+            .unwrap_or_else(|| panic!("missing provider {provider_id}"))
     }
 
     #[test]
-    fn projector_filters_visible_enabled_bindings_preserves_dao_order_and_aggregates_per_agent() {
+    fn projector_lists_enabled_providers_in_dao_order_and_aggregates_by_account() {
         let db = clean_projector_database();
         let now = Local.timestamp_opt(2_000_000_000, 0).single().unwrap();
         let windows = TrayUsageWindows::from_local_now(now).unwrap();
@@ -750,7 +708,7 @@ mod tests {
                 .iter()
                 .map(|agent| agent.agent_module_id.as_str())
                 .collect::<Vec<_>>(),
-            vec!["codex", "claude-code"],
+            vec!["providers"],
         );
         assert_eq!(
             snapshot.agents[0]
@@ -758,7 +716,13 @@ mod tests {
                 .iter()
                 .map(|provider| provider.provider_id.as_str())
                 .collect::<Vec<_>>(),
-            vec!["a-subscription", "b-metered", "c-no-budget", "d-no-source",],
+            vec![
+                "a-subscription",
+                "b-metered",
+                "c-no-budget",
+                "d-no-source",
+                "y-disabled-binding",
+            ],
         );
 
         let subscription = find_provider(&snapshot, "codex", "a-subscription");
@@ -807,14 +771,6 @@ mod tests {
             .windows
             .iter()
             .all(|window| window.used_percent.is_none() && window.resets_at.is_none()));
-
-        let shared_metered = find_provider(&snapshot, "claude-code", "b-metered")
-            .metered
-            .as_ref()
-            .unwrap();
-        assert_eq!(shared_metered.today_cost_usd.as_deref(), Some("0"));
-        assert_eq!(shared_metered.rolling_30_day_cost_usd.as_deref(), Some("0"));
-        assert_eq!(shared_metered.total_tokens, 0);
 
         let serialized = serde_json::to_string(&snapshot).unwrap();
         assert!(!serialized.contains("ignored-percent-secret-sentinel"));

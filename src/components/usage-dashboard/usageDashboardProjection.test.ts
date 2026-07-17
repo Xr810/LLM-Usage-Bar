@@ -2,10 +2,14 @@ import { describe, expect, it } from "vitest";
 import type {
   AgentModuleView,
   ProviderUsageView,
+  ProviderMonitoringDashboardView,
   UsageDashboardView,
   UsageProviderView,
 } from "@/types/usageDashboard";
-import { projectAgentDashboard } from "./usageDashboardProjection";
+import {
+  projectAgentDashboard,
+  projectProviderDashboard,
+} from "./usageDashboardProjection";
 
 const agent: AgentModuleView = {
   id: "codex",
@@ -258,6 +262,42 @@ describe("projectAgentDashboard", () => {
     expect(result).toMatchObject({
       meteredTotalCostUsd: "0",
       meteredCostStatus: "partial",
+    });
+  });
+});
+
+describe("projectProviderDashboard", () => {
+  it("keeps Provider accounts separate and totals all metered accounts", () => {
+    const first = usage(provider("openai-personal", "metered"), {
+      eventCount: 2,
+      inputTokens: 10,
+      totalCostUsd: "0.1",
+    });
+    const second = usage(provider("openai-work", "metered"), {
+      eventCount: 3,
+      inputTokens: 20,
+      totalCostUsd: "0.2",
+      costSourceCounts: { upstream: 0, estimated: 1, unavailable: 0 },
+    });
+    const subscription = usage(provider("chatgpt-personal", "subscription"));
+    const dashboard: ProviderMonitoringDashboardView = {
+      startAt: 1,
+      endAt: 2,
+      warnings: [],
+      providers: [first, second, subscription],
+    };
+
+    expect(projectProviderDashboard(dashboard)).toMatchObject({
+      subscriptionProviders: [
+        { provider: { id: "chatgpt-personal" } },
+      ],
+      meteredProviders: [
+        { provider: { id: "openai-personal" } },
+        { provider: { id: "openai-work" } },
+      ],
+      meteredRequestCount: 5,
+      meteredTotalCostUsd: "0.3",
+      meteredCostStatus: "estimated",
     });
   });
 });

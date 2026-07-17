@@ -2,23 +2,20 @@ import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { ProviderUsageView } from "@/types/usageDashboard";
-import { useUsageEvents } from "@/lib/query/usageDashboard";
+import { useProviderUsageEvents } from "@/lib/query/usageDashboard";
 import { useTranslation } from "react-i18next";
 
 export function MeteredProviderCard({
-  agentModuleId,
   usage,
   startAt,
   endAt,
 }: {
-  agentModuleId: string;
   usage: ProviderUsageView;
   startAt: number;
   endAt: number;
 }) {
   const { t } = useTranslation();
-  const events = useUsageEvents(
-    agentModuleId,
+  const events = useProviderUsageEvents(
     usage.provider.id,
     startAt,
     endAt,
@@ -59,13 +56,6 @@ export function MeteredProviderCard({
         <div className="flex items-start justify-between gap-3">
           <CardTitle className="text-base">{usage.provider.name}</CardTitle>
           <div className="flex flex-wrap justify-end gap-2">
-            {usage.sharedAccount ? (
-              <Badge variant="outline">
-                {t("usageDashboard.sharedAccount", {
-                  defaultValue: "Shared account",
-                })}
-              </Badge>
-            ) : null}
             <Badge variant="secondary">
               {t("usageDashboard.metered", { defaultValue: "Metered" })}
             </Badge>

@@ -1,5 +1,8 @@
 # Agent Provider Switching Frontend and Native Integration Plan
 
+> **Superseded 2026-07-17:** Do not implement. See
+> [`2026-07-17-provider-only-monitoring.md`](2026-07-17-provider-only-monitoring.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Expose verified per-Agent Provider switching, Custom Agent setup, model editing, guarded mutations, sync review, and native-menu fallback in the App without coupling switching to usage history or changing the usage-only left-click tray popover.

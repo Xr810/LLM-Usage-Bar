@@ -6,7 +6,7 @@ use crate::proxy::usage::cost_parser::UpstreamCost;
 use crate::proxy::usage::parser::TokenUsage;
 use crate::services::usage_stats::find_model_pricing_row;
 use crate::usage::domain::{CostSource, TokenSource, UsageEvent};
-use rusqlite::{params, Connection, OptionalExtension, Transaction};
+use rusqlite::{params, OptionalExtension, Transaction};
 use rust_decimal::Decimal;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -332,34 +332,6 @@ fn validate_input(input: &UsageIngestionInput) -> Result<(), AppError> {
     Ok(())
 }
 
-pub(crate) fn validate_session_agent_provider_binding_on_conn(
-    conn: &Connection,
-    agent_module_id: &str,
-    provider_id: &str,
-) -> Result<(), AppError> {
-    let available: bool = conn.query_row(
-        "SELECT EXISTS(
-             SELECT 1
-             FROM agent_provider_bindings AS binding
-             JOIN usage_providers AS provider ON provider.id = binding.provider_id
-             JOIN agent_modules AS agent ON agent.id = binding.agent_module_id
-             WHERE binding.agent_module_id = ?1
-               AND binding.provider_id = ?2
-               AND binding.enabled = 1
-               AND provider.enabled = 1
-               AND agent.archived_at IS NULL
-         )",
-        params![agent_module_id, provider_id],
-        |row| row.get(0),
-    )?;
-    if !available {
-        return Err(AppError::Message(
-            "usage_session_agent_binding_unavailable".to_string(),
-        ));
-    }
-    Ok(())
-}
-
 fn load_and_validate_provider(
     transaction: &Transaction<'_>,
     input: &UsageIngestionInput,
@@ -383,13 +355,6 @@ fn load_and_validate_provider(
     };
     let token_sources: Vec<TokenSource> = serde_json::from_str(&token_sources)
         .map_err(|error| AppError::Database(format!("invalid provider token_sources: {error}")))?;
-    if input.source == TokenSource::SessionLog {
-        validate_session_agent_provider_binding_on_conn(
-            transaction,
-            &input.agent_module_id,
-            &input.provider_id,
-        )?;
-    }
     if input.source != TokenSource::Proxy && !token_sources.contains(&input.source) {
         return Err(AppError::Message(format!(
             "usage provider does not accept {}",
@@ -1470,33 +1435,16 @@ mod tests {
     }
 
     #[test]
-    fn session_ingestion_requires_an_enabled_exact_agent_provider_binding() {
+    fn session_ingestion_does_not_require_an_agent_provider_binding() {
         let db = Database::memory().unwrap();
         save_provider(&db, "global-provider", None);
         let service = UsageIngestionService::new(&db);
 
         let missing = attributed_input("missing-binding", TokenSource::SessionLog, "claude-code");
-        assert_eq!(
-            service.ingest(&missing).unwrap_err().to_string(),
-            "usage_session_agent_binding_unavailable"
-        );
+        assert!(service.ingest(&missing).unwrap().inserted);
 
-        let binding_id = seed_session_binding(&db, "claude-code", "global-provider", false);
+        seed_session_binding(&db, "claude-code", "global-provider", false);
         let disabled = attributed_input("disabled-binding", TokenSource::SessionLog, "claude-code");
-        assert_eq!(
-            service.ingest(&disabled).unwrap_err().to_string(),
-            "usage_session_agent_binding_unavailable"
-        );
-
-        {
-            let conn = db.conn.lock().unwrap();
-            conn.execute(
-                "UPDATE agent_provider_bindings SET enabled = 1 WHERE id = ?1",
-                [binding_id],
-            )
-            .unwrap();
-        }
-        let enabled = attributed_input("enabled-binding", TokenSource::SessionLog, "claude-code");
-        assert!(service.ingest(&enabled).unwrap().inserted);
+        assert!(service.ingest(&disabled).unwrap().inserted);
     }
 }

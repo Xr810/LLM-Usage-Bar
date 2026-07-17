@@ -1038,8 +1038,7 @@ mod tests {
     }
 
     #[test]
-    fn bound_codex_parser_rejects_provider_without_codex_agent_before_cursor_advance(
-    ) -> Result<(), AppError> {
+    fn bound_codex_parser_imports_without_a_codex_agent_binding() -> Result<(), AppError> {
         let db = Database::memory()?;
         save_session_provider(&db, "wrong-agent-session")?;
         save_enabled_agent_binding(&db, "claude-code", "wrong-agent-session")?;
@@ -1051,22 +1050,20 @@ mod tests {
         fs::create_dir_all(&tmp).unwrap();
         let file = tmp.join("session.jsonl");
         fs::write(&file, codex_token_count_log(Some("wrong-agent"), 10)).unwrap();
-        let file_key = file.to_string_lossy().to_string();
-
-        let result = sync_single_codex_file(&db, &file, Some("wrong-agent-session"));
-        assert!(
-            result.is_err(),
-            "Codex session import must reject a provider bound only to another Agent"
-        );
         assert_eq!(
-            crate::services::session_usage::get_sync_state(&db, "codex", &file_key)?,
-            (0, 0)
+            sync_single_codex_file(&db, &file, Some("wrong-agent-session"))?,
+            (1, 0)
         );
-        let event_count: i64 = {
+        let ownership: (String, Option<String>) = {
             let conn = lock_conn!(db.conn);
-            conn.query_row("SELECT COUNT(*) FROM usage_events", [], |row| row.get(0))?
+            conn.query_row(
+                "SELECT provider_id, agent_module_id FROM usage_events",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?
         };
-        assert_eq!(event_count, 0);
+        assert_eq!(ownership.0, "wrong-agent-session");
+        assert_eq!(ownership.1.as_deref(), Some("codex"));
 
         fs::remove_dir_all(&tmp).ok();
         Ok(())

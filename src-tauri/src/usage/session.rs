@@ -1,11 +1,8 @@
-use crate::database::{lock_conn, Database};
+use crate::database::Database;
 use crate::error::AppError;
 use crate::proxy::usage::parser::TokenUsage;
 use crate::usage::domain::{session_agent_module_id, TokenSource};
-use crate::usage::ingestion::{
-    validate_session_agent_provider_binding_on_conn, LegacyLogInput, UsageIngestionInput,
-    UsageIngestionService,
-};
+use crate::usage::ingestion::{LegacyLogInput, UsageIngestionInput, UsageIngestionService};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -32,15 +29,12 @@ pub struct ProviderSessionSyncResult {
 }
 
 pub(crate) fn validate_bound_session_agent(
-    db: &Database,
+    _db: &Database,
     source: &str,
-    provider_id: &str,
+    _provider_id: &str,
 ) -> Result<&'static str, AppError> {
-    let agent_module_id = session_agent_module_id(source)
-        .ok_or_else(|| AppError::Message(format!("unsupported usage source: {source}")))?;
-    let conn = lock_conn!(db.conn);
-    validate_session_agent_provider_binding_on_conn(&conn, agent_module_id, provider_id)?;
-    Ok(agent_module_id)
+    session_agent_module_id(source)
+        .ok_or_else(|| AppError::Message(format!("unsupported usage source: {source}")))
 }
 
 #[derive(Clone)]
@@ -397,24 +391,34 @@ mod tests {
     }
 
     #[test]
-    fn source_binding_rejects_a_provider_without_the_fixed_agent_binding() {
+    fn source_binding_imports_without_an_agent_provider_binding() {
         let db = Arc::new(database_without_system_source_bindings());
-        db.save_usage_provider(&provider("wrong-agent")).unwrap();
-        db.set_usage_source_binding("claude", "wrong-agent")
+        db.save_usage_provider(&provider("provider-account"))
             .unwrap();
-        seed_agent_binding(&db, "codex", "wrong-agent", true);
+        db.set_usage_source_binding("claude", "provider-account")
+            .unwrap();
         let service = SessionUsageService::new(db.clone());
 
-        let error = service
-            .ingest_records("claude", vec![record("must-not-import", None)])
-            .unwrap_err();
-
-        assert_eq!(error.to_string(), "usage_session_agent_binding_unavailable");
-        let conn = db.conn.lock().unwrap();
-        let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM usage_events", [], |row| row.get(0))
+        let result = service
+            .ingest_records("claude", vec![record("provider-event", None)])
             .unwrap();
-        assert_eq!(count, 0);
+
+        assert_eq!(result.imported, 1);
+        let conn = db.conn.lock().unwrap();
+        let ownership: (String, Option<String>) = conn
+            .query_row(
+                "SELECT provider_id, agent_module_id FROM usage_events",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            ownership,
+            (
+                "provider-account".to_string(),
+                Some("claude-code".to_string())
+            )
+        );
     }
 
     #[test]

@@ -1,5 +1,9 @@
 # Agent Provider Switching and Custom Agent Adapter Design
 
+> **Superseded 2026-07-17:** This design is retained only as history. The approved
+> replacement is
+> [`2026-07-17-provider-only-monitoring-design.md`](2026-07-17-provider-only-monitoring-design.md).
+
 **Date:** 2026-07-16
 **Status:** Approved
 

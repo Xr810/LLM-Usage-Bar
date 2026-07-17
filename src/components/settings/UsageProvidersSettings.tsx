@@ -88,7 +88,7 @@ export function UsageProvidersSettings({
             <CardDescription>
               {t("usageDashboard.providersSettingsDescription", {
                 defaultValue:
-                  "Manage Provider billing identity and data-source metadata. Agent membership is managed only from Agents.",
+                  "Manage Provider accounts, monitoring sources, refresh settings, and budgets.",
               })}
             </CardDescription>
           </div>
@@ -126,8 +126,8 @@ export function UsageProvidersSettings({
           </CardTitle>
           <CardDescription>
             {t("usageDashboard.customProvidersDescription", {
-              defaultValue:
-                "Add or edit Providers with your own routing and metadata.",
+                defaultValue:
+                "Add or edit Provider accounts and their monitoring metadata.",
             })}
           </CardDescription>
         </CardHeader>

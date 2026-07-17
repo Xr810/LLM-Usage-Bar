@@ -1,17 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { takePendingMainWindowDestination } from "@/lib/api/trayUsage";
 import type { MainWindowDestination } from "@/types/trayUsage";
-import type { AgentModuleView } from "@/types/usageDashboard";
 import { useTauriEvent } from "./useTauriEvent";
 
 interface MainWindowNavigationOptions {
-  agents: AgentModuleView[];
-  openUsage: (agentModuleId: string | null) => void;
+  /** Deprecated Agent list is ignored by Provider-only navigation. */
+  agents?: unknown[];
+  openUsage: (agentModuleId?: string | null) => void;
   openProviderSettings: (providerId: string | null) => void;
 }
 
 export function useMainWindowNavigation({
-  agents,
   openUsage,
   openProviderSettings,
 }: MainWindowNavigationOptions): void {
@@ -46,21 +45,12 @@ export function useMainWindowNavigation({
   }, [drainPending]);
 
   useEffect(() => {
-    const actionableIndex = pending.findIndex((destination) => {
-      if (destination.kind === "providerBudget") return true;
-      if (destination.agentModuleId === null) return true;
-      return agents.some(
-        (agent) =>
-          agent.id === destination.agentModuleId &&
-          agent.visible === true &&
-          agent.archivedAt == null,
-      );
-    });
+    const actionableIndex = pending.findIndex(() => true);
     const destination = pending[actionableIndex];
     if (!destination) return;
 
     if (destination.kind === "usage") {
-      openUsage(destination.agentModuleId);
+      openUsage();
     } else {
       openProviderSettings(destination.providerId);
     }
@@ -70,5 +60,5 @@ export function useMainWindowNavigation({
       if (index < 0) return current;
       return [...current.slice(0, index), ...current.slice(index + 1)];
     });
-  }, [agents, openProviderSettings, openUsage, pending]);
+  }, [openProviderSettings, openUsage, pending]);
 }

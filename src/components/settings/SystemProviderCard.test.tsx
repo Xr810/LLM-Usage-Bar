@@ -3,9 +3,6 @@ import { expect, it, vi } from "vitest";
 import { SystemProviderCard } from "./SystemProviderCard";
 import type { UsageProviderView } from "@/types/usageDashboard";
 
-vi.mock("./SystemProviderAgentBindings", () => ({
-  SystemProviderAgentBindings: () => <div>Agent bindings</div>,
-}));
 vi.mock("./ProviderDailyBudgetField", () => ({
   ProviderDailyBudgetField: ({
     providerId,
@@ -59,7 +56,7 @@ it("locks system identity and endpoint without Edit or Delete actions", () => {
   expect(screen.queryByRole("button", { name: /delete/i })).toBeNull();
 });
 
-it("places a targeted budget editor after authentication and before Agent bindings for metered Providers", () => {
+it("places a targeted budget editor after authentication for metered Providers", () => {
   const onTargetHandled = vi.fn();
   render(
     <SystemProviderCard
@@ -91,9 +88,7 @@ it("places a targeted budget editor after authentication and before Agent bindin
   expect(cardText.indexOf("Upstream API key required")).toBeLessThan(
     cardText.indexOf("Daily budget"),
   );
-  expect(cardText.indexOf("Daily budget")).toBeLessThan(
-    cardText.indexOf("Agent bindings"),
-  );
+  expect(cardText).not.toContain("Agent bindings");
 });
 
 it("does not render a budget editor for subscription Providers", () => {

@@ -126,6 +126,110 @@ pub fn aggregate_provider_range(
     })
 }
 
+/// Aggregate one Provider account across every historical Agent and product
+/// group. Provider identity is the accounting boundary; explicit cross-source
+/// duplicate links remain authoritative even when legacy Agent metadata differs.
+pub fn aggregate_provider_account_range(
+    db: &Database,
+    provider_id: &str,
+    start_at: i64,
+    end_at: i64,
+) -> Result<ProviderRangeAggregate, AppError> {
+    let conn = db
+        .conn
+        .lock()
+        .map_err(|error| AppError::Database(format!("Mutex lock failed: {error}")))?;
+    let mut statement = conn.prepare(
+        "SELECT input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
+                total_cost_usd, cost_source
+         FROM usage_events AS event
+         WHERE event.provider_id = ?1
+           AND event.occurred_at >= ?2 AND event.occurred_at < ?3
+           AND NOT EXISTS (
+               SELECT 1
+               FROM usage_event_links AS link
+               JOIN usage_events AS canonical
+                 ON canonical.event_id = link.canonical_event_id
+               JOIN usage_events AS duplicate
+                 ON duplicate.event_id = link.duplicate_event_id
+               WHERE duplicate.event_id = event.event_id
+                 AND canonical.source = 'proxy'
+                 AND duplicate.source = 'session_log'
+                 AND canonical.provider_id = duplicate.provider_id
+           )
+         ORDER BY event.occurred_at, event.event_id",
+    )?;
+    let rows = statement.query_map(params![provider_id, start_at, end_at], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, i64>(2)?,
+            row.get::<_, i64>(3)?,
+            row.get::<_, Option<String>>(4)?,
+            row.get::<_, String>(5)?,
+        ))
+    })?;
+
+    aggregate_rows(rows)
+}
+
+fn aggregate_rows(
+    rows: impl Iterator<Item = rusqlite::Result<(i64, i64, i64, i64, Option<String>, String)>>,
+) -> Result<ProviderRangeAggregate, AppError> {
+    let mut event_count = 0_u64;
+    let mut input_tokens = 0_u64;
+    let mut output_tokens = 0_u64;
+    let mut cache_read_tokens = 0_u64;
+    let mut cache_creation_tokens = 0_u64;
+    let mut total_cost = Decimal::ZERO;
+    let mut has_cost = false;
+    let mut cost_source_counts = CostSourceCounts::default();
+    for row in rows {
+        let (input, output, cache_read, cache_creation, cost, source) = row?;
+        event_count = checked_sum(event_count, 1)?;
+        input_tokens = checked_sum(input_tokens, non_negative(input, "input_tokens")?)?;
+        output_tokens = checked_sum(output_tokens, non_negative(output, "output_tokens")?)?;
+        cache_read_tokens = checked_sum(
+            cache_read_tokens,
+            non_negative(cache_read, "cache_read_tokens")?,
+        )?;
+        cache_creation_tokens = checked_sum(
+            cache_creation_tokens,
+            non_negative(cache_creation, "cache_creation_tokens")?,
+        )?;
+        if let Some(cost) = cost {
+            total_cost = checked_cost_sum(total_cost, parse_decimal(&cost)?)?;
+            has_cost = true;
+        }
+        match source.as_str() {
+            "upstream" => {
+                cost_source_counts.upstream = checked_sum(cost_source_counts.upstream, 1)?
+            }
+            "estimated" => {
+                cost_source_counts.estimated = checked_sum(cost_source_counts.estimated, 1)?
+            }
+            "unavailable" => {
+                cost_source_counts.unavailable = checked_sum(cost_source_counts.unavailable, 1)?
+            }
+            _ => {
+                return Err(AppError::Database(format!(
+                    "invalid usage cost source: {source}"
+                )))
+            }
+        }
+    }
+
+    Ok(ProviderRangeAggregate {
+        event_count,
+        input_tokens,
+        output_tokens,
+        cache_read_tokens,
+        cache_creation_tokens,
+        total_cost_usd: has_cost.then(|| total_cost.normalize().to_string()),
+        cost_source_counts,
+    })
+}
+
 fn non_negative(value: i64, field: &str) -> Result<u64, AppError> {
     u64::try_from(value).map_err(|_| AppError::Database(format!("negative usage value in {field}")))
 }

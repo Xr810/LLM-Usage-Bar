@@ -10,8 +10,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { AgentsSettings } from "./DashboardModulesSettings";
-import { ProxyRoutingSettings } from "./ProxyRoutingSettings";
 import { UsageDiagnosticsPanel } from "./UsageDiagnosticsPanel";
 import { UsageProvidersSettings } from "./UsageProvidersSettings";
 
@@ -24,13 +22,13 @@ interface SettingsDialogProps {
   onProviderTargetHandled?: () => void;
 }
 
-type SettingsTab = "agents" | "providers" | "proxy" | "diagnostics";
+type SettingsTab = "providers" | "diagnostics";
 
 function resolveSettingsTab(tab?: string): SettingsTab {
-  if (tab === "providers" || tab === "proxy" || tab === "diagnostics") {
+  if (tab === "diagnostics") {
     return tab;
   }
-  return "agents";
+  return "providers";
 }
 
 export function SettingsPage({
@@ -75,7 +73,7 @@ export function SettingsPage({
           <DialogDescription>
             {t("settings.usageConfigurationDescription", {
               defaultValue:
-                "Manage Agents, Provider identities, local proxy setup, and usage diagnostics.",
+                "Manage Provider accounts, monitoring sources, budgets, and diagnostics.",
             })}
           </DialogDescription>
         </DialogHeader>
@@ -91,16 +89,8 @@ export function SettingsPage({
             })}
             className="w-full flex-shrink-0 justify-start overflow-x-auto"
           >
-            <TabsTrigger value="agents">
-              {t("settings.agents", { defaultValue: "Agents" })}
-            </TabsTrigger>
             <TabsTrigger value="providers">
               {t("settings.providers", { defaultValue: "Providers" })}
-            </TabsTrigger>
-            <TabsTrigger value="proxy">
-              {t("settings.proxySetup", {
-                defaultValue: "Proxy setup",
-              })}
             </TabsTrigger>
             <TabsTrigger value="diagnostics">
               {t("settings.diagnostics", { defaultValue: "Diagnostics" })}
@@ -108,17 +98,11 @@ export function SettingsPage({
           </TabsList>
 
           <div className="min-h-0 flex-1 overflow-y-auto">
-            <TabsContent value="agents">
-              <AgentsSettings />
-            </TabsContent>
             <TabsContent value="providers">
               <UsageProvidersSettings
                 targetProviderId={targetProviderId ?? undefined}
                 onTargetHandled={handleProviderTargetHandled}
               />
-            </TabsContent>
-            <TabsContent value="proxy">
-              <ProxyRoutingSettings />
             </TabsContent>
             <TabsContent value="diagnostics">
               <UsageDiagnosticsPanel />

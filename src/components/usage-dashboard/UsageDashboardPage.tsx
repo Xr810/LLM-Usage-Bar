@@ -1,27 +1,27 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { UsageDateRangePicker } from "@/components/usage/UsageDateRangePicker";
 import { useUsageEventBridge } from "@/hooks/useUsageEventBridge";
 import {
+  useProviderUsageDashboard,
   useRefreshProviderQuota,
   useSyncProviderSessionUsage,
-  useUsageDashboard,
 } from "@/lib/query/usageDashboard";
 import { resolveUsageRange } from "@/lib/usageRange";
 import type { UsageRangeSelection } from "@/types/usage";
 import type { AgentModuleView } from "@/types/usageDashboard";
-import { AgentUsagePage } from "./AgentUsagePage";
-import { projectAgentDashboard } from "./usageDashboardProjection";
+import { ProviderUsagePage } from "./ProviderUsagePage";
+import { projectProviderDashboard } from "./usageDashboardProjection";
 
 interface UsageDashboardPageProps {
+  /** Compatibility-only; Provider monitoring intentionally ignores Agent selection. */
   selectedAgent?: AgentModuleView | null;
   onOpenSettings?: () => void;
 }
 
 export function UsageDashboardPage({
-  selectedAgent = null,
   onOpenSettings,
 }: UsageDashboardPageProps) {
   const { t } = useTranslation();
@@ -32,26 +32,17 @@ export function UsageDashboardPage({
     const interval = globalThis.setInterval(advanceRangeClock, 30_000);
     return () => globalThis.clearInterval(interval);
   }, [advanceRangeClock]);
+
   const [selection, setSelection] = useState<UsageRangeSelection>({
     preset: "today",
   });
   const [warnings, setWarnings] = useState<string[]>([]);
   const [errors, setErrors] = useState<string[]>([]);
-  const selectedAgentId = selectedAgent?.id ?? "";
-  const [feedbackAgentId, setFeedbackAgentId] = useState(selectedAgentId);
-  const activeAgentId = useRef(selectedAgentId);
-  useEffect(() => {
-    activeAgentId.current = selectedAgentId;
-    setWarnings([]);
-    setErrors([]);
-    setFeedbackAgentId(selectedAgentId);
-  }, [selectedAgentId]);
   const range = useMemo(
     () => resolveUsageRange(selection, rangeClockMs),
     [rangeClockMs, selection],
   );
-  const dashboard = useUsageDashboard(
-    selectedAgent?.id ?? "",
+  const dashboard = useProviderUsageDashboard(
     range.startDate,
     range.endDate,
   );
@@ -59,106 +50,95 @@ export function UsageDashboardPage({
   const syncSession = useSyncProviderSessionUsage();
   const projection = useMemo(
     () =>
-      selectedAgent && dashboard.data
-        ? projectAgentDashboard(selectedAgent, dashboard.data)
-        : null,
-    [dashboard.data, selectedAgent],
+      dashboard.data ? projectProviderDashboard(dashboard.data) : null,
+    [dashboard.data],
   );
 
   const errorText = (cause: unknown) =>
     cause instanceof Error ? cause.message : String(cause);
   const run = async (operation: () => Promise<unknown>) => {
-    const operationAgentId = selectedAgentId;
     try {
       await operation();
-      if (activeAgentId.current !== operationAgentId) return;
-      setFeedbackAgentId(operationAgentId);
       setErrors([]);
     } catch (cause) {
-      if (activeAgentId.current !== operationAgentId) return;
-      setFeedbackAgentId(operationAgentId);
       setErrors([errorText(cause)]);
     }
   };
   const sync = async (providerId: string) => {
-    const operationAgentId = selectedAgentId;
     try {
       const result = await syncSession.mutateAsync(providerId);
-      if (activeAgentId.current !== operationAgentId) return;
-      setFeedbackAgentId(operationAgentId);
       setWarnings(result.warnings ?? []);
       setErrors(result.errors ?? []);
     } catch (cause) {
-      if (activeAgentId.current !== operationAgentId) return;
-      setFeedbackAgentId(operationAgentId);
       setWarnings([]);
       setErrors([errorText(cause)]);
     }
   };
 
-  const queryErrors = dashboard.error ? [errorText(dashboard.error)] : [];
   const renderedErrors = [
-    ...queryErrors,
-    ...(feedbackAgentId === selectedAgentId ? errors : []),
+    ...(dashboard.error ? [errorText(dashboard.error)] : []),
+    ...errors,
   ].filter((message, index, messages) => messages.indexOf(message) === index);
 
   return (
     <div className="space-y-4 pb-6">
-      <div className="flex flex-wrap items-center justify-end gap-2">
-        {(["today", "7d", "30d"] as const).map((preset) => (
-          <Button
-            key={preset}
-            size="sm"
-            variant={selection.preset === preset ? "default" : "outline"}
-            aria-pressed={selection.preset === preset}
-            onClick={() => setSelection({ preset })}
-          >
-            {preset === "today"
-              ? t("usageDashboard.today", { defaultValue: "Today" })
-              : preset === "7d"
-                ? t("usageDashboard.sevenDays", { defaultValue: "7 days" })
-                : t("usageDashboard.thirtyDays", {
-                    defaultValue: "30 days",
-                  })}
-          </Button>
-        ))}
-        <UsageDateRangePicker
-          selection={selection}
-          onApply={setSelection}
-          triggerLabel={t("usageDashboard.customRange", {
-            defaultValue: "Custom range",
-          })}
-        />
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-base font-semibold">
+            {t("usageDashboard.providerMonitoring", {
+              defaultValue: "Provider monitoring",
+            })}
+          </h2>
+          <p className="text-xs text-muted-foreground">
+            {t("usageDashboard.providerMonitoringDescription", {
+              defaultValue:
+                "Usage, cost and remaining quota are shown per Provider account.",
+            })}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {(["today", "7d", "30d"] as const).map((preset) => (
+            <Button
+              key={preset}
+              size="sm"
+              variant={selection.preset === preset ? "default" : "outline"}
+              aria-pressed={selection.preset === preset}
+              onClick={() => setSelection({ preset })}
+            >
+              {preset === "today"
+                ? t("usageDashboard.today", { defaultValue: "Today" })
+                : preset === "7d"
+                  ? t("usageDashboard.sevenDays", { defaultValue: "7 days" })
+                  : t("usageDashboard.thirtyDays", {
+                      defaultValue: "30 days",
+                    })}
+            </Button>
+          ))}
+          <UsageDateRangePicker
+            selection={selection}
+            onApply={setSelection}
+            triggerLabel={t("usageDashboard.customRange", {
+              defaultValue: "Custom range",
+            })}
+          />
+        </div>
       </div>
 
-      {[
-        ...(dashboard.data?.warnings ?? []),
-        ...(feedbackAgentId === selectedAgentId ? warnings : []),
-      ].map((warning) => (
+      {[...(dashboard.data?.warnings ?? []), ...warnings].map((warning) => (
         <Alert key={warning}>
           <AlertDescription>{warning}</AlertDescription>
         </Alert>
       ))}
       {renderedErrors.map((message) => (
-        <Alert
-          key={message}
-          variant="destructive"
-          aria-label={message}
-        >
+        <Alert key={message} variant="destructive" aria-label={message}>
           <AlertDescription>{message}</AlertDescription>
         </Alert>
       ))}
 
       {dashboard.isLoading ? (
         <div>{t("common.loading", { defaultValue: "Loading" })}</div>
-      ) : !selectedAgent ? (
-        <div className="rounded-lg border border-dashed p-8 text-center text-muted-foreground">
-          {t("dashboardAgents.selectAgent", {
-            defaultValue: "Select an Agent",
-          })}
-        </div>
       ) : projection ? (
-        <AgentUsagePage
+        <ProviderUsagePage
           projection={projection}
           startAt={range.startDate}
           endAt={range.endDate}

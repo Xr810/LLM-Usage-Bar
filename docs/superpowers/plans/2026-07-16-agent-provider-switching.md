@@ -1,5 +1,9 @@
 # Agent Provider Switching Program Implementation Plan
 
+> **Superseded 2026-07-17:** Do not implement this program or its physical-v19
+> migration. CC Switch owns switching; LLM Usage Bar is Provider-only monitoring.
+> See [`2026-07-17-provider-only-monitoring.md`](2026-07-17-provider-only-monitoring.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Deliver verified per-Agent Provider switching for the five built-in Agents and declarative Custom Agents while retaining every existing usage, Provider, Profile, proxy, Settings, and menu-bar capability.

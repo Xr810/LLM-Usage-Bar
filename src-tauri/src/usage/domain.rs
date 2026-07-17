@@ -447,6 +447,15 @@ pub struct UsageDashboardView {
     pub warnings: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderMonitoringDashboardView {
+    pub start_at: i64,
+    pub end_at: i64,
+    pub providers: Vec<ProviderUsageView>,
+    pub warnings: Vec<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

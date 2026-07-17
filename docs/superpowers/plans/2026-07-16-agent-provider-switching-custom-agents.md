@@ -1,5 +1,8 @@
 # Custom Agent Adapter Implementation Plan
 
+> **Superseded 2026-07-17:** Do not implement. See
+> [`2026-07-17-provider-only-monitoring.md`](2026-07-17-provider-only-monitoring.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Let a user define a safe declarative adapter for a Custom Agent, bind protocol-compatible Providers, and perform the same verified A→B→A switching, recovery, attribution, and guarded Disconnect lifecycle as a built-in Agent.

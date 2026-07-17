@@ -2,12 +2,12 @@ import { useTranslation } from "react-i18next";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import type { AgentUsageProjection } from "./usageDashboardProjection";
+import type { ProviderDashboardProjection } from "./usageDashboardProjection";
 import { MeteredProviderCard } from "./MeteredProviderCard";
 import { SubscriptionProviderCard } from "./SubscriptionProviderCard";
 
-interface AgentUsagePageProps {
-  projection: AgentUsageProjection;
+interface ProviderUsagePageProps {
+  projection: ProviderDashboardProjection;
   startAt: number;
   endAt: number;
   onRefreshQuota: (providerId: string) => Promise<unknown>;
@@ -17,7 +17,7 @@ interface AgentUsagePageProps {
   isSyncingSessions?: boolean;
 }
 
-export function AgentUsagePage({
+export function ProviderUsagePage({
   projection,
   startAt,
   endAt,
@@ -26,7 +26,7 @@ export function AgentUsagePage({
   onOpenSettings,
   isRefreshingQuota = false,
   isSyncingSessions = false,
-}: AgentUsagePageProps) {
+}: ProviderUsagePageProps) {
   const { t } = useTranslation();
   const costText =
     projection.meteredTotalCostUsd == null
@@ -36,9 +36,7 @@ export function AgentUsagePage({
       : `$${projection.meteredTotalCostUsd}`;
   const costStatusText =
     projection.meteredCostStatus === "partial"
-      ? t("usageDashboard.costPartial", {
-          defaultValue: "Partial cost data",
-        })
+      ? t("usageDashboard.costPartial", { defaultValue: "Partial cost data" })
       : projection.meteredCostStatus === "estimated"
         ? t("usageDashboard.costEstimatedSummary", {
             defaultValue: "Includes estimated cost",
@@ -50,16 +48,16 @@ export function AgentUsagePage({
           : t("usageDashboard.costComplete", {
               defaultValue: "Trusted cost data",
             });
-  const empty =
-    projection.subscriptionProviders.length === 0 &&
-    projection.meteredProviders.length === 0;
 
-  if (empty) {
+  if (
+    projection.subscriptionProviders.length === 0 &&
+    projection.meteredProviders.length === 0
+  ) {
     return (
       <div className="rounded-lg border border-dashed p-8 text-center">
         <p className="text-sm text-muted-foreground">
-          {t("usageDashboard.agentEmpty", {
-            defaultValue: "No Provider history is available for this Agent.",
+          {t("usageDashboard.providerEmpty", {
+            defaultValue: "No Provider accounts are configured.",
           })}
         </p>
         {onOpenSettings ? (
@@ -96,8 +94,8 @@ export function AgentUsagePage({
           </div>
         ) : (
           <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
-            {t("usageDashboard.noSubscriptionHistory", {
-              defaultValue: "No subscription history for this Agent.",
+            {t("usageDashboard.noSubscriptionProviders", {
+              defaultValue: "No subscription Provider accounts.",
             })}
           </div>
         )}
@@ -105,8 +103,8 @@ export function AgentUsagePage({
 
       <section className="space-y-3" aria-labelledby="metered-heading">
         <h2 id="metered-heading" className="text-base font-semibold">
-          {t("usageDashboard.meteredUsage", {
-            defaultValue: "Metered usage",
+          {t("usageDashboard.meteredProviders", {
+            defaultValue: "Metered Provider accounts",
           })}
         </h2>
         <Card>
@@ -125,10 +123,7 @@ export function AgentUsagePage({
               <div className="text-xs text-muted-foreground">
                 {t("usageDashboard.tokens", { defaultValue: "Tokens" })}
               </div>
-              <div
-                className="text-xl font-semibold"
-                data-testid="metered-total-tokens"
-              >
+              <div className="text-xl font-semibold" data-testid="metered-total-tokens">
                 {projection.meteredTotalTokens.toLocaleString()}
               </div>
             </div>
@@ -136,19 +131,13 @@ export function AgentUsagePage({
               <div className="text-xs text-muted-foreground">
                 {t("usageDashboard.requests", { defaultValue: "Requests" })}
               </div>
-              <div
-                className="text-xl font-semibold"
-                data-testid="metered-request-count"
-              >
+              <div className="text-xl font-semibold" data-testid="metered-request-count">
                 {projection.meteredRequestCount.toLocaleString()}
               </div>
             </div>
             <div>
               <div className="text-xs text-muted-foreground">USD</div>
-              <div
-                className="text-xl font-semibold"
-                data-testid="metered-total-cost"
-              >
+              <div className="text-xl font-semibold" data-testid="metered-total-cost">
                 {costText}
               </div>
             </div>
@@ -167,8 +156,8 @@ export function AgentUsagePage({
           </div>
         ) : (
           <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
-            {t("usageDashboard.noMeteredHistory", {
-              defaultValue: "No metered history for this Agent.",
+            {t("usageDashboard.noMeteredProviders", {
+              defaultValue: "No metered Provider accounts.",
             })}
           </div>
         )}

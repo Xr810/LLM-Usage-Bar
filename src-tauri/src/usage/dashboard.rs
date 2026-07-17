@@ -1,9 +1,9 @@
 use crate::database::Database;
 use crate::error::AppError;
-use crate::usage::aggregation::aggregate_provider_range;
+use crate::usage::aggregation::{aggregate_provider_account_range, aggregate_provider_range};
 use crate::usage::domain::{
-    BillingKind, CostSourceCounts, ProductUsageView, ProviderUsageView, QuotaStatusView,
-    TokenSource, UsageDashboardView, UsageProviderView,
+    BillingKind, CostSourceCounts, ProductUsageView, ProviderMonitoringDashboardView,
+    ProviderUsageView, QuotaStatusView, TokenSource, UsageDashboardView, UsageProviderView,
 };
 use rusqlite::params;
 use rust_decimal::Decimal;
@@ -43,6 +43,99 @@ impl<'a> UsageDashboardService<'a> {
     ) -> Self {
         self.shared_provider_ids = provider_ids.into_iter().collect();
         self
+    }
+
+    pub fn get_provider_dashboard(
+        &self,
+        start_at: i64,
+        end_at: i64,
+    ) -> Result<ProviderMonitoringDashboardView, AppError> {
+        if start_at >= end_at {
+            return Err(AppError::Message(
+                "start_at must be before end_at".to_string(),
+            ));
+        }
+
+        let mut provider_ids = self.event_provider_ids_all(start_at, end_at)?;
+        let providers = self
+            .db
+            .list_usage_providers()?
+            .into_iter()
+            .map(|provider| (provider.id.clone(), provider))
+            .collect::<BTreeMap<_, _>>();
+        provider_ids.extend(
+            providers
+                .values()
+                .filter(|provider| provider.enabled)
+                .map(|provider| provider.id.clone()),
+        );
+
+        let mut rows = Vec::with_capacity(provider_ids.len());
+        for provider_id in provider_ids {
+            let Some(provider) = providers.get(&provider_id) else {
+                continue;
+            };
+            let aggregate =
+                aggregate_provider_account_range(self.db, &provider.id, start_at, end_at)?;
+            let (snapshot, quota_fetch_state) = self.db.latest_quota_status(&provider.id)?;
+            let quota = snapshot.map(|snapshot| QuotaStatusView {
+                snapshot_id: snapshot.snapshot_id,
+                fetched_at: snapshot.fetched_at,
+                five_hour_utilization_percent: snapshot.five_hour_utilization_percent,
+                five_hour_resets_at: snapshot.five_hour_resets_at,
+                seven_day_utilization_percent: snapshot.seven_day_utilization_percent,
+                seven_day_resets_at: snapshot.seven_day_resets_at,
+                manual_resets_remaining: snapshot.manual_resets_remaining,
+            });
+            rows.push(ProviderUsageView {
+                provider: provider.clone(),
+                shared_account: false,
+                event_count: aggregate.event_count,
+                input_tokens: aggregate.input_tokens,
+                output_tokens: aggregate.output_tokens,
+                cache_read_tokens: aggregate.cache_read_tokens,
+                cache_creation_tokens: aggregate.cache_creation_tokens,
+                total_cost_usd: aggregate.total_cost_usd,
+                cost_source_counts: aggregate.cost_source_counts,
+                quota,
+                quota_fetch_state,
+            });
+        }
+        rows.sort_by(|left, right| {
+            (left.provider.name.to_lowercase(), left.provider.id.as_str()).cmp(&(
+                right.provider.name.to_lowercase(),
+                right.provider.id.as_str(),
+            ))
+        });
+
+        Ok(ProviderMonitoringDashboardView {
+            start_at,
+            end_at,
+            providers: rows,
+            warnings: vec![],
+        })
+    }
+
+    fn event_provider_ids_all(
+        &self,
+        start_at: i64,
+        end_at: i64,
+    ) -> Result<BTreeSet<String>, AppError> {
+        let conn = self
+            .db
+            .conn
+            .lock()
+            .map_err(|error| AppError::Database(format!("Mutex lock failed: {error}")))?;
+        let mut statement = conn.prepare(
+            "SELECT DISTINCT provider_id
+             FROM usage_events
+             WHERE occurred_at >= ?1 AND occurred_at < ?2
+             ORDER BY provider_id",
+        )?;
+        let provider_ids = statement
+            .query_map(params![start_at, end_at], |row| row.get(0))?
+            .collect::<Result<BTreeSet<_>, _>>()?;
+        Ok(provider_ids)
     }
 
     pub fn get_dashboard(
@@ -517,6 +610,74 @@ mod tests {
 
         let detail = db.list_usage_events("sub", 100, 200, 1, 10).unwrap();
         assert_eq!(detail.total, 2, "duplicate remains queryable in details");
+    }
+
+    #[test]
+    fn provider_dashboard_aggregates_all_agent_and_unassigned_history_by_account() {
+        let db = database_without_system_bindings();
+        db.save_usage_provider(&provider(
+            "account-personal",
+            BillingKind::Metered,
+            "openai",
+        ))
+        .unwrap();
+        db.save_usage_provider(&provider("account-work", BillingKind::Metered, "openai"))
+            .unwrap();
+
+        let mut personal_codex = event(
+            "personal-codex",
+            "account-personal",
+            "openai",
+            TokenSource::Proxy,
+            CostSource::Upstream,
+            100,
+            Some("0.10"),
+        );
+        personal_codex.agent_module_id = Some("codex".to_string());
+        let mut personal_claude = event(
+            "personal-claude",
+            "account-personal",
+            "legacy-openai",
+            TokenSource::SessionLog,
+            CostSource::Estimated,
+            101,
+            Some("0.20"),
+        );
+        personal_claude.agent_module_id = Some("claude-code".to_string());
+        let work_unassigned = event(
+            "work-unassigned",
+            "account-work",
+            "openai",
+            TokenSource::Proxy,
+            CostSource::Unavailable,
+            102,
+            None,
+        );
+        for usage_event in [&personal_codex, &personal_claude, &work_unassigned] {
+            db.insert_usage_event(usage_event).unwrap();
+        }
+
+        let dashboard = UsageDashboardService::new(&db)
+            .get_provider_dashboard(100, 200)
+            .unwrap();
+        let personal = dashboard
+            .providers
+            .iter()
+            .find(|row| row.provider.id == "account-personal")
+            .unwrap();
+        let work = dashboard
+            .providers
+            .iter()
+            .find(|row| row.provider.id == "account-work")
+            .unwrap();
+
+        assert_eq!(personal.event_count, 2);
+        assert_eq!(personal.input_tokens, 20);
+        assert_eq!(personal.total_cost_usd.as_deref(), Some("0.3"));
+        assert_eq!(work.event_count, 1);
+        assert_eq!(work.cost_source_counts.unavailable, 1);
+        assert!(!personal.shared_account);
+        assert!(!work.shared_account);
     }
 
     #[test]

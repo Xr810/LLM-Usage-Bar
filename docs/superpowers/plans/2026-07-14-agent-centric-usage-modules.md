@@ -1,5 +1,8 @@
 # Agent-Centric Usage Modules Implementation Plan
 
+> **Superseded 2026-07-17:** Do not implement this plan. Provider-only monitoring
+> is now canonical: [`2026-07-17-provider-only-monitoring.md`](2026-07-17-provider-only-monitoring.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: use
 > `superpowers:subagent-driven-development` task-by-task and
 > `superpowers:verification-before-completion` before any completion claim.

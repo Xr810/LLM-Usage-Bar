@@ -23,6 +23,8 @@ export const usageDashboardKeys = {
   diagnostics: () => [...usageDashboardKeys.all, "diagnostics"] as const,
   claudeAuth: () => [...usageDashboardKeys.all, "claude-cli-auth"] as const,
   dashboards: () => [...usageDashboardKeys.all, "dashboard"] as const,
+  providerDashboard: (startAt: number, endAt: number) =>
+    [...usageDashboardKeys.dashboards(), "providers", startAt, endAt] as const,
   dashboard: (agentModuleId: string, startAt: number, endAt: number) =>
     [
       ...usageDashboardKeys.dashboards(),
@@ -31,6 +33,22 @@ export const usageDashboardKeys = {
       endAt,
     ] as const,
   eventsAll: () => [...usageDashboardKeys.all, "events"] as const,
+  providerEvents: (
+    providerId: string,
+    startAt: number,
+    endAt: number,
+    page: number,
+    pageSize: number,
+  ) =>
+    [
+      ...usageDashboardKeys.eventsAll(),
+      "provider",
+      providerId,
+      startAt,
+      endAt,
+      page,
+      pageSize,
+    ] as const,
   eventsRoot: (agentModuleId: string, providerId?: string) =>
     [
       ...usageDashboardKeys.eventsAll(),
@@ -119,6 +137,14 @@ export function useUsageDashboard(
   });
 }
 
+export function useProviderUsageDashboard(startAt: number, endAt: number) {
+  return useQuery({
+    queryKey: usageDashboardKeys.providerDashboard(startAt, endAt),
+    queryFn: () => usageDashboardApi.getProviderDashboard(startAt, endAt),
+    enabled: startAt < endAt,
+  });
+}
+
 export function useUsageEvents(
   agentModuleId: string,
   providerId: string | undefined,
@@ -151,6 +177,33 @@ export function useUsageEvents(
       return events;
     },
     enabled: Boolean(agentModuleId) && startAt < endAt,
+  });
+}
+
+export function useProviderUsageEvents(
+  providerId: string,
+  startAt: number,
+  endAt: number,
+  page: number,
+  pageSize: number,
+) {
+  return useQuery({
+    queryKey: usageDashboardKeys.providerEvents(
+      providerId,
+      startAt,
+      endAt,
+      page,
+      pageSize,
+    ),
+    queryFn: () =>
+      usageDashboardApi.getProviderEvents(
+        providerId,
+        startAt,
+        endAt,
+        page,
+        pageSize,
+      ),
+    enabled: Boolean(providerId) && startAt < endAt,
   });
 }
 

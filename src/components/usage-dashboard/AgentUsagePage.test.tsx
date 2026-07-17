@@ -11,7 +11,7 @@ import { AgentUsagePage } from "./AgentUsagePage";
 const mocks = vi.hoisted(() => ({ events: vi.fn() }));
 
 vi.mock("@/lib/query/usageDashboard", () => ({
-  useUsageEvents: (...args: unknown[]) => mocks.events(...args),
+  useProviderUsageEvents: (...args: unknown[]) => mocks.events(...args),
 }));
 
 const agent: AgentModuleView = {
@@ -118,11 +118,11 @@ describe("AgentUsagePage", () => {
     expect(screen.getByText("Metered usage")).toBeInTheDocument();
     expect(screen.getByText("Official Subscription")).toBeInTheDocument();
     expect(screen.getByText("Azure API")).toBeInTheDocument();
-    expect(screen.getByText("Shared account quota")).toBeInTheDocument();
-    expect(screen.getByText("Shared account")).toBeInTheDocument();
+    expect(screen.queryByText("Shared account quota")).toBeNull();
+    expect(screen.queryByText("Shared account")).toBeNull();
     expect(screen.getByTestId("metered-total-tokens")).toHaveTextContent("135");
     expect(screen.getByTestId("metered-request-count")).toHaveTextContent("2");
-    expect(mocks.events).toHaveBeenCalledWith("codex", "metered", 10, 20, 1, 5);
+    expect(mocks.events).toHaveBeenCalledWith("metered", 10, 20, 1, 5);
 
     for (const configuration of [
       "Add Provider",

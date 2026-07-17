@@ -1,5 +1,8 @@
 # Agent Provider Switching Acceptance and Rollout Plan
 
+> **Superseded 2026-07-17:** Do not execute this rollout. See
+> [`2026-07-17-provider-only-monitoring.md`](2026-07-17-provider-only-monitoring.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Prove the complete first release—including Custom Agents—against configuration correctness, routing/attribution, crash recovery, account isolation, legacy compatibility, renderer/native behavior, secret boundaries, and the full repository regression suite.
