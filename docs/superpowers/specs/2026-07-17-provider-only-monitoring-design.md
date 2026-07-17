@@ -1,7 +1,7 @@
 # Provider-Only Usage Monitoring Design
 
-**Date:** 2026-07-17  
-**Status:** Approved  
+**Date:** 2026-07-17
+**Status:** Approved
 **Supersedes:** Agent-centric usage navigation, Agent–Provider attribution, and
 LLM Usage Bar-managed Provider switching.
 
@@ -96,4 +96,3 @@ than Agent bindings.
    CC Switch write.
 7. Existing history remains queryable by Provider after Agent UI removal.
 8. The v19 Agent switching migration and its switching tables are absent.
-
