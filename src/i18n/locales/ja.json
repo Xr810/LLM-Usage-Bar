@@ -153,7 +153,16 @@
     "leaveModuleEmptyTitle": "{{module}} を空にしますか？",
     "leaveModuleEmptyMessage": "{{provider}} を移動すると、{{module}} には Provider がなくなります。過去の使用量は変更されません。",
     "moveProvider": "Provider を移動",
-    "empty": "使用量 Provider はまだありません"
+    "empty": "使用量 Provider はまだありません",
+    "providerMonitoring": "プロバイダー監視",
+    "providerMonitoringDescription": "プロバイダーアカウントごとの使用量、コスト、残りクォータを表示します。",
+    "meteredProviders": "従量課金アカウント",
+    "noSubscriptionProviders": "サブスクリプションのプロバイダーアカウントはありません。",
+    "noMeteredProviders": "従量課金のプロバイダーアカウントはありません。",
+    "providerEmpty": "プロバイダーアカウントが設定されていません。",
+    "remainingPercent": "残り {{value}}%",
+    "fiveHourWindow": "5 時間枠",
+    "sevenDayWindow": "7 日間枠"
   },
   "dashboardModules": {
     "navigation": "使用量モジュール",
@@ -3278,6 +3287,7 @@
     "invalidQuotaPercent": "使用率を取得できません",
     "quotaUnavailable": "上限データを取得できません",
     "invalidResetTimestamp": "リセット時刻を取得できません",
-    "resetPendingRefresh": "上限データの更新待ち"
+    "resetPendingRefresh": "上限データの更新待ち",
+    "providerMonitoring": "プロバイダー監視"
   }
 }

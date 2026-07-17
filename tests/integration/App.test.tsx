@@ -24,7 +24,7 @@ describe("App usage-dashboard acceptance with Tauri MSW", () => {
     expect(
       await screen.findAllByText("Official Subscription"),
     ).not.toHaveLength(0);
-    expect(screen.getAllByText("25% used")).not.toHaveLength(0);
+    expect(screen.getAllByText("75% left")).not.toHaveLength(0);
     expect(screen.getByText("Azure API")).toBeInTheDocument();
     expect(screen.getAllByText("OpenRouter")).not.toHaveLength(0);
     expect(screen.queryByRole("tablist", { name: "Agents" })).toBeNull();

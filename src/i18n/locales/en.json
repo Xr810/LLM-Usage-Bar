@@ -153,7 +153,16 @@
     "leaveModuleEmptyTitle": "Leave {{module}} empty?",
     "leaveModuleEmptyMessage": "Moving {{provider}} will leave {{module}} without Providers. Historical usage is unchanged.",
     "moveProvider": "Move Provider",
-    "empty": "No usage providers yet"
+    "empty": "No usage providers yet",
+    "providerMonitoring": "Provider monitoring",
+    "providerMonitoringDescription": "Usage, cost and remaining quota are shown per Provider account.",
+    "meteredProviders": "Metered accounts",
+    "noSubscriptionProviders": "No subscription Provider accounts.",
+    "noMeteredProviders": "No metered Provider accounts.",
+    "providerEmpty": "No Provider accounts are configured.",
+    "remainingPercent": "{{value}}% left",
+    "fiveHourWindow": "5-hour window",
+    "sevenDayWindow": "7-day window"
   },
   "dashboardModules": {
     "navigation": "Dashboard modules",
@@ -3278,6 +3287,7 @@
     "invalidQuotaPercent": "Usage percentage unavailable",
     "quotaUnavailable": "Quota data unavailable",
     "invalidResetTimestamp": "Reset time unavailable",
-    "resetPendingRefresh": "Waiting for refreshed quota"
+    "resetPendingRefresh": "Waiting for refreshed quota",
+    "providerMonitoring": "Provider monitoring"
   }
 }

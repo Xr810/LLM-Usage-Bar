@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
+import { SegmentedControl } from "@/components/common/SegmentedControl";
 import { UsageDateRangePicker } from "@/components/usage/UsageDateRangePicker";
 import { useUsageEventBridge } from "@/hooks/useUsageEventBridge";
 import {
@@ -20,6 +20,8 @@ interface UsageDashboardPageProps {
   selectedAgent?: AgentModuleView | null;
   onOpenSettings?: () => void;
 }
+
+type RangePreset = "today" | "7d" | "30d";
 
 export function UsageDashboardPage({
   onOpenSettings,
@@ -42,15 +44,11 @@ export function UsageDashboardPage({
     () => resolveUsageRange(selection, rangeClockMs),
     [rangeClockMs, selection],
   );
-  const dashboard = useProviderUsageDashboard(
-    range.startDate,
-    range.endDate,
-  );
+  const dashboard = useProviderUsageDashboard(range.startDate, range.endDate);
   const refreshQuota = useRefreshProviderQuota();
   const syncSession = useSyncProviderSessionUsage();
   const projection = useMemo(
-    () =>
-      dashboard.data ? projectProviderDashboard(dashboard.data) : null,
+    () => (dashboard.data ? projectProviderDashboard(dashboard.data) : null),
     [dashboard.data],
   );
 
@@ -80,16 +78,26 @@ export function UsageDashboardPage({
     ...errors,
   ].filter((message, index, messages) => messages.indexOf(message) === index);
 
+  const presetOptions = (["today", "7d", "30d"] as const).map((preset) => ({
+    value: preset as RangePreset,
+    label:
+      preset === "today"
+        ? t("usageDashboard.today", { defaultValue: "Today" })
+        : preset === "7d"
+          ? t("usageDashboard.sevenDays", { defaultValue: "7 days" })
+          : t("usageDashboard.thirtyDays", { defaultValue: "30 days" }),
+  }));
+
   return (
-    <div className="space-y-4 pb-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+    <div className="space-y-5 pb-8">
+      <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h2 className="text-base font-semibold">
+          <h2 className="text-lg font-semibold tracking-tight">
             {t("usageDashboard.providerMonitoring", {
               defaultValue: "Provider monitoring",
             })}
           </h2>
-          <p className="text-xs text-muted-foreground">
+          <p className="mt-0.5 text-xs text-muted-foreground">
             {t("usageDashboard.providerMonitoringDescription", {
               defaultValue:
                 "Usage, cost and remaining quota are shown per Provider account.",
@@ -97,23 +105,15 @@ export function UsageDashboardPage({
           </p>
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2">
-          {(["today", "7d", "30d"] as const).map((preset) => (
-            <Button
-              key={preset}
-              size="sm"
-              variant={selection.preset === preset ? "default" : "outline"}
-              aria-pressed={selection.preset === preset}
-              onClick={() => setSelection({ preset })}
-            >
-              {preset === "today"
-                ? t("usageDashboard.today", { defaultValue: "Today" })
-                : preset === "7d"
-                  ? t("usageDashboard.sevenDays", { defaultValue: "7 days" })
-                  : t("usageDashboard.thirtyDays", {
-                      defaultValue: "30 days",
-                    })}
-            </Button>
-          ))}
+          <SegmentedControl
+            options={presetOptions}
+            value={
+              selection.preset === "custom"
+                ? ("" as RangePreset)
+                : (selection.preset as RangePreset)
+            }
+            onChange={(preset) => setSelection({ preset })}
+          />
           <UsageDateRangePicker
             selection={selection}
             onApply={setSelection}
@@ -136,7 +136,13 @@ export function UsageDashboardPage({
       ))}
 
       {dashboard.isLoading ? (
-        <div>{t("common.loading", { defaultValue: "Loading" })}</div>
+        <div className="space-y-4" aria-hidden="true">
+          <div className="grid gap-4 lg:grid-cols-2">
+            <div className="h-44 animate-pulse rounded-xl bg-muted/60" />
+            <div className="h-44 animate-pulse rounded-xl bg-muted/60" />
+          </div>
+          <div className="h-16 animate-pulse rounded-xl bg-muted/60" />
+        </div>
       ) : projection ? (
         <ProviderUsagePage
           projection={projection}

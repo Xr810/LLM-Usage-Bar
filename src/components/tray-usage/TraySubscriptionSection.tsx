@@ -29,11 +29,11 @@ export function TraySubscriptionSection({
     <section aria-labelledby="tray-subscription-heading">
       <h2
         id="tray-subscription-heading"
-        className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+        className="mb-1.5 px-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground"
       >
         {t("trayUsage.subscription", { defaultValue: "Subscription" })}
       </h2>
-      <div className="divide-y divide-border rounded-lg border border-border">
+      <div className="space-y-2">
         {rows.map(({ agentModuleId, agentName, provider }) => {
           if (!provider.subscription) return null;
           const planText = provider.subscription.planLabel
@@ -48,25 +48,25 @@ export function TraySubscriptionSection({
           return (
             <article
               key={`${agentModuleId}:${provider.providerId}`}
-              className="tray-usage-provider-row space-y-3 px-3 py-3"
+              className="tray-usage-provider-row space-y-2.5 rounded-xl border border-border/60 bg-card"
             >
-              <div className="flex min-w-0 items-start justify-between gap-3">
+              <div className="flex min-w-0 items-center justify-between gap-2">
                 <div className="flex min-w-0 items-center gap-2">
                   <ProviderIcon
                     icon={providerIconName(provider.systemPresetKey)}
                     name={provider.providerName}
-                    size={26}
+                    size={22}
                     className="rounded-md"
                   />
                   <div className="min-w-0">
                     <h3
-                      className="truncate text-sm font-semibold"
+                      className="truncate text-[13px] font-semibold leading-tight"
                       title={provider.providerName}
                     >
                       {provider.providerName}
                     </h3>
                     {subtitle ? (
-                      <p className="truncate text-[11px] text-muted-foreground">
+                      <p className="truncate text-[11px] leading-tight text-muted-foreground">
                         {subtitle}
                       </p>
                     ) : null}
@@ -75,7 +75,7 @@ export function TraySubscriptionSection({
                 <TrayUsageStatusBadge status={provider.status} t={t} />
               </div>
 
-              <div className="space-y-3">
+              <div className="space-y-2.5">
                 {provider.subscription.windows.map((window) => {
                   const allowanceLabel =
                     window.kind === "five_hour"
@@ -117,9 +117,11 @@ export function TraySubscriptionSection({
                         defaultValue: "Resets {{time}}",
                       });
                   return (
-                    <div key={window.kind} className="space-y-1.5">
+                    <div key={window.kind} className="space-y-1">
                       <div className="flex items-baseline justify-between gap-3 text-xs">
-                        <span className="font-medium">{allowanceLabel}</span>
+                        <span className="text-muted-foreground">
+                          {allowanceLabel}
+                        </span>
                         <span className="font-semibold tabular-nums">
                           {t("trayUsage.remaining", {
                             percent: formatPercent(window.remainingPercent),
@@ -134,16 +136,14 @@ export function TraySubscriptionSection({
                           status={window.status}
                         />
                       ) : null}
-                      <div className="flex items-center justify-between gap-3 text-[11px] text-muted-foreground">
-                        <span className="min-w-0">
-                          <span className="block">{resetLabel}</span>
-                          {unavailableReason ? (
-                            <span className="block text-foreground">
-                              {unavailableReason}
-                            </span>
-                          ) : null}
-                        </span>
-                        <TrayUsageStatusBadge status={window.status} t={t} />
+                      <div className="text-[11px] leading-tight text-muted-foreground">
+                        <span>{resetLabel}</span>
+                        {unavailableReason ? (
+                          <span className="text-foreground">
+                            {" · "}
+                            {unavailableReason}
+                          </span>
+                        ) : null}
                       </div>
                     </div>
                   );

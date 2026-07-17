@@ -25,10 +25,11 @@ export const ProviderIcon: React.FC<ProviderIconProps> = ({
   className,
   showFallback = true,
 }) => {
-  // 获取内联 SVG 字符串
+  // 获取内联 SVG 字符串（剥离 <title>：外层 span 已带 title 属性，
+  // 内嵌标题会污染文本查询并重复朗读名称）
   const iconSvg = useMemo(() => {
     if (icon && !isUrlIcon(icon) && hasIcon(icon)) {
-      return getIcon(icon);
+      return getIcon(icon).replace(/<title>[\s\S]*?<\/title>/g, "");
     }
     return "";
   }, [icon]);

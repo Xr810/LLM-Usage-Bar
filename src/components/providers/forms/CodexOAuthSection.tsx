@@ -98,14 +98,16 @@ export const CodexOAuthSection: React.FC<CodexOAuthSectionProps> = ({
   return (
     <div
       data-variant={variant}
-      className={`space-y-4 ${variant === "system-card" ? "rounded-md border bg-muted/20 p-3" : ""} ${className || ""}`}
+      className={`space-y-4 ${variant === "system-card" ? "rounded-lg bg-muted/25 px-3 py-3 dark:bg-muted/15" : ""} ${className || ""}`}
     >
       {/* 认证状态标题 */}
       <div className="flex items-center justify-between">
         <Label>{t("codexOauth.authStatus", "认证状态")}</Label>
         <Badge
           variant={hasAnyAccount ? "default" : "secondary"}
-          className={hasAnyAccount ? "bg-green-500 hover:bg-green-600" : ""}
+          className={
+            hasAnyAccount ? "border-success/20 bg-success/10 text-success" : ""
+          }
         >
           {hasAnyAccount
             ? t("codexOauth.accountCount", {

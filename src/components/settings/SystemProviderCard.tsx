@@ -17,6 +17,8 @@ import type { UsageProviderView } from "@/types/usageDashboard";
 import { ClaudeCliAuthSection } from "./ClaudeCliAuthSection";
 import { ProviderDailyBudgetField } from "./ProviderDailyBudgetField";
 import { SystemProviderApiKeyDialog } from "./SystemProviderApiKeyDialog";
+import { ProviderIcon } from "@/components/ProviderIcon";
+import { dashboardProviderIcon } from "@/components/usage-dashboard/usagePresentation";
 
 interface SystemProviderCardProps {
   provider: UsageProviderView;
@@ -49,22 +51,32 @@ export function SystemProviderCard({
   };
 
   const hasUpstreamKey = provider.upstreamCredentialStatus === "configured";
+  const { icon, iconColor } = dashboardProviderIcon(provider);
 
   return (
     <Card data-testid={`system-provider-${provider.id}`}>
-      <CardHeader className="flex-row items-start justify-between gap-4 space-y-0">
-        <div className="space-y-1.5">
-          <CardTitle className="text-base">{provider.name}</CardTitle>
-          <CardDescription>
-            {t("usageDashboard.fixedSystemProvider", {
-              defaultValue: "Built-in Provider",
-            })}
-            {provider.canonicalEndpoint
-              ? ` · ${t("usageDashboard.endpointLocked", {
-                  defaultValue: "Endpoint locked",
-                })}`
-              : ""}
-          </CardDescription>
+      <CardHeader className="flex-row items-center justify-between gap-4 space-y-0">
+        <div className="flex min-w-0 items-center gap-3">
+          <ProviderIcon
+            icon={icon}
+            color={iconColor}
+            name={provider.name}
+            size={32}
+            className="shrink-0 rounded-lg border border-border/50"
+          />
+          <div className="min-w-0 space-y-0.5">
+            <CardTitle className="text-[15px]">{provider.name}</CardTitle>
+            <CardDescription className="text-xs">
+              {t("usageDashboard.fixedSystemProvider", {
+                defaultValue: "Built-in Provider",
+              })}
+              {provider.canonicalEndpoint
+                ? ` · ${t("usageDashboard.endpointLocked", {
+                    defaultValue: "Endpoint locked",
+                  })}`
+                : ""}
+            </CardDescription>
+          </div>
         </div>
         <Button
           size="sm"
@@ -101,7 +113,7 @@ export function SystemProviderCard({
           <ClaudeCliAuthSection />
         ) : null}
         {provider.systemAuthKind === "provider_api_key" ? (
-          <div className="space-y-3 rounded-md border bg-muted/20 p-3">
+          <div className="space-y-3 rounded-lg bg-muted/25 px-3 py-3 dark:bg-muted/15">
             {provider.canonicalEndpoint ? (
               <div className="space-y-1">
                 <div className="text-xs text-muted-foreground">

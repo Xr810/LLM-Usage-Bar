@@ -11,7 +11,12 @@ export default defineConfig({
   },
   test: {
     environment: "jsdom",
-    exclude: [...configDefaults.exclude, "scripts/**/*.test.mjs"],
+    exclude: [
+      ...configDefaults.exclude,
+      "scripts/**/*.test.mjs",
+      "**/.pnpm-store/**",
+      "**/.worktrees/**",
+    ],
     setupFiles: ["./tests/setupGlobals.ts", "./tests/setupTests.ts"],
     globals: true,
     coverage: {

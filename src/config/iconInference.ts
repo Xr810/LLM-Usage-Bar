@@ -5,6 +5,11 @@
 const iconMappings = {
   // AI 服务商
   claude: { icon: "claude", iconColor: "#D4915D" },
+  openai: { icon: "openai", iconColor: "#000000" },
+  chatgpt: { icon: "openai", iconColor: "#000000" },
+  codex: { icon: "openai", iconColor: "#000000" },
+  gpt: { icon: "openai", iconColor: "#000000" },
+  gemini: { icon: "gemini", iconColor: "#4285F4" },
   anthropic: { icon: "anthropic", iconColor: "#D4915D" },
   deepseek: { icon: "deepseek", iconColor: "#1E88E5" },
   zhipu: { icon: "zhipu", iconColor: "#0F62FE" },

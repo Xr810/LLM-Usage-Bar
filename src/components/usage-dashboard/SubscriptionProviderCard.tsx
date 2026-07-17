@@ -1,8 +1,17 @@
+import { AlertTriangle, FolderSync, RefreshCw } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
+import { ProviderIcon } from "@/components/ProviderIcon";
 import type { ProviderUsageView } from "@/types/usageDashboard";
 import { useTranslation } from "react-i18next";
+import { QuotaMeter } from "./QuotaMeter";
+import {
+  dashboardProviderIcon,
+  formatTokensCompact,
+  parsePercentValue,
+  toneFromRemainingPercent,
+} from "./usagePresentation";
 
 interface Props {
   usage: ProviderUsageView;
@@ -53,11 +62,8 @@ export function SubscriptionProviderCard({
         : t("usageDashboard.sourceSession", { defaultValue: "Session log" }),
     )
     .join(" + ");
-  const usedLabel = (value: string) =>
-    t("usageDashboard.usedPercent", {
-      value,
-      defaultValue: `${value}% used`,
-    });
+  const { icon, iconColor } = dashboardProviderIcon(usage.provider);
+
   const quotaWindow = (
     label: string,
     value: string | null | undefined,
@@ -88,34 +94,43 @@ export function SubscriptionProviderCard({
             timeStyle: "short",
           }).format(parsedReset)
         : reset;
+    const used = parsePercentValue(value);
+    const remaining = used == null ? null : Math.max(0, 100 - used);
+    const unavailableText = t("usageDashboard.quotaWindowUnavailable", {
+      defaultValue: "This subscription does not provide this quota window",
+    });
     return (
-      <div className="rounded-lg bg-muted/40 p-3">
-        <div className="text-xs text-muted-foreground">{label}</div>
-        {value == null ? (
-          <div className="mt-1 text-sm font-medium">
-            {t("usageDashboard.quotaWindowUnavailable", {
-              defaultValue:
-                "This subscription does not provide this quota window",
-            })}
-          </div>
-        ) : (
-          <div className="mt-1 text-lg font-semibold">{usedLabel(value)}</div>
-        )}
-        {absoluteReset ? (
-          <div className="text-xs text-muted-foreground">
-            {t("usageDashboard.resetsAt", {
-              value: absoluteReset,
-              defaultValue: `Resets ${absoluteReset}`,
-            })}
-            {relativeLabel
-              ? ` · ${t("usageDashboard.resetsIn", {
-                  value: relativeLabel,
-                  defaultValue: `in ${relativeLabel}`,
-                })}`
-              : ""}
-          </div>
-        ) : null}
-      </div>
+      <QuotaMeter
+        key={label}
+        label={label}
+        meterLabel={label}
+        fillPercent={used}
+        tone={toneFromRemainingPercent(remaining)}
+        valueText={
+          remaining == null
+            ? unavailableText
+            : t("usageDashboard.remainingPercent", {
+                value: `${Math.round(remaining)}`,
+                defaultValue: "{{value}}% left",
+              })
+        }
+        footer={
+          absoluteReset ? (
+            <span title={absoluteReset}>
+              {t("usageDashboard.resetsAt", {
+                value: absoluteReset,
+                defaultValue: `Resets ${absoluteReset}`,
+              })}
+              {relativeLabel
+                ? ` · ${t("usageDashboard.resetsIn", {
+                    value: relativeLabel,
+                    defaultValue: `in ${relativeLabel}`,
+                  })}`
+                : ""}
+            </span>
+          ) : undefined
+        }
+      />
     );
   };
 
@@ -141,97 +156,136 @@ export function SubscriptionProviderCard({
     [t("usageDashboard.totalTokens", { defaultValue: "Total" }), totalTokens],
   ] as const;
 
+  const lastSuccessAt = fetchState?.lastSuccessAt ?? quota?.fetchedAt;
+
   return (
-    <Card data-testid={`subscription-provider-${usage.provider.id}`}>
-      <CardHeader className="pb-3">
-        <div className="flex items-start justify-between gap-3">
-          <CardTitle className="text-base">{usage.provider.name}</CardTitle>
-          <div className="flex flex-wrap justify-end gap-2">
-            <Badge variant="secondary">
-              {t("usageDashboard.subscription", {
-                defaultValue: "Subscription",
-              })}
-            </Badge>
+    <Card
+      data-testid={`subscription-provider-${usage.provider.id}`}
+      className="overflow-hidden"
+    >
+      <div className="flex items-center justify-between gap-3 px-5 pt-4">
+        <div className="flex min-w-0 items-center gap-3">
+          <ProviderIcon
+            icon={icon}
+            color={iconColor}
+            name={usage.provider.name}
+            size={34}
+            className="shrink-0 rounded-[10px] border border-border/50"
+          />
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <h3 className="truncate text-[15px] font-semibold tracking-tight">
+                {usage.provider.name}
+              </h3>
+              <Badge variant="secondary" className="shrink-0">
+                {t("usageDashboard.subscription", {
+                  defaultValue: "Subscription",
+                })}
+              </Badge>
+            </div>
+            <p className="mt-0.5 truncate text-xs text-muted-foreground">
+              {sourceText}
+              {lastSuccessAt ? (
+                <>
+                  {" · "}
+                  {t("usageDashboard.lastUpdated", {
+                    value: new Date(lastSuccessAt * 1000).toLocaleString(),
+                    defaultValue: `Last updated ${new Date(
+                      lastSuccessAt * 1000,
+                    ).toLocaleString()}`,
+                  })}
+                </>
+              ) : null}
+            </p>
           </div>
         </div>
-        <div className="text-xs text-muted-foreground">
-          {sourceText}
-          {(fetchState?.lastSuccessAt ?? quota?.fetchedAt) ? (
-            <>
-              {" · "}
-              {t("usageDashboard.lastUpdated", {
-                value: new Date(
-                  (fetchState?.lastSuccessAt ?? quota?.fetchedAt ?? 0) * 1000,
-                ).toLocaleString(),
-                defaultValue: `Last updated ${new Date(
-                  (fetchState?.lastSuccessAt ?? quota?.fetchedAt ?? 0) * 1000,
-                ).toLocaleString()}`,
-              })}
-            </>
-          ) : null}
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="grid gap-2 sm:grid-cols-2">
-          {quotaWindow(
-            t("usageDashboard.fiveHour", { defaultValue: "5 hour" }),
-            quota?.fiveHourUtilizationPercent,
-            quota?.fiveHourResetsAt,
-          )}
-          {quotaWindow(
-            t("usageDashboard.sevenDay", { defaultValue: "7 day" }),
-            quota?.sevenDayUtilizationPercent,
-            quota?.sevenDayResetsAt,
-          )}
-        </div>
-        <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-5">
+        {fetchState?.stale ? (
+          <Badge variant="warning" role="status" className="shrink-0">
+            <AlertTriangle className="h-3 w-3" aria-hidden="true" />
+            {t("usageDashboard.stale", { defaultValue: "Stale" })}
+          </Badge>
+        ) : null}
+      </div>
+
+      <div className="grid gap-2.5 px-5 pt-4 sm:grid-cols-2">
+        {quotaWindow(
+          t("usageDashboard.fiveHourWindow", { defaultValue: "5-hour window" }),
+          quota?.fiveHourUtilizationPercent,
+          quota?.fiveHourResetsAt,
+        )}
+        {quotaWindow(
+          t("usageDashboard.sevenDayWindow", { defaultValue: "7-day window" }),
+          quota?.sevenDayUtilizationPercent,
+          quota?.sevenDayResetsAt,
+        )}
+      </div>
+
+      <div className="px-5 pt-4">
+        <dl className="grid grid-cols-5 gap-2 rounded-lg bg-muted/25 px-3 py-2.5 dark:bg-muted/15">
           {tokenItems.map(([label, value]) => (
-            <div key={label}>
-              <div className="text-muted-foreground">{label}</div>
-              <div className="font-semibold">{value.toLocaleString()}</div>
+            <div key={label} className="min-w-0">
+              <dt className="truncate text-[11px] text-muted-foreground">
+                {label}
+              </dt>
+              <dd
+                className="mt-0.5 truncate text-sm font-semibold metric"
+                title={value.toLocaleString()}
+              >
+                {formatTokensCompact(value)}
+              </dd>
             </div>
           ))}
-        </div>
-        {quota?.manualResetsRemaining != null ? (
-          <div className="text-sm text-muted-foreground">
-            {t("usageDashboard.manualResets", {
-              defaultValue: "Manual resets",
-            })}
-            : {quota.manualResetsRemaining}
-          </div>
-        ) : null}
-        {fetchState?.stale ? (
-          <div role="status" className="text-sm text-amber-600">
-            {t("usageDashboard.stale", { defaultValue: "Stale" })}:{" "}
-            {fetchState.lastError ??
-              t("common.unknown", { defaultValue: "Unknown" })}
-          </div>
-        ) : null}
-        <div className="flex flex-wrap gap-2">
-          {canRefreshQuota ? (
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={isRefreshingQuota}
-              onClick={() => void onRefreshQuota(usage.provider.id)}
-            >
-              {t("usageDashboard.refreshQuota", {
-                defaultValue: "Refresh quota",
-              })}
-            </Button>
-          ) : null}
+        </dl>
+      </div>
+
+      {fetchState?.stale && fetchState.lastError ? (
+        <p className="px-5 pt-2 text-xs text-warning">
+          {t("usageDashboard.stale", { defaultValue: "Stale" })}:{" "}
+          {fetchState.lastError}
+        </p>
+      ) : null}
+      {quota?.manualResetsRemaining != null ? (
+        <p className="px-5 pt-2 text-xs text-muted-foreground">
+          {t("usageDashboard.manualResets", {
+            defaultValue: "Manual resets",
+          })}
+          : {quota.manualResetsRemaining}
+        </p>
+      ) : null}
+
+      <div className="mt-4 flex items-center gap-2 border-t border-border/60 px-5 py-3">
+        {canRefreshQuota ? (
           <Button
             size="sm"
-            variant="outline"
-            disabled={isSyncingSessions}
-            onClick={() => void onSyncSessions(usage.provider.id)}
+            variant="ghost"
+            className="h-8 px-2.5 text-xs"
+            disabled={isRefreshingQuota}
+            onClick={() => void onRefreshQuota(usage.provider.id)}
           >
-            {t("usageDashboard.syncSessions", {
-              defaultValue: "Sync sessions",
+            <RefreshCw
+              className={
+                isRefreshingQuota ? "h-3.5 w-3.5 animate-spin" : "h-3.5 w-3.5"
+              }
+              aria-hidden="true"
+            />
+            {t("usageDashboard.refreshQuota", {
+              defaultValue: "Refresh quota",
             })}
           </Button>
-        </div>
-      </CardContent>
+        ) : null}
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-8 px-2.5 text-xs"
+          disabled={isSyncingSessions}
+          onClick={() => void onSyncSessions(usage.provider.id)}
+        >
+          <FolderSync className="h-3.5 w-3.5" aria-hidden="true" />
+          {t("usageDashboard.syncSessions", {
+            defaultValue: "Sync sessions",
+          })}
+        </Button>
+      </div>
     </Card>
   );
 }

@@ -153,7 +153,16 @@
     "leaveModuleEmptyTitle": "將 {{module}} 留空？",
     "leaveModuleEmptyMessage": "移動 {{provider}} 後，{{module}} 將不再包含 Provider。歷史用量不會改變。",
     "moveProvider": "移動 Provider",
-    "empty": "尚未設定用量 Provider"
+    "empty": "尚未設定用量 Provider",
+    "providerMonitoring": "Provider 監控",
+    "providerMonitoringDescription": "按 Provider 帳號展示用量、費用與剩餘額度。",
+    "meteredProviders": "按量帳號",
+    "noSubscriptionProviders": "暫無訂閱制 Provider 帳號。",
+    "noMeteredProviders": "暫無按量計費 Provider 帳號。",
+    "providerEmpty": "尚未配置 Provider 帳號。",
+    "remainingPercent": "剩餘 {{value}}%",
+    "fiveHourWindow": "5 小時額度",
+    "sevenDayWindow": "7 天額度"
   },
   "dashboardModules": {
     "navigation": "用量模組導覽",
@@ -3250,6 +3259,7 @@
     "invalidQuotaPercent": "用量百分比無法使用",
     "quotaUnavailable": "額度資料無法使用",
     "invalidResetTimestamp": "重設時間無法使用",
-    "resetPendingRefresh": "等待額度重新整理"
+    "resetPendingRefresh": "等待額度重新整理",
+    "providerMonitoring": "Provider 監控"
   }
 }

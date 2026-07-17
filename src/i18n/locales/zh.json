@@ -153,7 +153,16 @@
     "leaveModuleEmptyTitle": "将 {{module}} 留空？",
     "leaveModuleEmptyMessage": "移动 {{provider}} 后，{{module}} 将不再包含 Provider。历史用量不会改变。",
     "moveProvider": "移动 Provider",
-    "empty": "尚未配置用量 Provider"
+    "empty": "尚未配置用量 Provider",
+    "providerMonitoring": "Provider 监控",
+    "providerMonitoringDescription": "按 Provider 账号展示用量、费用与剩余额度。",
+    "meteredProviders": "按量账号",
+    "noSubscriptionProviders": "暂无订阅制 Provider 账号。",
+    "noMeteredProviders": "暂无按量计费 Provider 账号。",
+    "providerEmpty": "尚未配置 Provider 账号。",
+    "remainingPercent": "剩余 {{value}}%",
+    "fiveHourWindow": "5 小时额度",
+    "sevenDayWindow": "7 天额度"
   },
   "dashboardModules": {
     "navigation": "用量模块导航",
@@ -3278,6 +3287,7 @@
     "invalidQuotaPercent": "用量百分比不可用",
     "quotaUnavailable": "额度数据不可用",
     "invalidResetTimestamp": "重置时间不可用",
-    "resetPendingRefresh": "等待额度刷新"
+    "resetPendingRefresh": "等待额度刷新",
+    "providerMonitoring": "Provider 监控"
   }
 }

@@ -1,10 +1,12 @@
 import { useTranslation } from "react-i18next";
+import { PlugZap } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import type { ProviderDashboardProjection } from "./usageDashboardProjection";
 import { MeteredProviderCard } from "./MeteredProviderCard";
 import { SubscriptionProviderCard } from "./SubscriptionProviderCard";
+import { formatTokensCompact } from "./usagePresentation";
 
 interface ProviderUsagePageProps {
   projection: ProviderDashboardProjection;
@@ -54,14 +56,17 @@ export function ProviderUsagePage({
     projection.meteredProviders.length === 0
   ) {
     return (
-      <div className="rounded-lg border border-dashed p-8 text-center">
-        <p className="text-sm text-muted-foreground">
+      <div className="rounded-xl border border-dashed border-border bg-muted/20 px-8 py-14 text-center dark:bg-muted/10">
+        <div className="mx-auto mb-3 grid h-10 w-10 place-items-center rounded-full bg-muted text-muted-foreground">
+          <PlugZap className="h-5 w-5" aria-hidden="true" />
+        </div>
+        <p className="text-sm font-medium">
           {t("usageDashboard.providerEmpty", {
             defaultValue: "No Provider accounts are configured.",
           })}
         </p>
         {onOpenSettings ? (
-          <Button className="mt-3" size="sm" onClick={onOpenSettings}>
+          <Button className="mt-4" size="sm" onClick={onOpenSettings}>
             {t("usageDashboard.configureProviders", {
               defaultValue: "Configure Providers in Settings",
             })}
@@ -71,14 +76,28 @@ export function ProviderUsagePage({
     );
   }
 
+  const sectionHeading = (id: string, text: string, count: number) => (
+    <div className="flex items-baseline gap-2">
+      <h2
+        id={id}
+        className="text-xs font-semibold uppercase tracking-wider text-muted-foreground"
+      >
+        {text}
+      </h2>
+      <span className="text-xs metric text-muted-foreground/70">{count}</span>
+    </div>
+  );
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-7">
       <section className="space-y-3" aria-labelledby="subscription-heading">
-        <h2 id="subscription-heading" className="text-base font-semibold">
-          {t("usageDashboard.subscriptionAccounts", {
+        {sectionHeading(
+          "subscription-heading",
+          t("usageDashboard.subscriptionAccounts", {
             defaultValue: "Subscription accounts",
-          })}
-        </h2>
+          }),
+          projection.subscriptionProviders.length,
+        )}
         {projection.subscriptionProviders.length ? (
           <div className="grid gap-4 lg:grid-cols-2">
             {projection.subscriptionProviders.map((usage) => (
@@ -93,7 +112,7 @@ export function ProviderUsagePage({
             ))}
           </div>
         ) : (
-          <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
+          <div className="rounded-xl border border-dashed border-border bg-muted/20 px-4 py-6 text-center text-sm text-muted-foreground dark:bg-muted/10">
             {t("usageDashboard.noSubscriptionProviders", {
               defaultValue: "No subscription Provider accounts.",
             })}
@@ -102,46 +121,58 @@ export function ProviderUsagePage({
       </section>
 
       <section className="space-y-3" aria-labelledby="metered-heading">
-        <h2 id="metered-heading" className="text-base font-semibold">
-          {t("usageDashboard.meteredProviders", {
-            defaultValue: "Metered Provider accounts",
-          })}
-        </h2>
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between gap-3">
-              <CardTitle className="text-base">
+        {sectionHeading(
+          "metered-heading",
+          t("usageDashboard.meteredProviders", {
+            defaultValue: "Metered accounts",
+          }),
+          projection.meteredProviders.length,
+        )}
+        <Card className="overflow-hidden">
+          <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 px-5 py-4">
+            <div className="flex items-center gap-2.5">
+              <h3 className="text-sm font-semibold tracking-tight">
                 {t("usageDashboard.meteredOverview", {
                   defaultValue: "Metered overview",
                 })}
-              </CardTitle>
+              </h3>
               <Badge variant="outline">{costStatusText}</Badge>
             </div>
-          </CardHeader>
-          <CardContent className="grid gap-4 sm:grid-cols-3">
-            <div>
-              <div className="text-xs text-muted-foreground">
-                {t("usageDashboard.tokens", { defaultValue: "Tokens" })}
+            <dl className="flex items-center gap-6">
+              <div className="min-w-0">
+                <dt className="text-[11px] text-muted-foreground">
+                  {t("usageDashboard.tokens", { defaultValue: "Tokens" })}
+                </dt>
+                <dd
+                  className="mt-0.5 text-base font-semibold metric"
+                  data-testid="metered-total-tokens"
+                  title={projection.meteredTotalTokens.toLocaleString()}
+                >
+                  {formatTokensCompact(projection.meteredTotalTokens)}
+                </dd>
               </div>
-              <div className="text-xl font-semibold" data-testid="metered-total-tokens">
-                {projection.meteredTotalTokens.toLocaleString()}
+              <div className="min-w-0">
+                <dt className="text-[11px] text-muted-foreground">
+                  {t("usageDashboard.requests", { defaultValue: "Requests" })}
+                </dt>
+                <dd
+                  className="mt-0.5 text-base font-semibold metric"
+                  data-testid="metered-request-count"
+                >
+                  {projection.meteredRequestCount.toLocaleString()}
+                </dd>
               </div>
-            </div>
-            <div>
-              <div className="text-xs text-muted-foreground">
-                {t("usageDashboard.requests", { defaultValue: "Requests" })}
+              <div className="min-w-0">
+                <dt className="text-[11px] text-muted-foreground">USD</dt>
+                <dd
+                  className="mt-0.5 text-base font-semibold metric"
+                  data-testid="metered-total-cost"
+                >
+                  {costText}
+                </dd>
               </div>
-              <div className="text-xl font-semibold" data-testid="metered-request-count">
-                {projection.meteredRequestCount.toLocaleString()}
-              </div>
-            </div>
-            <div>
-              <div className="text-xs text-muted-foreground">USD</div>
-              <div className="text-xl font-semibold" data-testid="metered-total-cost">
-                {costText}
-              </div>
-            </div>
-          </CardContent>
+            </dl>
+          </div>
         </Card>
         {projection.meteredProviders.length ? (
           <div className="grid gap-4 lg:grid-cols-2">
@@ -155,7 +186,7 @@ export function ProviderUsagePage({
             ))}
           </div>
         ) : (
-          <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
+          <div className="rounded-xl border border-dashed border-border bg-muted/20 px-4 py-6 text-center text-sm text-muted-foreground dark:bg-muted/10">
             {t("usageDashboard.noMeteredProviders", {
               defaultValue: "No metered Provider accounts.",
             })}

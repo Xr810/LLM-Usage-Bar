@@ -3,6 +3,7 @@ import type {
   TrayProviderUsageView,
   TrayUsageStatus,
 } from "@/types/trayUsage";
+import { inferIconForPreset } from "@/config/iconInference";
 
 export type TrayUsageTranslate = (
   key: string,
@@ -228,5 +229,9 @@ const PROVIDER_ICON_MAP: Readonly<Record<string, string>> = {
 };
 
 export function providerIconName(preset: string | null): string | undefined {
-  return preset == null ? undefined : PROVIDER_ICON_MAP[preset];
+  if (preset == null) return undefined;
+  const mapped = PROVIDER_ICON_MAP[preset];
+  if (mapped) return mapped;
+  const { icon } = inferIconForPreset(preset);
+  return icon;
 }

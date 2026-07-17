@@ -1,7 +1,6 @@
 import { ExternalLink, PlusCircle } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { ProviderIcon } from "@/components/ProviderIcon";
-import { Button } from "@/components/ui/button";
 import {
   clampPercentForProgress,
   costQualityLabel,
@@ -35,11 +34,11 @@ export function TrayApiSpendingSection({
     <section aria-labelledby="tray-api-spending-heading">
       <h2
         id="tray-api-spending-heading"
-        className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+        className="mb-1.5 px-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground"
       >
         {t("trayUsage.apiSpending", { defaultValue: "API spending" })}
       </h2>
-      <div className="divide-y divide-border rounded-lg border border-border">
+      <div className="space-y-2">
         {rows.map(({ agentModuleId, agentName, provider }) => {
           if (!provider.metered) return null;
           const usage = provider.metered;
@@ -75,25 +74,25 @@ export function TrayApiSpendingSection({
           return (
             <article
               key={`${agentModuleId}:${provider.providerId}`}
-              className="tray-usage-provider-row space-y-3 px-3 py-3"
+              className="tray-usage-provider-row space-y-2.5 rounded-xl border border-border/60 bg-card"
             >
-              <div className="flex min-w-0 items-start justify-between gap-3">
+              <div className="flex min-w-0 items-center justify-between gap-2">
                 <div className="flex min-w-0 items-center gap-2">
                   <ProviderIcon
                     icon={providerIconName(provider.systemPresetKey)}
                     name={provider.providerName}
-                    size={26}
+                    size={22}
                     className="rounded-md"
                   />
                   <div className="min-w-0">
                     <h3
-                      className="truncate text-sm font-semibold"
+                      className="truncate text-[13px] font-semibold leading-tight"
                       title={provider.providerName}
                     >
                       {provider.providerName}
                     </h3>
                     {showAgentName ? (
-                      <p className="truncate text-[11px] text-muted-foreground">
+                      <p className="truncate text-[11px] leading-tight text-muted-foreground">
                         {agentName}
                       </p>
                     ) : null}
@@ -102,12 +101,12 @@ export function TrayApiSpendingSection({
                 <TrayUsageStatusBadge status={provider.status} t={t} />
               </div>
 
-              <dl className="grid grid-cols-3 gap-x-3">
+              <dl className="grid grid-cols-3 gap-x-3 rounded-lg bg-muted/25 px-2.5 py-2 dark:bg-muted/15">
                 <div className="min-w-0">
                   <dt className="truncate text-[11px] text-muted-foreground">
                     {t("trayUsage.today", { defaultValue: "Today" })}
                   </dt>
-                  <dd className="mt-0.5 truncate text-sm font-semibold tabular-nums">
+                  <dd className="mt-0.5 truncate text-[13px] font-semibold tabular-nums">
                     {formatUsd(todayCost, locale)}
                   </dd>
                 </div>
@@ -117,7 +116,7 @@ export function TrayApiSpendingSection({
                       defaultValue: "Last 30 days",
                     })}
                   </dt>
-                  <dd className="mt-0.5 truncate text-sm font-semibold tabular-nums">
+                  <dd className="mt-0.5 truncate text-[13px] font-semibold tabular-nums">
                     {formatUsd(rollingCost, locale)}
                   </dd>
                 </div>
@@ -125,15 +124,17 @@ export function TrayApiSpendingSection({
                   <dt className="truncate text-[11px] text-muted-foreground">
                     {t("trayUsage.tokens", { defaultValue: "Tokens" })}
                   </dt>
-                  <dd className="mt-0.5 truncate text-sm font-semibold tabular-nums">
+                  <dd className="mt-0.5 truncate text-[13px] font-semibold tabular-nums">
                     {formatTokenCount(usage.totalTokens, locale)}
                   </dd>
                 </div>
               </dl>
 
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between gap-3 text-xs">
-                  <span className="font-medium">{dailyBudgetLabel}</span>
+              <div className="space-y-1">
+                <div className="flex items-baseline justify-between gap-3 text-xs">
+                  <span className="text-muted-foreground">
+                    {dailyBudgetLabel}
+                  </span>
                   <span className="text-[11px] text-muted-foreground">
                     {quality}
                   </span>
@@ -141,7 +142,7 @@ export function TrayApiSpendingSection({
 
                 {hasBudget ? (
                   <>
-                    <div className="text-sm font-semibold tabular-nums">
+                    <div className="text-[13px] font-semibold tabular-nums">
                       {t("trayUsage.ofBudget", {
                         cost: formatUsd(todayCost, locale),
                         budget: formatUsd(usage.dailyBudgetUsd, locale),
@@ -158,44 +159,37 @@ export function TrayApiSpendingSection({
                       />
                     ) : null}
                     {!hasUsableBudgetProgress ? (
-                      <Button
+                      <button
                         type="button"
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 w-full justify-start px-0 text-xs"
+                        className="inline-flex items-center gap-1 text-[11px] font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
                         aria-label={t("trayUsage.openProviderDetails", {
                           provider: provider.providerName,
                           defaultValue: "Open {{provider}} details",
                         })}
                         onClick={() => onOpenDetails(agentModuleId)}
                       >
-                        <ExternalLink
-                          className="h-3.5 w-3.5"
-                          aria-hidden="true"
-                        />
+                        <ExternalLink className="h-3 w-3" aria-hidden="true" />
                         {t("trayUsage.openDetails", {
                           defaultValue: "Open details",
                         })}
-                      </Button>
+                      </button>
                     ) : null}
                   </>
                 ) : (
-                  <Button
+                  <button
                     type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 w-full justify-start px-0 text-xs"
+                    className="inline-flex items-center gap-1 text-[11px] font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
                     aria-label={t("trayUsage.setProviderBudget", {
                       provider: provider.providerName,
                       defaultValue: "Set daily budget for {{provider}}",
                     })}
                     onClick={() => onOpenSettings(provider.providerId)}
                   >
-                    <PlusCircle className="h-3.5 w-3.5" aria-hidden="true" />
+                    <PlusCircle className="h-3 w-3" aria-hidden="true" />
                     {t("trayUsage.setDailyBudget", {
                       defaultValue: "Set daily budget",
                     })}
-                  </Button>
+                  </button>
                 )}
               </div>
             </article>

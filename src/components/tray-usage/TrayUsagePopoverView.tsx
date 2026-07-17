@@ -84,17 +84,20 @@ export function TrayUsagePopoverView({
       aria-busy={loading || refreshing}
       className="tray-popover-frame flex flex-col overflow-hidden"
     >
-      <header className="shrink-0 border-b border-border px-4 py-3">
-        <div className="flex items-start justify-between gap-3">
+      <header className="shrink-0 border-b border-border/60 px-4 pb-2.5 pt-3">
+        <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
-            <h1 className="truncate text-[15px] font-semibold" title={title}>
+            <h1
+              className="truncate text-[14px] font-semibold tracking-tight"
+              title={title}
+            >
               {title}
             </h1>
-            <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
               <span>{freshnessText}</span>
               {snapshot?.stale ? (
                 <span className="font-medium text-foreground">
-                  {t("trayUsage.stale", { defaultValue: "Stale" })}
+                  · {t("trayUsage.stale", { defaultValue: "Stale" })}
                 </span>
               ) : null}
             </div>
@@ -118,7 +121,7 @@ export function TrayUsagePopoverView({
       </header>
 
       <ScrollArea className="min-h-0 flex-1">
-        <div className="space-y-4 px-4 py-3">
+        <div className="space-y-3 px-3 py-3">
           {loading && !snapshot ? (
             <div role="status" className="space-y-3 py-5 text-center">
               <p className="text-sm text-muted-foreground">

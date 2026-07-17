@@ -35,9 +35,22 @@ module.exports = {
           DEFAULT: "hsl(var(--destructive))",
           foreground: "hsl(var(--destructive-foreground))",
         },
+        success: {
+          DEFAULT: "hsl(var(--success))",
+          foreground: "hsl(var(--success-foreground))",
+        },
+        warning: {
+          DEFAULT: "hsl(var(--warning))",
+          foreground: "hsl(var(--warning-foreground))",
+        },
+        danger: {
+          DEFAULT: "hsl(var(--danger))",
+          foreground: "hsl(var(--danger-foreground))",
+        },
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",
         ring: "hsl(var(--ring))",
+        // macOS system blues kept for legacy references
         blue: {
           400: "#409CFF",
           500: "#0A84FF",
@@ -70,15 +83,19 @@ module.exports = {
         },
       },
       boxShadow: {
-        sm: "0 1px 2px 0 rgb(0 0 0 / 0.05)",
-        md: "0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1)",
-        lg: "0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1)",
+        xs: "0 1px 2px 0 rgb(0 0 0 / 0.04)",
+        sm: "0 1px 2px 0 rgb(0 0 0 / 0.05), 0 1px 3px 0 rgb(0 0 0 / 0.04)",
+        md: "0 2px 8px -2px rgb(0 0 0 / 0.08), 0 4px 16px -4px rgb(0 0 0 / 0.06)",
+        lg: "0 8px 24px -6px rgb(0 0 0 / 0.12), 0 2px 8px -2px rgb(0 0 0 / 0.06)",
+        card: "0 1px 2px 0 rgb(0 0 0 / 0.04), 0 1px 3px 0 rgb(0 0 0 / 0.03)",
+        pop: "0 4px 12px -2px rgb(0 0 0 / 0.10), 0 12px 32px -8px rgb(0 0 0 / 0.12)",
       },
       borderRadius: {
         sm: "0.375rem",
         md: "0.5rem",
         lg: "0.75rem",
         xl: "0.875rem",
+        "2xl": "1rem",
       },
       fontFamily: {
         // 使用与之前版本保持一致的系统字体栈
@@ -102,13 +119,16 @@ module.exports = {
         ],
       },
       animation: {
-        "fade-in": "fadeIn 0.5s ease-out",
-        "slide-up": "slideUp 0.5s ease-out",
+        "fade-in": "fadeIn 0.25s ease-out",
+        "slide-up": "slideUp 0.3s ease-out",
         "slide-down": "slideDown 0.3s ease-out",
         "slide-in-right": "slideInRight 0.3s ease-out",
         "pulse-slow": "pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite",
         "accordion-down": "accordion-down 0.2s ease-out",
         "accordion-up": "accordion-up 0.2s ease-out",
+      },
+      transitionTimingFunction: {
+        "out-expo": "cubic-bezier(0.16, 1, 0.3, 1)",
       },
       keyframes: {
         fadeIn: {
@@ -121,7 +141,7 @@ module.exports = {
         },
         slideUp: {
           "0%": {
-            transform: "translateY(20px)",
+            transform: "translateY(8px)",
             opacity: "0",
           },
           "100%": {
@@ -170,4 +190,3 @@ module.exports = {
   },
   plugins: [],
 };
-

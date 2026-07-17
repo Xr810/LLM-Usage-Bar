@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import { Maximize2, Minus, Settings, X } from "lucide-react";
+import { ChartColumn, Maximize2, Minus, Settings, X } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Button } from "@/components/ui/button";
 import { SettingsPage } from "@/components/settings/SettingsPage";
@@ -71,20 +71,28 @@ export default function App() {
         />
       ) : null}
       <header
-        className="grid shrink-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-4 border-b border-border/70 px-6 py-3"
+        className="grid shrink-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-4 border-b border-border/60 px-5 py-2.5"
         data-tauri-drag-region
         style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
       >
-        <h1 className="text-lg font-semibold">
-          {t("app.title", { defaultValue: "LLM Usage Bar" })}
-        </h1>
+        <div className="flex items-center gap-2.5">
+          <div
+            aria-hidden="true"
+            className="grid h-6 w-6 place-items-center rounded-md bg-primary text-primary-foreground shadow-xs"
+          >
+            <ChartColumn className="h-3.5 w-3.5" />
+          </div>
+          <h1 className="text-[15px] font-semibold tracking-tight">
+            {t("app.title", { defaultValue: "LLM Usage Bar" })}
+          </h1>
+        </div>
         <div aria-hidden="true" />
         <div
           className="flex items-center gap-1"
           style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
         >
-          <Button size="sm" variant="outline" onClick={openManualSettings}>
-            <Settings className="mr-2 h-4 w-4" />
+          <Button size="sm" variant="ghost" onClick={openManualSettings}>
+            <Settings className="mr-1.5 h-3.5 w-3.5" />
             {t("common.settings", { defaultValue: "Settings" })}
           </Button>
           {useAppWindowControls ? (
@@ -127,7 +135,7 @@ export default function App() {
         </div>
       </header>
 
-      <main className="min-h-0 flex-1 overflow-y-auto px-6 pt-5">
+      <main className="min-h-0 flex-1 overflow-y-auto px-5 pt-5">
         <UsageDashboardPage onOpenSettings={openManualSettings} />
       </main>
 

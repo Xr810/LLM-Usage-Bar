@@ -1,5 +1,4 @@
 import type { TrayUsageStatus } from "@/types/trayUsage";
-import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { statusLabel, type TrayUsageTranslate } from "./trayUsagePresentation";
 
@@ -25,6 +24,11 @@ export function TrayUsageProgress({
   );
 }
 
+/**
+ * Compact status indicator: a colored dot plus a tiny label. The bar/progress
+ * colors carry per-window status, so this appears once per provider (or for
+ * the whole popover header).
+ */
 export function TrayUsageStatusBadge({
   status,
   t,
@@ -35,13 +39,12 @@ export function TrayUsageStatusBadge({
   live?: boolean;
 }) {
   return (
-    <Badge
-      variant="outline"
+    <span
       role={live ? "status" : undefined}
       className={cn("tray-usage-status", `is-${status}`)}
     >
       <span aria-hidden="true" className="tray-usage-status-dot" />
       {statusLabel(status, t)}
-    </Badge>
+    </span>
   );
 }

@@ -24,8 +24,12 @@ describe("UsageDashboardPage Provider-only contract", () => {
       await screen.findByRole("heading", { name: "Provider monitoring" }),
     ).toBeInTheDocument();
     expect(await screen.findByText("ChatGPT Plus/Pro")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Subscription accounts" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Metered Provider accounts" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Subscription accounts" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Metered accounts" }),
+    ).toBeInTheDocument();
     expect(screen.getAllByText("OpenRouter")).toHaveLength(2);
     expect(screen.queryByRole("tablist", { name: "Agents" })).toBeNull();
   });
@@ -37,11 +41,15 @@ describe("UsageDashboardPage Provider-only contract", () => {
 
     await user.click(screen.getByRole("button", { name: "7 days" }));
     await waitFor(() =>
-      expect(commandCalls("get_provider_usage_dashboard").length).toBeGreaterThan(1),
+      expect(
+        commandCalls("get_provider_usage_dashboard").length,
+      ).toBeGreaterThan(1),
     );
     await user.click(screen.getByRole("button", { name: "30 days" }));
     await waitFor(() =>
-      expect(commandCalls("get_provider_usage_dashboard").length).toBeGreaterThan(2),
+      expect(
+        commandCalls("get_provider_usage_dashboard").length,
+      ).toBeGreaterThan(2),
     );
 
     for (const call of commandCalls("get_provider_usage_dashboard")) {
@@ -56,7 +64,9 @@ describe("UsageDashboardPage Provider-only contract", () => {
     renderPage();
     await screen.findByText("ChatGPT Plus/Pro");
 
-    await user.click(screen.getAllByRole("button", { name: "Refresh quota" })[0]);
+    await user.click(
+      screen.getAllByRole("button", { name: "Refresh quota" })[0],
+    );
     await waitFor(() =>
       expect(commandCalls("refresh_provider_quota").length).toBe(1),
     );
@@ -64,7 +74,9 @@ describe("UsageDashboardPage Provider-only contract", () => {
       providerId: "system-chatgpt-subscription",
     });
 
-    await user.click(screen.getAllByRole("button", { name: "Sync sessions" })[0]);
+    await user.click(
+      screen.getAllByRole("button", { name: "Sync sessions" })[0],
+    );
     await waitFor(() =>
       expect(commandCalls("sync_provider_session_usage").length).toBe(1),
     );
