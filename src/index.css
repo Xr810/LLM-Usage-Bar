@@ -256,20 +256,12 @@ html[data-window-surface="tray-popover"] #root {
   padding: 10px 12px;
 }
 
-.tray-usage-footer {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  padding: 6px;
-}
-
 .tray-usage-footer-button {
-  min-height: 34px;
-  height: auto;
-  white-space: normal;
+  white-space: nowrap;
 }
 
 .tray-usage-footer-label {
   overflow: hidden;
-  text-align: center;
   text-overflow: ellipsis;
   max-width: 100%;
 }
