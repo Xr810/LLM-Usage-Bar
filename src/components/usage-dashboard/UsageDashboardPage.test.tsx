@@ -31,6 +31,13 @@ describe("UsageDashboardPage Provider-only contract", () => {
       screen.getByRole("heading", { name: "Metered accounts" }),
     ).toBeInTheDocument();
     expect(screen.getAllByText("OpenRouter")).toHaveLength(2);
+    expect(
+      screen.getByRole("heading", { name: "Usage trend" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Hourly")).toBeInTheDocument();
+    expect(
+      screen.getByRole("img", { name: "Token usage by hour" }),
+    ).toBeInTheDocument();
     expect(screen.queryByRole("tablist", { name: "Agents" })).toBeNull();
   });
 
@@ -45,6 +52,7 @@ describe("UsageDashboardPage Provider-only contract", () => {
         commandCalls("get_provider_usage_dashboard").length,
       ).toBeGreaterThan(1),
     );
+    expect(await screen.findByText("Daily")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "30 days" }));
     await waitFor(() =>
       expect(

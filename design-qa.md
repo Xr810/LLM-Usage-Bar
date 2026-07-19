@@ -126,3 +126,56 @@ status item under the notch/overflow; it does not affect the popup layout, statu
 model, native-menu preservation, or verified click classifier.
 
 final result: passed
+
+---
+
+# Main Window Usage Trend — Design QA
+
+Date: 2026-07-19
+
+Source visual truth: `/var/folders/th/28ml58qj663d_8tbmcz417t00000gn/T/TemporaryItems/NSIRD_screencaptureui_c8Bj7M/截屏2026-07-19 20.55.14.png`
+
+Hourly implementation screenshot: `/private/tmp/llm-usage-trend-preview-crop.png`
+
+Daily implementation screenshot: `/private/tmp/llm-usage-trend-daily.png`
+
+Comparison viewport: `620 × 330` content crop, dark theme
+
+State: populated Provider-wide token trend; hourly and daily buckets
+
+## Findings
+
+No actionable P0, P1, or P2 differences remain. The implementation preserves the
+reference hierarchy: compact summary, low-noise dark card, zero-filled time
+buckets, and a single dominant bar series. Indigo replaces the reference amber
+as an intentional use of the existing Obsidian & Paper primary token. The
+reference's cost/model text is not duplicated inside this component because the
+main dashboard already presents cost and per-Provider model/request evidence in
+the surrounding sections.
+
+## Fidelity surfaces
+
+- Fonts and typography: existing application font, metric numerals, hierarchy,
+  wrapping, and compact labels are consistent with the main window.
+- Spacing and layout rhythm: the chart fits a 620 px content width without
+  overflow; header, plot, and axis spacing remain readable for both 21 hourly
+  and 30 daily buckets.
+- Colors and visual tokens: card, border, muted text, popover, and bar colors all
+  use the existing dark-theme tokens with sufficient contrast.
+- Image and asset fidelity: no raster asset is required; the data visualization
+  is rendered by the project's existing Recharts dependency.
+- Copy and content: localized title, hourly/daily label, total, accessible chart
+  name, and tooltip values match the selected aggregation state.
+
+## Evidence and interactions
+
+The source and hourly implementation were opened together in one comparison
+input. The full component was legible, so a separate focused crop was not needed.
+Hovering the 16:00 hourly bar exposed `3,200,000 Token · 40 次请求`. The daily
+state rendered 30 distinct buckets with readable sampled dates. Browser console
+errors and warnings: none.
+
+No P0/P1/P2 visual fix iteration was required after the settled chart animation
+was captured. Automated coverage also verifies the hourly-to-daily range switch.
+
+final result: passed

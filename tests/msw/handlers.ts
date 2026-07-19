@@ -1403,6 +1403,15 @@ export const handlers = [
         startAt,
         endAt,
         warnings: [],
+        trendGranularity: endAt - startAt <= 24 * 60 * 60 ? "hour" : "day",
+        trendBuckets: [
+          {
+            startAt,
+            endAt,
+            eventCount: 3,
+            totalTokens: 1_250,
+          },
+        ],
         providers: usageProvidersFixture
           .filter((provider) => provider.enabled)
           .map((provider, index) =>

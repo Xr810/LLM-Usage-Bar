@@ -168,6 +168,15 @@ export interface ProviderUsageView {
   quotaFetchState: QuotaFetchState | null;
 }
 
+export type UsageTrendGranularity = "hour" | "day";
+
+export interface UsageTrendBucketView {
+  startAt: number;
+  endAt: number;
+  eventCount: number;
+  totalTokens: number;
+}
+
 export interface ProductUsageView {
   productGroupId: string;
   inputTokens: number;
@@ -193,6 +202,8 @@ export interface ProviderMonitoringDashboardView {
   startAt: number;
   endAt: number;
   providers: ProviderUsageView[];
+  trendGranularity: UsageTrendGranularity;
+  trendBuckets: UsageTrendBucketView[];
   warnings: string[];
 }
 

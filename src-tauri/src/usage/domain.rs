@@ -423,6 +423,22 @@ pub struct ProviderUsageView {
     pub quota_fetch_state: Option<QuotaFetchState>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UsageTrendGranularity {
+    Hour,
+    Day,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageTrendBucketView {
+    pub start_at: i64,
+    pub end_at: i64,
+    pub event_count: u64,
+    pub total_tokens: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProductUsageView {
@@ -454,6 +470,8 @@ pub struct ProviderMonitoringDashboardView {
     pub start_at: i64,
     pub end_at: i64,
     pub providers: Vec<ProviderUsageView>,
+    pub trend_granularity: UsageTrendGranularity,
+    pub trend_buckets: Vec<UsageTrendBucketView>,
     pub warnings: Vec<String>,
 }
 

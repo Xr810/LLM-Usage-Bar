@@ -6,6 +6,8 @@ import type {
   QuotaStatusView,
   UsageDashboardView,
   ProviderMonitoringDashboardView,
+  UsageTrendBucketView,
+  UsageTrendGranularity,
 } from "@/types/usageDashboard";
 
 export type MeteredCostStatus =
@@ -28,6 +30,8 @@ export interface ProviderDashboardProjection {
   meteredRequestCount: number;
   meteredTotalCostUsd: string | null;
   meteredCostStatus: MeteredCostStatus;
+  trendGranularity: UsageTrendGranularity;
+  trendBuckets: UsageTrendBucketView[];
 }
 
 function addCounts(
@@ -239,5 +243,7 @@ export function projectProviderDashboard(
     ),
     meteredTotalCostUsd,
     meteredCostStatus,
+    trendGranularity: dashboard.trendGranularity,
+    trendBuckets: dashboard.trendBuckets,
   };
 }

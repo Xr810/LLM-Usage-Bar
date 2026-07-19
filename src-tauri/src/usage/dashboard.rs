@@ -1,6 +1,8 @@
 use crate::database::Database;
 use crate::error::AppError;
-use crate::usage::aggregation::{aggregate_provider_account_range, aggregate_provider_range};
+use crate::usage::aggregation::{
+    aggregate_enabled_provider_trend, aggregate_provider_account_range, aggregate_provider_range,
+};
 use crate::usage::domain::{
     BillingKind, CostSourceCounts, ProductUsageView, ProviderMonitoringDashboardView,
     ProviderUsageView, QuotaStatusView, TokenSource, UsageDashboardView, UsageProviderView,
@@ -109,10 +111,15 @@ impl<'a> UsageDashboardService<'a> {
             ))
         });
 
+        let (trend_granularity, trend_buckets) =
+            aggregate_enabled_provider_trend(self.db, start_at, end_at)?;
+
         Ok(ProviderMonitoringDashboardView {
             start_at,
             end_at,
             providers: rows,
+            trend_granularity,
+            trend_buckets,
             warnings: vec![],
         })
     }
@@ -720,6 +727,50 @@ mod tests {
             .find(|row| row.provider.id == "account-personal")
             .expect("re-enabled Provider returns with its history");
         assert_eq!(restored.event_count, 1);
+    }
+
+    #[test]
+    fn provider_dashboard_builds_hourly_trend_and_excludes_disabled_accounts() {
+        let db = database_without_system_bindings();
+        db.save_usage_provider(&provider("enabled", BillingKind::Metered, "openai"))
+            .unwrap();
+        db.save_usage_provider(&provider("disabled", BillingKind::Metered, "openai"))
+            .unwrap();
+        db.set_usage_provider_enabled("disabled", false).unwrap();
+
+        for (id, provider_id, occurred_at) in [
+            ("first", "enabled", 100),
+            ("hidden", "disabled", 3_700),
+            ("last", "enabled", 7_300),
+        ] {
+            db.insert_usage_event(&event(
+                id,
+                provider_id,
+                "openai",
+                TokenSource::Proxy,
+                CostSource::Unavailable,
+                occurred_at,
+                None,
+            ))
+            .unwrap();
+        }
+
+        let dashboard = UsageDashboardService::new(&db)
+            .get_provider_dashboard(0, 10_800)
+            .unwrap();
+        assert_eq!(
+            dashboard.trend_granularity,
+            crate::usage::domain::UsageTrendGranularity::Hour
+        );
+        assert_eq!(dashboard.trend_buckets.len(), 3);
+        assert_eq!(
+            dashboard
+                .trend_buckets
+                .iter()
+                .map(|bucket| (bucket.event_count, bucket.total_tokens))
+                .collect::<Vec<_>>(),
+            vec![(1, 19), (0, 0), (1, 19)]
+        );
     }
 
     #[test]

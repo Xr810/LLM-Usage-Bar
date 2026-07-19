@@ -6,6 +6,7 @@ import { Card } from "@/components/ui/card";
 import type { ProviderDashboardProjection } from "./usageDashboardProjection";
 import { MeteredProviderCard } from "./MeteredProviderCard";
 import { SubscriptionProviderCard } from "./SubscriptionProviderCard";
+import { ProviderUsageTrendChart } from "./ProviderUsageTrendChart";
 import { formatTokensCompact } from "./usagePresentation";
 import type { RemainingThresholds } from "./usagePresentation";
 
@@ -93,6 +94,11 @@ export function ProviderUsagePage({
 
   return (
     <div className="space-y-7">
+      <ProviderUsageTrendChart
+        granularity={projection.trendGranularity}
+        buckets={projection.trendBuckets}
+      />
+
       <section className="space-y-3" aria-labelledby="subscription-heading">
         {sectionHeading(
           "subscription-heading",

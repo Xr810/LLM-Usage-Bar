@@ -284,13 +284,13 @@ describe("projectProviderDashboard", () => {
       startAt: 1,
       endAt: 2,
       warnings: [],
+      trendGranularity: "hour",
+      trendBuckets: [{ startAt: 1, endAt: 2, eventCount: 5, totalTokens: 123 }],
       providers: [first, second, subscription],
     };
 
     expect(projectProviderDashboard(dashboard)).toMatchObject({
-      subscriptionProviders: [
-        { provider: { id: "chatgpt-personal" } },
-      ],
+      subscriptionProviders: [{ provider: { id: "chatgpt-personal" } }],
       meteredProviders: [
         { provider: { id: "openai-personal" } },
         { provider: { id: "openai-work" } },
@@ -298,6 +298,8 @@ describe("projectProviderDashboard", () => {
       meteredRequestCount: 5,
       meteredTotalCostUsd: "0.3",
       meteredCostStatus: "estimated",
+      trendGranularity: "hour",
+      trendBuckets: [{ eventCount: 5, totalTokens: 123 }],
     });
   });
 });

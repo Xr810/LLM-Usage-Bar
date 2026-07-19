@@ -1,6 +1,7 @@
 use crate::database::Database;
 use crate::error::AppError;
-use crate::usage::domain::CostSourceCounts;
+use crate::usage::domain::{CostSourceCounts, UsageTrendBucketView, UsageTrendGranularity};
+use chrono::{Duration, Local, NaiveDate, TimeZone};
 use rusqlite::params;
 use rust_decimal::Decimal;
 use std::str::FromStr;
@@ -14,6 +15,159 @@ pub struct ProviderRangeAggregate {
     pub cache_creation_tokens: u64,
     pub total_cost_usd: Option<String>,
     pub cost_source_counts: CostSourceCounts,
+}
+
+pub fn aggregate_enabled_provider_trend(
+    db: &Database,
+    start_at: i64,
+    end_at: i64,
+) -> Result<(UsageTrendGranularity, Vec<UsageTrendBucketView>), AppError> {
+    if start_at >= end_at {
+        return Err(AppError::Message(
+            "start_at must be before end_at".to_string(),
+        ));
+    }
+
+    let granularity = if end_at - start_at <= 24 * 60 * 60 {
+        UsageTrendGranularity::Hour
+    } else {
+        UsageTrendGranularity::Day
+    };
+    let mut buckets = empty_trend_buckets(start_at, end_at, granularity)?;
+    let conn = db
+        .conn
+        .lock()
+        .map_err(|error| AppError::Database(format!("Mutex lock failed: {error}")))?;
+    let mut statement = conn.prepare(
+        "SELECT event.occurred_at, event.input_tokens, event.output_tokens,
+                event.cache_read_tokens, event.cache_creation_tokens
+         FROM usage_events AS event
+         JOIN usage_providers AS provider ON provider.id = event.provider_id
+         WHERE provider.enabled = 1
+           AND event.occurred_at >= ?1 AND event.occurred_at < ?2
+           AND NOT EXISTS (
+               SELECT 1
+               FROM usage_event_links AS link
+               JOIN usage_events AS canonical
+                 ON canonical.event_id = link.canonical_event_id
+               JOIN usage_events AS duplicate
+                 ON duplicate.event_id = link.duplicate_event_id
+               WHERE duplicate.event_id = event.event_id
+                 AND canonical.source = 'proxy'
+                 AND duplicate.source = 'session_log'
+                 AND canonical.provider_id = duplicate.provider_id
+           )
+         ORDER BY event.occurred_at, event.event_id",
+    )?;
+    let rows = statement.query_map(params![start_at, end_at], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, i64>(2)?,
+            row.get::<_, i64>(3)?,
+            row.get::<_, i64>(4)?,
+        ))
+    })?;
+
+    for row in rows {
+        let (occurred_at, input, output, cache_read, cache_creation) = row?;
+        let index = trend_bucket_index(start_at, occurred_at, granularity)?;
+        let bucket = buckets.get_mut(index).ok_or_else(|| {
+            AppError::Database("usage event fell outside trend buckets".to_string())
+        })?;
+        bucket.event_count = checked_sum(bucket.event_count, 1)?;
+        let event_tokens = [
+            (input, "input_tokens"),
+            (output, "output_tokens"),
+            (cache_read, "cache_read_tokens"),
+            (cache_creation, "cache_creation_tokens"),
+        ]
+        .into_iter()
+        .try_fold(0_u64, |total, (value, field)| {
+            checked_sum(total, non_negative(value, field)?)
+        })?;
+        bucket.total_tokens = checked_sum(bucket.total_tokens, event_tokens)?;
+    }
+
+    Ok((granularity, buckets))
+}
+
+fn empty_trend_buckets(
+    start_at: i64,
+    end_at: i64,
+    granularity: UsageTrendGranularity,
+) -> Result<Vec<UsageTrendBucketView>, AppError> {
+    match granularity {
+        UsageTrendGranularity::Hour => {
+            let count = (end_at - start_at + 60 * 60 - 1) / (60 * 60);
+            (0..count)
+                .map(|index| {
+                    let bucket_start = start_at + index * 60 * 60;
+                    Ok(UsageTrendBucketView {
+                        start_at: bucket_start,
+                        end_at: (bucket_start + 60 * 60).min(end_at),
+                        event_count: 0,
+                        total_tokens: 0,
+                    })
+                })
+                .collect()
+        }
+        UsageTrendGranularity::Day => {
+            let start_date = local_date(start_at)?;
+            let last_date = local_date(end_at - 1)?;
+            let count = last_date.signed_duration_since(start_date).num_days() + 1;
+            (0..count)
+                .map(|index| {
+                    let date = start_date
+                        .checked_add_signed(Duration::days(index))
+                        .ok_or_else(|| AppError::Database("trend date overflow".to_string()))?;
+                    let next_date = date
+                        .checked_add_signed(Duration::days(1))
+                        .ok_or_else(|| AppError::Database("trend date overflow".to_string()))?;
+                    Ok(UsageTrendBucketView {
+                        start_at: local_midnight_timestamp(date)?.max(start_at),
+                        end_at: local_midnight_timestamp(next_date)?.min(end_at),
+                        event_count: 0,
+                        total_tokens: 0,
+                    })
+                })
+                .collect()
+        }
+    }
+}
+
+fn trend_bucket_index(
+    start_at: i64,
+    occurred_at: i64,
+    granularity: UsageTrendGranularity,
+) -> Result<usize, AppError> {
+    let index = match granularity {
+        UsageTrendGranularity::Hour => (occurred_at - start_at) / (60 * 60),
+        UsageTrendGranularity::Day => local_date(occurred_at)?
+            .signed_duration_since(local_date(start_at)?)
+            .num_days(),
+    };
+    usize::try_from(index)
+        .map_err(|_| AppError::Database("invalid usage trend bucket index".to_string()))
+}
+
+fn local_date(timestamp: i64) -> Result<NaiveDate, AppError> {
+    Local
+        .timestamp_opt(timestamp, 0)
+        .single()
+        .map(|value| value.date_naive())
+        .ok_or_else(|| AppError::Database("invalid usage trend timestamp".to_string()))
+}
+
+fn local_midnight_timestamp(date: NaiveDate) -> Result<i64, AppError> {
+    let midnight = date
+        .and_hms_opt(0, 0, 0)
+        .ok_or_else(|| AppError::Database("invalid usage trend date".to_string()))?;
+    Local
+        .from_local_datetime(&midnight)
+        .earliest()
+        .map(|value| value.timestamp())
+        .ok_or_else(|| AppError::Database("invalid local midnight".to_string()))
 }
 
 pub fn aggregate_provider_range(
