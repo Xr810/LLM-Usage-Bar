@@ -1,8 +1,8 @@
 use super::aggregation::{aggregate_provider_account_range, ProviderRangeAggregate};
 use super::domain::{BillingKind, UsageProviderView};
 use super::status::{
-    classify_metered, classify_subscription, worst_status, CostQuality, SourceClassification,
-    UsageStatus,
+    classify_metered, classify_subscription_with_thresholds, worst_status, CostQuality,
+    SourceClassification, SubscriptionThresholds, UsageStatus,
 };
 use crate::database::Database;
 use crate::error::AppError;
@@ -184,7 +184,13 @@ impl TrayUsageProjector {
             (left.name.to_lowercase(), left.id.as_str())
                 .cmp(&(right.name.to_lowercase(), right.id.as_str()))
         });
-        let projected_providers = self.project_providers(&providers, windows, generated_at)?;
+        let settings = crate::settings::get_settings();
+        let thresholds = SubscriptionThresholds {
+            warning_remaining_percent: settings.usage_warning_remaining_percent,
+            critical_remaining_percent: settings.usage_critical_remaining_percent,
+        };
+        let projected_providers =
+            self.project_providers(&providers, windows, generated_at, thresholds)?;
         let status = worst_status(projected_providers.iter().map(|provider| provider.status));
         let projected_agents = vec![TrayAgentUsageView {
             agent_module_id: "providers".to_string(),
@@ -210,13 +216,14 @@ impl TrayUsageProjector {
         providers: &[UsageProviderView],
         windows: TrayUsageWindows,
         now_timestamp: i64,
+        thresholds: SubscriptionThresholds,
     ) -> Result<Vec<TrayProviderUsageView>, AppError> {
         providers
             .iter()
             .map(|provider| match provider.billing_kind {
                 BillingKind::Subscription => {
                     let (subscription, classification) =
-                        self.project_subscription(provider, now_timestamp)?;
+                        self.project_subscription(provider, now_timestamp, thresholds)?;
                     Ok(TrayProviderUsageView {
                         provider_id: provider.id.clone(),
                         provider_name: provider.name.clone(),
@@ -249,6 +256,7 @@ impl TrayUsageProjector {
         &self,
         provider: &UsageProviderView,
         now_timestamp: i64,
+        thresholds: SubscriptionThresholds,
     ) -> Result<(TraySubscriptionUsageView, SourceClassification), AppError> {
         let snapshot = if provider.quota_source.is_some() {
             self.db.latest_quota_snapshot(&provider.id)?
@@ -261,7 +269,8 @@ impl TrayUsageProjector {
         let seven_day_used = snapshot
             .as_ref()
             .and_then(|snapshot| snapshot.seven_day_utilization_percent.as_deref());
-        let classification = classify_subscription(five_hour_used, seven_day_used);
+        let classification =
+            classify_subscription_with_thresholds(five_hour_used, seven_day_used, thresholds);
         let windows = [
             (
                 "five_hour",
@@ -279,7 +288,9 @@ impl TrayUsageProjector {
             ),
         ]
         .into_iter()
-        .map(|(kind, used, resets_at)| subscription_window(kind, used, resets_at, now_timestamp))
+        .map(|(kind, used, resets_at)| {
+            subscription_window(kind, used, resets_at, now_timestamp, thresholds)
+        })
         .collect();
 
         Ok((
@@ -337,8 +348,9 @@ fn subscription_window(
     used_percent: Option<&str>,
     resets_at: Option<&str>,
     now_timestamp: i64,
+    thresholds: SubscriptionThresholds,
 ) -> TrayQuotaWindowView {
-    let classification = classify_subscription(used_percent, None);
+    let classification = classify_subscription_with_thresholds(used_percent, None, thresholds);
     let (resets_at, reset_reason) = canonical_reset(resets_at, now_timestamp);
     TrayQuotaWindowView {
         kind: kind.to_string(),
@@ -1031,6 +1043,7 @@ mod tests {
             Some("invalid-percent-secret-sentinel"),
             Some(&past_reset),
             now.timestamp(),
+            SubscriptionThresholds::default(),
         );
         assert_eq!(
             invalid_usage_with_past_reset.unavailable_reason.as_deref(),

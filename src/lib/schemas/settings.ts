@@ -16,6 +16,8 @@ export const settingsSchema = z.object({
   launchOnStartup: z.boolean().optional(),
   enableLocalProxy: z.boolean().optional(),
   usageDashboardRefreshIntervalMs: z.number().optional(),
+  usageWarningRemainingPercent: z.number().min(0).max(100).optional(),
+  usageCriticalRemainingPercent: z.number().min(0).max(100).optional(),
   preserveCodexOfficialAuthOnSwitch: z.boolean().optional(),
   unifyCodexSessionHistory: z.boolean().optional(),
   language: z.enum(["en", "zh", "zh-TW", "ja"]).optional(),

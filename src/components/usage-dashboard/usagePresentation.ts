@@ -9,6 +9,16 @@
 
 export type UsageTone = "success" | "warning" | "danger" | "muted";
 
+export interface RemainingThresholds {
+  warning: number;
+  critical: number;
+}
+
+export const DEFAULT_REMAINING_THRESHOLDS: RemainingThresholds = {
+  warning: 50,
+  critical: 20,
+};
+
 export function parsePercentValue(
   value: string | null | undefined,
 ): number | null {
@@ -19,10 +29,11 @@ export function parsePercentValue(
 
 export function toneFromRemainingPercent(
   remaining: number | null,
+  thresholds: RemainingThresholds = DEFAULT_REMAINING_THRESHOLDS,
 ): UsageTone {
   if (remaining == null) return "muted";
-  if (remaining > 50) return "success";
-  if (remaining >= 20) return "warning";
+  if (remaining > thresholds.warning) return "success";
+  if (remaining >= thresholds.critical) return "warning";
   return "danger";
 }
 

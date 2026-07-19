@@ -9,11 +9,13 @@ import {
   useRefreshProviderQuota,
   useSyncProviderSessionUsage,
 } from "@/lib/query/usageDashboard";
+import { useSettingsQuery } from "@/lib/query";
 import { resolveUsageRange } from "@/lib/usageRange";
 import type { UsageRangeSelection } from "@/types/usage";
 import type { AgentModuleView } from "@/types/usageDashboard";
 import { ProviderUsagePage } from "./ProviderUsagePage";
 import { projectProviderDashboard } from "./usageDashboardProjection";
+import { DEFAULT_REMAINING_THRESHOLDS } from "./usagePresentation";
 
 interface UsageDashboardPageProps {
   /** Compatibility-only; Provider monitoring intentionally ignores Agent selection. */
@@ -45,12 +47,21 @@ export function UsageDashboardPage({
     [rangeClockMs, selection],
   );
   const dashboard = useProviderUsageDashboard(range.startDate, range.endDate);
+  const settings = useSettingsQuery();
   const refreshQuota = useRefreshProviderQuota();
   const syncSession = useSyncProviderSessionUsage();
   const projection = useMemo(
     () => (dashboard.data ? projectProviderDashboard(dashboard.data) : null),
     [dashboard.data],
   );
+  const remainingThresholds = {
+    warning:
+      settings.data?.usageWarningRemainingPercent ??
+      DEFAULT_REMAINING_THRESHOLDS.warning,
+    critical:
+      settings.data?.usageCriticalRemainingPercent ??
+      DEFAULT_REMAINING_THRESHOLDS.critical,
+  };
 
   const errorText = (cause: unknown) =>
     cause instanceof Error ? cause.message : String(cause);
@@ -155,6 +166,7 @@ export function UsageDashboardPage({
           onSyncSessions={sync}
           isRefreshingQuota={refreshQuota.isPending}
           isSyncingSessions={syncSession.isPending}
+          remainingThresholds={remainingThresholds}
         />
       ) : null}
     </div>

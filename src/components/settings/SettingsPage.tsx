@@ -13,6 +13,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { UsageDiagnosticsPanel } from "./UsageDiagnosticsPanel";
 import { UsageProvidersSettings } from "./UsageProvidersSettings";
 import { StartupSettings } from "./StartupSettings";
+import { UsageThresholdSettings } from "./UsageThresholdSettings";
 
 interface SettingsDialogProps {
   open: boolean;
@@ -104,6 +105,7 @@ export function SettingsPage({
           <div className="min-h-0 flex-1 overflow-y-auto">
             <TabsContent value="general">
               <StartupSettings />
+              <UsageThresholdSettings />
             </TabsContent>
             <TabsContent value="providers">
               <UsageProvidersSettings

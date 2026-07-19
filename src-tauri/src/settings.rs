@@ -369,6 +369,12 @@ pub struct AppSettings {
     pub usage_confirmed: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage_dashboard_refresh_interval_ms: Option<u32>,
+    /// Remaining-quota percentage at or below which subscription usage turns yellow.
+    #[serde(default = "default_usage_warning_remaining_percent")]
+    pub usage_warning_remaining_percent: u8,
+    /// Remaining-quota percentage below which subscription usage turns red.
+    #[serde(default = "default_usage_critical_remaining_percent")]
+    pub usage_critical_remaining_percent: u8,
     /// User has confirmed the stream check first-run notice
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stream_check_confirmed: Option<bool>,
@@ -491,6 +497,14 @@ fn default_minimize_to_tray_on_close() -> bool {
     true
 }
 
+fn default_usage_warning_remaining_percent() -> u8 {
+    50
+}
+
+fn default_usage_critical_remaining_percent() -> u8 {
+    20
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
@@ -505,6 +519,8 @@ impl Default for AppSettings {
             proxy_confirmed: None,
             usage_confirmed: None,
             usage_dashboard_refresh_interval_ms: None,
+            usage_warning_remaining_percent: default_usage_warning_remaining_percent(),
+            usage_critical_remaining_percent: default_usage_critical_remaining_percent(),
             stream_check_confirmed: None,
             enable_failover_toggle: false,
             preserve_codex_official_auth_on_switch: false,
@@ -548,6 +564,11 @@ impl AppSettings {
     }
 
     fn normalize_paths(&mut self) {
+        self.usage_warning_remaining_percent = self.usage_warning_remaining_percent.min(100);
+        self.usage_critical_remaining_percent = self
+            .usage_critical_remaining_percent
+            .min(self.usage_warning_remaining_percent);
+
         self.claude_config_dir = self
             .claude_config_dir
             .as_ref()
@@ -1174,6 +1195,28 @@ mod tests {
     use super::*;
     use crate::app_config::AppType;
     use tempfile::tempdir;
+
+    #[test]
+    fn usage_threshold_defaults_match_the_product_bands() {
+        let settings = AppSettings::default();
+
+        assert_eq!(settings.usage_warning_remaining_percent, 50);
+        assert_eq!(settings.usage_critical_remaining_percent, 20);
+    }
+
+    #[test]
+    fn usage_thresholds_are_normalized_before_persistence() {
+        let mut settings = AppSettings {
+            usage_warning_remaining_percent: 120,
+            usage_critical_remaining_percent: 110,
+            ..AppSettings::default()
+        };
+
+        settings.normalize_paths();
+
+        assert_eq!(settings.usage_warning_remaining_percent, 100);
+        assert_eq!(settings.usage_critical_remaining_percent, 100);
+    }
 
     #[test]
     fn sync_defaults_preserve_existing_remote_root_bytes() {

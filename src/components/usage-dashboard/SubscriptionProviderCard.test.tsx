@@ -184,4 +184,22 @@ describe("SubscriptionProviderCard localized reset countdown", () => {
       expect(meter.firstElementChild).toHaveClass(toneClass);
     },
   );
+
+  it("uses custom remaining thresholds for the quota color", () => {
+    const usage = subscriptionUsage();
+    usage.quota!.fiveHourUtilizationPercent = "45";
+
+    render(
+      <SubscriptionProviderCard
+        usage={usage}
+        onRefreshQuota={vi.fn()}
+        onSyncSessions={vi.fn()}
+        remainingThresholds={{ warning: 60, critical: 30 }}
+      />,
+    );
+
+    const meter = screen.getByRole("progressbar", { name: "5-hour window" });
+    expect(meter).toHaveAttribute("aria-valuenow", "55");
+    expect(meter.firstElementChild).toHaveClass("bg-warning");
+  });
 });

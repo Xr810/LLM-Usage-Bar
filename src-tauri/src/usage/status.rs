@@ -36,6 +36,21 @@ pub struct SourceClassification {
     pub reason: Option<&'static str>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SubscriptionThresholds {
+    pub warning_remaining_percent: u8,
+    pub critical_remaining_percent: u8,
+}
+
+impl Default for SubscriptionThresholds {
+    fn default() -> Self {
+        Self {
+            warning_remaining_percent: 50,
+            critical_remaining_percent: 20,
+        }
+    }
+}
+
 impl SourceClassification {
     fn unknown(reason: &'static str) -> Self {
         Self {
@@ -51,6 +66,18 @@ impl SourceClassification {
 pub fn classify_subscription(
     five_hour_used: Option<&str>,
     seven_day_used: Option<&str>,
+) -> SourceClassification {
+    classify_subscription_with_thresholds(
+        five_hour_used,
+        seven_day_used,
+        SubscriptionThresholds::default(),
+    )
+}
+
+pub fn classify_subscription_with_thresholds(
+    five_hour_used: Option<&str>,
+    seven_day_used: Option<&str>,
+    thresholds: SubscriptionThresholds,
 ) -> SourceClassification {
     let mut highest_used: Option<Decimal> = None;
     let mut saw_invalid = false;
@@ -79,9 +106,11 @@ pub fn classify_subscription(
     let Some(remaining) = Decimal::ONE_HUNDRED.checked_sub(used) else {
         return SourceClassification::unknown(INVALID_QUOTA_PERCENT);
     };
-    let status = if remaining < Decimal::new(20, 0) {
+    let critical = Decimal::from(thresholds.critical_remaining_percent);
+    let warning = Decimal::from(thresholds.warning_remaining_percent);
+    let status = if remaining < critical {
         UsageStatus::Red
-    } else if remaining <= Decimal::new(50, 0) {
+    } else if remaining <= warning {
         UsageStatus::Yellow
     } else {
         UsageStatus::Green
@@ -197,6 +226,27 @@ mod tests {
         ] {
             assert_eq!(
                 classify_subscription(Some(used), None).status,
+                expected,
+                "{used}",
+            );
+        }
+    }
+
+    #[test]
+    fn subscription_uses_custom_remaining_thresholds() {
+        let thresholds = SubscriptionThresholds {
+            warning_remaining_percent: 60,
+            critical_remaining_percent: 30,
+        };
+
+        for (used, expected) in [
+            ("39.999", UsageStatus::Green),
+            ("40", UsageStatus::Yellow),
+            ("70", UsageStatus::Yellow),
+            ("70.001", UsageStatus::Red),
+        ] {
+            assert_eq!(
+                classify_subscription_with_thresholds(Some(used), None, thresholds).status,
                 expected,
                 "{used}",
             );

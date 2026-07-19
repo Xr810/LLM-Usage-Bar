@@ -7,9 +7,11 @@ import type { ProviderUsageView } from "@/types/usageDashboard";
 import { useTranslation } from "react-i18next";
 import { QuotaMeter } from "./QuotaMeter";
 import {
+  DEFAULT_REMAINING_THRESHOLDS,
   dashboardProviderIcon,
   formatTokensCompact,
   parsePercentValue,
+  type RemainingThresholds,
   toneFromRemainingPercent,
 } from "./usagePresentation";
 
@@ -19,6 +21,7 @@ interface Props {
   onSyncSessions: (providerId: string) => Promise<void>;
   isRefreshingQuota?: boolean;
   isSyncingSessions?: boolean;
+  remainingThresholds?: RemainingThresholds;
 }
 
 type RelativeReset = {
@@ -45,6 +48,7 @@ export function SubscriptionProviderCard({
   onSyncSessions,
   isRefreshingQuota = false,
   isSyncingSessions = false,
+  remainingThresholds = DEFAULT_REMAINING_THRESHOLDS,
 }: Props) {
   const { t, i18n } = useTranslation();
   const canRefreshQuota = Boolean(usage.provider.quotaSource);
@@ -105,7 +109,7 @@ export function SubscriptionProviderCard({
         label={label}
         meterLabel={label}
         fillPercent={remaining}
-        tone={toneFromRemainingPercent(remaining)}
+        tone={toneFromRemainingPercent(remaining, remainingThresholds)}
         valueText={
           remaining == null
             ? unavailableText

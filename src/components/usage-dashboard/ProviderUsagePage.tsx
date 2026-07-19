@@ -7,6 +7,7 @@ import type { ProviderDashboardProjection } from "./usageDashboardProjection";
 import { MeteredProviderCard } from "./MeteredProviderCard";
 import { SubscriptionProviderCard } from "./SubscriptionProviderCard";
 import { formatTokensCompact } from "./usagePresentation";
+import type { RemainingThresholds } from "./usagePresentation";
 
 interface ProviderUsagePageProps {
   projection: ProviderDashboardProjection;
@@ -17,6 +18,7 @@ interface ProviderUsagePageProps {
   onOpenSettings?: () => void;
   isRefreshingQuota?: boolean;
   isSyncingSessions?: boolean;
+  remainingThresholds?: RemainingThresholds;
 }
 
 export function ProviderUsagePage({
@@ -28,6 +30,7 @@ export function ProviderUsagePage({
   onOpenSettings,
   isRefreshingQuota = false,
   isSyncingSessions = false,
+  remainingThresholds,
 }: ProviderUsagePageProps) {
   const { t } = useTranslation();
   const costText =
@@ -108,6 +111,7 @@ export function ProviderUsagePage({
                 onSyncSessions={onSyncSessions}
                 isRefreshingQuota={isRefreshingQuota}
                 isSyncingSessions={isSyncingSessions}
+                remainingThresholds={remainingThresholds}
               />
             ))}
           </div>

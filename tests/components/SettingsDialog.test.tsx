@@ -30,16 +30,31 @@ vi.mock("@/components/settings/StartupSettings", () => ({
   StartupSettings: () => <div>Startup settings content</div>,
 }));
 
+vi.mock("@/components/settings/UsageThresholdSettings", () => ({
+  UsageThresholdSettings: () => <div>Usage threshold settings content</div>,
+}));
+
 vi.mock("@/components/ui/dialog", () => ({
   Dialog: ({ open, children }: { open: boolean; children: ReactNode }) =>
     open ? <div data-testid="dialog-root">{children}</div> : null,
-  DialogContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-  DialogClose: ({ children, ...props }: ButtonHTMLAttributes<HTMLButtonElement>) => (
-    <button type="button" {...props}>{children}</button>
+  DialogContent: ({ children }: { children: ReactNode }) => (
+    <div>{children}</div>
   ),
-  DialogHeader: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  DialogClose: ({
+    children,
+    ...props
+  }: ButtonHTMLAttributes<HTMLButtonElement>) => (
+    <button type="button" {...props}>
+      {children}
+    </button>
+  ),
+  DialogHeader: ({ children }: { children: ReactNode }) => (
+    <div>{children}</div>
+  ),
   DialogTitle: ({ children }: { children: ReactNode }) => <h2>{children}</h2>,
-  DialogDescription: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  DialogDescription: ({ children }: { children: ReactNode }) => (
+    <div>{children}</div>
+  ),
 }));
 
 describe("SettingsPage Provider-only sections", () => {
@@ -51,18 +66,24 @@ describe("SettingsPage Provider-only sections", () => {
       "aria-selected",
       "true",
     );
-    expect(screen.getByRole("button", { name: "Add Provider" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Add Provider" }),
+    ).toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Agents" })).toBeNull();
     expect(screen.queryByRole("tab", { name: "Proxy setup" })).toBeNull();
 
     await user.click(screen.getByRole("tab", { name: "Diagnostics" }));
-    expect(screen.getByText("Aggregate diagnostics content")).toBeInTheDocument();
+    expect(
+      screen.getByText("Aggregate diagnostics content"),
+    ).toBeInTheDocument();
   });
 
   it.each(["agents", "modules", "proxy", "unknown"])(
     "maps legacy default %s to Providers",
     (defaultTab) => {
-      render(<SettingsPage open onOpenChange={() => {}} defaultTab={defaultTab} />);
+      render(
+        <SettingsPage open onOpenChange={() => {}} defaultTab={defaultTab} />,
+      );
       expect(screen.getByRole("tab", { name: "Providers" })).toHaveAttribute(
         "aria-selected",
         "true",
@@ -93,13 +114,17 @@ describe("SettingsPage Provider-only sections", () => {
     expect(screen.getByLabelText("Provider target")).toHaveTextContent(
       "system-openrouter-api",
     );
-    await user.click(screen.getByRole("button", { name: "Handle provider target" }));
+    await user.click(
+      screen.getByRole("button", { name: "Handle provider target" }),
+    );
     expect(screen.getByLabelText("Provider target")).toHaveTextContent("none");
     expect(onProviderTargetHandled).toHaveBeenCalledOnce();
   });
 
   it("does not mount sections while closed and keeps an accessible close control", () => {
-    const { rerender } = render(<SettingsPage open={false} onOpenChange={() => {}} />);
+    const { rerender } = render(
+      <SettingsPage open={false} onOpenChange={() => {}} />,
+    );
     expect(screen.queryByRole("button", { name: "Add Provider" })).toBeNull();
     rerender(<SettingsPage open onOpenChange={() => {}} />);
     expect(screen.getByRole("button", { name: "Close" })).toBeInTheDocument();

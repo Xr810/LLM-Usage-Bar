@@ -353,6 +353,9 @@ export interface Settings {
   // User has confirmed the usage query first-run notice
   usageConfirmed?: boolean;
   usageDashboardRefreshIntervalMs?: number;
+  // Remaining quota thresholds used by subscription bars and tray status.
+  usageWarningRemainingPercent?: number;
+  usageCriticalRemainingPercent?: number;
   // User has confirmed the stream check first-run notice
   streamCheckConfirmed?: boolean;
   // Whether to show the failover toggle independently on the main page
