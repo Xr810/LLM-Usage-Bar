@@ -131,10 +131,12 @@ export function TraySubscriptionSection({
                           })}
                         </span>
                       </div>
-                      {hasUsablePercent(window.usedPercent) ? (
+                      {hasUsablePercent(window.remainingPercent) ? (
                         <TrayUsageProgress
                           label={progressLabel}
-                          value={clampPercentForProgress(window.usedPercent)}
+                          value={clampPercentForProgress(
+                            window.remainingPercent,
+                          )}
                           status={window.status}
                         />
                       ) : null}

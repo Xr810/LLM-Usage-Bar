@@ -218,6 +218,23 @@ describe("TrayUsagePopover Provider-only UI", () => {
     expect(screen.getByText(/Codex Spark/)).toBeInTheDocument();
   });
 
+  it("fills subscription progress from remaining quota", () => {
+    const mostlyAvailable = structuredClone(snapshot);
+    const window =
+      mostlyAvailable.agents[0].providers[0].subscription!.windows[0];
+    window.usedPercent = "5";
+    window.remainingPercent = "95";
+    window.status = "green";
+
+    render(<TrayUsagePopoverView {...props({ snapshot: mostlyAvailable })} />);
+
+    expect(
+      screen.getByRole("progressbar", {
+        name: "5-hour allowance for ChatGPT Plus/Pro",
+      }),
+    ).toHaveAttribute("aria-valuenow", "95");
+  });
+
   it("routes Provider row and footer actions without Agent identity", async () => {
     const user = userEvent.setup();
     const onOpenDetails = vi.fn();
