@@ -1,3 +1,5 @@
+import type { QuotaResetDetailView } from "./quota";
+
 export type TrayUsageStatus = "green" | "yellow" | "red" | "unknown";
 
 export type TrayCostQuality =
@@ -28,8 +30,37 @@ export interface TrayProviderUsageView {
   billingKind: "subscription" | "metered";
   status: TrayUsageStatus;
   warningReason: string | null;
+  recentUsage: TrayProviderRecentUsageView;
   subscription: TraySubscriptionUsageView | null;
   metered: TrayMeteredUsageView | null;
+}
+
+export interface TrayProviderRecentUsageView {
+  startAt: number;
+  endAt: number;
+  totalTokens: number;
+  todayCostUsd: string | null;
+  totalCostUsd: string | null;
+  costQuality: TrayCostQuality;
+  mostUsedModel: string | null;
+  trendBuckets: TrayUsageTrendBucketView[];
+}
+
+export interface TrayUsageTrendBucketView {
+  startAt: number;
+  endAt: number;
+  eventCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  totalTokens: number;
+  totalCostUsd: string | null;
+  costSourceCounts: {
+    upstream: number;
+    estimated: number;
+    unavailable: number;
+  };
 }
 
 export interface TrayQuotaWindowView {
@@ -44,6 +75,7 @@ export interface TrayQuotaWindowView {
 export interface TraySubscriptionUsageView {
   planLabel: string | null;
   windows: TrayQuotaWindowView[];
+  additionalResetDetails?: QuotaResetDetailView[];
 }
 
 export interface TrayMeteredUsageView {

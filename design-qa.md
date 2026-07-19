@@ -129,6 +129,72 @@ final result: passed
 
 ---
 
+# Provider Usage Statistics — Design QA
+
+Date: 2026-07-19
+
+Source visual truth:
+
+- Main usage statistics: `/Users/max/Library/Application Support/CleanShot/media/media_TLZaGI07E8/CleanShot 2026-07-19 at 21.49.38@2x.png`
+- Provider recent usage: `/var/folders/th/28ml58qj663d_8tbmcz417t00000gn/T/TemporaryItems/NSIRD_screencaptureui_EqUMHT/截屏2026-07-19 21.45.34.png`
+
+Implementation screenshots:
+
+- Main: `qa-artifacts/usage-main.png`
+- Tray: `qa-artifacts/usage-tray.png`
+- Combined main comparison: `qa-artifacts/usage-main-comparison.png`
+- Combined tray comparison: `qa-artifacts/usage-tray-comparison.png`
+
+Viewport and state:
+
+- Main: `1280 × 800`, dark theme, all enabled Providers combined, populated hourly buckets.
+- Tray: `760 × 1200` capture with a `348 px` Provider card, dark theme, ChatGPT quota plus populated 30-day usage.
+
+## Findings
+
+No actionable P0, P1, or P2 differences remain. The tray implementation closely
+preserves the supplied two-column metric hierarchy, amber bars, and most-used
+model line while intentionally omitting the explanatory local-log sentence. The
+main implementation uses the reference's summary hierarchy and multi-series
+trend, with stacked bars retained because the requested product behavior calls
+for hourly/daily bar charts.
+
+## Fidelity surfaces
+
+- Fonts and typography: existing application typography and tabular metric
+  numerals preserve the reference hierarchy at both main-window and popover
+  densities.
+- Spacing and layout rhythm: the main summary, five token-breakdown cells, chart,
+  and compact tray block remain aligned without overflow at the tested sizes.
+- Colors and visual tokens: surfaces, borders, muted copy, state green, amber tray
+  bars, token-series colors, and estimated-cost line use the existing dark-theme
+  tokens or the supplied chart palette.
+- Image and asset fidelity: no illustrative assets are needed; both charts use
+  the project's existing Recharts implementation and render sharply.
+- Copy and content: total tokens, requests, estimated cost, input/output/cache
+  values, cache hit rate, and most-used model are visible. The prohibited local
+  estimation explanation is absent. Tooltip cost copy is localized.
+
+## Comparison history
+
+- Initial rendered capture: the chart animation left the bars visually empty on
+  first paint, a P2 mismatch for a glanceable monitoring screen.
+- Fix: disabled Recharts animation for the main stacked bars, cost line, and tray
+  bars so real data is visible immediately.
+- Post-fix evidence: both combined comparison images show populated bars at the
+  same dark-theme state. No P0/P1/P2 issue remains.
+
+## Focused evidence and interactions
+
+The full combined images are readable, so a separate focused crop was not
+needed. Hovering the main 14:12 bar exposed localized input, output, cache write,
+cache read, and total-cost values. Both preview states reported zero browser
+console errors.
+
+final result: passed
+
+---
+
 # Main Window Usage Trend — Design QA
 
 Date: 2026-07-19

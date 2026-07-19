@@ -1,5 +1,10 @@
-use super::aggregation::{aggregate_provider_account_range, ProviderRangeAggregate};
-use super::domain::{BillingKind, UsageProviderView};
+use super::aggregation::{
+    aggregate_provider_account_range, aggregate_provider_account_trend, most_used_provider_model,
+    ProviderRangeAggregate,
+};
+use super::domain::{
+    BillingKind, QuotaResetDetailView, QuotaStatusView, UsageProviderView, UsageTrendBucketView,
+};
 use super::status::{
     classify_metered, classify_subscription_with_thresholds, worst_status, CostQuality,
     SourceClassification, SubscriptionThresholds, UsageStatus,
@@ -59,8 +64,22 @@ pub struct TrayProviderUsageView {
     pub billing_kind: BillingKind,
     pub status: UsageStatus,
     pub warning_reason: Option<String>,
+    pub recent_usage: TrayProviderRecentUsageView,
     pub subscription: Option<TraySubscriptionUsageView>,
     pub metered: Option<TrayMeteredUsageView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrayProviderRecentUsageView {
+    pub start_at: i64,
+    pub end_at: i64,
+    pub total_tokens: u64,
+    pub today_cost_usd: Option<String>,
+    pub total_cost_usd: Option<String>,
+    pub cost_quality: CostQuality,
+    pub most_used_model: Option<String>,
+    pub trend_buckets: Vec<UsageTrendBucketView>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -79,6 +98,8 @@ pub struct TrayQuotaWindowView {
 pub struct TraySubscriptionUsageView {
     pub plan_label: Option<String>,
     pub windows: Vec<TrayQuotaWindowView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub additional_reset_details: Vec<QuotaResetDetailView>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -220,33 +241,71 @@ impl TrayUsageProjector {
     ) -> Result<Vec<TrayProviderUsageView>, AppError> {
         providers
             .iter()
-            .map(|provider| match provider.billing_kind {
-                BillingKind::Subscription => {
-                    let (subscription, classification) =
-                        self.project_subscription(provider, now_timestamp, thresholds)?;
-                    Ok(TrayProviderUsageView {
-                        provider_id: provider.id.clone(),
-                        provider_name: provider.name.clone(),
-                        system_preset_key: provider.system_preset_key.clone(),
-                        billing_kind: provider.billing_kind,
-                        status: classification.status,
-                        warning_reason: classification.reason.map(str::to_string),
-                        subscription: Some(subscription),
-                        metered: None,
-                    })
-                }
-                BillingKind::Metered => {
-                    let (metered, classification) = self.project_metered(provider, windows)?;
-                    Ok(TrayProviderUsageView {
-                        provider_id: provider.id.clone(),
-                        provider_name: provider.name.clone(),
-                        system_preset_key: provider.system_preset_key.clone(),
-                        billing_kind: provider.billing_kind,
-                        status: classification.status,
-                        warning_reason: classification.reason.map(str::to_string),
-                        subscription: None,
-                        metered: Some(metered),
-                    })
+            .map(|provider| {
+                let rolling_30_day = aggregate_provider_account_range(
+                    &self.db,
+                    &provider.id,
+                    windows.rolling_30_start_at,
+                    windows.end_at,
+                )?;
+                let today = aggregate_provider_account_range(
+                    &self.db,
+                    &provider.id,
+                    windows.today_start_at,
+                    windows.end_at,
+                )?;
+                let (_, trend_buckets) = aggregate_provider_account_trend(
+                    &self.db,
+                    &provider.id,
+                    windows.rolling_30_start_at,
+                    windows.end_at,
+                )?;
+                let recent_usage = TrayProviderRecentUsageView {
+                    start_at: windows.rolling_30_start_at,
+                    end_at: windows.end_at,
+                    total_tokens: checked_total_tokens(&rolling_30_day)?,
+                    today_cost_usd: display_cost(&today),
+                    total_cost_usd: display_cost(&rolling_30_day),
+                    cost_quality: cost_quality(&rolling_30_day),
+                    most_used_model: most_used_provider_model(
+                        &self.db,
+                        &provider.id,
+                        windows.rolling_30_start_at,
+                        windows.end_at,
+                    )?,
+                    trend_buckets,
+                };
+                match provider.billing_kind {
+                    BillingKind::Subscription => {
+                        let (subscription, classification) =
+                            self.project_subscription(provider, now_timestamp, thresholds)?;
+                        Ok(TrayProviderUsageView {
+                            provider_id: provider.id.clone(),
+                            provider_name: provider.name.clone(),
+                            system_preset_key: provider.system_preset_key.clone(),
+                            billing_kind: provider.billing_kind,
+                            status: classification.status,
+                            warning_reason: classification.reason.map(str::to_string),
+                            recent_usage,
+                            subscription: Some(subscription),
+                            metered: None,
+                        })
+                    }
+                    BillingKind::Metered => {
+                        let (metered, classification) =
+                            self.project_metered(provider, &today, &rolling_30_day)?;
+                        Ok(TrayProviderUsageView {
+                            provider_id: provider.id.clone(),
+                            provider_name: provider.name.clone(),
+                            system_preset_key: provider.system_preset_key.clone(),
+                            billing_kind: provider.billing_kind,
+                            status: classification.status,
+                            warning_reason: classification.reason.map(str::to_string),
+                            recent_usage,
+                            subscription: None,
+                            metered: Some(metered),
+                        })
+                    }
                 }
             })
             .collect::<Result<Vec<_>, AppError>>()
@@ -297,6 +356,11 @@ impl TrayUsageProjector {
             TraySubscriptionUsageView {
                 plan_label: None,
                 windows,
+                additional_reset_details: snapshot
+                    .as_ref()
+                    .map(QuotaStatusView::from_snapshot)
+                    .map(|quota| quota.additional_reset_details)
+                    .unwrap_or_default(),
             },
             classification,
         ))
@@ -305,29 +369,18 @@ impl TrayUsageProjector {
     fn project_metered(
         &self,
         provider: &UsageProviderView,
-        windows: TrayUsageWindows,
+        today: &ProviderRangeAggregate,
+        rolling_30_day: &ProviderRangeAggregate,
     ) -> Result<(TrayMeteredUsageView, SourceClassification), AppError> {
-        let today = aggregate_provider_account_range(
-            &self.db,
-            &provider.id,
-            windows.today_start_at,
-            windows.end_at,
-        )?;
-        let rolling_30_day = aggregate_provider_account_range(
-            &self.db,
-            &provider.id,
-            windows.rolling_30_start_at,
-            windows.end_at,
-        )?;
         let quality = cost_quality(&today);
         let today_cost_usd = display_cost(&today);
-        let rolling_30_day_cost_usd = display_cost(&rolling_30_day);
+        let rolling_30_day_cost_usd = display_cost(rolling_30_day);
         let classification = classify_metered(
             today_cost_usd.as_deref(),
             provider.daily_budget_usd.as_deref(),
             quality,
         );
-        let total_tokens = checked_total_tokens(&rolling_30_day)?;
+        let total_tokens = checked_total_tokens(rolling_30_day)?;
 
         Ok((
             TrayMeteredUsageView {
@@ -652,7 +705,15 @@ mod tests {
             Some(&future_reset),
             Some("40"),
             Some(&future_reset),
-            json!({"fixture": true}),
+            json!({
+                "tiers": [
+                    {
+                        "name": "codex_additional:0:18000:Codex Spark",
+                        "utilization": 10,
+                        "resetsAt": future_reset.clone()
+                    }
+                ]
+            }),
         ))
         .unwrap();
         db.append_quota_success(&quota_snapshot(
@@ -739,7 +800,13 @@ mod tests {
 
         let subscription = find_provider(&snapshot, "codex", "a-subscription");
         assert_eq!(subscription.status, UsageStatus::Red);
-        assert_eq!(subscription.subscription.as_ref().unwrap().plan_label, None,);
+        let subscription_quota = subscription.subscription.as_ref().unwrap();
+        assert_eq!(subscription_quota.plan_label, None);
+        assert_eq!(subscription_quota.additional_reset_details.len(), 1);
+        assert_eq!(
+            subscription_quota.additional_reset_details[0].label,
+            "Codex Spark"
+        );
 
         let metered = find_provider(&snapshot, "codex", "b-metered")
             .metered
@@ -749,6 +816,19 @@ mod tests {
         assert_eq!(metered.rolling_30_day_cost_usd.as_deref(), Some("18.75"),);
         assert_eq!(metered.total_tokens, 110);
         assert_eq!(metered.cost_quality, CostQuality::Complete);
+        let recent = &find_provider(&snapshot, "codex", "b-metered").recent_usage;
+        assert_eq!(recent.today_cost_usd.as_deref(), Some("8.75"));
+        assert_eq!(recent.total_cost_usd.as_deref(), Some("18.75"));
+        assert_eq!(recent.total_tokens, 110);
+        assert!(recent.most_used_model.is_some());
+        assert_eq!(
+            recent
+                .trend_buckets
+                .iter()
+                .map(|bucket| bucket.event_count)
+                .sum::<u64>(),
+            2
+        );
 
         let no_budget = find_provider(&snapshot, "codex", "c-no-budget");
         assert_eq!(no_budget.status, UsageStatus::Unknown);
@@ -1269,6 +1349,31 @@ mod tests {
                     billing_kind: BillingKind::Metered,
                     status: UsageStatus::Yellow,
                     warning_reason: Some("partial_cost".to_string()),
+                    recent_usage: TrayProviderRecentUsageView {
+                        start_at: 1,
+                        end_at: 200,
+                        total_tokens: 42,
+                        today_cost_usd: Some("5".to_string()),
+                        total_cost_usd: Some("80".to_string()),
+                        cost_quality: CostQuality::Partial,
+                        most_used_model: Some("gpt-5.6-sol".to_string()),
+                        trend_buckets: vec![UsageTrendBucketView {
+                            start_at: 100,
+                            end_at: 200,
+                            event_count: 1,
+                            input_tokens: 10,
+                            output_tokens: 2,
+                            cache_read_tokens: 30,
+                            cache_creation_tokens: 0,
+                            total_tokens: 42,
+                            total_cost_usd: Some("5".to_string()),
+                            cost_source_counts: super::super::domain::CostSourceCounts {
+                                upstream: 0,
+                                estimated: 1,
+                                unavailable: 0,
+                            },
+                        }],
+                    },
                     subscription: Some(TraySubscriptionUsageView {
                         plan_label: Some("Plus".to_string()),
                         windows: vec![TrayQuotaWindowView {
@@ -1279,6 +1384,7 @@ mod tests {
                             status: UsageStatus::Yellow,
                             unavailable_reason: None,
                         }],
+                        additional_reset_details: Vec::new(),
                     }),
                     metered: Some(TrayMeteredUsageView {
                         today_cost_usd: Some("5".to_string()),
@@ -1293,6 +1399,31 @@ mod tests {
         };
 
         let value = serde_json::to_value(&snapshot).unwrap();
+        let recent_usage_json = json!({
+            "startAt": 1,
+            "endAt": 200,
+            "totalTokens": 42,
+            "todayCostUsd": "5",
+            "totalCostUsd": "80",
+            "costQuality": "partial",
+            "mostUsedModel": "gpt-5.6-sol",
+            "trendBuckets": [{
+                "startAt": 100,
+                "endAt": 200,
+                "eventCount": 1,
+                "inputTokens": 10,
+                "outputTokens": 2,
+                "cacheReadTokens": 30,
+                "cacheCreationTokens": 0,
+                "totalTokens": 42,
+                "totalCostUsd": "5",
+                "costSourceCounts": {
+                    "upstream": 0,
+                    "estimated": 1,
+                    "unavailable": 0
+                }
+            }]
+        });
         assert_eq!(
             value,
             json!({
@@ -1314,6 +1445,7 @@ mod tests {
                         "billingKind": "metered",
                         "status": "yellow",
                         "warningReason": "partial_cost",
+                        "recentUsage": recent_usage_json,
                         "subscription": {
                             "planLabel": "Plus",
                             "windows": [{

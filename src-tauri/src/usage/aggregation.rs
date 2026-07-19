@@ -22,6 +22,59 @@ pub fn aggregate_enabled_provider_trend(
     start_at: i64,
     end_at: i64,
 ) -> Result<(UsageTrendGranularity, Vec<UsageTrendBucketView>), AppError> {
+    aggregate_provider_trend(db, None, start_at, end_at)
+}
+
+pub fn aggregate_provider_account_trend(
+    db: &Database,
+    provider_id: &str,
+    start_at: i64,
+    end_at: i64,
+) -> Result<(UsageTrendGranularity, Vec<UsageTrendBucketView>), AppError> {
+    aggregate_provider_trend(db, Some(provider_id), start_at, end_at)
+}
+
+pub fn most_used_provider_model(
+    db: &Database,
+    provider_id: &str,
+    start_at: i64,
+    end_at: i64,
+) -> Result<Option<String>, AppError> {
+    let conn = db
+        .conn
+        .lock()
+        .map_err(|error| AppError::Database(format!("Mutex lock failed: {error}")))?;
+    let mut statement = conn.prepare(
+        "SELECT event.model
+         FROM usage_events AS event
+         WHERE event.provider_id = ?1
+           AND event.occurred_at >= ?2 AND event.occurred_at < ?3
+           AND NOT EXISTS (
+               SELECT 1
+               FROM usage_event_links AS link
+               JOIN usage_events AS canonical
+                 ON canonical.event_id = link.canonical_event_id
+               JOIN usage_events AS duplicate
+                 ON duplicate.event_id = link.duplicate_event_id
+               WHERE duplicate.event_id = event.event_id
+                 AND canonical.source = 'proxy'
+                 AND duplicate.source = 'session_log'
+                 AND canonical.provider_id = duplicate.provider_id
+           )
+         GROUP BY event.model
+         ORDER BY COUNT(*) DESC, event.model ASC
+         LIMIT 1",
+    )?;
+    let mut rows = statement.query(params![provider_id, start_at, end_at])?;
+    Ok(rows.next()?.map(|row| row.get(0)).transpose()?)
+}
+
+fn aggregate_provider_trend(
+    db: &Database,
+    provider_id: Option<&str>,
+    start_at: i64,
+    end_at: i64,
+) -> Result<(UsageTrendGranularity, Vec<UsageTrendBucketView>), AppError> {
     if start_at >= end_at {
         return Err(AppError::Message(
             "start_at must be before end_at".to_string(),
@@ -40,11 +93,13 @@ pub fn aggregate_enabled_provider_trend(
         .map_err(|error| AppError::Database(format!("Mutex lock failed: {error}")))?;
     let mut statement = conn.prepare(
         "SELECT event.occurred_at, event.input_tokens, event.output_tokens,
-                event.cache_read_tokens, event.cache_creation_tokens
+                event.cache_read_tokens, event.cache_creation_tokens,
+                event.total_cost_usd, event.cost_source
          FROM usage_events AS event
          JOIN usage_providers AS provider ON provider.id = event.provider_id
          WHERE provider.enabled = 1
-           AND event.occurred_at >= ?1 AND event.occurred_at < ?2
+           AND (?1 IS NULL OR event.provider_id = ?1)
+           AND event.occurred_at >= ?2 AND event.occurred_at < ?3
            AND NOT EXISTS (
                SELECT 1
                FROM usage_event_links AS link
@@ -59,34 +114,69 @@ pub fn aggregate_enabled_provider_trend(
            )
          ORDER BY event.occurred_at, event.event_id",
     )?;
-    let rows = statement.query_map(params![start_at, end_at], |row| {
+    let rows = statement.query_map(params![provider_id, start_at, end_at], |row| {
         Ok((
             row.get::<_, i64>(0)?,
             row.get::<_, i64>(1)?,
             row.get::<_, i64>(2)?,
             row.get::<_, i64>(3)?,
             row.get::<_, i64>(4)?,
+            row.get::<_, Option<String>>(5)?,
+            row.get::<_, String>(6)?,
         ))
     })?;
 
     for row in rows {
-        let (occurred_at, input, output, cache_read, cache_creation) = row?;
+        let (occurred_at, input, output, cache_read, cache_creation, cost, cost_source) = row?;
         let index = trend_bucket_index(start_at, occurred_at, granularity)?;
         let bucket = buckets.get_mut(index).ok_or_else(|| {
             AppError::Database("usage event fell outside trend buckets".to_string())
         })?;
         bucket.event_count = checked_sum(bucket.event_count, 1)?;
-        let event_tokens = [
-            (input, "input_tokens"),
-            (output, "output_tokens"),
-            (cache_read, "cache_read_tokens"),
-            (cache_creation, "cache_creation_tokens"),
-        ]
-        .into_iter()
-        .try_fold(0_u64, |total, (value, field)| {
-            checked_sum(total, non_negative(value, field)?)
-        })?;
+        let input = non_negative(input, "input_tokens")?;
+        let output = non_negative(output, "output_tokens")?;
+        let cache_read = non_negative(cache_read, "cache_read_tokens")?;
+        let cache_creation = non_negative(cache_creation, "cache_creation_tokens")?;
+        bucket.input_tokens = checked_sum(bucket.input_tokens, input)?;
+        bucket.output_tokens = checked_sum(bucket.output_tokens, output)?;
+        bucket.cache_read_tokens = checked_sum(bucket.cache_read_tokens, cache_read)?;
+        bucket.cache_creation_tokens = checked_sum(bucket.cache_creation_tokens, cache_creation)?;
+        let event_tokens = [input, output, cache_read, cache_creation]
+            .into_iter()
+            .try_fold(0_u64, checked_sum)?;
         bucket.total_tokens = checked_sum(bucket.total_tokens, event_tokens)?;
+        if let Some(cost) = cost {
+            let total = bucket
+                .total_cost_usd
+                .as_deref()
+                .map(parse_decimal)
+                .transpose()?
+                .unwrap_or(Decimal::ZERO);
+            bucket.total_cost_usd = Some(
+                checked_cost_sum(total, parse_decimal(&cost)?)?
+                    .normalize()
+                    .to_string(),
+            );
+        }
+        match cost_source.as_str() {
+            "upstream" => {
+                bucket.cost_source_counts.upstream =
+                    checked_sum(bucket.cost_source_counts.upstream, 1)?
+            }
+            "estimated" => {
+                bucket.cost_source_counts.estimated =
+                    checked_sum(bucket.cost_source_counts.estimated, 1)?
+            }
+            "unavailable" => {
+                bucket.cost_source_counts.unavailable =
+                    checked_sum(bucket.cost_source_counts.unavailable, 1)?
+            }
+            _ => {
+                return Err(AppError::Database(format!(
+                    "invalid usage cost source: {cost_source}"
+                )))
+            }
+        }
     }
 
     Ok((granularity, buckets))
@@ -107,7 +197,13 @@ fn empty_trend_buckets(
                         start_at: bucket_start,
                         end_at: (bucket_start + 60 * 60).min(end_at),
                         event_count: 0,
+                        input_tokens: 0,
+                        output_tokens: 0,
+                        cache_read_tokens: 0,
+                        cache_creation_tokens: 0,
                         total_tokens: 0,
+                        total_cost_usd: None,
+                        cost_source_counts: CostSourceCounts::default(),
                     })
                 })
                 .collect()
@@ -128,7 +224,13 @@ fn empty_trend_buckets(
                         start_at: local_midnight_timestamp(date)?.max(start_at),
                         end_at: local_midnight_timestamp(next_date)?.min(end_at),
                         event_count: 0,
+                        input_tokens: 0,
+                        output_tokens: 0,
+                        cache_read_tokens: 0,
+                        cache_creation_tokens: 0,
                         total_tokens: 0,
+                        total_cost_usd: None,
+                        cost_source_counts: CostSourceCounts::default(),
                     })
                 })
                 .collect()

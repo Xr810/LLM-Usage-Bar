@@ -81,15 +81,7 @@ impl<'a> UsageDashboardService<'a> {
             let aggregate =
                 aggregate_provider_account_range(self.db, &provider.id, start_at, end_at)?;
             let (snapshot, quota_fetch_state) = self.db.latest_quota_status(&provider.id)?;
-            let quota = snapshot.map(|snapshot| QuotaStatusView {
-                snapshot_id: snapshot.snapshot_id,
-                fetched_at: snapshot.fetched_at,
-                five_hour_utilization_percent: snapshot.five_hour_utilization_percent,
-                five_hour_resets_at: snapshot.five_hour_resets_at,
-                seven_day_utilization_percent: snapshot.seven_day_utilization_percent,
-                seven_day_resets_at: snapshot.seven_day_resets_at,
-                manual_resets_remaining: snapshot.manual_resets_remaining,
-            });
+            let quota = snapshot.as_ref().map(QuotaStatusView::from_snapshot);
             rows.push(ProviderUsageView {
                 provider: provider.clone(),
                 shared_account: false,
@@ -282,15 +274,7 @@ impl<'a> UsageDashboardService<'a> {
         let (quota, quota_fetch_state) =
             if provider.billing_kind == BillingKind::Subscription && include_quota {
                 let (snapshot, fetch_state) = self.db.latest_quota_status(&provider.id)?;
-                let quota = snapshot.map(|snapshot| QuotaStatusView {
-                    snapshot_id: snapshot.snapshot_id,
-                    fetched_at: snapshot.fetched_at,
-                    five_hour_utilization_percent: snapshot.five_hour_utilization_percent,
-                    five_hour_resets_at: snapshot.five_hour_resets_at,
-                    seven_day_utilization_percent: snapshot.seven_day_utilization_percent,
-                    seven_day_resets_at: snapshot.seven_day_resets_at,
-                    manual_resets_remaining: snapshot.manual_resets_remaining,
-                });
+                let quota = snapshot.as_ref().map(QuotaStatusView::from_snapshot);
                 (quota, fetch_state)
             } else {
                 (None, None)
@@ -767,9 +751,23 @@ mod tests {
             dashboard
                 .trend_buckets
                 .iter()
-                .map(|bucket| (bucket.event_count, bucket.total_tokens))
+                .map(|bucket| {
+                    (
+                        bucket.event_count,
+                        bucket.input_tokens,
+                        bucket.output_tokens,
+                        bucket.cache_read_tokens,
+                        bucket.cache_creation_tokens,
+                        bucket.total_tokens,
+                        bucket.cost_source_counts.unavailable,
+                    )
+                })
                 .collect::<Vec<_>>(),
-            vec![(1, 19), (0, 0), (1, 19)]
+            vec![
+                (1, 10, 2, 3, 4, 19, 1),
+                (0, 0, 0, 0, 0, 0, 0),
+                (1, 10, 2, 3, 4, 19, 1)
+            ]
         );
     }
 

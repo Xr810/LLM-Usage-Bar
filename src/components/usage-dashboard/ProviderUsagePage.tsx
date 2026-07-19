@@ -97,6 +97,10 @@ export function ProviderUsagePage({
       <ProviderUsageTrendChart
         granularity={projection.trendGranularity}
         buckets={projection.trendBuckets}
+        totalTokens={projection.overallTotalTokens}
+        requestCount={projection.overallRequestCount}
+        totalCostUsd={projection.overallTotalCostUsd}
+        costStatus={projection.overallCostStatus}
       />
 
       <section className="space-y-3" aria-labelledby="subscription-heading">

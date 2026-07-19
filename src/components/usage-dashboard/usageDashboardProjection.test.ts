@@ -285,7 +285,20 @@ describe("projectProviderDashboard", () => {
       endAt: 2,
       warnings: [],
       trendGranularity: "hour",
-      trendBuckets: [{ startAt: 1, endAt: 2, eventCount: 5, totalTokens: 123 }],
+      trendBuckets: [
+        {
+          startAt: 1,
+          endAt: 2,
+          eventCount: 5,
+          inputTokens: 30,
+          outputTokens: 20,
+          cacheReadTokens: 70,
+          cacheCreationTokens: 3,
+          totalTokens: 123,
+          totalCostUsd: "0.3",
+          costSourceCounts: { upstream: 1, estimated: 1, unavailable: 0 },
+        },
+      ],
       providers: [first, second, subscription],
     };
 
@@ -298,6 +311,10 @@ describe("projectProviderDashboard", () => {
       meteredRequestCount: 5,
       meteredTotalCostUsd: "0.3",
       meteredCostStatus: "estimated",
+      overallTotalTokens: 67,
+      overallRequestCount: 6,
+      overallTotalCostUsd: "0.3",
+      overallCostStatus: "partial",
       trendGranularity: "hour",
       trendBuckets: [{ eventCount: 5, totalTokens: 123 }],
     });

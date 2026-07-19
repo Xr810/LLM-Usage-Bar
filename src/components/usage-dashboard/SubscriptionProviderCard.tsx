@@ -3,6 +3,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ProviderIcon } from "@/components/ProviderIcon";
+import { QuotaResetDetails } from "@/components/QuotaResetDetails";
 import type { ProviderUsageView } from "@/types/usageDashboard";
 import { useTranslation } from "react-i18next";
 import { QuotaMeter } from "./QuotaMeter";
@@ -218,11 +219,18 @@ export function SubscriptionProviderCard({
           quota?.fiveHourResetsAt,
         )}
         {quotaWindow(
-          t("usageDashboard.sevenDayWindow", { defaultValue: "7-day window" }),
+          t("usageDashboard.sevenDayWindow", {
+            defaultValue: "Weekly allowance",
+          }),
           quota?.sevenDayUtilizationPercent,
           quota?.sevenDayResetsAt,
         )}
       </div>
+
+      <QuotaResetDetails
+        details={quota?.additionalResetDetails ?? []}
+        className="px-5 pt-2"
+      />
 
       <div className="px-5 pt-4">
         <dl className="grid grid-cols-5 gap-2 rounded-lg bg-muted/25 px-3 py-2.5 dark:bg-muted/15">

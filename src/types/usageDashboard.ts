@@ -1,3 +1,5 @@
+import type { QuotaResetDetailView } from "./quota";
+
 export type BillingKind = "subscription" | "metered";
 export type TokenSource = "proxy" | "session_log";
 export type SessionSource = "claude" | "codex";
@@ -143,6 +145,7 @@ export interface QuotaStatusView {
   sevenDayUtilizationPercent: string | null;
   sevenDayResetsAt: string | null;
   manualResetsRemaining: number | null;
+  additionalResetDetails?: QuotaResetDetailView[];
 }
 
 export interface QuotaFetchState {
@@ -174,7 +177,13 @@ export interface UsageTrendBucketView {
   startAt: number;
   endAt: number;
   eventCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
   totalTokens: number;
+  totalCostUsd: string | null;
+  costSourceCounts: CostSourceCounts;
 }
 
 export interface ProductUsageView {

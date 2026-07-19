@@ -639,8 +639,17 @@ struct CodexRateLimit {
 }
 
 #[derive(Deserialize)]
+struct CodexAdditionalRateLimit {
+    limit_name: Option<String>,
+    metered_feature: Option<String>,
+    rate_limit: Option<CodexRateLimit>,
+}
+
+#[derive(Deserialize)]
 struct CodexUsageResponse {
     rate_limit: Option<CodexRateLimit>,
+    #[serde(default)]
+    additional_rate_limits: Vec<CodexAdditionalRateLimit>,
 }
 
 /// 根据窗口秒数映射到 tier 名称（与 Claude 的命名兼容以复用前端 i18n）
@@ -666,6 +675,64 @@ fn window_seconds_to_tier_name(secs: i64) -> String {
 /// Unix 时间戳（秒）转 ISO 8601 字符串
 fn unix_ts_to_iso(ts: i64) -> Option<String> {
     chrono::DateTime::from_timestamp(ts, 0).map(|dt| dt.to_rfc3339())
+}
+
+fn codex_usage_tiers(body: CodexUsageResponse) -> Vec<QuotaTier> {
+    let mut tiers = Vec::new();
+
+    if let Some(rate_limit) = body.rate_limit {
+        for window in [rate_limit.primary_window, rate_limit.secondary_window]
+            .into_iter()
+            .flatten()
+        {
+            if let Some(used) = window.used_percent {
+                tiers.push(QuotaTier {
+                    name: window
+                        .limit_window_seconds
+                        .map(window_seconds_to_tier_name)
+                        .unwrap_or_else(|| "unknown".to_string()),
+                    utilization: used,
+                    resets_at: window.reset_at.and_then(unix_ts_to_iso),
+                    used_value_usd: None,
+                    max_value_usd: None,
+                });
+            }
+        }
+    }
+
+    for (index, additional) in body.additional_rate_limits.into_iter().enumerate() {
+        let label = additional
+            .limit_name
+            .or(additional.metered_feature)
+            .filter(|label| !label.trim().is_empty())
+            .unwrap_or_else(|| format!("Additional limit {}", index + 1));
+        let Some(rate_limit) = additional.rate_limit else {
+            continue;
+        };
+        for window in [rate_limit.primary_window, rate_limit.secondary_window]
+            .into_iter()
+            .flatten()
+        {
+            let (Some(used), Some(window_seconds)) =
+                (window.used_percent, window.limit_window_seconds)
+            else {
+                continue;
+            };
+            tiers.push(QuotaTier {
+                name: crate::usage::domain::codex_additional_rate_limit_tier_name(
+                    index,
+                    &label,
+                    window_seconds,
+                ),
+                utilization: used,
+                resets_at: window.reset_at.and_then(unix_ts_to_iso),
+                used_value_usd: None,
+                max_value_usd: None,
+            });
+        }
+    }
+
+    tiers
 }
 
 /// 使用 LLM Usage Bar 自管账号查询 ChatGPT 订阅额度。
@@ -768,27 +835,7 @@ pub(crate) async fn query_codex_quota(
         }
     };
 
-    let mut tiers = Vec::new();
-
-    if let Some(rate_limit) = body.rate_limit {
-        for window in [rate_limit.primary_window, rate_limit.secondary_window]
-            .into_iter()
-            .flatten()
-        {
-            if let Some(used) = window.used_percent {
-                tiers.push(QuotaTier {
-                    name: window
-                        .limit_window_seconds
-                        .map(window_seconds_to_tier_name)
-                        .unwrap_or_else(|| "unknown".to_string()),
-                    utilization: used,
-                    resets_at: window.reset_at.and_then(unix_ts_to_iso),
-                    used_value_usd: None,
-                    max_value_usd: None,
-                });
-            }
-        }
-    }
+    let tiers = codex_usage_tiers(body);
 
     Ok(SubscriptionQuota {
         tool: tool_label.to_string(),
@@ -1410,5 +1457,45 @@ mod tests {
         // 其他窗口按小时/天回退命名
         assert_eq!(window_seconds_to_tier_name(3600), "1_hour");
         assert_eq!(window_seconds_to_tier_name(86400), "1_day");
+    }
+
+    #[test]
+    fn codex_usage_keeps_named_additional_rate_limit_windows() {
+        let body: CodexUsageResponse = serde_json::from_value(serde_json::json!({
+            "rate_limit": {
+                "secondary_window": {
+                    "used_percent": 4,
+                    "limit_window_seconds": 604800,
+                    "reset_at": 1_800_000_000
+                }
+            },
+            "additional_rate_limits": [
+                {
+                    "limit_name": "Codex Spark",
+                    "rate_limit": {
+                        "primary_window": {
+                            "used_percent": 10,
+                            "limit_window_seconds": 18000,
+                            "reset_at": 1_800_003_600
+                        },
+                        "secondary_window": {
+                            "used_percent": 20,
+                            "limit_window_seconds": 604800,
+                            "reset_at": 1_800_604_800
+                        }
+                    }
+                }
+            ]
+        }))
+        .unwrap();
+
+        let tiers = codex_usage_tiers(body);
+
+        assert_eq!(tiers.len(), 3);
+        assert_eq!(tiers[0].name, TIER_SEVEN_DAY);
+        assert_eq!(tiers[1].name, "codex_additional:0:18000:Codex Spark");
+        assert_eq!(tiers[2].name, "codex_additional:0:604800:Codex Spark");
+        assert!(tiers[1].resets_at.is_some());
+        assert!(tiers[2].resets_at.is_some());
     }
 }

@@ -330,6 +330,57 @@ pub struct QuotaSnapshot {
     pub created_at: i64,
 }
 
+const CODEX_ADDITIONAL_RATE_LIMIT_TIER_PREFIX: &str = "codex_additional";
+
+pub(crate) fn codex_additional_rate_limit_tier_name(
+    index: usize,
+    label: &str,
+    window_seconds: i64,
+) -> String {
+    format!(
+        "{CODEX_ADDITIONAL_RATE_LIMIT_TIER_PREFIX}:{index}:{window_seconds}:{}",
+        label.trim()
+    )
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotaResetDetailView {
+    pub id: String,
+    pub label: String,
+    pub window_seconds: i64,
+    pub resets_at: String,
+}
+
+fn additional_reset_details(raw_payload: &Value) -> Vec<QuotaResetDetailView> {
+    raw_payload
+        .get("tiers")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|tier| {
+            let name = tier.get("name")?.as_str()?;
+            let mut parts = name.splitn(4, ':');
+            if parts.next()? != CODEX_ADDITIONAL_RATE_LIMIT_TIER_PREFIX {
+                return None;
+            }
+            let index = parts.next()?.parse::<usize>().ok()?;
+            let window_seconds = parts.next()?.parse::<i64>().ok()?;
+            let label = parts.next()?.trim();
+            let resets_at = tier.get("resetsAt")?.as_str()?.trim();
+            if label.is_empty() || window_seconds <= 0 || resets_at.is_empty() {
+                return None;
+            }
+            Some(QuotaResetDetailView {
+                id: format!("{index}:{window_seconds}"),
+                label: label.to_string(),
+                window_seconds,
+                resets_at: resets_at.to_string(),
+            })
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QuotaFetchState {
@@ -405,6 +456,22 @@ pub struct QuotaStatusView {
     pub seven_day_utilization_percent: Option<String>,
     pub seven_day_resets_at: Option<String>,
     pub manual_resets_remaining: Option<i64>,
+    pub additional_reset_details: Vec<QuotaResetDetailView>,
+}
+
+impl QuotaStatusView {
+    pub(crate) fn from_snapshot(snapshot: &QuotaSnapshot) -> Self {
+        Self {
+            snapshot_id: snapshot.snapshot_id.clone(),
+            fetched_at: snapshot.fetched_at,
+            five_hour_utilization_percent: snapshot.five_hour_utilization_percent.clone(),
+            five_hour_resets_at: snapshot.five_hour_resets_at.clone(),
+            seven_day_utilization_percent: snapshot.seven_day_utilization_percent.clone(),
+            seven_day_resets_at: snapshot.seven_day_resets_at.clone(),
+            manual_resets_remaining: snapshot.manual_resets_remaining,
+            additional_reset_details: additional_reset_details(&snapshot.raw_payload),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -436,7 +503,13 @@ pub struct UsageTrendBucketView {
     pub start_at: i64,
     pub end_at: i64,
     pub event_count: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_creation_tokens: u64,
     pub total_tokens: u64,
+    pub total_cost_usd: Option<String>,
+    pub cost_source_counts: CostSourceCounts,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -622,5 +695,54 @@ mod tests {
     fn provider_input_has_no_legacy_dashboard_membership() {
         let value = serde_json::to_value(valid_provider_input()).unwrap();
         assert!(value.get("dashboardModuleId").is_none());
+    }
+
+    #[test]
+    fn quota_status_projects_only_valid_named_additional_reset_windows() {
+        let snapshot = QuotaSnapshot {
+            snapshot_id: "quota".to_string(),
+            provider_id: "chatgpt".to_string(),
+            fetched_at: 1,
+            five_hour_utilization_percent: None,
+            five_hour_resets_at: None,
+            seven_day_utilization_percent: Some("4".to_string()),
+            seven_day_resets_at: Some("2026-07-25T04:51:08Z".to_string()),
+            manual_resets_remaining: None,
+            raw_payload: json!({
+                "tiers": [
+                    {
+                        "name": "seven_day",
+                        "utilization": 4,
+                        "resetsAt": "2026-07-25T04:51:08Z"
+                    },
+                    {
+                        "name": "codex_additional:0:18000:Codex Spark",
+                        "utilization": 10,
+                        "resetsAt": "2026-07-19T08:00:00Z"
+                    },
+                    {
+                        "name": "codex_additional:0:604800:Codex Spark",
+                        "utilization": 20,
+                        "resetsAt": "2026-07-26T08:00:00Z"
+                    },
+                    {
+                        "name": "codex_additional:1:604800:Missing reset",
+                        "utilization": 20,
+                        "resetsAt": null
+                    }
+                ]
+            }),
+            created_at: 1,
+        };
+
+        let status = QuotaStatusView::from_snapshot(&snapshot);
+
+        assert_eq!(status.additional_reset_details.len(), 2);
+        assert_eq!(status.additional_reset_details[0].label, "Codex Spark");
+        assert_eq!(status.additional_reset_details[0].window_seconds, 18_000);
+        assert_eq!(
+            status.additional_reset_details[1].resets_at,
+            "2026-07-26T08:00:00Z"
+        );
     }
 }

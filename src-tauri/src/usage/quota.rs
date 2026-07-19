@@ -446,15 +446,7 @@ async fn scheduler_time_or_failure(
 }
 
 fn quota_status_view(snapshot: &QuotaSnapshot) -> QuotaStatusView {
-    QuotaStatusView {
-        snapshot_id: snapshot.snapshot_id.clone(),
-        fetched_at: snapshot.fetched_at,
-        five_hour_utilization_percent: snapshot.five_hour_utilization_percent.clone(),
-        five_hour_resets_at: snapshot.five_hour_resets_at.clone(),
-        seven_day_utilization_percent: snapshot.seven_day_utilization_percent.clone(),
-        seven_day_resets_at: snapshot.seven_day_resets_at.clone(),
-        manual_resets_remaining: snapshot.manual_resets_remaining,
-    }
+    QuotaStatusView::from_snapshot(snapshot)
 }
 
 pub struct QuotaSchedulerHandle {

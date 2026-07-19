@@ -4,7 +4,6 @@ import { ProviderIcon } from "@/components/ProviderIcon";
 import {
   clampPercentForProgress,
   costQualityLabel,
-  formatTokenCount,
   formatUsd,
   hasUsableBudget,
   hasUsablePercent,
@@ -13,6 +12,7 @@ import {
   type TrayProviderRow,
 } from "./trayUsagePresentation";
 import { TrayUsageProgress, TrayUsageStatusBadge } from "./TrayUsageProgress";
+import { TrayProviderRecentUsage } from "./TrayProviderRecentUsage";
 
 export function TrayApiSpendingSection({
   rows,
@@ -44,10 +44,6 @@ export function TrayApiSpendingSection({
           const usage = provider.metered;
           const todayCost =
             usage.costQuality === "unavailable" ? null : usage.todayCostUsd;
-          const rollingCost =
-            usage.costQuality === "unavailable"
-              ? null
-              : usage.rolling30DayCostUsd;
           const hasBudget = hasUsableBudget(usage.dailyBudgetUsd);
           const hasUsableBudgetProgress =
             hasBudget &&
@@ -101,7 +97,7 @@ export function TrayApiSpendingSection({
                 <TrayUsageStatusBadge status={provider.status} t={t} />
               </div>
 
-              <dl className="grid grid-cols-3 gap-x-3 rounded-lg bg-muted/25 px-2.5 py-2 dark:bg-muted/15">
+              <dl className="grid grid-cols-2 gap-x-3 rounded-lg bg-muted/25 px-2.5 py-2 dark:bg-muted/15">
                 <div className="min-w-0">
                   <dt className="truncate text-[11px] text-muted-foreground">
                     {t("trayUsage.today", { defaultValue: "Today" })}
@@ -112,20 +108,12 @@ export function TrayApiSpendingSection({
                 </div>
                 <div className="min-w-0">
                   <dt className="truncate text-[11px] text-muted-foreground">
-                    {t("trayUsage.rolling30Days", {
-                      defaultValue: "Last 30 days",
+                    {t("trayUsage.dailyBudget", {
+                      defaultValue: "Daily budget",
                     })}
                   </dt>
                   <dd className="mt-0.5 truncate text-[13px] font-semibold tabular-nums">
-                    {formatUsd(rollingCost, locale)}
-                  </dd>
-                </div>
-                <div className="min-w-0">
-                  <dt className="truncate text-[11px] text-muted-foreground">
-                    {t("trayUsage.tokens", { defaultValue: "Tokens" })}
-                  </dt>
-                  <dd className="mt-0.5 truncate text-[13px] font-semibold tabular-nums">
-                    {formatTokenCount(usage.totalTokens, locale)}
+                    {formatUsd(usage.dailyBudgetUsd, locale)}
                   </dd>
                 </div>
               </dl>
@@ -192,6 +180,11 @@ export function TrayApiSpendingSection({
                   </button>
                 )}
               </div>
+
+              <TrayProviderRecentUsage
+                usage={provider.recentUsage}
+                locale={locale}
+              />
             </article>
           );
         })}

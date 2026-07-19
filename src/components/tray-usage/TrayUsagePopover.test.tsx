@@ -1,6 +1,12 @@
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { TrayUsageSnapshot } from "@/types/trayUsage";
@@ -30,6 +36,33 @@ const snapshot: TrayUsageSnapshot = {
           billingKind: "subscription",
           status: "yellow",
           warningReason: null,
+          recentUsage: {
+            startAt: 1_781_611_200,
+            endAt: 1_784_203_200,
+            totalTokens: 87_000_000,
+            todayCostUsd: "1.25",
+            totalCostUsd: "48.5",
+            costQuality: "estimated",
+            mostUsedModel: "gpt-5.6-sol",
+            trendBuckets: [
+              {
+                startAt: 1_784_116_800,
+                endAt: 1_784_203_200,
+                eventCount: 8,
+                inputTokens: 1_000_000,
+                outputTokens: 200_000,
+                cacheReadTokens: 3_000_000,
+                cacheCreationTokens: 0,
+                totalTokens: 4_200_000,
+                totalCostUsd: "1.25",
+                costSourceCounts: {
+                  upstream: 0,
+                  estimated: 8,
+                  unavailable: 0,
+                },
+              },
+            ],
+          },
           subscription: {
             planLabel: "Plus",
             windows: [
@@ -52,6 +85,33 @@ const snapshot: TrayUsageSnapshot = {
           billingKind: "metered",
           status: "green",
           warningReason: null,
+          recentUsage: {
+            startAt: 1_781_611_200,
+            endAt: 1_784_203_200,
+            totalTokens: 2_300_000,
+            todayCostUsd: "8",
+            totalCostUsd: "20",
+            costQuality: "complete",
+            mostUsedModel: "gpt-4.1",
+            trendBuckets: [
+              {
+                startAt: 1_784_116_800,
+                endAt: 1_784_203_200,
+                eventCount: 3,
+                inputTokens: 500_000,
+                outputTokens: 50_000,
+                cacheReadTokens: 200_000,
+                cacheCreationTokens: 0,
+                totalTokens: 750_000,
+                totalCostUsd: "8",
+                costSourceCounts: {
+                  upstream: 3,
+                  estimated: 0,
+                  unavailable: 0,
+                },
+              },
+            ],
+          },
           subscription: null,
           metered: {
             todayCostUsd: "8",
@@ -101,6 +161,17 @@ describe("TrayUsagePopover Provider-only UI", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("ChatGPT Plus/Pro")).toBeInTheDocument();
     expect(screen.getByText("OpenAI API")).toBeInTheDocument();
+    expect(
+      screen.getByText("Most used model: gpt-5.6-sol"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getAllByRole("img", {
+        name: "Token usage for the last 30 days",
+      }),
+    ).toHaveLength(2);
+    expect(
+      screen.queryByText(/Estimated from this Provider/),
+    ).not.toBeInTheDocument();
     expect(screen.getByText("$8.00 of $10.00")).toBeInTheDocument();
     expect(screen.queryByRole("tablist")).toBeNull();
     expect(screen.queryByText("Providers")).toBeNull();
@@ -109,6 +180,42 @@ describe("TrayUsagePopover Provider-only UI", () => {
         name: "Daily budget for OpenAI API",
       }),
     ).toHaveAttribute("aria-valuenow", "80");
+  });
+
+  it("uses the weekly label and expands GPT additional reset times", async () => {
+    const user = userEvent.setup();
+    const withExtraResets = structuredClone(snapshot);
+    const subscription = withExtraResets.agents[0].providers[0].subscription!;
+    subscription.windows.push({
+      kind: "seven_day",
+      usedPercent: "4",
+      remainingPercent: "96",
+      resetsAt: "2026-07-20T08:00:00Z",
+      status: "green",
+      unavailableReason: null,
+    });
+    subscription.additionalResetDetails = [
+      {
+        id: "0:604800",
+        label: "Codex Spark",
+        windowSeconds: 604_800,
+        resetsAt: "2026-07-20T08:00:00Z",
+      },
+    ];
+
+    render(<TrayUsagePopoverView {...props({ snapshot: withExtraResets })} />);
+
+    expect(screen.getByText("Weekly allowance")).toBeInTheDocument();
+    expect(screen.queryByText("7-day allowance")).toBeNull();
+    expect(screen.queryByText(/Codex Spark/)).toBeNull();
+
+    await user.click(
+      screen.getByRole("button", {
+        name: "Toggle 1 additional quota reset times",
+      }),
+    );
+
+    expect(screen.getByText(/Codex Spark/)).toBeInTheDocument();
   });
 
   it("routes Provider row and footer actions without Agent identity", async () => {
@@ -147,7 +254,9 @@ describe("TrayUsagePopover Provider-only UI", () => {
         {...props({ snapshot: { ...snapshot, agents: [] } })}
       />,
     );
-    expect(screen.getByText("No visible Provider accounts")).toBeInTheDocument();
+    expect(
+      screen.getByText("No visible Provider accounts"),
+    ).toBeInTheDocument();
   });
 
   it("opens the Provider dashboard from the live tray popover", async () => {

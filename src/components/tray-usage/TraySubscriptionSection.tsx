@@ -1,5 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { ProviderIcon } from "@/components/ProviderIcon";
+import { QuotaResetDetails } from "@/components/QuotaResetDetails";
 import {
   clampPercentForProgress,
   formatPercent,
@@ -10,6 +11,7 @@ import {
   type TrayProviderRow,
 } from "./trayUsagePresentation";
 import { TrayUsageProgress, TrayUsageStatusBadge } from "./TrayUsageProgress";
+import { TrayProviderRecentUsage } from "./TrayProviderRecentUsage";
 
 export function TraySubscriptionSection({
   rows,
@@ -83,7 +85,7 @@ export function TraySubscriptionSection({
                           defaultValue: "5-hour allowance",
                         })
                       : t("trayUsage.sevenDayAllowance", {
-                          defaultValue: "7-day allowance",
+                          defaultValue: "Weekly allowance",
                         });
                   const reset = formatResetTime(
                     window.resetsAt,
@@ -149,6 +151,16 @@ export function TraySubscriptionSection({
                   );
                 })}
               </div>
+
+              <QuotaResetDetails
+                details={provider.subscription.additionalResetDetails ?? []}
+                compact
+              />
+
+              <TrayProviderRecentUsage
+                usage={provider.recentUsage}
+                locale={locale}
+              />
             </article>
           );
         })}

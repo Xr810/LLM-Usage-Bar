@@ -202,4 +202,42 @@ describe("SubscriptionProviderCard localized reset countdown", () => {
     expect(meter).toHaveAttribute("aria-valuenow", "55");
     expect(meter.firstElementChild).toHaveClass("bg-warning");
   });
+
+  it("labels the secondary window as weekly allowance and expands extra reset times", () => {
+    const usage = subscriptionUsage();
+    usage.quota!.sevenDayUtilizationPercent = "4";
+    usage.quota!.sevenDayResetsAt = "2026-07-20T08:00:00.000Z";
+    usage.quota!.additionalResetDetails = [
+      {
+        id: "0:18000",
+        label: "Codex Spark",
+        windowSeconds: 18_000,
+        resetsAt: "2026-07-13T05:00:00.000Z",
+      },
+      {
+        id: "0:604800",
+        label: "Codex Spark",
+        windowSeconds: 604_800,
+        resetsAt: "2026-07-20T08:00:00.000Z",
+      },
+    ];
+
+    render(
+      <SubscriptionProviderCard
+        usage={usage}
+        onRefreshQuota={vi.fn()}
+        onSyncSessions={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Weekly allowance")).toBeInTheDocument();
+    expect(screen.queryByText("7-day window")).toBeNull();
+    expect(screen.queryByText(/Codex Spark/)).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /Toggle/ }));
+
+    expect(screen.getAllByText(/Codex Spark/)).toHaveLength(2);
+    expect(screen.getByText(/5-hour allowance/)).toBeInTheDocument();
+    expect(screen.getAllByText(/Weekly allowance/).length).toBeGreaterThan(1);
+  });
 });

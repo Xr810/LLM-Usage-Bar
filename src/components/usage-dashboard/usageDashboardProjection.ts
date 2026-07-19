@@ -26,6 +26,10 @@ export interface AgentUsageProjection {
 export interface ProviderDashboardProjection {
   subscriptionProviders: ProviderUsageView[];
   meteredProviders: ProviderUsageView[];
+  overallTotalTokens: number;
+  overallRequestCount: number;
+  overallTotalCostUsd: string | null;
+  overallCostStatus: MeteredCostStatus;
   meteredTotalTokens: number;
   meteredRequestCount: number;
   meteredTotalCostUsd: string | null;
@@ -205,6 +209,29 @@ export function projectProviderDashboard(
   const meteredProviders = providers.filter(
     (usage) => usage.provider.billingKind === "metered",
   );
+  const overallKnownCosts = providers
+    .map((usage) => usage.totalCostUsd)
+    .filter((value): value is string => value != null);
+  const overallHasEvents = providers.some((usage) => usage.eventCount > 0);
+  const overallTotalCostUsd = overallHasEvents
+    ? addDecimalStrings(overallKnownCosts)
+    : "0";
+  const overallHasUnavailable = providers.some(
+    (usage) =>
+      usage.eventCount > 0 &&
+      (usage.totalCostUsd == null || usage.costSourceCounts.unavailable > 0),
+  );
+  const overallHasEstimated = providers.some(
+    (usage) => usage.costSourceCounts.estimated > 0,
+  );
+  const overallCostStatus: MeteredCostStatus =
+    overallTotalCostUsd == null
+      ? "unavailable"
+      : overallHasUnavailable
+        ? "partial"
+        : overallHasEstimated
+          ? "estimated"
+          : "complete";
   const knownCosts = meteredProviders
     .map((usage) => usage.totalCostUsd)
     .filter((value): value is string => value != null);
@@ -228,6 +255,21 @@ export function projectProviderDashboard(
   return {
     subscriptionProviders,
     meteredProviders,
+    overallTotalTokens: providers.reduce(
+      (sum, usage) =>
+        sum +
+        usage.inputTokens +
+        usage.outputTokens +
+        usage.cacheReadTokens +
+        usage.cacheCreationTokens,
+      0,
+    ),
+    overallRequestCount: providers.reduce(
+      (sum, usage) => sum + usage.eventCount,
+      0,
+    ),
+    overallTotalCostUsd,
+    overallCostStatus,
     meteredTotalTokens: meteredProviders.reduce(
       (sum, usage) =>
         sum +
