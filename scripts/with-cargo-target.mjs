@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import {
   currentBootIdentity,
-  finalizeLeaseAfterTreeExit,
+  finalizeLeaseAfterOwnedChildExit,
   pendingLease,
   removeLease,
   resolveBuildCommand,
@@ -103,7 +103,7 @@ child.on("error", (error) => {
   if (finished) return;
   finished = true;
   removeSignalHandlers();
-  if (Number.isSafeInteger(childPid)) finalizeLeaseAfterTreeExit(leasePath);
+  if (Number.isSafeInteger(childPid)) finalizeLeaseAfterOwnedChildExit(leasePath);
   else removeLease(leasePath);
   console.error(error.message);
   if (forwardedSignal) {
@@ -116,7 +116,7 @@ child.on("error", (error) => {
 child.on("exit", (code, signal) => {
   if (finished) return;
   finished = true;
-  finalizeLeaseAfterTreeExit(leasePath);
+  finalizeLeaseAfterOwnedChildExit(leasePath);
   removeSignalHandlers();
 
   const terminationSignal = signal ?? forwardedSignal;

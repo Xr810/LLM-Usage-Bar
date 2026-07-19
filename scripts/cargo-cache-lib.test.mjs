@@ -23,6 +23,7 @@ import {
   applyPrunePlan,
   createPruneSnapshot,
   currentBootIdentity,
+  finalizeLeaseAfterOwnedChildExit,
   finalizeLeaseAfterTreeExit,
   planPrune,
   probeBuildProcessTree,
@@ -414,6 +415,20 @@ test("status reports the current lock hash before its cache bucket exists", asyn
   assert.match(result.stdout, /keep: 0/);
   assert.match(result.stdout, /remove: 0/);
   await assert.rejects(access(targetDir), { code: "ENOENT" });
+});
+
+test("clean-current is dry-run by default", async (t) => {
+  const root = await makeRepo("version = 4\n");
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const { targetDir } = resolveCargoTarget(root);
+  await mkdir(targetDir, { recursive: true });
+
+  const result = runCacheCli(root, "clean-current");
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /current-cache clean dry run/i);
+  assert.match(result.stdout, /pnpm rust -- clean --manifest-path src-tauri\/Cargo.toml/);
+  assert.equal((await stat(targetDir)).isDirectory(), true);
 });
 
 test("cache CLI accepts exactly one leading pnpm separator", async (t) => {
@@ -909,6 +924,28 @@ test("same-boot ambiguous leases fail closed", async (t) => {
   assert.equal(finalizeLeaseAfterTreeExit(leasePath), false);
   assert.equal(JSON.parse(await readFile(leasePath)).state, "orphaned");
 });
+
+test(
+  "owned Unix child cleanup removes an unknown-boot lease after its group exits",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const root = await mkdtemp(path.join(tmpdir(), "llm-cache-owned-exit-"));
+    const leasePath = path.join(root, "lease.json");
+    t.after(() => rm(root, { recursive: true, force: true }));
+    writeLeaseAtomic(leasePath, {
+      version: 1,
+      state: "running",
+      bootIdentity: `${process.platform}:unknown`,
+      processTree: {
+        kind: "unix-process-group",
+        processGroupId: 999_999,
+      },
+    });
+
+    assert.equal(finalizeLeaseAfterOwnedChildExit(leasePath), true);
+    await assert.rejects(access(leasePath), { code: "ENOENT" });
+  },
+);
 
 test("an unknown boot identity never proves that a lease is from an old boot", () => {
   const probe = probeBuildProcessTree({

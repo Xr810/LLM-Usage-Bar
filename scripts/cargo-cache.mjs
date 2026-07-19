@@ -1,5 +1,8 @@
 #!/usr/bin/env node
 
+import { spawnSync } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   applyPrunePlan,
   createPruneSnapshot,
@@ -8,8 +11,13 @@ import {
   resolveCargoTarget,
 } from "./cargo-cache-lib.mjs";
 
+const wrapperPath = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "with-cargo-target.mjs",
+);
+
 function usage() {
-  return "Usage: node scripts/cargo-cache.mjs status | prune [--apply]";
+  return "Usage: node scripts/cargo-cache.mjs status | prune | clean-current [--apply]";
 }
 
 function printPlan(plan, dryRun) {
@@ -20,9 +28,28 @@ function printPlan(plan, dryRun) {
   for (const reason of plan.unsafeReasons) console.log(`  unsafe ${reason}`);
 }
 
+function cleanCurrentCache(apply) {
+  const { lockHash, lockfile } = resolveCargoTarget();
+  const manifestPath = path.join(path.dirname(lockfile), "Cargo.toml");
+  if (!apply) {
+    console.log("Cargo current-cache clean dry run (no files deleted)");
+    console.log(`current lock: ${lockHash}`);
+    console.log("would run: pnpm rust -- clean --manifest-path src-tauri/Cargo.toml");
+    return;
+  }
+
+  const result = spawnSync(
+    process.execPath,
+    [wrapperPath, "cargo", "clean", "--manifest-path", manifestPath],
+    { cwd: process.cwd(), stdio: "inherit" },
+  );
+  if (result.error) throw result.error;
+  if (result.status !== 0) process.exitCode = result.status ?? 1;
+}
+
 function main(argv) {
   const [command, ...options] = argv[0] === "--" ? argv.slice(1) : argv;
-  if (!new Set(["status", "prune"]).has(command)) {
+  if (!new Set(["status", "prune", "clean-current"]).has(command)) {
     throw new Error(usage());
   }
   if (options.some((option) => option !== "--apply")) {
@@ -30,6 +57,10 @@ function main(argv) {
   }
   const apply = options.includes("--apply");
   if (command === "status" && apply) throw new Error(usage());
+  if (command === "clean-current") {
+    cleanCurrentCache(apply);
+    return;
+  }
   const snapshot = createPruneSnapshot(process.cwd());
   const plan = planPrune({
     referencedHashes: snapshot.referencedHashes,

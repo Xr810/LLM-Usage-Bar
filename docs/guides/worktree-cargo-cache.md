@@ -16,6 +16,7 @@ Windows Command Prompt:
 | Start Tauri development | `pnpm dev` |
 | Build the Tauri application | `pnpm build` |
 | Inspect cache status | `pnpm cargo:cache -- status` |
+| Review cleaning the current cache | `pnpm cargo:cache -- clean-current` |
 
 For example, use `pnpm rust -- check`, `pnpm rust -- test`, or
 `pnpm rust -- clippy`. Do not run local `cargo build`, `cargo test`,
@@ -64,6 +65,14 @@ that plan before running `pnpm cargo:cache -- prune --apply`. Apply mode deletes
 only unreferenced hash buckets whose leases are provably inactive. It checks all
 worktrees and lockfiles before the first deletion, rechecks immediately before
 each deletion, and stops on the first unsafe state or error.
+
+Pruning deliberately never removes the current lock bucket, because it may be
+used by a registered worktree. When a large local build leaves that bucket too
+large, run `pnpm cargo:cache -- clean-current` to review the exact `cargo clean`
+operation, then add `--apply` to execute it through the same wrapper and target
+selection. This removes only regenerable artifacts; the next Rust build will
+compile again. Run it after stopping local Rust and Tauri builds, as well as
+any local app launched directly from that target directory.
 
 Before removing a worktree, run `pnpm cargo:cache -- status` while that
 worktree and its `Cargo.lock` are still present. If status fails or reports an

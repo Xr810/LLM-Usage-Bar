@@ -16,4 +16,7 @@
 - Do not invoke local `cargo build`, `cargo test`, `cargo clippy`, or `tauri` directly.
 - Run `pnpm cargo:cache -- status` before removing a worktree.
 - `pnpm cargo:cache -- prune` is dry-run; deletion requires `--apply`.
+- `pnpm cargo:cache -- clean-current` is dry-run; use `--apply` to run a
+  wrapper-managed `cargo clean` for the current lock bucket after local Rust
+  and Tauri builds, and apps launched from that target, have stopped.
 - With pnpm 11, run focused Vitest as `pnpm test:unit <path>`; do not insert `--` before the path, because Vitest may fall back to a broader concurrent run.

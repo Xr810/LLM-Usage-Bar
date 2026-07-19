@@ -693,25 +693,7 @@ function probeWindowsTree(lease) {
   return probeWindowsProcessTree(lease, processes);
 }
 
-export function probeBuildProcessTree(lease) {
-  if (!lease || typeof lease !== "object") {
-    return { state: "unknown", reason: "invalid-lease" };
-  }
-
-  const bootIdentity = currentBootIdentity();
-  const leaseBootState = classifyBootIdentity(lease.bootIdentity);
-  const currentBootState = classifyBootIdentity(bootIdentity);
-  if (leaseBootState === "invalid") {
-    return { state: "unknown", reason: "invalid-boot-identity" };
-  }
-  if (leaseBootState === "unknown" || currentBootState !== "known") {
-    return { state: "unknown", reason: "boot-identity-unavailable" };
-  }
-  if (lease.bootIdentity !== bootIdentity) {
-    return { state: "empty", reason: "previous-boot" };
-  }
-
-  if (process.platform === "win32") return probeWindowsTree(lease);
+function probeUnixProcessGroup(lease) {
   if (lease.processTree?.kind !== "unix-process-group") {
     return { state: "unknown", reason: "unsupported-process-tree-kind" };
   }
@@ -735,7 +717,45 @@ export function probeBuildProcessTree(lease) {
   }
 }
 
-export function finalizeLeaseAfterTreeExit(leasePath) {
+export function probeBuildProcessTree(lease) {
+  if (!lease || typeof lease !== "object") {
+    return { state: "unknown", reason: "invalid-lease" };
+  }
+
+  const bootIdentity = currentBootIdentity();
+  const leaseBootState = classifyBootIdentity(lease.bootIdentity);
+  const currentBootState = classifyBootIdentity(bootIdentity);
+  if (leaseBootState === "invalid") {
+    return { state: "unknown", reason: "invalid-boot-identity" };
+  }
+  if (leaseBootState === "unknown" || currentBootState !== "known") {
+    return { state: "unknown", reason: "boot-identity-unavailable" };
+  }
+  if (lease.bootIdentity !== bootIdentity) {
+    return { state: "empty", reason: "previous-boot" };
+  }
+
+  if (process.platform === "win32") return probeWindowsTree(lease);
+  return probeUnixProcessGroup(lease);
+}
+
+export function probeBuildProcessTreeAfterOwnedChildExit(lease) {
+  if (!lease || typeof lease !== "object") {
+    return { state: "unknown", reason: "invalid-lease" };
+  }
+
+  // The wrapper has just received its own child's exit event. On Unix, the
+  // process-group probe is therefore sufficient even when a sandbox prevents
+  // us from reading the system boot identity. Descendants in the group still
+  // keep the lease alive.
+  if (process.platform !== "win32") return probeUnixProcessGroup(lease);
+
+  // Windows cannot prove that descendants survived an exited root without a
+  // reliable process snapshot, so retain the regular fail-closed behavior.
+  return probeBuildProcessTree(lease);
+}
+
+function finalizeLease(leasePath, probeBuildProcessTreeFn) {
   let lease;
   try {
     lease = JSON.parse(readFileSync(leasePath, "utf8"));
@@ -744,7 +764,7 @@ export function finalizeLeaseAfterTreeExit(leasePath) {
     return false;
   }
 
-  const probe = probeBuildProcessTree(lease);
+  const probe = probeBuildProcessTreeFn(lease);
   if (probe.state === "empty") {
     removeLease(leasePath);
     return true;
@@ -761,6 +781,14 @@ export function finalizeLeaseAfterTreeExit(leasePath) {
     lastProbe: probe,
   });
   return false;
+}
+
+export function finalizeLeaseAfterTreeExit(leasePath) {
+  return finalizeLease(leasePath, probeBuildProcessTree);
+}
+
+export function finalizeLeaseAfterOwnedChildExit(leasePath) {
+  return finalizeLease(leasePath, probeBuildProcessTreeAfterOwnedChildExit);
 }
 
 function classifyBucketLeases(bucket, probeBuildProcessTreeFn) {
