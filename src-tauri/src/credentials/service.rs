@@ -2286,9 +2286,9 @@ impl BindingCredentialService {
             .await
     }
 
-    pub async fn ensure_fixed_api_binding_local_keys(
+    async fn initialize_missing_fixed_api_binding_local_keys(
         &self,
-    ) -> Result<Vec<AgentProviderBindingView>, AppError> {
+    ) -> Result<HashSet<String>, AppError> {
         let snapshots = self
             .db
             .credential_binding_snapshots(None)
@@ -2317,6 +2317,24 @@ impl BindingCredentialService {
                 );
             }
         }
+        Ok(unavailable_bindings)
+    }
+
+    /// Initialize only missing local keys without reading any existing
+    /// protected item. Application startup uses this path so an ad-hoc or newly
+    /// updated build does not fan out macOS Keychain authorization dialogs.
+    pub(crate) async fn initialize_startup_binding_keys(&self) -> Result<(), AppError> {
+        self.initialize_missing_fixed_api_binding_local_keys()
+            .await
+            .map(|_| ())
+    }
+
+    pub async fn ensure_fixed_api_binding_local_keys(
+        &self,
+    ) -> Result<Vec<AgentProviderBindingView>, AppError> {
+        let unavailable_bindings = self
+            .initialize_missing_fixed_api_binding_local_keys()
+            .await?;
         let mut views = self.list_agent_provider_bindings(None).await?;
         for view in &mut views {
             if unavailable_bindings.contains(&view.id) {
@@ -2843,7 +2861,7 @@ impl BindingCredentialService {
         }
     }
 
-    async fn reconcile_locked(&self) -> Result<(), AppError> {
+    async fn reconcile_locked(&self, audit_active_pointers: bool) -> Result<(), AppError> {
         self.reconcile_provider_entries_locked().await?;
         let initial_entries = self
             .db
@@ -2886,14 +2904,15 @@ impl BindingCredentialService {
             .credential_journal_entries()
             .map_err(normalize_db_error)?
             .is_empty();
-        // Audit every active pointer after journal cleanup. Status remains a
-        // derived fail-closed view; reconciliation never guesses or rewrites a
-        // missing protected value.
-        if self.list_agent_provider_bindings(None).await.is_err() {
-            log::error!("credential active-pointer audit failed");
-        }
-        if self.list_usage_providers().await.is_err() {
-            log::error!("provider credential active-pointer audit failed");
+        if audit_active_pointers {
+            // Explicit maintenance operations audit every active pointer after
+            // journal cleanup. Normal application startup deliberately skips
+            // these reads: macOS may require one authorization dialog per
+            // Keychain item, and status is verified lazily before publication
+            // or credential use anyway.
+            if self.list_usage_providers().await.is_err() {
+                log::error!("protected credential active-pointer audit failed");
+            }
         }
         if failed {
             Err(public_error("credential_unavailable"))
@@ -2907,7 +2926,19 @@ impl BindingCredentialService {
             log::error!("credential lifecycle lock failed");
             public_error("credential_unavailable")
         })?;
-        self.reconcile_locked().await
+        self.reconcile_locked(true).await
+    }
+
+    /// Recover interrupted credential mutations without opening any active
+    /// Keychain item. This is the startup path; active values remain fail-closed
+    /// and are verified lazily when a UI view or proxy route actually needs
+    /// them.
+    pub(crate) async fn reconcile_startup_journals(&self) -> Result<(), AppError> {
+        let _lifecycle_guard = self.lifecycle_lock.exclusive().await.map_err(|_| {
+            log::error!("credential lifecycle lock failed");
+            public_error("credential_unavailable")
+        })?;
+        self.reconcile_locked(false).await
     }
 
     pub(crate) async fn run_exclusive_database_change<T, Fut>(
@@ -2921,9 +2952,9 @@ impl BindingCredentialService {
             log::error!("credential lifecycle lock failed");
             public_error("credential_unavailable")
         })?;
-        self.reconcile_locked().await?;
+        self.reconcile_locked(true).await?;
         let result = operation.await;
-        self.reconcile_locked().await?;
+        self.reconcile_locked(true).await?;
         result
     }
 
@@ -2939,7 +2970,7 @@ impl BindingCredentialService {
             log::error!("credential lifecycle lock failed");
             public_error("credential_unavailable")
         })?);
-        self.reconcile_locked().await?;
+        self.reconcile_locked(true).await?;
         let detached_guard = lifecycle_guard.clone();
         let result = match tokio::task::spawn_blocking(move || {
             let _lifecycle_guard = detached_guard;
@@ -2953,7 +2984,7 @@ impl BindingCredentialService {
                 Err(public_error("credential_unavailable"))
             }
         };
-        self.reconcile_locked().await?;
+        self.reconcile_locked(true).await?;
         result
     }
 }

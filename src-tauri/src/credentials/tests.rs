@@ -2258,6 +2258,24 @@ async fn fixed_api_resolution_separates_local_identity_from_shared_upstream_cred
 }
 
 #[tokio::test]
+async fn normal_startup_does_not_read_existing_protected_items() {
+    let db = Arc::new(Database::memory().unwrap());
+    let store = Arc::new(MemoryCredentialStore::default());
+    let service = BindingCredentialService::new(db, store.clone());
+
+    // Populate the fixed bindings once. Status-producing APIs may verify them
+    // because they represent an explicit UI or maintenance read.
+    service.ensure_fixed_api_binding_local_keys().await.unwrap();
+    let reads_before_startup = store.get_call_count();
+    assert!(reads_before_startup > 0);
+
+    service.reconcile_startup_journals().await.unwrap();
+    service.initialize_startup_binding_keys().await.unwrap();
+
+    assert_eq!(store.get_call_count(), reads_before_startup);
+}
+
+#[tokio::test]
 async fn fixed_api_preflight_requires_a_verified_provider_credential() {
     let db = Arc::new(Database::memory().unwrap());
     let store = Arc::new(MemoryCredentialStore::default());

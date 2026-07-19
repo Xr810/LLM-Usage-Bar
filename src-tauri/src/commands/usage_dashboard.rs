@@ -232,12 +232,14 @@ pub fn get_unassigned_usage_diagnostics(
 }
 
 #[tauri::command]
-pub async fn list_usage_providers(
+pub fn list_usage_providers(
     state: State<'_, AppState>,
-    codex_state: State<'_, CodexOAuthState>,
 ) -> Result<Vec<UsageProviderView>, AppError> {
-    let auth = system_provider_auth_snapshot(&state, &codex_state).await;
-    list_usage_providers_with_auth_snapshot_test_hook(&state, auth).await
+    // Provider-only settings do not publish or act on legacy Agent bindings.
+    // Reading their protected status here would open every macOS Keychain item
+    // merely because the user opened Settings. Credential verification remains
+    // on explicit binding, connection-test, and proxy-use paths.
+    state.db.list_usage_providers()
 }
 
 #[tauri::command]
@@ -245,7 +247,9 @@ pub async fn save_usage_provider(
     state: State<'_, AppState>,
     input: SaveUsageProviderCommandInput,
 ) -> Result<UsageProviderView, AppError> {
-    save_usage_provider_command_test_hook(&state, input).await
+    let provider = state.db.save_usage_provider(&input.into())?;
+    crate::usage_events::notify_dashboard_invalidated();
+    Ok(provider)
 }
 
 #[tauri::command]

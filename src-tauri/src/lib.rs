@@ -1479,7 +1479,7 @@ pub fn run() {
                 // to fail closed.
                 if state
                     .binding_credential_service
-                    .reconcile_startup()
+                    .reconcile_startup_journals()
                     .await
                     .is_err()
                 {
@@ -1487,7 +1487,7 @@ pub fn run() {
                 }
                 if state
                     .binding_credential_service
-                    .ensure_fixed_api_binding_local_keys()
+                    .initialize_startup_binding_keys()
                     .await
                     .is_err()
                 {
