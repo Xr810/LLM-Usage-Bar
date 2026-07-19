@@ -29,6 +29,17 @@ export function ClaudeCliAuthSection() {
       data.subscriptionType.slice(1)
     : null;
   const connected = Boolean(data?.installed && data.authenticated);
+  const detectedDetail = plan
+    ? plan
+    : data?.authMethod === "api_key"
+      ? t("usageDashboard.claudeApiKey", { defaultValue: "API Key" })
+      : data?.authMethod === "claude_account"
+        ? t("usageDashboard.claudeAccount", {
+            defaultValue: "Claude Account",
+          })
+        : t("usageDashboard.claudeAuthenticated", {
+            defaultValue: "Authenticated",
+          });
 
   return (
     <div className="space-y-2">
@@ -50,12 +61,12 @@ export function ClaudeCliAuthSection() {
                       defaultValue: "Claude CLI not installed",
                     })
                   : data.authenticated
-                    ? t("usageDashboard.claudeConnected", {
-                        defaultValue: `Connected${plan ? ` · ${plan}` : ""}`,
-                        plan,
+                    ? t("usageDashboard.claudeCliDetected", {
+                        defaultValue: `Claude CLI detected${detectedDetail ? ` · ${detectedDetail}` : ""}`,
+                        detail: detectedDetail,
                       })
-                    : t("usageDashboard.claudeDisconnected", {
-                        defaultValue: "Not connected",
+                    : t("usageDashboard.claudeCliDetectedSignedOut", {
+                        defaultValue: "Claude CLI detected · Not signed in",
                       })}
             </div>
             <div className="truncate text-xs text-muted-foreground">

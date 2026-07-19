@@ -337,6 +337,7 @@ pub struct QuotaFetchState {
     pub last_attempt_at: Option<i64>,
     pub last_success_at: Option<i64>,
     pub last_error: Option<String>,
+    pub consecutive_failures: u32,
     pub stale: bool,
 }
 

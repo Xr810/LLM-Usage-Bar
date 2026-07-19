@@ -23,7 +23,8 @@ use tokio::sync::{watch, Mutex as AsyncMutex, RwLock};
 use uuid::Uuid;
 
 pub const DEFAULT_QUOTA_INTERVAL_SECONDS: u64 = 300;
-const SCHEDULER_TICK_SECONDS: u64 = 60;
+const SCHEDULER_TICK_SECONDS: u64 = 30;
+const FAILURE_RETRY_DELAYS_SECONDS: [u64; 5] = [30, 60, 300, 600, 1_800];
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct NormalizedQuota {
@@ -341,9 +342,9 @@ impl QuotaService {
         Ok(())
     }
 
-    /// Runs one deterministic scheduling pass. Failed collections have their
-    /// attempt persisted, so subsequent passes wait for the full configured
-    /// interval instead of entering a retry loop.
+    /// Runs one deterministic scheduling pass. Normal refreshes use the
+    /// configured interval. Failures retry after 30s, 1m, 5m, 10m, then 30m;
+    /// the fetch state only becomes stale when the 10-minute retry fails.
     pub async fn refresh_due_at(&self, now: i64) -> Result<QuotaSchedulerCycle, AppError> {
         let mut cycle = QuotaSchedulerCycle::default();
         for view in self.db.list_usage_providers()? {
@@ -357,9 +358,13 @@ impl QuotaService {
                 continue;
             };
             let state = self.db.get_quota_fetch_state(&view.id)?;
-            let due = state
-                .and_then(|state| state.last_attempt_at)
-                .is_none_or(|last_attempt| now.saturating_sub(last_attempt) >= interval as i64);
+            let due = state.as_ref().is_none_or(|state| {
+                let Some(last_attempt) = state.last_attempt_at else {
+                    return true;
+                };
+                let delay = quota_refresh_delay_seconds(state, interval);
+                now.saturating_sub(last_attempt) >= delay as i64
+            });
             if !due {
                 continue;
             }
@@ -483,6 +488,17 @@ pub fn quota_interval_seconds(configured: Option<u64>) -> Result<Option<u64>, Ap
         )),
         interval => Ok(Some(interval)),
     }
+}
+
+fn quota_refresh_delay_seconds(state: &QuotaFetchState, interval: u64) -> u64 {
+    if state.consecutive_failures == 0 {
+        return interval;
+    }
+    let index = state
+        .consecutive_failures
+        .saturating_sub(1)
+        .min((FAILURE_RETRY_DELAYS_SECONDS.len() - 1) as u32) as usize;
+    FAILURE_RETRY_DELAYS_SECONDS[index]
 }
 
 pub fn normalize_subscription_quota(
@@ -923,12 +939,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn success_appends_and_failure_preserves_success_without_tight_retry() {
+    async fn failures_follow_backoff_and_only_expire_after_ten_minute_retry() {
         let db = isolated_quota_test_db();
         db.save_usage_provider(&provider("sub", BillingKind::Subscription, true))
             .unwrap();
         let collector = Arc::new(FakeCollector::new(vec![
             Ok(successful_quota("claude")),
+            Err("timeout".to_string()),
+            Err("timeout".to_string()),
+            Err("timeout".to_string()),
+            Err("timeout".to_string()),
+            Err("timeout".to_string()),
             Err("timeout".to_string()),
         ]));
         let service = QuotaService::with_collectors(db.clone(), vec![collector.clone()]);
@@ -952,10 +973,46 @@ mod tests {
         let state = db.get_quota_fetch_state("sub").unwrap().unwrap();
         assert_eq!(state.last_success_at, Some(100));
         assert_eq!(state.last_attempt_at, Some(400));
-        assert!(state.stale);
+        assert_eq!(state.consecutive_failures, 1);
+        assert!(!state.stale);
 
-        assert_eq!(service.refresh_due_at(401).await.unwrap().attempted, 0);
-        assert_eq!(collector.calls.load(Ordering::SeqCst), 2);
+        for (not_due_at, due_at, expected_failures, expected_stale) in [
+            (429, 430, 2, false),
+            (489, 490, 3, false),
+            (789, 790, 4, false),
+            (1_389, 1_390, 5, true),
+            (3_189, 3_190, 6, true),
+        ] {
+            assert_eq!(
+                service.refresh_due_at(not_due_at).await.unwrap().attempted,
+                0
+            );
+            assert_eq!(service.refresh_due_at(due_at).await.unwrap().attempted, 1);
+            let state = db.get_quota_fetch_state("sub").unwrap().unwrap();
+            assert_eq!(state.consecutive_failures, expected_failures);
+            assert_eq!(state.stale, expected_stale);
+        }
+        assert_eq!(collector.calls.load(Ordering::SeqCst), 7);
+    }
+
+    #[tokio::test]
+    async fn custom_interval_only_changes_healthy_refresh_cadence() {
+        let db = isolated_quota_test_db();
+        let mut input = provider("sub", BillingKind::Subscription, true);
+        input.quota_interval_seconds = Some(480);
+        db.save_usage_provider(&input).unwrap();
+        let collector = Arc::new(FakeCollector::new(vec![
+            Ok(successful_quota("claude")),
+            Err("timeout".to_string()),
+            Err("timeout".to_string()),
+        ]));
+        let service = QuotaService::with_collectors(db, vec![collector]);
+
+        assert_eq!(service.refresh_due_at(100).await.unwrap().attempted, 1);
+        assert_eq!(service.refresh_due_at(579).await.unwrap().attempted, 0);
+        assert_eq!(service.refresh_due_at(580).await.unwrap().attempted, 1);
+        assert_eq!(service.refresh_due_at(609).await.unwrap().attempted, 0);
+        assert_eq!(service.refresh_due_at(610).await.unwrap().attempted, 1);
     }
 
     #[tokio::test]
@@ -994,7 +1051,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn configuration_failures_wait_for_the_full_interval() {
+    async fn configuration_failures_enter_the_retry_schedule() {
         let db = isolated_quota_test_db();
         let mut input = provider("sub", BillingKind::Subscription, true);
         input.quota_source = Some("unsupported".to_string());
@@ -1012,17 +1069,18 @@ mod tests {
             Some(100)
         );
         assert_eq!(service.refresh_due_at(101).await.unwrap().attempted, 0);
-        assert_eq!(service.refresh_due_at(399).await.unwrap().attempted, 0);
+        assert_eq!(service.refresh_due_at(129).await.unwrap().attempted, 0);
+        assert_eq!(service.refresh_due_at(130).await.unwrap().attempted, 1);
     }
 
     #[tokio::test]
-    async fn normalization_failures_wait_for_the_full_interval() {
+    async fn normalization_failures_enter_the_retry_schedule() {
         let db = isolated_quota_test_db();
         db.save_usage_provider(&provider("sub", BillingKind::Subscription, true))
             .unwrap();
         let mut invalid = successful_quota("claude");
         invalid.tiers[0].utilization = f64::NAN;
-        let collector = Arc::new(FakeCollector::new(vec![Ok(invalid)]));
+        let collector = Arc::new(FakeCollector::new(vec![Ok(invalid.clone()), Ok(invalid)]));
         let service = QuotaService::with_collectors(db.clone(), vec![collector.clone()]);
 
         let first = service.refresh_due_at(100).await.unwrap();
@@ -1035,8 +1093,9 @@ mod tests {
             .as_deref()
             .unwrap_or_default()
             .contains("non-negative finite"));
-        assert_eq!(service.refresh_due_at(399).await.unwrap().attempted, 0);
-        assert_eq!(collector.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(service.refresh_due_at(129).await.unwrap().attempted, 0);
+        assert_eq!(service.refresh_due_at(130).await.unwrap().attempted, 1);
+        assert_eq!(collector.calls.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]

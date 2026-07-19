@@ -12,6 +12,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { UsageDiagnosticsPanel } from "./UsageDiagnosticsPanel";
 import { UsageProvidersSettings } from "./UsageProvidersSettings";
+import { StartupSettings } from "./StartupSettings";
 
 interface SettingsDialogProps {
   open: boolean;
@@ -22,10 +23,10 @@ interface SettingsDialogProps {
   onProviderTargetHandled?: () => void;
 }
 
-type SettingsTab = "providers" | "diagnostics";
+type SettingsTab = "general" | "providers" | "diagnostics";
 
 function resolveSettingsTab(tab?: string): SettingsTab {
-  if (tab === "diagnostics") {
+  if (tab === "general" || tab === "diagnostics") {
     return tab;
   }
   return "providers";
@@ -89,6 +90,9 @@ export function SettingsPage({
             })}
             className="w-full flex-shrink-0 justify-start overflow-x-auto"
           >
+            <TabsTrigger value="general">
+              {t("settings.general", { defaultValue: "General" })}
+            </TabsTrigger>
             <TabsTrigger value="providers">
               {t("settings.providers", { defaultValue: "Providers" })}
             </TabsTrigger>
@@ -98,6 +102,9 @@ export function SettingsPage({
           </TabsList>
 
           <div className="min-h-0 flex-1 overflow-y-auto">
+            <TabsContent value="general">
+              <StartupSettings />
+            </TabsContent>
             <TabsContent value="providers">
               <UsageProvidersSettings
                 targetProviderId={targetProviderId ?? undefined}

@@ -1,6 +1,7 @@
 use crate::error::AppError;
 use std::future::Future;
 use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -20,11 +21,20 @@ pub enum ClaudeSubscriptionType {
     Max,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClaudeAuthMethod {
+    ApiKey,
+    ClaudeAccount,
+    Other,
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClaudeCliAuthStatus {
     pub installed: bool,
     pub authenticated: bool,
+    pub auth_method: Option<ClaudeAuthMethod>,
     pub subscription_type: Option<ClaudeSubscriptionType>,
     pub quota_availability: &'static str,
     pub error_code: Option<String>,
@@ -51,23 +61,62 @@ fn command_error(code: &'static str) -> AppError {
     AppError::Message(code.to_string())
 }
 
+fn claude_binary_candidates_for_home(home: &Path) -> Vec<PathBuf> {
+    let mut candidates = vec![PathBuf::from(CLAUDE_BINARY)];
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        for relative in [
+            ".local/bin/claude",
+            ".volta/bin/claude",
+            ".asdf/shims/claude",
+            ".local/share/mise/shims/claude",
+            ".config/mise/shims/claude",
+            ".npm-global/bin/claude",
+            ".npm-packages/bin/claude",
+            ".local/share/pnpm/claude",
+            "Library/pnpm/claude",
+        ] {
+            candidates.push(home.join(relative));
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            candidates.push(PathBuf::from("/opt/homebrew/bin/claude"));
+            candidates.push(PathBuf::from("/usr/local/bin/claude"));
+        }
+
+        #[cfg(target_os = "linux")]
+        candidates.push(PathBuf::from("/usr/local/bin/claude"));
+    }
+
+    candidates
+}
+
+fn claude_binary_candidates() -> Vec<PathBuf> {
+    claude_binary_candidates_for_home(&crate::config::get_home_dir())
+}
+
 fn run_fixed_claude_command(
     args: &'static [&'static str],
     timeout: Duration,
 ) -> Result<ClaudeAuthCommandOutput, AppError> {
-    let mut child = Command::new(CLAUDE_BINARY)
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound {
-                command_error("claude_cli_not_installed")
-            } else {
-                command_error("claude_cli_status_failed")
+    let mut child = claude_binary_candidates()
+        .into_iter()
+        .find_map(|binary| {
+            match Command::new(binary)
+                .args(args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+            {
+                Ok(child) => Some(Ok(child)),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                Err(_) => Some(Err(command_error("claude_cli_status_failed"))),
             }
-        })?;
+        })
+        .unwrap_or_else(|| Err(command_error("claude_cli_not_installed")))?;
     let deadline = Instant::now() + timeout;
     let status = loop {
         match child.try_wait() {
@@ -143,6 +192,7 @@ impl ClaudeCliAuthService {
         ClaudeCliAuthStatus {
             installed,
             authenticated: false,
+            auth_method: None,
             subscription_type: None,
             quota_availability: "unavailable",
             error_code,
@@ -176,9 +226,16 @@ impl ClaudeCliAuthService {
             Some("max") => Some(ClaudeSubscriptionType::Max),
             _ => None,
         };
+        let auth_method = match object.get("authMethod").and_then(|value| value.as_str()) {
+            Some("api_key") => Some(ClaudeAuthMethod::ApiKey),
+            Some("claude.ai") => Some(ClaudeAuthMethod::ClaudeAccount),
+            Some(_) => Some(ClaudeAuthMethod::Other),
+            None => None,
+        };
         ClaudeCliAuthStatus {
             installed: true,
             authenticated: true,
+            auth_method,
             subscription_type,
             quota_availability: "unavailable",
             error_code: None,
@@ -275,7 +332,7 @@ mod tests {
     async fn status_maps_official_exit_codes_and_allowlisted_json_only() {
         for (stdout, subscription_type) in [
             (
-                r#"{"loggedIn":true,"subscriptionType":"pro","token":"must-not-escape"}"#,
+                r#"{"loggedIn":true,"authMethod":"claude.ai","subscriptionType":"pro","token":"must-not-escape"}"#,
                 Some(ClaudeSubscriptionType::Pro),
             ),
             (
@@ -298,6 +355,15 @@ mod tests {
         }
 
         let runner = Arc::new(MockRunner::with_statuses(vec![output(
+            0,
+            r#"{"loggedIn":true,"authMethod":"api_key","apiKeySource":"ANTHROPIC_API_KEY"}"#,
+        )]));
+        let status = ClaudeCliAuthService::new(runner).status().await;
+        assert_eq!(status.auth_method, Some(ClaudeAuthMethod::ApiKey));
+        let json = serde_json::to_string(&status).unwrap();
+        assert!(!json.contains("apiKeySource"));
+
+        let runner = Arc::new(MockRunner::with_statuses(vec![output(
             1,
             r#"{"loggedIn":false}"#,
         )]));
@@ -305,6 +371,14 @@ mod tests {
         assert!(status.installed);
         assert!(!status.authenticated);
         assert_eq!(status.error_code, None);
+    }
+
+    #[test]
+    fn gui_path_fallback_includes_native_claude_install() {
+        let candidates = claude_binary_candidates_for_home(Path::new("/Users/example"));
+        assert_eq!(candidates.first(), Some(&PathBuf::from("claude")));
+        #[cfg(not(target_os = "windows"))]
+        assert!(candidates.contains(&PathBuf::from("/Users/example/.local/bin/claude")));
     }
 
     #[tokio::test]

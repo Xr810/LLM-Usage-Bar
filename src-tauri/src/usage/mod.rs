@@ -8,6 +8,7 @@ pub mod ingestion;
 pub(crate) mod migration;
 pub(crate) mod module_migration;
 pub mod quota;
+pub(crate) mod quota_retry_migration;
 pub mod session;
 pub(crate) mod source_roots;
 pub mod status;

@@ -27,7 +27,8 @@ fn quota_fetch_state_from_row(row: &Row<'_>) -> rusqlite::Result<QuotaFetchState
         last_attempt_at: row.get(1)?,
         last_success_at: row.get(2)?,
         last_error: row.get(3)?,
-        stale: row.get(4)?,
+        consecutive_failures: row.get::<_, i64>(4)? as u32,
+        stale: row.get(5)?,
     })
 }
 
@@ -36,7 +37,8 @@ fn fetch_state_on_conn(
     provider_id: &str,
 ) -> Result<Option<QuotaFetchState>, AppError> {
     conn.query_row(
-        "SELECT provider_id, last_attempt_at, last_success_at, last_error, stale
+        "SELECT provider_id, last_attempt_at, last_success_at, last_error,
+                consecutive_failures, stale
          FROM quota_fetch_state WHERE provider_id = ?1",
         [provider_id],
         quota_fetch_state_from_row,
@@ -92,12 +94,14 @@ impl Database {
         )?;
         transaction.execute(
             "INSERT INTO quota_fetch_state (
-                provider_id, last_attempt_at, last_success_at, last_error, stale
-             ) VALUES (?1, ?2, ?2, NULL, 0)
+                provider_id, last_attempt_at, last_success_at, last_error,
+                consecutive_failures, stale
+             ) VALUES (?1, ?2, ?2, NULL, 0, 0)
              ON CONFLICT(provider_id) DO UPDATE SET
                 last_attempt_at = excluded.last_attempt_at,
                 last_success_at = excluded.last_success_at,
                 last_error = NULL,
+                consecutive_failures = 0,
                 stale = 0
              WHERE excluded.last_attempt_at >= COALESCE(
                 quota_fetch_state.last_attempt_at, -9223372036854775808
@@ -119,12 +123,17 @@ impl Database {
         let conn = lock_conn!(self.conn);
         conn.execute(
             "INSERT INTO quota_fetch_state (
-                provider_id, last_attempt_at, last_success_at, last_error, stale
-             ) VALUES (?1, ?2, NULL, ?3, 1)
+                provider_id, last_attempt_at, last_success_at, last_error,
+                consecutive_failures, stale
+             ) VALUES (?1, ?2, NULL, ?3, 1, 0)
              ON CONFLICT(provider_id) DO UPDATE SET
                 last_attempt_at = excluded.last_attempt_at,
                 last_error = excluded.last_error,
-                stale = 1
+                consecutive_failures = quota_fetch_state.consecutive_failures + 1,
+                stale = CASE
+                    WHEN quota_fetch_state.consecutive_failures + 1 >= 5 THEN 1
+                    ELSE 0
+                END
              WHERE excluded.last_attempt_at > COALESCE(
                 quota_fetch_state.last_attempt_at, -9223372036854775808
              )",
@@ -212,24 +221,33 @@ mod tests {
         assert_eq!(state.last_attempt_at, Some(100));
         assert_eq!(state.last_success_at, Some(100));
         assert_eq!(state.last_error, None);
+        assert_eq!(state.consecutive_failures, 0);
         assert!(!state.stale);
         assert_eq!(db.latest_quota_snapshot("sub").unwrap(), Some(first));
         assert_eq!(db.get_quota_fetch_state("sub").unwrap(), Some(state));
     }
 
     #[test]
-    fn quota_failure_preserves_last_successful_snapshot_and_marks_state_stale() {
+    fn quota_failure_preserves_snapshot_and_only_marks_stale_after_ten_minute_retry() {
         let db = Database::memory().unwrap();
         save_provider(&db, "sub");
         let first_success_at = 100;
         let first = snapshot("first", first_success_at);
         db.append_quota_success(&first).unwrap();
 
-        let state = db.record_quota_failure("sub", 200, "timeout").unwrap();
+        let mut state = db.record_quota_failure("sub", 200, "timeout").unwrap();
         assert_eq!(state.last_attempt_at, Some(200));
         assert_eq!(state.last_success_at, Some(first_success_at));
         assert_eq!(state.last_error.as_deref(), Some("timeout"));
-        assert!(state.stale);
+        assert_eq!(state.consecutive_failures, 1);
+        assert!(!state.stale);
+        for attempt in 2..=5 {
+            state = db
+                .record_quota_failure("sub", 200 + i64::from(attempt), "timeout")
+                .unwrap();
+            assert_eq!(state.consecutive_failures, attempt);
+            assert_eq!(state.stale, attempt >= 5);
+        }
         assert_eq!(
             db.latest_quota_snapshot("sub").unwrap().unwrap().fetched_at,
             first_success_at
@@ -247,6 +265,7 @@ mod tests {
         assert_eq!(state.last_attempt_at, Some(200));
         assert_eq!(state.last_success_at, Some(200));
         assert_eq!(state.last_error, None);
+        assert_eq!(state.consecutive_failures, 0);
         assert!(!state.stale);
     }
 

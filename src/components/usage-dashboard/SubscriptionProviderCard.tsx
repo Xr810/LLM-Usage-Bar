@@ -104,7 +104,7 @@ export function SubscriptionProviderCard({
         key={label}
         label={label}
         meterLabel={label}
-        fillPercent={used}
+        fillPercent={remaining}
         tone={toneFromRemainingPercent(remaining)}
         valueText={
           remaining == null

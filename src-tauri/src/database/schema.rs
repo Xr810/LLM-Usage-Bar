@@ -562,6 +562,11 @@ impl Database {
                         )?;
                         crate::usage::budget_migration::migrate_v17_to_v18(conn)?;
                     }
+                    18 => {
+                        log::info!("迁移数据库从 v18 到 v19（持久化配额刷新失败退避状态）");
+                        crate::usage::budget_migration::validate_schema_v18_complete(conn)?;
+                        crate::usage::quota_retry_migration::migrate_v18_to_v19(conn)?;
+                    }
                     _ => {
                         return Err(AppError::Database(format!(
                             "未知的数据库版本 {version}，无法迁移到 {SCHEMA_VERSION}"
@@ -577,8 +582,11 @@ impl Database {
             if version >= 17 {
                 crate::usage::system_provider_migration::validate_schema_v17_complete(conn)?;
             }
-            if version == 18 {
+            if version >= 18 {
                 crate::usage::budget_migration::validate_schema_v18_complete(conn)?;
+            }
+            if version == 19 {
+                crate::usage::quota_retry_migration::validate_schema_v19_complete(conn)?;
             }
             Ok(())
         })();

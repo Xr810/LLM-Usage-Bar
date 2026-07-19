@@ -2039,16 +2039,17 @@ mod migration_v16_to_v17 {
     }
 
     #[test]
-    fn migration_continues_from_v12_through_complete_v18() {
+    fn migration_continues_from_v12_through_current_schema() {
         let conn = super::true_v12_usage_fixture();
         Database::apply_schema_migrations_on_conn_with_roots(
             &conn,
             &super::migration_v15_to_v16::roots(),
         )
-        .expect("migrate continuously from v12 through v18");
+        .expect("migrate continuously from v12 through current schema");
         assert_eq!(Database::get_user_version(&conn).unwrap(), SCHEMA_VERSION);
         assert!(Database::has_column(&conn, "usage_providers", "system_preset_key").unwrap());
         assert!(Database::has_column(&conn, "usage_providers", "daily_budget_usd").unwrap());
+        assert!(Database::has_column(&conn, "quota_fetch_state", "consecutive_failures").unwrap());
         assert!(Database::has_column(&conn, "agent_provider_bindings", "route_protocol").unwrap());
         assert!(Database::table_exists(&conn, "provider_api_credentials").unwrap());
         assert!(Database::table_exists(&conn, "provider_credential_operations").unwrap());
@@ -2073,7 +2074,7 @@ mod migration_v17_to_v18 {
     }
 
     #[test]
-    fn migration_v17_to_v18_adds_nullable_daily_budget_and_reconciliation_preserves_it() {
+    fn migration_from_v17_adds_current_usage_columns_and_preserves_daily_budget() {
         let conn = v17_usage_fixture();
         conn.execute(
             "INSERT INTO usage_providers (
@@ -2096,10 +2097,14 @@ mod migration_v17_to_v18 {
             &conn,
             &super::migration_v15_to_v16::roots(),
         )
-        .expect("migrate v17 to v18");
+        .expect("migrate v17 to current schema");
 
-        assert_eq!(Database::get_user_version(&conn).unwrap(), 18);
+        assert_eq!(
+            Database::get_user_version(&conn).unwrap(),
+            super::SCHEMA_VERSION
+        );
         assert!(Database::has_column(&conn, "usage_providers", "daily_budget_usd").unwrap());
+        assert!(Database::has_column(&conn, "quota_fetch_state", "consecutive_failures").unwrap());
         assert_eq!(
             conn.query_row(
                 "SELECT upper(type), \"notnull\", dflt_value

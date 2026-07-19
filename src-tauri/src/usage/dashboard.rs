@@ -56,19 +56,20 @@ impl<'a> UsageDashboardService<'a> {
             ));
         }
 
-        let mut provider_ids = self.event_provider_ids_all(start_at, end_at)?;
         let providers = self
             .db
             .list_usage_providers()?
             .into_iter()
             .map(|provider| (provider.id.clone(), provider))
             .collect::<BTreeMap<_, _>>();
-        provider_ids.extend(
-            providers
-                .values()
-                .filter(|provider| provider.enabled)
-                .map(|provider| provider.id.clone()),
-        );
+        // Only enabled Providers are monitored. Disabling an account hides it
+        // here exactly like in the tray popover; its stored usage history is
+        // kept in the database and reappears when the Provider is re-enabled.
+        let provider_ids = providers
+            .values()
+            .filter(|provider| provider.enabled)
+            .map(|provider| provider.id.clone())
+            .collect::<BTreeSet<_>>();
 
         let mut rows = Vec::with_capacity(provider_ids.len());
         for provider_id in provider_ids {
@@ -114,28 +115,6 @@ impl<'a> UsageDashboardService<'a> {
             providers: rows,
             warnings: vec![],
         })
-    }
-
-    fn event_provider_ids_all(
-        &self,
-        start_at: i64,
-        end_at: i64,
-    ) -> Result<BTreeSet<String>, AppError> {
-        let conn = self
-            .db
-            .conn
-            .lock()
-            .map_err(|error| AppError::Database(format!("Mutex lock failed: {error}")))?;
-        let mut statement = conn.prepare(
-            "SELECT DISTINCT provider_id
-             FROM usage_events
-             WHERE occurred_at >= ?1 AND occurred_at < ?2
-             ORDER BY provider_id",
-        )?;
-        let provider_ids = statement
-            .query_map(params![start_at, end_at], |row| row.get(0))?
-            .collect::<Result<BTreeSet<_>, _>>()?;
-        Ok(provider_ids)
     }
 
     pub fn get_dashboard(
@@ -678,6 +657,69 @@ mod tests {
         assert_eq!(work.cost_source_counts.unavailable, 1);
         assert!(!personal.shared_account);
         assert!(!work.shared_account);
+    }
+
+    #[test]
+    fn provider_dashboard_hides_disabled_providers_and_restores_them_when_reenabled() {
+        let db = database_without_system_bindings();
+        db.save_usage_provider(&provider(
+            "account-personal",
+            BillingKind::Metered,
+            "openai",
+        ))
+        .unwrap();
+        let usage_event = event(
+            "personal-codex",
+            "account-personal",
+            "openai",
+            TokenSource::Proxy,
+            CostSource::Upstream,
+            100,
+            Some("0.10"),
+        );
+        db.insert_usage_event(&usage_event).unwrap();
+
+        // Sanity: an enabled Provider with history is visible.
+        let dashboard = UsageDashboardService::new(&db)
+            .get_provider_dashboard(100, 200)
+            .unwrap();
+        assert!(dashboard
+            .providers
+            .iter()
+            .any(|row| row.provider.id == "account-personal"));
+
+        // Disabling hides the account even though it has events in range,
+        // matching the tray popover contract.
+        db.set_usage_provider_enabled("account-personal", false)
+            .unwrap();
+        let dashboard = UsageDashboardService::new(&db)
+            .get_provider_dashboard(100, 200)
+            .unwrap();
+        assert!(
+            dashboard
+                .providers
+                .iter()
+                .all(|row| row.provider.id != "account-personal"),
+            "disabled Provider must not appear in monitoring: {:?}",
+            dashboard
+                .providers
+                .iter()
+                .map(|row| row.provider.id.as_str())
+                .collect::<Vec<_>>()
+        );
+
+        // Re-enabling restores the account with its preserved history.
+        db.set_usage_provider_enabled("account-personal", true)
+            .unwrap();
+        let dashboard = UsageDashboardService::new(&db)
+            .get_provider_dashboard(100, 200)
+            .unwrap();
+        let restored = dashboard
+            .providers
+            .iter()
+            .find(|row| row.provider.id == "account-personal")
+            .expect("re-enabled Provider returns with its history");
+        assert_eq!(restored.event_count, 1);
     }
 
     #[test]

@@ -116,6 +116,7 @@ describe("SubscriptionProviderCard localized reset countdown", () => {
       lastAttemptAt: 10,
       lastSuccessAt: 9,
       lastError: "stale quota error",
+      consecutiveFailures: 5,
       stale: true,
     };
 
@@ -158,4 +159,29 @@ describe("SubscriptionProviderCard localized reset countdown", () => {
     expect(usage.provider.quotaSource).toBe("codex_oauth");
     expect(onRefreshQuota).toHaveBeenCalledWith("system-chatgpt-subscription");
   });
+
+  it.each([
+    { used: "1", remaining: 99, toneClass: "bg-success" },
+    { used: "50", remaining: 50, toneClass: "bg-warning" },
+    { used: "81", remaining: 19, toneClass: "bg-danger" },
+  ])(
+    "fills the quota bar to $remaining% remaining with the matching status color",
+    ({ used, remaining, toneClass }) => {
+      const usage = subscriptionUsage();
+      usage.quota!.fiveHourUtilizationPercent = used;
+
+      render(
+        <SubscriptionProviderCard
+          usage={usage}
+          onRefreshQuota={vi.fn()}
+          onSyncSessions={vi.fn()}
+        />,
+      );
+
+      const meter = screen.getByRole("progressbar", { name: "5-hour window" });
+      expect(meter).toHaveAttribute("aria-valuenow", String(remaining));
+      expect(meter.firstElementChild).toHaveStyle({ width: `${remaining}%` });
+      expect(meter.firstElementChild).toHaveClass(toneClass);
+    },
+  );
 });

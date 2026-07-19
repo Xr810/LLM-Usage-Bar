@@ -26,6 +26,10 @@ vi.mock("@/components/settings/UsageDiagnosticsPanel", () => ({
   UsageDiagnosticsPanel: () => <div>Aggregate diagnostics content</div>,
 }));
 
+vi.mock("@/components/settings/StartupSettings", () => ({
+  StartupSettings: () => <div>Startup settings content</div>,
+}));
+
 vi.mock("@/components/ui/dialog", () => ({
   Dialog: ({ open, children }: { open: boolean; children: ReactNode }) =>
     open ? <div data-testid="dialog-root">{children}</div> : null,
@@ -55,7 +59,7 @@ describe("SettingsPage Provider-only sections", () => {
     expect(screen.getByText("Aggregate diagnostics content")).toBeInTheDocument();
   });
 
-  it.each(["agents", "modules", "proxy", "general", "unknown"])(
+  it.each(["agents", "modules", "proxy", "unknown"])(
     "maps legacy default %s to Providers",
     (defaultTab) => {
       render(<SettingsPage open onOpenChange={() => {}} defaultTab={defaultTab} />);
@@ -65,6 +69,14 @@ describe("SettingsPage Provider-only sections", () => {
       );
     },
   );
+
+  it("opens Startup for the general section", () => {
+    render(<SettingsPage open onOpenChange={() => {}} defaultTab="general" />);
+    expect(screen.getByRole("tab", { name: "General" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+  });
 
   it("preserves a Provider target until the Provider DOM handles it", async () => {
     const user = userEvent.setup();

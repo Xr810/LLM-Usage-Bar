@@ -80,6 +80,7 @@ export interface SystemProviderConnectionTestResult {
 export interface ClaudeCliAuthStatus {
   installed: boolean;
   authenticated: boolean;
+  authMethod: "api_key" | "claude_account" | "other" | null;
   subscriptionType: "pro" | "max" | null;
   quotaAvailability: "unavailable";
   errorCode: string | null;
@@ -149,6 +150,7 @@ export interface QuotaFetchState {
   lastAttemptAt: number | null;
   lastSuccessAt: number | null;
   lastError: string | null;
+  consecutiveFailures: number;
   stale: boolean;
 }
 
