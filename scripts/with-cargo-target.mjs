@@ -7,7 +7,7 @@ import {
   pendingLease,
   removeLease,
   resolveBuildCommand,
-  resolveCargoTarget,
+  resolveCargoTargetForInvocation,
   runningLease,
   writeLeaseAtomic,
 } from "./cargo-cache-lib.mjs";
@@ -22,7 +22,7 @@ if (!command) {
 let invocation;
 let resolved;
 try {
-  resolved = resolveCargoTarget();
+  resolved = resolveCargoTargetForInvocation(command, args);
   invocation = resolveBuildCommand(command, args);
 } catch (error) {
   console.error(error.message);

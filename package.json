@@ -7,6 +7,8 @@
   "scripts": {
     "dev": "pnpm tauri dev",
     "build": "pnpm tauri build",
+    "build:local:mac": "./script/build_and_run.sh --build-only",
+    "run:local:mac": "./script/build_and_run.sh",
     "tauri": "node scripts/with-cargo-target.mjs tauri",
     "rust": "node scripts/with-cargo-target.mjs cargo",
     "cargo:cache": "node scripts/cargo-cache.mjs",

@@ -30,6 +30,7 @@ import {
   removeLease,
   resolveBuildCommand,
   resolveCargoTarget,
+  resolveCargoTargetForInvocation,
   writeLeaseAtomic,
 } from "./cargo-cache-lib.mjs";
 
@@ -766,6 +767,41 @@ test("main and linked worktree with the same lockfile share one bucket", async (
   assert.equal(
     resolveCargoTarget(root).targetDir,
     resolveCargoTarget(linked).targetDir,
+  );
+});
+
+test("Tauri builds use a worktree-local target while dev and Cargo stay shared", async (t) => {
+  const root = await makeRepo("version = 4\n");
+  const linked = `${root}-linked-build`;
+  git(root, "worktree", "add", "-b", "linked-build", linked);
+  t.after(() => rm(linked, { recursive: true, force: true }));
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  const mainBuild = resolveCargoTargetForInvocation("tauri", ["build"], root);
+  const linkedBuild = resolveCargoTargetForInvocation(
+    "tauri",
+    ["build", "--bundles", "app"],
+    linked,
+  );
+  const shared = resolveCargoTarget(root);
+
+  assert.equal(
+    mainBuild.targetDir,
+    path.join(mainBuild.worktreeRoot, "release", "tauri-target"),
+  );
+  assert.equal(
+    linkedBuild.targetDir,
+    path.join(linkedBuild.worktreeRoot, "release", "tauri-target"),
+  );
+  assert.notEqual(mainBuild.targetDir, linkedBuild.targetDir);
+  assert.equal(mainBuild.sharedTargetDir, shared.targetDir);
+  assert.equal(
+    resolveCargoTargetForInvocation("tauri", ["dev"], root).targetDir,
+    shared.targetDir,
+  );
+  assert.equal(
+    resolveCargoTargetForInvocation("cargo", ["build"], root).targetDir,
+    shared.targetDir,
   );
 });
 

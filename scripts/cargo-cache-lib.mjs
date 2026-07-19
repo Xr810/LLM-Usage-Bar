@@ -51,9 +51,29 @@ export function resolveCargoTarget(cwd = process.cwd()) {
 
   return {
     commonRoot,
+    worktreeRoot,
     lockfile,
     lockHash,
     targetDir: path.join(commonRoot, ".cache", "cargo-targets", lockHash),
+  };
+}
+
+export function resolveCargoTargetForInvocation(
+  command,
+  args = [],
+  cwd = process.cwd(),
+) {
+  const shared = resolveCargoTarget(cwd);
+  const isTauriBuild =
+    (command === "tauri" || command === "@tauri-apps/cli") &&
+    args[0] === "build";
+
+  if (!isTauriBuild) return shared;
+
+  return {
+    ...shared,
+    sharedTargetDir: shared.targetDir,
+    targetDir: path.join(shared.worktreeRoot, "release", "tauri-target"),
   };
 }
 
