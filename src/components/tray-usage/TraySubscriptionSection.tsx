@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { ProviderIcon } from "@/components/ProviderIcon";
-import { QuotaResetDetails } from "@/components/QuotaResetDetails";
+import { ManualResetCredits } from "@/components/ManualResetCredits";
 import {
   clampPercentForProgress,
   formatPercent,
@@ -154,8 +154,11 @@ export function TraySubscriptionSection({
                 })}
               </div>
 
-              <QuotaResetDetails
-                details={provider.subscription.additionalResetDetails ?? []}
+              <ManualResetCredits
+                availableCount={
+                  provider.subscription.manualResetsRemaining ?? null
+                }
+                credits={provider.subscription.manualResetCredits ?? []}
                 compact
               />
 

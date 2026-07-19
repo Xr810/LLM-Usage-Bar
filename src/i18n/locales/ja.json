@@ -3268,14 +3268,13 @@
     "queryFailed": "クエリに失敗しました",
     "refresh": "更新"
   },
-  "quotaResetDetails": {
-    "summary": "追加枠のリセット：{{count}} 件",
-    "toggle": "{{count}} 件の追加枠リセット時刻を開閉",
-    "fiveHour": "5 時間枠",
-    "weekly": "週間枠",
-    "days": "{{count}} 日間枠",
-    "hours": "{{count}} 時間枠",
-    "resetsAt": "リセット：{{value}}"
+  "manualResetCredits": {
+    "summary": "使用上限のリセット",
+    "available": "{{count}} 回利用可能",
+    "toggle": "{{count}} 回の使用上限リセットを開閉",
+    "defaultTitle": "Full reset",
+    "expiresAt": "{{value}} に期限切れ",
+    "undisclosed": "ほか {{count}} 回分の期限は提供されていません"
   },
   "trayUsage": {
     "overview": "概要",

@@ -55,6 +55,27 @@ pub struct ExtraUsage {
     pub currency: Option<String>,
 }
 
+/// 一张可手动消耗的订阅额度重置券。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManualResetCredit {
+    pub id: String,
+    pub reset_type: Option<String>,
+    pub status: Option<String>,
+    pub granted_at: Option<String>,
+    pub expires_at: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+}
+
+/// Codex 账号当前可用的手动额度重置券。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManualResetCredits {
+    pub available_count: i64,
+    pub credits: Vec<ManualResetCredit>,
+}
+
 /// 订阅额度查询结果
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -64,6 +85,8 @@ pub struct SubscriptionQuota {
     pub credential_message: Option<String>,
     pub success: bool,
     pub tiers: Vec<QuotaTier>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub manual_reset_credits: Option<ManualResetCredits>,
     pub extra_usage: Option<ExtraUsage>,
     pub error: Option<String>,
     pub queried_at: Option<i64>,
@@ -77,6 +100,7 @@ impl SubscriptionQuota {
             credential_message: None,
             success: false,
             tiers: vec![],
+            manual_reset_credits: None,
             extra_usage: None,
             error: None,
             queried_at: None,
@@ -90,6 +114,7 @@ impl SubscriptionQuota {
             credential_message: Some(message.clone()),
             success: false,
             tiers: vec![],
+            manual_reset_credits: None,
             extra_usage: None,
             error: Some(message),
             queried_at: Some(now_millis()),
@@ -449,6 +474,7 @@ async fn query_claude_quota(access_token: &str) -> Result<SubscriptionQuota, Str
         credential_message: None,
         success: true,
         tiers,
+        manual_reset_credits: None,
         extra_usage,
         error: None,
         queried_at: Some(now_millis()),
@@ -650,6 +676,30 @@ struct CodexUsageResponse {
     rate_limit: Option<CodexRateLimit>,
     #[serde(default)]
     additional_rate_limits: Vec<CodexAdditionalRateLimit>,
+    rate_limit_reset_credits: Option<CodexResetCreditSummary>,
+}
+
+#[derive(Deserialize)]
+struct CodexResetCreditSummary {
+    available_count: Option<i64>,
+}
+
+#[derive(Deserialize)]
+struct CodexResetCredit {
+    id: Option<String>,
+    reset_type: Option<String>,
+    status: Option<String>,
+    granted_at: Option<i64>,
+    expires_at: Option<i64>,
+    title: Option<String>,
+    description: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct CodexResetCreditsResponse {
+    available_count: Option<i64>,
+    #[serde(default)]
+    credits: Option<Vec<CodexResetCredit>>,
 }
 
 /// 根据窗口秒数映射到 tier 名称（与 Claude 的命名兼容以复用前端 i18n）
@@ -675,6 +725,10 @@ fn window_seconds_to_tier_name(secs: i64) -> String {
 /// Unix 时间戳（秒）转 ISO 8601 字符串
 fn unix_ts_to_iso(ts: i64) -> Option<String> {
     chrono::DateTime::from_timestamp(ts, 0).map(|dt| dt.to_rfc3339())
+}
+
+fn codex_additional_rate_limit_tier_name(index: usize, label: &str, window_seconds: i64) -> String {
+    format!("codex_additional:{index}:{window_seconds}:{}", label.trim())
 }
 
 fn codex_usage_tiers(body: CodexUsageResponse) -> Vec<QuotaTier> {
@@ -719,11 +773,7 @@ fn codex_usage_tiers(body: CodexUsageResponse) -> Vec<QuotaTier> {
                 continue;
             };
             tiers.push(QuotaTier {
-                name: crate::usage::domain::codex_additional_rate_limit_tier_name(
-                    index,
-                    &label,
-                    window_seconds,
-                ),
+                name: codex_additional_rate_limit_tier_name(index, &label, window_seconds),
                 utilization: used,
                 resets_at: window.reset_at.and_then(unix_ts_to_iso),
                 used_value_usd: None,
@@ -733,6 +783,66 @@ fn codex_usage_tiers(body: CodexUsageResponse) -> Vec<QuotaTier> {
     }
 
     tiers
+}
+
+fn normalize_codex_reset_credits(
+    summary_count: Option<i64>,
+    response: Option<CodexResetCreditsResponse>,
+) -> Option<ManualResetCredits> {
+    let response_count = response.as_ref().and_then(|value| value.available_count);
+    let credits = response
+        .and_then(|value| value.credits)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|credit| {
+            credit
+                .status
+                .as_deref()
+                .map_or(true, |status| status.eq_ignore_ascii_case("available"))
+        })
+        .filter_map(|credit| {
+            let expires_at = credit.expires_at.and_then(unix_ts_to_iso)?;
+            Some(ManualResetCredit {
+                id: credit.id?,
+                reset_type: credit.reset_type,
+                status: credit.status,
+                granted_at: credit.granted_at.and_then(unix_ts_to_iso),
+                expires_at,
+                title: credit.title,
+                description: credit.description,
+            })
+        })
+        .collect::<Vec<_>>();
+    let available_count = summary_count
+        .or(response_count)
+        .unwrap_or(credits.len() as i64)
+        .max(0);
+
+    (summary_count.is_some() || response_count.is_some() || !credits.is_empty()).then_some(
+        ManualResetCredits {
+            available_count,
+            credits,
+        },
+    )
+}
+
+fn codex_wham_get(
+    client: &reqwest::Client,
+    path: &str,
+    access_token: &str,
+    account_id: Option<&str>,
+) -> reqwest::RequestBuilder {
+    let mut request = client
+        .get(format!("https://chatgpt.com/backend-api/wham/{path}"))
+        .header("Authorization", format!("Bearer {access_token}"))
+        .header("User-Agent", "codex-cli")
+        .header("OpenAI-Beta", "codex-1")
+        .header("originator", "Codex Desktop")
+        .header("Accept", "application/json");
+    if let Some(id) = account_id {
+        request = request.header("ChatGPT-Account-Id", id);
+    }
+    request.timeout(std::time::Duration::from_secs(15))
 }
 
 /// 使用 LLM Usage Bar 自管账号查询 ChatGPT 订阅额度。
@@ -787,17 +897,10 @@ pub(crate) async fn query_codex_quota(
 ) -> Result<SubscriptionQuota, String> {
     let client = crate::proxy::http_client::get();
 
-    let mut req = client
-        .get("https://chatgpt.com/backend-api/wham/usage")
-        .header("Authorization", format!("Bearer {access_token}"))
-        .header("User-Agent", "codex-cli")
-        .header("Accept", "application/json");
-
-    if let Some(id) = account_id {
-        req = req.header("ChatGPT-Account-Id", id);
-    }
-
-    let resp = match req.timeout(std::time::Duration::from_secs(15)).send().await {
+    let resp = match codex_wham_get(&client, "usage", access_token, account_id)
+        .send()
+        .await
+    {
         Ok(r) => r,
         Err(e) => return Err(format!("Network error: {e}")),
     };
@@ -835,7 +938,48 @@ pub(crate) async fn query_codex_quota(
         }
     };
 
+    let reset_credit_count = body
+        .rate_limit_reset_credits
+        .as_ref()
+        .and_then(|credits| credits.available_count);
+    let should_fetch_reset_credit_details = reset_credit_count.is_some_and(|count| count > 0);
     let tiers = codex_usage_tiers(body);
+    let reset_credit_response = if should_fetch_reset_credit_details {
+        match codex_wham_get(
+            &client,
+            "rate-limit-reset-credits",
+            access_token,
+            account_id,
+        )
+        .send()
+        .await
+        {
+            Ok(response) if response.status().is_success() => {
+                match response.json::<CodexResetCreditsResponse>().await {
+                    Ok(value) => Some(value),
+                    Err(error) => {
+                        log::warn!("failed to parse Codex reset credit details: {error}");
+                        None
+                    }
+                }
+            }
+            Ok(response) => {
+                log::warn!(
+                    "failed to fetch Codex reset credit details: HTTP {}",
+                    response.status()
+                );
+                None
+            }
+            Err(error) => {
+                log::warn!("failed to fetch Codex reset credit details: {error}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let manual_reset_credits =
+        normalize_codex_reset_credits(reset_credit_count, reset_credit_response);
 
     Ok(SubscriptionQuota {
         tool: tool_label.to_string(),
@@ -843,6 +987,7 @@ pub(crate) async fn query_codex_quota(
         credential_message: None,
         success: true,
         tiers,
+        manual_reset_credits,
         extra_usage: None,
         error: None,
         queried_at: Some(now_millis()),
@@ -1306,6 +1451,7 @@ async fn query_gemini_quota(access_token: &str) -> Result<SubscriptionQuota, Str
         credential_message: None,
         success: true,
         tiers,
+        manual_reset_credits: None,
         extra_usage: None,
         error: None,
         queried_at: Some(now_millis()),
@@ -1497,5 +1643,58 @@ mod tests {
         assert_eq!(tiers[2].name, "codex_additional:0:604800:Codex Spark");
         assert!(tiers[1].resets_at.is_some());
         assert!(tiers[2].resets_at.is_some());
+    }
+
+    #[test]
+    fn codex_manual_reset_credits_keep_available_items_and_authoritative_count() {
+        let response: CodexResetCreditsResponse = serde_json::from_value(serde_json::json!({
+            "available_count": 4,
+            "credits": [
+                {
+                    "id": "reset-1",
+                    "reset_type": "codexRateLimits",
+                    "status": "available",
+                    "granted_at": 1782517465,
+                    "expires_at": 1785109465,
+                    "title": "Full reset"
+                },
+                {
+                    "id": "reset-2",
+                    "status": "consumed",
+                    "expires_at": 1785524619,
+                    "title": "Full reset"
+                },
+                {
+                    "id": "reset-3",
+                    "status": "available",
+                    "expires_at": 1786555942,
+                    "title": "Full reset"
+                },
+                {
+                    "id": "missing-expiry",
+                    "status": "available"
+                }
+            ]
+        }))
+        .unwrap();
+
+        let credits = normalize_codex_reset_credits(Some(3), Some(response)).unwrap();
+
+        assert_eq!(credits.available_count, 3);
+        assert_eq!(credits.credits.len(), 2);
+        assert_eq!(credits.credits[0].title.as_deref(), Some("Full reset"));
+        assert!(credits.credits[0].expires_at.starts_with("2026-07-26"));
+        assert!(credits.credits[1].expires_at.starts_with("2026-08-12"));
+
+        let count_only = normalize_codex_reset_credits(
+            Some(2),
+            Some(CodexResetCreditsResponse {
+                available_count: Some(2),
+                credits: None,
+            }),
+        )
+        .unwrap();
+        assert_eq!(count_only.available_count, 2);
+        assert!(count_only.credits.is_empty());
     }
 }

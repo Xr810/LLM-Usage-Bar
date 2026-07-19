@@ -1,3 +1,46 @@
+# Codex Manual Weekly Reset Credits — Design QA
+
+Date: 2026-07-19
+Branch: `codex/manual-reset-credits`
+
+Source visual truth:
+
+- `/var/folders/th/28ml58qj663d_8tbmcz417t00000gn/T/TemporaryItems/NSIRD_screencaptureui_dbMT8k/截屏2026-07-19 23.30.57.png`
+
+Implementation comparison:
+
+- `qa-artifacts/manual-reset-credits-comparison.png`
+
+## Result
+
+The corrected implementation presents Codex reset credits as manually consumable
+weekly-limit resets, not as additional quota windows. The collapsed row shows
+`使用限额重置` and the authoritative `可用 3 次` count. Expanding it reveals three
+`Full reset` entries with localized expiry dates of July 27, August 1, and
+August 13. The existing secondary subscription window remains labeled `周额度`.
+
+No actionable P0, P1, or P2 visual, interaction, copy, or accessibility issue
+remains. The implementation intentionally uses the existing Provider card and
+design tokens instead of cloning the Codex modal. The screenshot's destructive
+`使用重置` buttons are intentionally absent because this feature is read-only and
+must not consume a reset credit.
+
+## Evidence
+
+- The supplied Codex screenshot and the expanded LLM Usage Bar card were
+  rendered side by side in the same `1280 × 720` dark-theme comparison input.
+- The collapsible control exposes the accessible name
+  `展开或收起 3 次使用限额重置` and correctly reports the expanded state.
+- DOM verification confirmed all three `Full reset` rows and their exact
+  localized expiry dates.
+- The initial keyboard-focus treatment was visually too prominent inside the
+  clipped card. It was replaced by the existing muted-surface focus treatment,
+  then recaptured and rechecked.
+
+final result: passed
+
+---
+
 # Menu Bar Usage Popover — Final Design QA
 
 Date: 2026-07-16  

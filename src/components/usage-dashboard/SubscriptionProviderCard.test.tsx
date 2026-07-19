@@ -18,6 +18,15 @@ vi.mock("react-i18next", () => ({
       if (key === "usageDashboard.resetsIn") {
         return `${options?.value} 后`;
       }
+      if (key === "manualResetCredits.available") {
+        return `可用 ${options?.count} 次`;
+      }
+      if (key === "manualResetCredits.toggle") {
+        return `展开或收起 ${options?.count} 次使用限额重置`;
+      }
+      if (key === "manualResetCredits.expiresAt") {
+        return `将于 ${options?.value} 到期`;
+      }
       return options?.defaultValue ?? key;
     },
     i18n: { language: "zh", resolvedLanguage: "zh" },
@@ -203,22 +212,26 @@ describe("SubscriptionProviderCard localized reset countdown", () => {
     expect(meter.firstElementChild).toHaveClass("bg-warning");
   });
 
-  it("labels the secondary window as weekly allowance and expands extra reset times", () => {
+  it("labels the secondary window as weekly allowance and expands manual reset credits", () => {
     const usage = subscriptionUsage();
     usage.quota!.sevenDayUtilizationPercent = "4";
     usage.quota!.sevenDayResetsAt = "2026-07-20T08:00:00.000Z";
-    usage.quota!.additionalResetDetails = [
+    usage.quota!.manualResetsRemaining = 3;
+    usage.quota!.manualResetCredits = [
       {
-        id: "0:18000",
-        label: "Codex Spark",
-        windowSeconds: 18_000,
-        resetsAt: "2026-07-13T05:00:00.000Z",
+        id: "reset-1",
+        title: "Full reset",
+        expiresAt: "2026-07-27T00:00:00.000Z",
       },
       {
-        id: "0:604800",
-        label: "Codex Spark",
-        windowSeconds: 604_800,
-        resetsAt: "2026-07-20T08:00:00.000Z",
+        id: "reset-2",
+        title: "Full reset",
+        expiresAt: "2026-08-01T00:00:00.000Z",
+      },
+      {
+        id: "reset-3",
+        title: "Full reset",
+        expiresAt: "2026-08-13T00:00:00.000Z",
       },
     ];
 
@@ -232,12 +245,38 @@ describe("SubscriptionProviderCard localized reset countdown", () => {
 
     expect(screen.getByText("Weekly allowance")).toBeInTheDocument();
     expect(screen.queryByText("7-day window")).toBeNull();
-    expect(screen.queryByText(/Codex Spark/)).toBeNull();
+    expect(screen.getByText("可用 3 次")).toBeInTheDocument();
+    expect(screen.queryByText("Full reset")).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: /Toggle/ }));
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "展开或收起 3 次使用限额重置",
+      }),
+    );
 
-    expect(screen.getAllByText(/Codex Spark/)).toHaveLength(2);
-    expect(screen.getByText(/5-hour allowance/)).toBeInTheDocument();
-    expect(screen.getAllByText(/Weekly allowance/).length).toBeGreaterThan(1);
+    expect(screen.getAllByText("Full reset")).toHaveLength(3);
+    expect(screen.getByText(/7月27日/)).toBeInTheDocument();
+    expect(screen.getByText(/8月1日/)).toBeInTheDocument();
+    expect(screen.getByText(/8月13日/)).toBeInTheDocument();
+  });
+
+  it("shows a count without offering a fake toggle when expiry details are unavailable", () => {
+    const usage = subscriptionUsage();
+    usage.quota!.manualResetsRemaining = 3;
+
+    render(
+      <SubscriptionProviderCard
+        usage={usage}
+        onRefreshQuota={vi.fn()}
+        onSyncSessions={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("可用 3 次")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", {
+        name: "展开或收起 3 次使用限额重置",
+      }),
+    ).toBeNull();
   });
 });

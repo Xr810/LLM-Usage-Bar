@@ -96,6 +96,7 @@ mod tests {
             credential_message: None,
             success: true,
             tiers: vec![],
+            manual_reset_credits: None,
             extra_usage: None,
             error: None,
             queried_at: Some(0),

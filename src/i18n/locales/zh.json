@@ -3268,14 +3268,13 @@
     "queryFailed": "查询失败",
     "refresh": "刷新"
   },
-  "quotaResetDetails": {
-    "summary": "额外额度重置：{{count}} 个",
-    "toggle": "展开或收起 {{count}} 个额外额度重置时间",
-    "fiveHour": "5 小时额度",
-    "weekly": "周额度",
-    "days": "{{count}} 天额度",
-    "hours": "{{count}} 小时额度",
-    "resetsAt": "重置时间：{{value}}"
+  "manualResetCredits": {
+    "summary": "使用限额重置",
+    "available": "可用 {{count}} 次",
+    "toggle": "展开或收起 {{count}} 次使用限额重置",
+    "defaultTitle": "Full reset",
+    "expiresAt": "将于 {{value}} 到期",
+    "undisclosed": "另有 {{count}} 次未提供到期时间"
   },
   "trayUsage": {
     "overview": "概览",

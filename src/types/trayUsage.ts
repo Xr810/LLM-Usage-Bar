@@ -1,4 +1,4 @@
-import type { QuotaResetDetailView } from "./quota";
+import type { ManualResetCreditView } from "./quota";
 
 export type TrayUsageStatus = "green" | "yellow" | "red" | "unknown";
 
@@ -75,7 +75,8 @@ export interface TrayQuotaWindowView {
 export interface TraySubscriptionUsageView {
   planLabel: string | null;
   windows: TrayQuotaWindowView[];
-  additionalResetDetails?: QuotaResetDetailView[];
+  manualResetsRemaining?: number | null;
+  manualResetCredits?: ManualResetCreditView[];
 }
 
 export interface TrayMeteredUsageView {

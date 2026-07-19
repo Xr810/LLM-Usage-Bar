@@ -1,6 +1,5 @@
-export interface QuotaResetDetailView {
+export interface ManualResetCreditView {
   id: string;
-  label: string;
-  windowSeconds: number;
-  resetsAt: string;
+  title: string | null;
+  expiresAt: string;
 }
