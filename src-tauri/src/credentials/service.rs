@@ -1899,13 +1899,13 @@ impl BindingCredentialService {
         Ok(providers)
     }
 
-    async fn mutate_api_key(
+    async fn publish_api_key_mutation(
         &self,
         binding_id: &str,
         expected_version: u64,
         api_key: SecretString,
         kind: CredentialMutationKind,
-    ) -> Result<AgentProviderBindingView, AppError> {
+    ) -> Result<(), AppError> {
         if !binding_credential_is_acceptable(api_key.expose_bytes()) {
             return Err(public_error("credential_required"));
         }
@@ -1943,6 +1943,18 @@ impl BindingCredentialService {
         // retryable and must not make callers retry the mutation with a stale
         // expected version.
         let _ = self.finish_published_operation(&reservation).await;
+        Ok(())
+    }
+
+    async fn mutate_api_key(
+        &self,
+        binding_id: &str,
+        expected_version: u64,
+        api_key: SecretString,
+        kind: CredentialMutationKind,
+    ) -> Result<AgentProviderBindingView, AppError> {
+        self.publish_api_key_mutation(binding_id, expected_version, api_key, kind)
+            .await?;
         self.binding_view(binding_id).await
     }
 
@@ -2303,10 +2315,11 @@ impl BindingCredentialService {
                 continue;
             }
             if let Err(error) = self
-                .set_binding_api_key(
+                .publish_api_key_mutation(
                     &snapshot.id,
                     snapshot.credential_version,
                     generate_local_binding_key(),
+                    CredentialMutationKind::Set,
                 )
                 .await
             {

@@ -2258,6 +2258,41 @@ async fn fixed_api_resolution_separates_local_identity_from_shared_upstream_cred
 }
 
 #[tokio::test]
+async fn normal_startup_initializes_missing_items_without_reading_them() {
+    let db = Arc::new(Database::memory().unwrap());
+    let store = Arc::new(MemoryCredentialStore::default());
+    let service = BindingCredentialService::new(db.clone(), store.clone());
+    let missing_bindings = db
+        .credential_binding_snapshots(None)
+        .unwrap()
+        .into_iter()
+        .filter(|snapshot| snapshot.is_fixed_system_api())
+        .collect::<Vec<_>>();
+
+    assert!(!missing_bindings.is_empty());
+    assert_eq!(store.get_call_count(), 0);
+
+    service.reconcile_startup_journals().await.unwrap();
+    service.initialize_startup_binding_keys().await.unwrap();
+
+    assert_eq!(store.get_call_count(), 0);
+    assert_eq!(store.items.lock().unwrap().len(), missing_bindings.len());
+    for snapshot in db.credential_binding_snapshots(None).unwrap() {
+        if snapshot.is_fixed_system_api() {
+            assert!(snapshot.fingerprint.is_some());
+            assert!(snapshot.credential_slot.is_some());
+            assert_eq!(journal_count(&db, &snapshot.id), 0);
+        }
+    }
+
+    service.reconcile_startup_journals().await.unwrap();
+    service.initialize_startup_binding_keys().await.unwrap();
+
+    assert_eq!(store.get_call_count(), 0);
+    assert_eq!(store.items.lock().unwrap().len(), missing_bindings.len());
+}
+
+#[tokio::test]
 async fn normal_startup_does_not_read_existing_protected_items() {
     let db = Arc::new(Database::memory().unwrap());
     let store = Arc::new(MemoryCredentialStore::default());
