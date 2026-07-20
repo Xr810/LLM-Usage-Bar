@@ -1,6 +1,7 @@
 use super::binding_credentials::CredentialMutationKind;
 use crate::database::{lock_conn, Database};
 use crate::error::AppError;
+use crate::usage::system_providers::is_fixed_api_preset;
 use rusqlite::{params, OptionalExtension, TransactionBehavior};
 use std::time::{SystemTime, UNIX_EPOCH};
 use subtle::ConstantTimeEq;
@@ -154,24 +155,26 @@ impl Database {
         let state = transaction
             .query_row(
                 "SELECT credential.credential_version,
-                        credential.api_key_fingerprint, credential.credential_slot
+                        credential.api_key_fingerprint, credential.credential_slot,
+                        provider.system_preset_key
                  FROM provider_api_credentials credential
                  JOIN usage_providers provider ON provider.id = credential.provider_id
-                 WHERE credential.provider_id = ?1
-                   AND provider.system_preset_key IN (
-                       'openai-api', 'anthropic-api', 'openrouter-api'
-                   )",
+                 WHERE credential.provider_id = ?1",
                 [provider_id],
                 |row| {
                     Ok((
                         row.get::<_, i64>(0)?,
                         row.get::<_, Option<Vec<u8>>>(1)?,
                         row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
                     ))
                 },
             )
             .optional()?
             .ok_or_else(|| public_error("unsupported_auth"))?;
+        if !is_fixed_api_preset(state.3.as_deref()) {
+            return Err(public_error("unsupported_auth"));
+        }
         let current_version =
             u64::try_from(state.0).map_err(|_| public_error("credential_unavailable"))?;
         if current_version != expected_version {

@@ -26,6 +26,21 @@ const SYSTEM_PROVIDER_ORDER = [
   "openai-api",
   "anthropic-api",
   "openrouter-api",
+  "gemini-api",
+  "xai-api",
+  "deepseek-api",
+  "kimi-api",
+  "glm-api",
+  "qwen-api",
+  "minimax-api",
+  "mistral-api",
+  "groq-api",
+  "together-api",
+  "fireworks-api",
+  "perplexity-api",
+  "siliconflow-api",
+  "nvidia-nim-api",
+  "cerebras-api",
 ];
 
 interface UsageProvidersSettingsProps {

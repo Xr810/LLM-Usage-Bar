@@ -457,6 +457,12 @@ impl Database {
                     "数据库版本过新（{version}），当前应用仅支持 {SCHEMA_VERSION}，请升级应用后再尝试。"
                 )));
             }
+            // The built-in Provider catalog can grow without a schema-version
+            // bump. Reconcile it before versioned validators inspect the
+            // protected catalog so an existing v17+ database can open safely.
+            if version >= 17 {
+                crate::usage::system_provider_migration::reconcile_system_provider_catalog(conn)?;
+            }
             while version < SCHEMA_VERSION {
                 match version {
                     0 => {

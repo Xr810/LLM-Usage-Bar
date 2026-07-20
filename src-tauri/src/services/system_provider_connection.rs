@@ -1,6 +1,7 @@
 use crate::credentials::{BindingCredentialService, ResolvedProviderCredential};
 use crate::database::Database;
 use crate::error::AppError;
+use crate::usage::system_providers::system_provider_definition;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -100,37 +101,38 @@ impl SystemProviderConnectionService {
         credential: &ResolvedProviderCredential,
     ) -> Result<SystemProviderConnectionRequest, AppError> {
         let base = credential.canonical_endpoint().trim_end_matches('/');
-        let (url, headers) = match credential.system_preset_key() {
-            "openai-api" | "openrouter-api" => (
-                format!("{base}/models"),
+        let definition = system_provider_definition(credential.system_preset_key())
+            .ok_or_else(|| AppError::Message("unsupported_auth".to_string()))?;
+        let route_config = definition
+            .route_config
+            .as_ref()
+            .ok_or_else(|| AppError::Message("unsupported_auth".to_string()))?;
+        let models_path = definition
+            .connection_models_path
+            .filter(|path| path.starts_with('/') && !path.starts_with("//"))
+            .ok_or_else(|| AppError::Message("unsupported_auth".to_string()))?;
+        let secret = std::str::from_utf8(credential.expose_secret())
+            .map_err(|_| AppError::Message("credential_unavailable".to_string()))?;
+        let url = format!("{base}{models_path}");
+        let headers = match route_config
+            .get("authMode")
+            .and_then(serde_json::Value::as_str)
+        {
+            Some("bearer") => {
                 vec![(
                     "authorization".to_string(),
-                    Zeroizing::new(format!(
-                        "Bearer {}",
-                        std::str::from_utf8(credential.expose_secret())
-                            .map_err(|_| AppError::Message("credential_unavailable".to_string()))?
-                    )),
-                )],
-            ),
-            "anthropic-api" => (
-                format!("{base}/v1/models"),
+                    Zeroizing::new(format!("Bearer {secret}")),
+                )]
+            }
+            Some("x_api_key") => {
                 vec![
-                    (
-                        "x-api-key".to_string(),
-                        Zeroizing::new(
-                            std::str::from_utf8(credential.expose_secret())
-                                .map_err(|_| {
-                                    AppError::Message("credential_unavailable".to_string())
-                                })?
-                                .to_string(),
-                        ),
-                    ),
+                    ("x-api-key".to_string(), Zeroizing::new(secret.to_string())),
                     (
                         "anthropic-version".to_string(),
                         Zeroizing::new("2023-06-01".to_string()),
                     ),
-                ],
-            ),
+                ]
+            }
             _ => return Err(AppError::Message("unsupported_auth".to_string())),
         };
         Ok(SystemProviderConnectionRequest { url, headers })
@@ -225,36 +227,103 @@ mod tests {
 
     #[tokio::test]
     async fn probes_only_canonical_model_endpoints_with_fixed_auth_headers() {
-        for (provider_id, key, expected_url, expected_headers) in [
+        for (provider_id, expected_url, auth_mode) in [
             (
                 "system-openai-api",
-                "openai-connection-secret",
                 "https://api.openai.com/v1/models",
-                vec![("authorization", "Bearer openai-connection-secret")],
+                "bearer",
             ),
             (
                 "system-openrouter-api",
-                "openrouter-connection-secret",
                 "https://openrouter.ai/api/v1/models",
-                vec![("authorization", "Bearer openrouter-connection-secret")],
+                "bearer",
             ),
             (
                 "system-anthropic-api",
-                "anthropic-connection-secret",
                 "https://api.anthropic.com/v1/models",
-                vec![
-                    ("x-api-key", "anthropic-connection-secret"),
-                    ("anthropic-version", "2023-06-01"),
-                ],
+                "x_api_key",
+            ),
+            (
+                "system-gemini-api",
+                "https://generativelanguage.googleapis.com/v1beta/openai/models",
+                "bearer",
+            ),
+            ("system-xai-api", "https://api.x.ai/v1/models", "bearer"),
+            (
+                "system-deepseek-api",
+                "https://api.deepseek.com/models",
+                "bearer",
+            ),
+            (
+                "system-kimi-api",
+                "https://api.moonshot.cn/v1/models",
+                "bearer",
+            ),
+            (
+                "system-glm-api",
+                "https://api.z.ai/api/paas/v4/models",
+                "bearer",
+            ),
+            (
+                "system-qwen-api",
+                "https://dashscope.aliyuncs.com/compatible-mode/v1/models",
+                "bearer",
+            ),
+            (
+                "system-minimax-api",
+                "https://api.minimaxi.com/v1/models",
+                "bearer",
+            ),
+            (
+                "system-mistral-api",
+                "https://api.mistral.ai/v1/models",
+                "bearer",
+            ),
+            (
+                "system-groq-api",
+                "https://api.groq.com/openai/v1/models",
+                "bearer",
+            ),
+            (
+                "system-together-api",
+                "https://api.together.xyz/v1/models",
+                "bearer",
+            ),
+            (
+                "system-fireworks-api",
+                "https://api.fireworks.ai/inference/v1/models",
+                "bearer",
+            ),
+            (
+                "system-perplexity-api",
+                "https://api.perplexity.ai/v1/models",
+                "bearer",
+            ),
+            (
+                "system-siliconflow-api",
+                "https://api.siliconflow.cn/v1/models",
+                "bearer",
+            ),
+            (
+                "system-nvidia-nim-api",
+                "https://integrate.api.nvidia.com/v1/models",
+                "bearer",
+            ),
+            (
+                "system-cerebras-api",
+                "https://api.cerebras.ai/v1/models",
+                "bearer",
             ),
         ] {
+            let key = format!("{provider_id}-connection-secret");
             let db = Arc::new(Database::memory().unwrap());
+            db.set_usage_provider_enabled(provider_id, true).unwrap();
             let credentials = Arc::new(BindingCredentialService::new(
                 db.clone(),
                 Arc::new(MemoryStore::default()),
             ));
             credentials
-                .set_provider_api_key(provider_id, 0, SecretString::new(key.to_string()))
+                .set_provider_api_key(provider_id, 0, SecretString::new(key.clone()))
                 .await
                 .unwrap();
             let client = Arc::new(RecordingClient {
@@ -267,18 +336,20 @@ mod tests {
             assert!(result.success);
             assert_eq!(result.status, "success");
             assert_eq!(result.error_code, None);
-            assert!(!serde_json::to_string(&result).unwrap().contains(key));
+            assert!(!serde_json::to_string(&result).unwrap().contains(&key));
 
             let requests = client.requests.lock().unwrap();
             assert_eq!(requests.len(), 1);
             assert_eq!(requests[0].url, expected_url);
-            assert_eq!(
-                requests[0].headers_for_test(),
-                expected_headers
-                    .into_iter()
-                    .map(|(name, value)| (name.to_string(), value.to_string()))
-                    .collect::<Vec<_>>()
-            );
+            let expected_headers = if auth_mode == "x_api_key" {
+                vec![
+                    ("x-api-key".to_string(), key.clone()),
+                    ("anthropic-version".to_string(), "2023-06-01".to_string()),
+                ]
+            } else {
+                vec![("authorization".to_string(), format!("Bearer {key}"))]
+            };
+            assert_eq!(requests[0].headers_for_test(), expected_headers);
             let provider = db
                 .list_usage_providers()
                 .unwrap()

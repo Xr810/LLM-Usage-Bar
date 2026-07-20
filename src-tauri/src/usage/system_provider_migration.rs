@@ -1,7 +1,6 @@
 use super::domain::{BillingKind, SystemProviderAuthKind};
 use super::system_providers::{
-    system_provider_definitions, ANTHROPIC_API_ID, CHATGPT_SUBSCRIPTION_ID, CLAUDE_SUBSCRIPTION_ID,
-    OPENAI_API_ID, OPENROUTER_API_ID,
+    system_provider_definitions, CHATGPT_SUBSCRIPTION_ID, CLAUDE_SUBSCRIPTION_ID, OPENROUTER_API_ID,
 };
 use crate::database::{to_json_string, Database};
 use crate::error::AppError;
@@ -164,8 +163,8 @@ pub(crate) fn reconcile_system_provider_catalog(conn: &Connection) -> Result<(),
              ) VALUES (
                  ?1, ?2, ?3, ?4, ?5,
                  ?6, ?7, ?8, ?9,
-                 NULL, 1, 0, NULL,
-                 NULL, ?10, ?10, ?11
+                 NULL, ?10, 0, NULL,
+                 NULL, ?11, ?11, ?12
              )
              ON CONFLICT(id) DO UPDATE SET
                  name = excluded.name,
@@ -191,6 +190,7 @@ pub(crate) fn reconcile_system_provider_catalog(conn: &Connection) -> Result<(),
                 definition.quota_interval_seconds,
                 definition.upstream_protocol,
                 route_config,
+                definition.default_enabled,
                 now,
                 definition.preset_key,
             ],
@@ -414,17 +414,19 @@ pub(crate) fn validate_schema_v17_complete(conn: &Connection) -> Result<(), AppE
          END",
     )?;
 
+    let definitions = system_provider_definitions();
+    let expected_system_rows = definitions.len() as i64;
     let actual_system_rows = conn.query_row(
         "SELECT COUNT(*) FROM usage_providers WHERE system_preset_key IS NOT NULL",
         [],
         |row| row.get::<_, i64>(0),
     )?;
-    if actual_system_rows != 5 {
+    if actual_system_rows != expected_system_rows {
         return Err(incomplete(format!(
-            "expected five system Provider rows, found {actual_system_rows}"
+            "expected {expected_system_rows} system Provider rows, found {actual_system_rows}"
         )));
     }
-    for definition in system_provider_definitions() {
+    for definition in &definitions {
         let found: bool = conn.query_row(
             "SELECT EXISTS(
                  SELECT 1 FROM usage_providers
@@ -440,25 +442,31 @@ pub(crate) fn validate_schema_v17_complete(conn: &Connection) -> Result<(), AppE
             )));
         }
     }
-    let api_credential_rows: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM provider_api_credentials
-         WHERE provider_id IN (?1, ?2, ?3)",
-        params![OPENAI_API_ID, ANTHROPIC_API_ID, OPENROUTER_API_ID],
-        |row| row.get(0),
-    )?;
-    if api_credential_rows != 3 {
+    let api_definitions = definitions
+        .iter()
+        .filter(|definition| definition.auth_kind == SystemProviderAuthKind::ProviderApiKey)
+        .collect::<Vec<_>>();
+    let api_credential_rows: i64 =
+        conn.query_row("SELECT COUNT(*) FROM provider_api_credentials", [], |row| {
+            row.get(0)
+        })?;
+    if api_credential_rows != api_definitions.len() as i64 {
         return Err(incomplete("fixed API Provider credential rows are missing"));
     }
-    let invalid_provider_credential: Option<String> = conn
-        .query_row(
-            "SELECT provider_id FROM provider_api_credentials
-             WHERE provider_id NOT IN (?1, ?2, ?3) LIMIT 1",
-            params![OPENAI_API_ID, ANTHROPIC_API_ID, OPENROUTER_API_ID],
+    for definition in api_definitions {
+        let found: bool = conn.query_row(
+            "SELECT EXISTS(
+                 SELECT 1 FROM provider_api_credentials WHERE provider_id = ?1
+             )",
+            [definition.id],
             |row| row.get(0),
-        )
-        .optional()?;
-    if invalid_provider_credential.is_some() {
-        return Err(incomplete("unexpected Provider credential owner"));
+        )?;
+        if !found {
+            return Err(incomplete(format!(
+                "missing fixed API Provider credential owner: {}",
+                definition.id
+            )));
+        }
     }
 
     let foreign_key_violation: Option<String> = conn

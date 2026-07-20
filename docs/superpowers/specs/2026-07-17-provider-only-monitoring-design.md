@@ -80,10 +80,12 @@ database migration. No new Agent switching schema is added. Dead Agent runtime,
 commands, and UI may be removed in small verified changes after Provider-only
 queries and screens no longer depend on them.
 
-The five fixed Provider cards remain useful, but their default Agent bindings
-and Agent-specific credentials are obsolete. A fixed card represents one
-monitorable Provider account; additional accounts require distinct records rather
-than Agent bindings.
+The built-in Provider catalog remains useful, but default Agent bindings and
+Agent-specific credentials are obsolete. The original five entries stay enabled
+for compatibility; additional common API Providers are built in but disabled
+until the user opts in and configures that account. A built-in card represents
+one monitorable Provider account; additional accounts require distinct records
+rather than Agent bindings.
 
 ## Acceptance Criteria
 

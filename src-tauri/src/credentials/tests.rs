@@ -5,7 +5,9 @@ use crate::provider::{Provider, ProviderMeta};
 use crate::proxy::provider_router::BindingPricingOverride;
 use crate::usage::domain::{
     AgentModuleInput, AgentProviderBindingInput, AgentProviderBindingView, BindingCredentialStatus,
+    SystemProviderAuthKind,
 };
+use crate::usage::system_providers::system_provider_definitions;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -1683,9 +1685,27 @@ async fn provider_credential_set_replace_clear_is_versioned_and_redacted() {
 }
 
 #[tokio::test]
-async fn provider_credential_only_accepts_the_three_fixed_api_cards() {
+async fn provider_credential_accepts_the_built_in_api_catalog_only() {
     let db = Arc::new(Database::memory().unwrap());
-    let service = BindingCredentialService::new(db, Arc::new(MemoryCredentialStore::default()));
+    let service =
+        BindingCredentialService::new(db.clone(), Arc::new(MemoryCredentialStore::default()));
+
+    let api_definitions = system_provider_definitions()
+        .into_iter()
+        .filter(|definition| definition.auth_kind == SystemProviderAuthKind::ProviderApiKey)
+        .collect::<Vec<_>>();
+    assert_eq!(api_definitions.len(), 18);
+    for definition in api_definitions {
+        let configured = service
+            .set_provider_api_key(
+                definition.id,
+                0,
+                secret(&format!("{}-provider-key", definition.preset_key)),
+            )
+            .await
+            .unwrap();
+        assert_eq!(configured.upstream_credential_version, 1);
+    }
 
     for rejected in [
         "system-chatgpt-subscription",

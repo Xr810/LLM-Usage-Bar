@@ -8,6 +8,21 @@ const fixedProviders = [
   ["system-openai-api", "OpenAI API", "openai-api"],
   ["system-anthropic-api", "Anthropic API", "anthropic-api"],
   ["system-openrouter-api", "OpenRouter", "openrouter-api"],
+  ["system-gemini-api", "Google Gemini API", "gemini-api"],
+  ["system-xai-api", "xAI (Grok) API", "xai-api"],
+  ["system-deepseek-api", "DeepSeek API", "deepseek-api"],
+  ["system-kimi-api", "Kimi / Moonshot API", "kimi-api"],
+  ["system-glm-api", "GLM / Z.AI API", "glm-api"],
+  ["system-qwen-api", "Qwen / DashScope API", "qwen-api"],
+  ["system-minimax-api", "MiniMax API", "minimax-api"],
+  ["system-mistral-api", "Mistral AI API", "mistral-api"],
+  ["system-groq-api", "Groq API", "groq-api"],
+  ["system-together-api", "Together AI", "together-api"],
+  ["system-fireworks-api", "Fireworks AI", "fireworks-api"],
+  ["system-perplexity-api", "Perplexity API", "perplexity-api"],
+  ["system-siliconflow-api", "SiliconFlow API", "siliconflow-api"],
+  ["system-nvidia-nim-api", "NVIDIA NIM API", "nvidia-nim-api"],
+  ["system-cerebras-api", "Cerebras API", "cerebras-api"],
 ].map(([id, name, systemPresetKey]) => ({
   id,
   name,
@@ -85,7 +100,7 @@ vi.mock("@/components/usage-dashboard/UsageProviderDialog", () => ({
   UsageProviderDialog: () => null,
 }));
 
-it("renders the five fixed Provider cards in canonical order before custom Providers", () => {
+it("renders the built-in Provider catalog in canonical order before custom Providers", () => {
   render(<UsageProvidersSettings />);
 
   expect(
@@ -98,10 +113,25 @@ it("renders the five fixed Provider cards in canonical order before custom Provi
     "OpenAI API",
     "Anthropic API",
     "OpenRouter",
+    "Google Gemini API",
+    "xAI (Grok) API",
+    "DeepSeek API",
+    "Kimi / Moonshot API",
+    "GLM / Z.AI API",
+    "Qwen / DashScope API",
+    "MiniMax API",
+    "Mistral AI API",
+    "Groq API",
+    "Together AI",
+    "Fireworks AI",
+    "Perplexity API",
+    "SiliconFlow API",
+    "NVIDIA NIM API",
+    "Cerebras API",
   ]);
 
   const pageText = document.body.textContent ?? "";
-  expect(pageText.indexOf("OpenRouter")).toBeLessThan(
+  expect(pageText.indexOf("Cerebras API")).toBeLessThan(
     pageText.indexOf("Custom Example"),
   );
   expect(

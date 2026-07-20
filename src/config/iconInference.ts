@@ -10,6 +10,8 @@ const iconMappings = {
   codex: { icon: "openai", iconColor: "#000000" },
   gpt: { icon: "openai", iconColor: "#000000" },
   gemini: { icon: "gemini", iconColor: "#4285F4" },
+  xai: { icon: "xai", iconColor: "#000000" },
+  grok: { icon: "grok", iconColor: "#000000" },
   anthropic: { icon: "anthropic", iconColor: "#D4915D" },
   deepseek: { icon: "deepseek", iconColor: "#1E88E5" },
   zhipu: { icon: "zhipu", iconColor: "#0F62FE" },
@@ -31,6 +33,7 @@ const iconMappings = {
   mistral: { icon: "mistral", iconColor: "#FF7000" },
   cohere: { icon: "cohere", iconColor: "#39594D" },
   perplexity: { icon: "perplexity", iconColor: "#20808D" },
+  nvidia: { icon: "nvidia", iconColor: "#76B900" },
   huggingface: { icon: "huggingface", iconColor: "#FFD21E" },
   novita: { icon: "novita", iconColor: "#000000" },
 

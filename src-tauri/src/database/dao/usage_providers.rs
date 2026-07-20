@@ -745,6 +745,7 @@ mod tests {
         AgentProviderBindingInput, BillingKind, BindingCredentialStatus, SystemProviderAuthKind,
         TokenSource, UsageProviderInput,
     };
+    use crate::usage::system_providers::system_provider_definitions;
     use serde_json::json;
     use std::sync::{mpsc, Arc};
     use std::time::Duration;
@@ -944,19 +945,17 @@ mod tests {
         .unwrap();
 
         let providers = db.list_usage_providers().unwrap();
+        let mut expected_ids = system_provider_definitions()
+            .into_iter()
+            .map(|definition| definition.id.to_string())
+            .collect::<Vec<_>>();
+        expected_ids.push("000-custom-provider".to_string());
         assert_eq!(
             providers
                 .iter()
-                .map(|provider| provider.id.as_str())
+                .map(|provider| provider.id.clone())
                 .collect::<Vec<_>>(),
-            vec![
-                "system-chatgpt-subscription",
-                "system-claude-subscription",
-                "system-openai-api",
-                "system-anthropic-api",
-                "system-openrouter-api",
-                "000-custom-provider",
-            ]
+            expected_ids
         );
         assert_eq!(
             providers[0].system_preset_key.as_deref(),

@@ -1538,7 +1538,7 @@ mod migration_v16_to_v17 {
     }
 
     #[test]
-    fn migration_v16_to_v17_seeds_exact_system_catalog_and_preserves_custom_rows() {
+    fn migration_v16_to_v17_seeds_complete_system_catalog_and_preserves_custom_rows() {
         let conn = v16_usage_fixture();
         conn.execute(
             "INSERT INTO usage_providers (
@@ -1611,6 +1611,12 @@ mod migration_v16_to_v17 {
                     "metered".into(),
                 ),
                 (
+                    "system-cerebras-api".into(),
+                    "cerebras-api".into(),
+                    "Cerebras API".into(),
+                    "metered".into(),
+                ),
+                (
                     "system-chatgpt-subscription".into(),
                     "chatgpt-subscription".into(),
                     "ChatGPT Plus/Pro".into(),
@@ -1623,6 +1629,60 @@ mod migration_v16_to_v17 {
                     "subscription".into(),
                 ),
                 (
+                    "system-deepseek-api".into(),
+                    "deepseek-api".into(),
+                    "DeepSeek API".into(),
+                    "metered".into(),
+                ),
+                (
+                    "system-fireworks-api".into(),
+                    "fireworks-api".into(),
+                    "Fireworks AI".into(),
+                    "metered".into(),
+                ),
+                (
+                    "system-gemini-api".into(),
+                    "gemini-api".into(),
+                    "Google Gemini API".into(),
+                    "metered".into(),
+                ),
+                (
+                    "system-glm-api".into(),
+                    "glm-api".into(),
+                    "GLM / Z.AI API".into(),
+                    "metered".into(),
+                ),
+                (
+                    "system-groq-api".into(),
+                    "groq-api".into(),
+                    "Groq API".into(),
+                    "metered".into(),
+                ),
+                (
+                    "system-kimi-api".into(),
+                    "kimi-api".into(),
+                    "Kimi / Moonshot API".into(),
+                    "metered".into(),
+                ),
+                (
+                    "system-minimax-api".into(),
+                    "minimax-api".into(),
+                    "MiniMax API".into(),
+                    "metered".into(),
+                ),
+                (
+                    "system-mistral-api".into(),
+                    "mistral-api".into(),
+                    "Mistral AI API".into(),
+                    "metered".into(),
+                ),
+                (
+                    "system-nvidia-nim-api".into(),
+                    "nvidia-nim-api".into(),
+                    "NVIDIA NIM API".into(),
+                    "metered".into(),
+                ),
+                (
                     "system-openai-api".into(),
                     "openai-api".into(),
                     "OpenAI API".into(),
@@ -1632,6 +1692,36 @@ mod migration_v16_to_v17 {
                     "system-openrouter-api".into(),
                     "openrouter-api".into(),
                     "OpenRouter".into(),
+                    "metered".into(),
+                ),
+                (
+                    "system-perplexity-api".into(),
+                    "perplexity-api".into(),
+                    "Perplexity API".into(),
+                    "metered".into(),
+                ),
+                (
+                    "system-qwen-api".into(),
+                    "qwen-api".into(),
+                    "Qwen / DashScope API".into(),
+                    "metered".into(),
+                ),
+                (
+                    "system-siliconflow-api".into(),
+                    "siliconflow-api".into(),
+                    "SiliconFlow API".into(),
+                    "metered".into(),
+                ),
+                (
+                    "system-together-api".into(),
+                    "together-api".into(),
+                    "Together AI".into(),
+                    "metered".into(),
+                ),
+                (
+                    "system-xai-api".into(),
+                    "xai-api".into(),
+                    "xAI (Grok) API".into(),
                     "metered".into(),
                 ),
             ]
@@ -1693,7 +1783,7 @@ mod migration_v16_to_v17 {
             ),
             0
         );
-        assert_eq!(super::count(&conn, "provider_api_credentials"), 3);
+        assert_eq!(super::count(&conn, "provider_api_credentials"), 18);
         assert_eq!(
             super::scalar_i64(
                 &conn,
@@ -1706,6 +1796,19 @@ mod migration_v16_to_v17 {
                    AND credential_version = 0",
             ),
             3
+        );
+        assert_eq!(
+            super::scalar_i64(
+                &conn,
+                "SELECT COUNT(*) FROM usage_providers
+                 WHERE system_preset_key IN (
+                     'gemini-api','xai-api','deepseek-api','kimi-api','glm-api',
+                     'qwen-api','minimax-api','mistral-api','groq-api','together-api',
+                     'fireworks-api','perplexity-api','siliconflow-api',
+                     'nvidia-nim-api','cerebras-api'
+                 ) AND enabled = 0",
+            ),
+            15
         );
         assert_eq!(
             conn.query_row(
@@ -1891,7 +1994,7 @@ mod migration_v16_to_v17 {
                 "SELECT COUNT(*) FROM usage_providers
                  WHERE system_preset_key IS NOT NULL",
             ),
-            5
+            20
         );
         assert_eq!(
             super::scalar_i64(
@@ -1901,7 +2004,7 @@ mod migration_v16_to_v17 {
             ),
             4
         );
-        assert_eq!(super::count(&conn, "provider_api_credentials"), 3);
+        assert_eq!(super::count(&conn, "provider_api_credentials"), 18);
         assert_eq!(
             super::scalar_i64(
                 &conn,
@@ -1909,6 +2012,69 @@ mod migration_v16_to_v17 {
                  WHERE agent_module_id = 'opencode'
                    AND provider_id = 'system-openrouter-api'",
             ),
+            0
+        );
+    }
+
+    #[test]
+    fn current_schema_reconciles_catalog_growth_before_validation() {
+        let conn = v16_usage_fixture();
+        Database::apply_schema_migrations_on_conn_with_roots(
+            &conn,
+            &super::migration_v15_to_v16::roots(),
+        )
+        .expect("create current database");
+
+        conn.execute_batch(
+            "DELETE FROM provider_api_credentials
+             WHERE provider_id NOT IN (
+                 'system-openai-api','system-anthropic-api','system-openrouter-api'
+             );
+             DROP TRIGGER usage_providers_system_delete;
+             DELETE FROM usage_providers
+             WHERE system_preset_key NOT IN (
+                 'chatgpt-subscription','claude-subscription','openai-api',
+                 'anthropic-api','openrouter-api'
+             );
+             CREATE TRIGGER usage_providers_system_delete
+             BEFORE DELETE ON usage_providers
+             WHEN OLD.system_preset_key IS NOT NULL
+             BEGIN
+                 SELECT RAISE(ABORT, 'system provider cannot be deleted');
+             END;",
+        )
+        .expect("simulate database from the original five-entry catalog");
+        assert_eq!(
+            super::scalar_i64(
+                &conn,
+                "SELECT COUNT(*) FROM usage_providers
+                 WHERE system_preset_key IS NOT NULL",
+            ),
+            5
+        );
+
+        Database::apply_schema_migrations_on_conn_with_roots(
+            &conn,
+            &super::migration_v15_to_v16::roots(),
+        )
+        .expect("reconcile expanded catalog without a schema bump");
+
+        assert_eq!(
+            super::scalar_i64(
+                &conn,
+                "SELECT COUNT(*) FROM usage_providers
+                 WHERE system_preset_key IS NOT NULL",
+            ),
+            20
+        );
+        assert_eq!(super::count(&conn, "provider_api_credentials"), 18);
+        assert_eq!(
+            conn.query_row(
+                "SELECT enabled FROM usage_providers WHERE id = 'system-kimi-api'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
             0
         );
     }

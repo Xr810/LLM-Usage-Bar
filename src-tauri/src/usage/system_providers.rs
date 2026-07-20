@@ -5,6 +5,21 @@ pub const CLAUDE_SUBSCRIPTION_ID: &str = "system-claude-subscription";
 pub const OPENAI_API_ID: &str = "system-openai-api";
 pub const ANTHROPIC_API_ID: &str = "system-anthropic-api";
 pub const OPENROUTER_API_ID: &str = "system-openrouter-api";
+pub const GEMINI_API_ID: &str = "system-gemini-api";
+pub const XAI_API_ID: &str = "system-xai-api";
+pub const DEEPSEEK_API_ID: &str = "system-deepseek-api";
+pub const KIMI_API_ID: &str = "system-kimi-api";
+pub const GLM_API_ID: &str = "system-glm-api";
+pub const QWEN_API_ID: &str = "system-qwen-api";
+pub const MINIMAX_API_ID: &str = "system-minimax-api";
+pub const MISTRAL_API_ID: &str = "system-mistral-api";
+pub const GROQ_API_ID: &str = "system-groq-api";
+pub const TOGETHER_API_ID: &str = "system-together-api";
+pub const FIREWORKS_API_ID: &str = "system-fireworks-api";
+pub const PERPLEXITY_API_ID: &str = "system-perplexity-api";
+pub const SILICONFLOW_API_ID: &str = "system-siliconflow-api";
+pub const NVIDIA_NIM_API_ID: &str = "system-nvidia-nim-api";
+pub const CEREBRAS_API_ID: &str = "system-cerebras-api";
 pub const MANAGED_CODEX_QUOTA_SOURCE: &str = "codex_oauth";
 
 pub struct SystemProviderDefinition {
@@ -15,10 +30,49 @@ pub struct SystemProviderDefinition {
     pub product_group_id: &'static str,
     pub token_sources: &'static [TokenSource],
     pub auth_kind: SystemProviderAuthKind,
+    pub default_enabled: bool,
     pub quota_source: Option<&'static str>,
     pub quota_interval_seconds: Option<u64>,
     pub upstream_protocol: Option<&'static str>,
+    pub connection_models_path: Option<&'static str>,
     pub route_config: Option<serde_json::Value>,
+}
+
+fn metered_api_provider(
+    id: &'static str,
+    preset_key: &'static str,
+    name: &'static str,
+    base_url: &'static str,
+) -> SystemProviderDefinition {
+    metered_api_provider_with_models_path(id, preset_key, name, base_url, "/models")
+}
+
+fn metered_api_provider_with_models_path(
+    id: &'static str,
+    preset_key: &'static str,
+    name: &'static str,
+    base_url: &'static str,
+    models_path: &'static str,
+) -> SystemProviderDefinition {
+    SystemProviderDefinition {
+        id,
+        preset_key,
+        name,
+        billing_kind: BillingKind::Metered,
+        product_group_id: preset_key,
+        token_sources: &[TokenSource::Proxy],
+        auth_kind: SystemProviderAuthKind::ProviderApiKey,
+        default_enabled: false,
+        quota_source: None,
+        quota_interval_seconds: None,
+        upstream_protocol: Some("codex"),
+        connection_models_path: Some(models_path),
+        route_config: Some(serde_json::json!({
+            "base_url": base_url,
+            "apiFormat": "openai_chat",
+            "authMode": "bearer"
+        })),
+    }
 }
 
 pub fn system_provider_definitions() -> Vec<SystemProviderDefinition> {
@@ -31,9 +85,11 @@ pub fn system_provider_definitions() -> Vec<SystemProviderDefinition> {
             product_group_id: "chatgpt-subscription",
             token_sources: &[TokenSource::Proxy, TokenSource::SessionLog],
             auth_kind: SystemProviderAuthKind::CodexOauth,
+            default_enabled: true,
             quota_source: Some(MANAGED_CODEX_QUOTA_SOURCE),
             quota_interval_seconds: Some(300),
             upstream_protocol: Some("codex"),
+            connection_models_path: None,
             route_config: None,
         },
         SystemProviderDefinition {
@@ -44,9 +100,11 @@ pub fn system_provider_definitions() -> Vec<SystemProviderDefinition> {
             product_group_id: "claude-subscription",
             token_sources: &[TokenSource::SessionLog],
             auth_kind: SystemProviderAuthKind::ClaudeCli,
+            default_enabled: true,
             quota_source: None,
             quota_interval_seconds: None,
             upstream_protocol: None,
+            connection_models_path: None,
             route_config: None,
         },
         SystemProviderDefinition {
@@ -57,9 +115,11 @@ pub fn system_provider_definitions() -> Vec<SystemProviderDefinition> {
             product_group_id: "openai-api",
             token_sources: &[TokenSource::Proxy],
             auth_kind: SystemProviderAuthKind::ProviderApiKey,
+            default_enabled: true,
             quota_source: None,
             quota_interval_seconds: None,
             upstream_protocol: Some("codex"),
+            connection_models_path: Some("/models"),
             route_config: Some(serde_json::json!({
                 "base_url": "https://api.openai.com/v1",
                 "apiFormat": "openai_chat",
@@ -74,9 +134,11 @@ pub fn system_provider_definitions() -> Vec<SystemProviderDefinition> {
             product_group_id: "anthropic-api",
             token_sources: &[TokenSource::Proxy],
             auth_kind: SystemProviderAuthKind::ProviderApiKey,
+            default_enabled: true,
             quota_source: None,
             quota_interval_seconds: None,
             upstream_protocol: Some("claude"),
+            connection_models_path: Some("/v1/models"),
             route_config: Some(serde_json::json!({
                 "base_url": "https://api.anthropic.com",
                 "apiFormat": "anthropic",
@@ -91,16 +153,115 @@ pub fn system_provider_definitions() -> Vec<SystemProviderDefinition> {
             product_group_id: "openrouter-api",
             token_sources: &[TokenSource::Proxy],
             auth_kind: SystemProviderAuthKind::ProviderApiKey,
+            default_enabled: true,
             quota_source: None,
             quota_interval_seconds: None,
             upstream_protocol: Some("codex"),
+            connection_models_path: Some("/models"),
             route_config: Some(serde_json::json!({
                 "base_url": "https://openrouter.ai/api/v1",
                 "apiFormat": "openai_chat",
                 "authMode": "bearer"
             })),
         },
+        metered_api_provider(
+            GEMINI_API_ID,
+            "gemini-api",
+            "Google Gemini API",
+            "https://generativelanguage.googleapis.com/v1beta/openai",
+        ),
+        metered_api_provider(
+            XAI_API_ID,
+            "xai-api",
+            "xAI (Grok) API",
+            "https://api.x.ai/v1",
+        ),
+        metered_api_provider(
+            DEEPSEEK_API_ID,
+            "deepseek-api",
+            "DeepSeek API",
+            "https://api.deepseek.com",
+        ),
+        metered_api_provider(
+            KIMI_API_ID,
+            "kimi-api",
+            "Kimi / Moonshot API",
+            "https://api.moonshot.cn/v1",
+        ),
+        metered_api_provider(
+            GLM_API_ID,
+            "glm-api",
+            "GLM / Z.AI API",
+            "https://api.z.ai/api/paas/v4",
+        ),
+        metered_api_provider(
+            QWEN_API_ID,
+            "qwen-api",
+            "Qwen / DashScope API",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        ),
+        metered_api_provider(
+            MINIMAX_API_ID,
+            "minimax-api",
+            "MiniMax API",
+            "https://api.minimaxi.com/v1",
+        ),
+        metered_api_provider(
+            MISTRAL_API_ID,
+            "mistral-api",
+            "Mistral AI API",
+            "https://api.mistral.ai/v1",
+        ),
+        metered_api_provider(
+            GROQ_API_ID,
+            "groq-api",
+            "Groq API",
+            "https://api.groq.com/openai/v1",
+        ),
+        metered_api_provider(
+            TOGETHER_API_ID,
+            "together-api",
+            "Together AI",
+            "https://api.together.xyz/v1",
+        ),
+        metered_api_provider(
+            FIREWORKS_API_ID,
+            "fireworks-api",
+            "Fireworks AI",
+            "https://api.fireworks.ai/inference/v1",
+        ),
+        metered_api_provider_with_models_path(
+            PERPLEXITY_API_ID,
+            "perplexity-api",
+            "Perplexity API",
+            "https://api.perplexity.ai",
+            "/v1/models",
+        ),
+        metered_api_provider(
+            SILICONFLOW_API_ID,
+            "siliconflow-api",
+            "SiliconFlow API",
+            "https://api.siliconflow.cn/v1",
+        ),
+        metered_api_provider(
+            NVIDIA_NIM_API_ID,
+            "nvidia-nim-api",
+            "NVIDIA NIM API",
+            "https://integrate.api.nvidia.com/v1",
+        ),
+        metered_api_provider(
+            CEREBRAS_API_ID,
+            "cerebras-api",
+            "Cerebras API",
+            "https://api.cerebras.ai/v1",
+        ),
     ]
+}
+
+pub fn system_provider_definition(preset_key: &str) -> Option<SystemProviderDefinition> {
+    system_provider_definitions()
+        .into_iter()
+        .find(|definition| definition.preset_key == preset_key)
 }
 
 pub(crate) fn system_binding_route_protocol(
@@ -125,10 +286,9 @@ pub(crate) fn system_binding_route_protocol(
 }
 
 pub(crate) fn is_fixed_api_preset(preset_key: Option<&str>) -> bool {
-    matches!(
-        preset_key,
-        Some("openai-api" | "anthropic-api" | "openrouter-api")
-    )
+    preset_key
+        .and_then(system_provider_definition)
+        .is_some_and(|definition| definition.auth_kind == SystemProviderAuthKind::ProviderApiKey)
 }
 
 #[cfg(test)]
