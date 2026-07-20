@@ -3,7 +3,7 @@ use super::aggregation::{
     ProviderRangeAggregate,
 };
 use super::domain::{
-    BillingKind, QuotaResetDetailView, QuotaStatusView, UsageProviderView, UsageTrendBucketView,
+    BillingKind, ManualResetCreditView, QuotaStatusView, UsageProviderView, UsageTrendBucketView,
 };
 use super::status::{
     classify_metered, classify_subscription_with_thresholds, worst_status, CostQuality,
@@ -98,8 +98,9 @@ pub struct TrayQuotaWindowView {
 pub struct TraySubscriptionUsageView {
     pub plan_label: Option<String>,
     pub windows: Vec<TrayQuotaWindowView>,
+    pub manual_resets_remaining: Option<i64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub additional_reset_details: Vec<QuotaResetDetailView>,
+    pub manual_reset_credits: Vec<ManualResetCreditView>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -351,15 +352,17 @@ impl TrayUsageProjector {
             subscription_window(kind, used, resets_at, now_timestamp, thresholds)
         })
         .collect();
+        let quota_status = snapshot.as_ref().map(QuotaStatusView::from_snapshot);
 
         Ok((
             TraySubscriptionUsageView {
                 plan_label: None,
                 windows,
-                additional_reset_details: snapshot
+                manual_resets_remaining: quota_status
                     .as_ref()
-                    .map(QuotaStatusView::from_snapshot)
-                    .map(|quota| quota.additional_reset_details)
+                    .and_then(|quota| quota.manual_resets_remaining),
+                manual_reset_credits: quota_status
+                    .map(|quota| quota.manual_reset_credits)
                     .unwrap_or_default(),
             },
             classification,
@@ -624,7 +627,9 @@ mod tests {
             five_hour_resets_at: five_hour_resets_at.map(str::to_string),
             seven_day_utilization_percent: seven_day_used.map(str::to_string),
             seven_day_resets_at: seven_day_resets_at.map(str::to_string),
-            manual_resets_remaining: None,
+            manual_resets_remaining: raw_payload
+                .pointer("/manualResetCredits/availableCount")
+                .and_then(serde_json::Value::as_i64),
             raw_payload,
             created_at: fetched_at,
         }
@@ -706,13 +711,17 @@ mod tests {
             Some("40"),
             Some(&future_reset),
             json!({
-                "tiers": [
+                "manualResetCredits": {
+                    "availableCount": 3,
+                    "credits": [
                     {
-                        "name": "codex_additional:0:18000:Codex Spark",
-                        "utilization": 10,
-                        "resetsAt": future_reset.clone()
+                        "id": "reset-1",
+                        "status": "available",
+                        "title": "Full reset",
+                        "expiresAt": future_reset.clone()
                     }
-                ]
+                    ]
+                }
             }),
         ))
         .unwrap();
@@ -802,10 +811,11 @@ mod tests {
         assert_eq!(subscription.status, UsageStatus::Red);
         let subscription_quota = subscription.subscription.as_ref().unwrap();
         assert_eq!(subscription_quota.plan_label, None);
-        assert_eq!(subscription_quota.additional_reset_details.len(), 1);
+        assert_eq!(subscription_quota.manual_resets_remaining, Some(3));
+        assert_eq!(subscription_quota.manual_reset_credits.len(), 1);
         assert_eq!(
-            subscription_quota.additional_reset_details[0].label,
-            "Codex Spark"
+            subscription_quota.manual_reset_credits[0].title.as_deref(),
+            Some("Full reset")
         );
 
         let metered = find_provider(&snapshot, "codex", "b-metered")
@@ -1384,7 +1394,8 @@ mod tests {
                             status: UsageStatus::Yellow,
                             unavailable_reason: None,
                         }],
-                        additional_reset_details: Vec::new(),
+                        manual_resets_remaining: None,
+                        manual_reset_credits: Vec::new(),
                     }),
                     metered: Some(TrayMeteredUsageView {
                         today_cost_usd: Some("5".to_string()),

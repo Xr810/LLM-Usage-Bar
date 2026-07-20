@@ -182,7 +182,7 @@ describe("TrayUsagePopover Provider-only UI", () => {
     ).toHaveAttribute("aria-valuenow", "80");
   });
 
-  it("uses the weekly label and expands GPT additional reset times", async () => {
+  it("uses the weekly label and expands GPT manual reset credits", async () => {
     const user = userEvent.setup();
     const withExtraResets = structuredClone(snapshot);
     const subscription = withExtraResets.agents[0].providers[0].subscription!;
@@ -194,12 +194,22 @@ describe("TrayUsagePopover Provider-only UI", () => {
       status: "green",
       unavailableReason: null,
     });
-    subscription.additionalResetDetails = [
+    subscription.manualResetsRemaining = 3;
+    subscription.manualResetCredits = [
       {
-        id: "0:604800",
-        label: "Codex Spark",
-        windowSeconds: 604_800,
-        resetsAt: "2026-07-20T08:00:00Z",
+        id: "reset-1",
+        title: "Full reset",
+        expiresAt: "2026-07-27T00:00:00Z",
+      },
+      {
+        id: "reset-2",
+        title: "Full reset",
+        expiresAt: "2026-08-01T00:00:00Z",
+      },
+      {
+        id: "reset-3",
+        title: "Full reset",
+        expiresAt: "2026-08-13T00:00:00Z",
       },
     ];
 
@@ -207,15 +217,17 @@ describe("TrayUsagePopover Provider-only UI", () => {
 
     expect(screen.getByText("Weekly allowance")).toBeInTheDocument();
     expect(screen.queryByText("7-day allowance")).toBeNull();
-    expect(screen.queryByText(/Codex Spark/)).toBeNull();
+    expect(screen.getByText("3 available")).toBeInTheDocument();
+    expect(screen.queryByText("Full reset")).toBeNull();
 
     await user.click(
       screen.getByRole("button", {
-        name: "Toggle 1 additional quota reset times",
+        name: "Toggle 3 usage limit resets",
       }),
     );
 
-    expect(screen.getByText(/Codex Spark/)).toBeInTheDocument();
+    expect(screen.getAllByText("Full reset")).toHaveLength(3);
+    expect(screen.getAllByText(/^Expires /)).toHaveLength(3);
   });
 
   it("fills subscription progress from remaining quota", () => {

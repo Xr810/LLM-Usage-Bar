@@ -3240,14 +3240,13 @@
     "queryFailed": "查詢失敗",
     "refresh": "重新整理"
   },
-  "quotaResetDetails": {
-    "summary": "額外額度重設：{{count}} 個",
-    "toggle": "展開或收合 {{count}} 個額外額度重設時間",
-    "fiveHour": "5 小時額度",
-    "weekly": "週額度",
-    "days": "{{count}} 天額度",
-    "hours": "{{count}} 小時額度",
-    "resetsAt": "重設時間：{{value}}"
+  "manualResetCredits": {
+    "summary": "使用限額重設",
+    "available": "可用 {{count}} 次",
+    "toggle": "展開或收合 {{count}} 次使用限額重設",
+    "defaultTitle": "Full reset",
+    "expiresAt": "將於 {{value}} 到期",
+    "undisclosed": "另有 {{count}} 次未提供到期時間"
   },
   "trayUsage": {
     "overview": "概覽",

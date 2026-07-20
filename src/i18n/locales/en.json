@@ -3268,14 +3268,13 @@
     "queryFailed": "Query failed",
     "refresh": "Refresh"
   },
-  "quotaResetDetails": {
-    "summary": "Additional quota resets: {{count}}",
-    "toggle": "Toggle {{count}} additional quota reset times",
-    "fiveHour": "5-hour allowance",
-    "weekly": "Weekly allowance",
-    "days": "{{count}}-day allowance",
-    "hours": "{{count}}-hour allowance",
-    "resetsAt": "Resets {{value}}"
+  "manualResetCredits": {
+    "summary": "Usage limit resets",
+    "available": "{{count}} available",
+    "toggle": "Toggle {{count}} usage limit resets",
+    "defaultTitle": "Full reset",
+    "expiresAt": "Expires {{value}}",
+    "undisclosed": "{{count}} more reset expiry times were not provided"
   },
   "trayUsage": {
     "overview": "Overview",

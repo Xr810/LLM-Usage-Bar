@@ -1284,6 +1284,7 @@ mod tests {
             credential_message: None,
             success,
             tiers,
+            manual_reset_credits: None,
             extra_usage: None,
             error: None,
             queried_at: Some(0),

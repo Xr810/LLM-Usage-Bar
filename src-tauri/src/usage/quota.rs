@@ -522,7 +522,11 @@ pub fn normalize_subscription_quota(
             .map(|tier| decimal_percent(tier.utilization))
             .transpose()?,
         seven_day_resets_at: seven_day.and_then(|tier| tier.resets_at.clone()),
-        manual_resets_remaining,
+        manual_resets_remaining: quota
+            .manual_reset_credits
+            .as_ref()
+            .map(|credits| credits.available_count)
+            .or(manual_resets_remaining),
         raw_payload: serde_json::to_value(quota)
             .map_err(|error| AppError::Config(format!("serialize quota payload: {error}")))?,
     })
@@ -571,7 +575,8 @@ mod tests {
     use crate::database::Database;
     use crate::proxy::providers::codex_oauth_auth::CodexOAuthManager;
     use crate::services::subscription::{
-        CredentialStatus, QuotaTier, SubscriptionQuota, TIER_FIVE_HOUR, TIER_SEVEN_DAY,
+        CredentialStatus, ManualResetCredit, ManualResetCredits, QuotaTier, SubscriptionQuota,
+        TIER_FIVE_HOUR, TIER_SEVEN_DAY,
     };
     use crate::usage::domain::{BillingKind, TokenSource, UsageProviderInput};
     use crate::usage::system_providers::CHATGPT_SUBSCRIPTION_ID;
@@ -603,6 +608,7 @@ mod tests {
                     max_value_usd: None,
                 },
             ],
+            manual_reset_credits: None,
             extra_usage: None,
             error: None,
             queried_at: Some(100_000),
@@ -703,6 +709,31 @@ mod tests {
             Some("42")
         );
         assert_eq!(normalized.manual_resets_remaining, Some(3));
+    }
+
+    #[test]
+    fn codex_reported_manual_reset_count_overrides_legacy_config_fallback() {
+        let mut quota = successful_quota("codex");
+        quota.manual_reset_credits = Some(ManualResetCredits {
+            available_count: 3,
+            credits: vec![ManualResetCredit {
+                id: "reset-1".to_string(),
+                reset_type: Some("codexRateLimits".to_string()),
+                status: Some("available".to_string()),
+                granted_at: None,
+                expires_at: "2026-07-27T00:00:00+00:00".to_string(),
+                title: Some("Full reset".to_string()),
+                description: None,
+            }],
+        });
+
+        let normalized = normalize_subscription_quota(&quota, Some(1)).unwrap();
+
+        assert_eq!(normalized.manual_resets_remaining, Some(3));
+        assert_eq!(
+            normalized.raw_payload["manualResetCredits"]["credits"][0]["expiresAt"],
+            json!("2026-07-27T00:00:00+00:00")
+        );
     }
 
     #[test]

@@ -1,4 +1,4 @@
-import type { QuotaResetDetailView } from "./quota";
+import type { ManualResetCreditView } from "./quota";
 
 export type BillingKind = "subscription" | "metered";
 export type TokenSource = "proxy" | "session_log";
@@ -145,7 +145,7 @@ export interface QuotaStatusView {
   sevenDayUtilizationPercent: string | null;
   sevenDayResetsAt: string | null;
   manualResetsRemaining: number | null;
-  additionalResetDetails?: QuotaResetDetailView[];
+  manualResetCredits?: ManualResetCreditView[];
 }
 
 export interface QuotaFetchState {
