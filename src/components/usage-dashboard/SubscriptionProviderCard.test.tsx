@@ -19,7 +19,7 @@ vi.mock("react-i18next", () => ({
         return `${options?.value} 后`;
       }
       if (key === "manualResetCredits.available") {
-        return `可用 ${options?.count} 次`;
+        return `${options?.count} 次`;
       }
       if (key === "manualResetCredits.toggle") {
         return `展开或收起 ${options?.count} 次使用限额重置`;
@@ -245,7 +245,7 @@ describe("SubscriptionProviderCard localized reset countdown", () => {
 
     expect(screen.getByText("Weekly allowance")).toBeInTheDocument();
     expect(screen.queryByText("7-day window")).toBeNull();
-    expect(screen.getByText("可用 3 次")).toBeInTheDocument();
+    expect(screen.getByText("3 次")).toBeInTheDocument();
     expect(screen.queryByText("Full reset")).toBeNull();
 
     fireEvent.click(
@@ -272,7 +272,7 @@ describe("SubscriptionProviderCard localized reset countdown", () => {
       />,
     );
 
-    expect(screen.getByText("可用 3 次")).toBeInTheDocument();
+    expect(screen.getByText("3 次")).toBeInTheDocument();
     expect(
       screen.queryByRole("button", {
         name: "展开或收起 3 次使用限额重置",

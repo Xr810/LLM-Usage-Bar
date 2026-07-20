@@ -3242,7 +3242,7 @@
   },
   "manualResetCredits": {
     "summary": "使用限額重設",
-    "available": "可用 {{count}} 次",
+    "available": "{{count}} 次",
     "toggle": "展開或收合 {{count}} 次使用限額重設",
     "defaultTitle": "Full reset",
     "expiresAt": "將於 {{value}} 到期",

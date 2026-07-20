@@ -3270,7 +3270,7 @@
   },
   "manualResetCredits": {
     "summary": "使用限额重置",
-    "available": "可用 {{count}} 次",
+    "available": "{{count}} 次",
     "toggle": "展开或收起 {{count}} 次使用限额重置",
     "defaultTitle": "Full reset",
     "expiresAt": "将于 {{value}} 到期",
