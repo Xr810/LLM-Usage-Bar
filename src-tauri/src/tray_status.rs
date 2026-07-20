@@ -1,5 +1,6 @@
 use crate::usage::status::UsageStatus;
 use crate::usage::tray_snapshot::TrayUsageSnapshot;
+#[cfg(any(target_os = "macos", test))]
 use tauri::image::Image;
 use tauri::{AppHandle, Emitter};
 
@@ -14,6 +15,7 @@ pub fn tray_status_tooltip(status: UsageStatus) -> &'static str {
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 pub(crate) fn status_icon_bytes(status: UsageStatus) -> &'static [u8] {
     match status {
         UsageStatus::Green => include_bytes!("../icons/tray/macos/status_green.png"),
@@ -23,6 +25,7 @@ pub(crate) fn status_icon_bytes(status: UsageStatus) -> &'static [u8] {
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 pub(crate) fn decode_status_icon(status: UsageStatus) -> Result<Image<'static>, tauri::Error> {
     Image::from_bytes(status_icon_bytes(status))
 }
@@ -93,6 +96,7 @@ pub fn publish_tray_usage(app: &AppHandle, snapshot: &TrayUsageSnapshot) {
     );
 }
 
+#[cfg(any(target_os = "macos", test))]
 pub(crate) fn select_initial_status_icon<T, E, Legacy>(
     unknown: Result<T, E>,
     legacy: Legacy,

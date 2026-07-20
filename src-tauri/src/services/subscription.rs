@@ -798,7 +798,7 @@ fn normalize_codex_reset_credits(
             credit
                 .status
                 .as_deref()
-                .map_or(true, |status| status.eq_ignore_ascii_case("available"))
+                .is_none_or(|status| status.eq_ignore_ascii_case("available"))
         })
         .filter_map(|credit| {
             let expires_at = credit.expires_at.and_then(unix_ts_to_iso)?;

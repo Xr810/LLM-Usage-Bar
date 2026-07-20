@@ -1,18 +1,24 @@
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex, OnceLock};
+#[cfg(any(target_os = "macos", test))]
 use tauri::tray::{MouseButton, MouseButtonState};
-use tauri::{
-    AppHandle, Emitter, Manager, PhysicalPosition, PhysicalRect, PhysicalSize, Rect, WebviewUrl,
-    WebviewWindow, WebviewWindowBuilder,
-};
+use tauri::{AppHandle, Emitter, Manager};
+#[cfg(any(target_os = "macos", test))]
+use tauri::{PhysicalPosition, PhysicalRect, PhysicalSize};
+#[cfg(target_os = "macos")]
+use tauri::{Rect, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 use crate::error::AppError;
 
 pub const TRAY_POPOVER_LABEL: &str = "tray-popover";
+#[cfg(target_os = "macos")]
 const POPOVER_WIDTH: f64 = 380.0;
+#[cfg(target_os = "macos")]
 const POPOVER_HEIGHT: f64 = 520.0;
+#[cfg(any(target_os = "macos", test))]
 const POPOVER_GAP_PHYSICAL: i32 = 8;
 
+#[cfg(any(target_os = "macos", test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrayClickAction {
     TogglePopover,
@@ -115,6 +121,7 @@ fn clear_pending_main_window_destination_for_test() {
         .take();
 }
 
+#[cfg(any(target_os = "macos", test))]
 pub fn classify_tray_click(button: MouseButton, state: MouseButtonState) -> TrayClickAction {
     match (button, state) {
         (MouseButton::Left, MouseButtonState::Down) => TrayClickAction::TogglePopover,
@@ -123,6 +130,7 @@ pub fn classify_tray_click(button: MouseButton, state: MouseButtonState) -> Tray
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 pub fn calculate_popover_position(
     anchor: PhysicalRect<i32, u32>,
     popup_size: PhysicalSize<u32>,
@@ -151,6 +159,7 @@ fn main_window_error(operation: &str, error: impl std::fmt::Display) -> AppError
     AppError::Message("main_window_unavailable".to_string())
 }
 
+#[cfg(target_os = "macos")]
 pub fn ensure_window(app: &AppHandle) -> Result<WebviewWindow, AppError> {
     if let Some(window) = app.get_webview_window(TRAY_POPOVER_LABEL) {
         return Ok(window);
@@ -173,6 +182,7 @@ pub fn ensure_window(app: &AppHandle) -> Result<WebviewWindow, AppError> {
     .map_err(|error| popover_error("creation", error))
 }
 
+#[cfg(target_os = "macos")]
 pub fn toggle(app: &AppHandle, anchor: Rect) -> Result<(), AppError> {
     let window = ensure_window(app)?;
     if window

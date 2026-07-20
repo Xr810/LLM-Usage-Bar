@@ -29,7 +29,9 @@ fn tauri_identity_and_protocol_do_not_collide_with_original_cc_switch() {
     );
 
     let tray_source = include_str!("../src/lib.rs");
-    assert!(tray_source.contains(".tooltip(\"LLM Usage Bar\")"));
+    let tray_status_source = include_str!("../src/tray_status.rs");
+    assert!(tray_source.contains(".tooltip(tray_status::tray_status_tooltip("));
+    assert!(tray_status_source.contains("LLM Usage Bar — Usage healthy"));
     assert!(!tray_source.contains(".tooltip(\"CC Switch\")"));
 
     let directory_hook = include_str!("../../src/hooks/useDirectorySettings.ts");

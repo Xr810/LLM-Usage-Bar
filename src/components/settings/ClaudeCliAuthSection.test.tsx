@@ -9,11 +9,7 @@ const mocks = vi.hoisted(() => ({
   statusData: {
     installed: true,
     authenticated: true,
-    authMethod: "api_key" as
-      | "api_key"
-      | "claude_account"
-      | "other"
-      | null,
+    authMethod: "api_key" as "api_key" | "claude_account" | "other" | null,
     subscriptionType: null as "pro" | "max" | null,
     quotaAvailability: "unavailable" as const,
     errorCode: null,

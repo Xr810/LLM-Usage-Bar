@@ -375,8 +375,8 @@ impl TrayUsageProjector {
         today: &ProviderRangeAggregate,
         rolling_30_day: &ProviderRangeAggregate,
     ) -> Result<(TrayMeteredUsageView, SourceClassification), AppError> {
-        let quality = cost_quality(&today);
-        let today_cost_usd = display_cost(&today);
+        let quality = cost_quality(today);
+        let today_cost_usd = display_cost(today);
         let rolling_30_day_cost_usd = display_cost(rolling_30_day);
         let classification = classify_metered(
             today_cost_usd.as_deref(),
@@ -1466,7 +1466,8 @@ mod tests {
                                 "resetsAt": "2026-07-16T13:00:00Z",
                                 "status": "yellow",
                                 "unavailableReason": null
-                            }]
+                            }],
+                            "manualResetsRemaining": null
                         },
                         "metered": {
                             "todayCostUsd": "5",

@@ -95,13 +95,18 @@ async fn nine_command_adapters_validate_and_never_serialize_provider_secrets() {
         .unwrap()
         .contains("route-secret"));
     let providers = list_usage_providers_test_hook(&state).await.unwrap();
-    assert_eq!(providers.len(), 6);
+    let system_provider_count = providers
+        .iter()
+        .filter(|provider| provider.system_preset_key.is_some())
+        .count();
+    assert_eq!(providers.len(), system_provider_count + 1);
     assert_eq!(
         providers
             .iter()
-            .filter(|provider| provider.system_preset_key.is_some())
-            .count(),
-        5
+            .filter(|provider| provider.system_preset_key.is_none())
+            .map(|provider| provider.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["metered"]
     );
     assert!(providers.iter().any(|provider| provider.id == "metered"));
     assert!(!serde_json::to_string(&providers)

@@ -1,5 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setPendingMainWindowDestination } from "../tests/msw/handlers";
@@ -60,7 +66,9 @@ describe("Provider-only usage dashboard main path", () => {
     expect(
       await screen.findByRole("tab", { name: "Providers" }),
     ).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("tab", { name: "Diagnostics" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("tab", { name: "Diagnostics" }),
+    ).toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Agents" })).toBeNull();
     expect(screen.queryByRole("tab", { name: "Proxy setup" })).toBeNull();
   });

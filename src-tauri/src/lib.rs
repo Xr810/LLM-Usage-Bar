@@ -466,6 +466,7 @@ fn classify_window_event_route(label: &str, event: WindowEventKind) -> WindowEve
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn should_hide_minimized_main(dock_visible: bool, is_minimized: bool) -> bool {
     dock_visible && is_minimized
 }
