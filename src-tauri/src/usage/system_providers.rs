@@ -34,7 +34,7 @@ pub struct SystemProviderDefinition {
     pub quota_source: Option<&'static str>,
     pub quota_interval_seconds: Option<u64>,
     pub upstream_protocol: Option<&'static str>,
-    pub connection_models_path: Option<&'static str>,
+    pub connection_test_path: Option<&'static str>,
     pub route_config: Option<serde_json::Value>,
 }
 
@@ -44,15 +44,15 @@ fn metered_api_provider(
     name: &'static str,
     base_url: &'static str,
 ) -> SystemProviderDefinition {
-    metered_api_provider_with_models_path(id, preset_key, name, base_url, "/models")
+    metered_api_provider_with_connection_path(id, preset_key, name, base_url, "/models")
 }
 
-fn metered_api_provider_with_models_path(
+fn metered_api_provider_with_connection_path(
     id: &'static str,
     preset_key: &'static str,
     name: &'static str,
     base_url: &'static str,
-    models_path: &'static str,
+    connection_test_path: &'static str,
 ) -> SystemProviderDefinition {
     SystemProviderDefinition {
         id,
@@ -66,7 +66,7 @@ fn metered_api_provider_with_models_path(
         quota_source: None,
         quota_interval_seconds: None,
         upstream_protocol: Some("codex"),
-        connection_models_path: Some(models_path),
+        connection_test_path: Some(connection_test_path),
         route_config: Some(serde_json::json!({
             "base_url": base_url,
             "apiFormat": "openai_chat",
@@ -89,7 +89,7 @@ pub fn system_provider_definitions() -> Vec<SystemProviderDefinition> {
             quota_source: Some(MANAGED_CODEX_QUOTA_SOURCE),
             quota_interval_seconds: Some(300),
             upstream_protocol: Some("codex"),
-            connection_models_path: None,
+            connection_test_path: None,
             route_config: None,
         },
         SystemProviderDefinition {
@@ -104,7 +104,7 @@ pub fn system_provider_definitions() -> Vec<SystemProviderDefinition> {
             quota_source: None,
             quota_interval_seconds: None,
             upstream_protocol: None,
-            connection_models_path: None,
+            connection_test_path: None,
             route_config: None,
         },
         SystemProviderDefinition {
@@ -119,7 +119,7 @@ pub fn system_provider_definitions() -> Vec<SystemProviderDefinition> {
             quota_source: None,
             quota_interval_seconds: None,
             upstream_protocol: Some("codex"),
-            connection_models_path: Some("/models"),
+            connection_test_path: Some("/models"),
             route_config: Some(serde_json::json!({
                 "base_url": "https://api.openai.com/v1",
                 "apiFormat": "openai_chat",
@@ -138,7 +138,7 @@ pub fn system_provider_definitions() -> Vec<SystemProviderDefinition> {
             quota_source: None,
             quota_interval_seconds: None,
             upstream_protocol: Some("claude"),
-            connection_models_path: Some("/v1/models"),
+            connection_test_path: Some("/v1/models"),
             route_config: Some(serde_json::json!({
                 "base_url": "https://api.anthropic.com",
                 "apiFormat": "anthropic",
@@ -157,7 +157,10 @@ pub fn system_provider_definitions() -> Vec<SystemProviderDefinition> {
             quota_source: None,
             quota_interval_seconds: None,
             upstream_protocol: Some("codex"),
-            connection_models_path: Some("/models"),
+            // OpenRouter's model catalog is publicly readable, so it cannot
+            // validate the submitted key. `/key` is the official read-only
+            // endpoint for the current authenticated API key.
+            connection_test_path: Some("/key"),
             route_config: Some(serde_json::json!({
                 "base_url": "https://openrouter.ai/api/v1",
                 "apiFormat": "openai_chat",
@@ -230,12 +233,14 @@ pub fn system_provider_definitions() -> Vec<SystemProviderDefinition> {
             "Fireworks AI",
             "https://api.fireworks.ai/inference/v1",
         ),
-        metered_api_provider_with_models_path(
+        metered_api_provider_with_connection_path(
             PERPLEXITY_API_ID,
             "perplexity-api",
             "Perplexity API",
             "https://api.perplexity.ai",
-            "/v1/models",
+            // `/v1/models` is public and would accept a bogus key. Listing
+            // async Sonar requests is read-only and requires authentication.
+            "/v1/async/sonar",
         ),
         metered_api_provider(
             SILICONFLOW_API_ID,
@@ -243,11 +248,15 @@ pub fn system_provider_definitions() -> Vec<SystemProviderDefinition> {
             "SiliconFlow API",
             "https://api.siliconflow.cn/v1",
         ),
-        metered_api_provider(
+        metered_api_provider_with_connection_path(
             NVIDIA_NIM_API_ID,
             "nvidia-nim-api",
             "NVIDIA NIM API",
             "https://integrate.api.nvidia.com/v1",
+            // NVIDIA's hosted `/models` catalog is public and does not prove
+            // that a key can invoke hosted inference. Keep the canonical path
+            // for discovery, but the UI suppresses the misleading key test.
+            "/models",
         ),
         metered_api_provider(
             CEREBRAS_API_ID,

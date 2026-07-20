@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
 import { UsageProvidersSettings } from "./UsageProvidersSettings";
 
@@ -139,6 +139,25 @@ it("renders the built-in Provider catalog in canonical order before custom Provi
   ).toBeNull();
   expect(
     screen.getByRole("button", { name: "Edit Custom Example" }),
+  ).toBeInTheDocument();
+});
+
+it("searches the Provider catalog by name and preset identity", () => {
+  render(<UsageProvidersSettings />);
+
+  const search = screen.getByRole("searchbox", { name: "Search Providers" });
+  fireEvent.change(search, { target: { value: "moonshot" } });
+
+  expect(screen.getByText("Kimi / Moonshot API")).toBeInTheDocument();
+  expect(screen.queryByText("OpenAI API")).toBeNull();
+  expect(screen.queryByText("Custom Example")).toBeNull();
+
+  fireEvent.change(search, { target: { value: "not-a-provider" } });
+  expect(
+    screen.getByText("No Providers match this search."),
+  ).toBeInTheDocument();
+  expect(
+    screen.getByRole("button", { name: "Add Provider" }),
   ).toBeInTheDocument();
 });
 

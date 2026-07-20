@@ -51,6 +51,7 @@ export function SystemProviderCard({
   };
 
   const hasUpstreamKey = provider.upstreamCredentialStatus === "configured";
+  const canTestConnection = provider.systemPresetKey !== "nvidia-nim-api";
   const { icon, iconColor } = dashboardProviderIcon(provider);
 
   return (
@@ -149,24 +150,26 @@ export function SystemProviderCard({
               </Button>
               {hasUpstreamKey ? (
                 <>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={credentials.isPending}
-                    onClick={() =>
-                      void run(async () => {
-                        const result = await credentials.testConnection(
-                          provider.id,
-                          provider.upstreamCredentialVersion,
-                        );
-                        setConnectionStatus(result.status);
-                      })
-                    }
-                  >
-                    {t("usageDashboard.testConnection", {
-                      defaultValue: "Test connection",
-                    })}
-                  </Button>
+                  {canTestConnection ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={credentials.isPending}
+                      onClick={() =>
+                        void run(async () => {
+                          const result = await credentials.testConnection(
+                            provider.id,
+                            provider.upstreamCredentialVersion,
+                          );
+                          setConnectionStatus(result.status);
+                        })
+                      }
+                    >
+                      {t("usageDashboard.testConnection", {
+                        defaultValue: "Test connection",
+                      })}
+                    </Button>
+                  ) : null}
                   <Button
                     size="sm"
                     variant="outline"
@@ -199,6 +202,14 @@ export function SystemProviderCard({
                 </>
               ) : null}
             </div>
+            {!canTestConnection ? (
+              <div className="text-xs text-muted-foreground">
+                {t("usageDashboard.connectionTestUnavailable", {
+                  defaultValue:
+                    "This Provider's public model catalog cannot validate an API key. Verify it with an actual inference request.",
+                })}
+              </div>
+            ) : null}
             {(connectionStatus ?? provider.lastConnectionTestStatus) ? (
               <div className="text-xs text-muted-foreground">
                 {(connectionStatus ?? provider.lastConnectionTestStatus) ===

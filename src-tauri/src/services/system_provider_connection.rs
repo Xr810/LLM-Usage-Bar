@@ -107,13 +107,13 @@ impl SystemProviderConnectionService {
             .route_config
             .as_ref()
             .ok_or_else(|| AppError::Message("unsupported_auth".to_string()))?;
-        let models_path = definition
-            .connection_models_path
+        let test_path = definition
+            .connection_test_path
             .filter(|path| path.starts_with('/') && !path.starts_with("//"))
             .ok_or_else(|| AppError::Message("unsupported_auth".to_string()))?;
         let secret = std::str::from_utf8(credential.expose_secret())
             .map_err(|_| AppError::Message("credential_unavailable".to_string()))?;
-        let url = format!("{base}{models_path}");
+        let url = format!("{base}{test_path}");
         let headers = match route_config
             .get("authMode")
             .and_then(serde_json::Value::as_str)
@@ -226,7 +226,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn probes_only_canonical_model_endpoints_with_fixed_auth_headers() {
+    async fn probes_only_canonical_read_only_endpoints_with_fixed_auth_headers() {
         for (provider_id, expected_url, auth_mode) in [
             (
                 "system-openai-api",
@@ -235,7 +235,7 @@ mod tests {
             ),
             (
                 "system-openrouter-api",
-                "https://openrouter.ai/api/v1/models",
+                "https://openrouter.ai/api/v1/key",
                 "bearer",
             ),
             (
@@ -296,7 +296,7 @@ mod tests {
             ),
             (
                 "system-perplexity-api",
-                "https://api.perplexity.ai/v1/models",
+                "https://api.perplexity.ai/v1/async/sonar",
                 "bearer",
             ),
             (

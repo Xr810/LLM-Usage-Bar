@@ -23,7 +23,10 @@ vi.mock("@/components/providers/forms/CodexOAuthSection", () => ({
   CodexOAuthSection: () => <div>ChatGPT auth</div>,
 }));
 vi.mock("@/lib/query/usageDashboard", () => ({
-  useSystemProviderCredentialActions: () => ({ isPending: false }),
+  useSystemProviderCredentialActions: () => ({
+    isPending: false,
+    testConnection: vi.fn(),
+  }),
   useSetUsageProviderEnabled: () => ({
     mutateAsync: vi.fn(),
     isPending: false,
@@ -114,4 +117,33 @@ it("does not render a budget editor for subscription Providers", () => {
   );
 
   expect(screen.queryByText("Daily budget")).toBeNull();
+});
+
+it("does not claim that NVIDIA's public model catalog validates an API key", () => {
+  render(
+    <SystemProviderCard
+      provider={
+        {
+          id: "system-nvidia-nim-api",
+          name: "NVIDIA NIM API",
+          billingKind: "metered",
+          dailyBudgetUsd: null,
+          systemPresetKey: "nvidia-nim-api",
+          systemAuthKind: "provider_api_key",
+          canonicalEndpoint: "https://integrate.api.nvidia.com/v1",
+          upstreamCredentialStatus: "configured",
+          upstreamCredentialVersion: 1,
+          canClearUpstreamCredential: true,
+          lastConnectionTestStatus: null,
+          bindings: [],
+          enabled: true,
+        } as unknown as UsageProviderView
+      }
+    />,
+  );
+
+  expect(screen.queryByRole("button", { name: "Test connection" })).toBeNull();
+  expect(
+    screen.getByText(/public model catalog cannot validate an API key/i),
+  ).toBeInTheDocument();
 });

@@ -1,6 +1,8 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Card,
   CardContent,
@@ -43,6 +45,23 @@ const SYSTEM_PROVIDER_ORDER = [
   "cerebras-api",
 ];
 
+function providerMatchesSearch(
+  provider: UsageProviderView,
+  normalizedQuery: string,
+): boolean {
+  if (!normalizedQuery) return true;
+  return [
+    provider.name,
+    provider.systemPresetKey,
+    provider.canonicalEndpoint,
+    provider.productGroupId,
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join(" ")
+    .toLocaleLowerCase()
+    .includes(normalizedQuery);
+}
+
 interface UsageProvidersSettingsProps {
   targetProviderId?: string;
   onTargetHandled?: () => void;
@@ -58,6 +77,7 @@ export function UsageProvidersSettings({
   const setEnabled = useSetUsageProviderEnabled();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<UsageProviderView | null>(null);
+  const [providerSearch, setProviderSearch] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   const run = async (operation: () => Promise<unknown>) => {
@@ -93,11 +113,28 @@ export function UsageProvidersSettings({
       provider.systemPresetKey === null ||
       provider.systemPresetKey === undefined,
   );
+  const normalizedProviderSearch = providerSearch.trim().toLocaleLowerCase();
+  const visibleSystemProviders = useMemo(
+    () =>
+      systemProviders.filter((provider) =>
+        providerMatchesSearch(provider, normalizedProviderSearch),
+      ),
+    [normalizedProviderSearch, systemProviders],
+  );
+  const visibleCustomProviders = useMemo(
+    () =>
+      customProviders.filter((provider) =>
+        providerMatchesSearch(provider, normalizedProviderSearch),
+      ),
+    [customProviders, normalizedProviderSearch],
+  );
+  const hasVisibleProviders =
+    visibleSystemProviders.length + visibleCustomProviders.length > 0;
 
   return (
     <div className="space-y-4 pb-6">
       <Card>
-        <CardHeader className="flex-row items-start justify-between gap-4 space-y-0">
+        <CardHeader className="space-y-4">
           <div className="space-y-1.5">
             <CardTitle className="text-base">
               {t("usageDashboard.providers", { defaultValue: "Providers" })}
@@ -109,15 +146,32 @@ export function UsageProvidersSettings({
               })}
             </CardDescription>
           </div>
-          <Button
-            size="sm"
-            onClick={() => {
-              setEditing(null);
-              setDialogOpen(true);
-            }}
-          >
-            {t("usageDashboard.addProvider", { defaultValue: "Add Provider" })}
-          </Button>
+          <div className="space-y-2">
+            <div className="relative">
+              <Search
+                aria-hidden="true"
+                className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+              />
+              <Input
+                type="search"
+                value={providerSearch}
+                onChange={(event) => setProviderSearch(event.target.value)}
+                aria-label={t("usageDashboard.searchProviders", {
+                  defaultValue: "Search Providers",
+                })}
+                placeholder={t("usageDashboard.searchProvidersPlaceholder", {
+                  defaultValue: "Search by Provider name or endpoint...",
+                })}
+                className="pl-9"
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {t("usageDashboard.providerCatalogHint", {
+                defaultValue:
+                  "Search the built-in catalog, then sign in or save an API key. Usage, balance, and quota still depend on the monitoring sources each Provider exposes.",
+              })}
+            </p>
+          </div>
         </CardHeader>
       </Card>
 
@@ -125,7 +179,7 @@ export function UsageProvidersSettings({
         <div>{t("common.loading", { defaultValue: "Loading" })}</div>
       ) : null}
 
-      {systemProviders.map((provider) => (
+      {visibleSystemProviders.map((provider) => (
         <SystemProviderCard
           key={provider.id}
           provider={provider}
@@ -133,6 +187,18 @@ export function UsageProvidersSettings({
           onTargetHandled={onTargetHandled}
         />
       ))}
+
+      {!providersQuery.isLoading &&
+      normalizedProviderSearch &&
+      !hasVisibleProviders ? (
+        <Card className="border-dashed">
+          <CardContent className="p-6 text-center text-sm text-muted-foreground">
+            {t("usageDashboard.noMatchingProviders", {
+              defaultValue: "No Providers match this search.",
+            })}
+          </CardContent>
+        </Card>
+      ) : null}
 
       <Card>
         <CardHeader>
@@ -149,7 +215,7 @@ export function UsageProvidersSettings({
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-2">
-          {customProviders.map((provider) => {
+          {visibleCustomProviders.map((provider) => {
             const { icon, iconColor } = dashboardProviderIcon(provider);
             return (
               <div
@@ -242,13 +308,25 @@ export function UsageProvidersSettings({
               </div>
             );
           })}
-          {!providersQuery.isLoading && customProviders.length === 0 ? (
+          {!providersQuery.isLoading &&
+          !normalizedProviderSearch &&
+          customProviders.length === 0 ? (
             <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
               {t("usageDashboard.noCustomProvidersConfigured", {
                 defaultValue: "No custom Providers configured",
               })}
             </div>
           ) : null}
+          <Button
+            variant="outline"
+            className="h-auto w-full border-dashed py-4"
+            onClick={() => {
+              setEditing(null);
+              setDialogOpen(true);
+            }}
+          >
+            {t("usageDashboard.addProvider", { defaultValue: "Add Provider" })}
+          </Button>
         </CardContent>
       </Card>
 
