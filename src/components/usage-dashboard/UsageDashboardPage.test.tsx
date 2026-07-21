@@ -25,18 +25,21 @@ describe("UsageDashboardPage Provider-only contract", () => {
     ).toBeInTheDocument();
     expect(await screen.findByText("ChatGPT Plus/Pro")).toBeInTheDocument();
     expect(
-      screen.getByRole("heading", { name: "Subscription accounts" }),
+      screen.getByRole("heading", { name: "Remaining quota" }),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("heading", { name: "Metered accounts" }),
     ).toBeInTheDocument();
     expect(screen.getAllByText("OpenRouter")).toHaveLength(2);
     expect(
+      screen.getByRole("heading", { name: "Daily activity" }),
+    ).toBeInTheDocument();
+    expect(
       screen.getByRole("heading", { name: "Usage trend" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("Hourly")).toBeInTheDocument();
+    expect(screen.getByText("Daily")).toBeInTheDocument();
     expect(
-      screen.getByRole("img", { name: "Token usage by hour" }),
+      screen.getByRole("img", { name: "Token usage by day" }),
     ).toBeInTheDocument();
     expect(screen.queryByRole("tablist", { name: "Agents" })).toBeNull();
   });
@@ -46,18 +49,25 @@ describe("UsageDashboardPage Provider-only contract", () => {
     renderPage();
     await screen.findByText("ChatGPT Plus/Pro");
 
-    await user.click(screen.getByRole("button", { name: "7 days" }));
+    await user.click(screen.getByRole("button", { name: "Today" }));
     await waitFor(() =>
       expect(
         commandCalls("get_provider_usage_dashboard").length,
       ).toBeGreaterThan(1),
+    );
+    expect(await screen.findByText("Hourly")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "7 days" }));
+    await waitFor(() =>
+      expect(
+        commandCalls("get_provider_usage_dashboard").length,
+      ).toBeGreaterThan(2),
     );
     expect(await screen.findByText("Daily")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "30 days" }));
     await waitFor(() =>
       expect(
         commandCalls("get_provider_usage_dashboard").length,
-      ).toBeGreaterThan(2),
+      ).toBeGreaterThan(3),
     );
 
     for (const call of commandCalls("get_provider_usage_dashboard")) {
@@ -65,6 +75,14 @@ describe("UsageDashboardPage Provider-only contract", () => {
       expect(args).not.toHaveProperty("agentModuleId");
       expect(Number(args.endAt)).toBeGreaterThan(Number(args.startAt));
     }
+
+    const activityCalls = commandCalls("get_provider_usage_activity");
+    expect(activityCalls).toHaveLength(1);
+    const activityArgs = activityCalls[0]?.[1] ?? {};
+    expect(activityArgs).not.toHaveProperty("agentModuleId");
+    expect(
+      Number(activityArgs.endAt) - Number(activityArgs.startAt),
+    ).toBeGreaterThan(300 * 24 * 60 * 60);
   });
 
   it("refreshes quota and syncs sessions by Provider identity", async () => {

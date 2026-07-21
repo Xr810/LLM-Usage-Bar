@@ -279,4 +279,27 @@ describe("SubscriptionProviderCard localized reset countdown", () => {
       }),
     ).toBeNull();
   });
+
+  it("keeps quota and Provider actions available in the sidebar layout", () => {
+    render(
+      <SubscriptionProviderCard
+        usage={subscriptionUsage()}
+        layout="sidebar"
+        onRefreshQuota={vi.fn()}
+        onSyncSessions={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByTestId("subscription-provider-system-chatgpt-subscription"),
+    ).toHaveAttribute("data-layout", "sidebar");
+    expect(screen.getByText("5-hour window")).toBeInTheDocument();
+    expect(screen.getByText("Weekly allowance")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Refresh quota" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Sync sessions" }),
+    ).toBeInTheDocument();
+  });
 });

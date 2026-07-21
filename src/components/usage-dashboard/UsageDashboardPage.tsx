@@ -9,8 +9,12 @@ import {
   useRefreshProviderQuota,
   useSyncProviderSessionUsage,
 } from "@/lib/query/usageDashboard";
+import { useProviderUsageActivity } from "@/lib/query/providerUsageActivity";
 import { useSettingsQuery } from "@/lib/query";
-import { resolveUsageRange } from "@/lib/usageRange";
+import {
+  resolveProviderActivityRange,
+  resolveUsageRange,
+} from "@/lib/usageRange";
 import type { UsageRangeSelection } from "@/types/usage";
 import type { AgentModuleView } from "@/types/usageDashboard";
 import { ProviderUsagePage } from "./ProviderUsagePage";
@@ -38,7 +42,7 @@ export function UsageDashboardPage({
   }, [advanceRangeClock]);
 
   const [selection, setSelection] = useState<UsageRangeSelection>({
-    preset: "today",
+    preset: "30d",
   });
   const [warnings, setWarnings] = useState<string[]>([]);
   const [errors, setErrors] = useState<string[]>([]);
@@ -46,7 +50,15 @@ export function UsageDashboardPage({
     () => resolveUsageRange(selection, rangeClockMs),
     [rangeClockMs, selection],
   );
+  const activityRange = useMemo(
+    () => resolveProviderActivityRange(rangeClockMs),
+    [rangeClockMs],
+  );
   const dashboard = useProviderUsageDashboard(range.startDate, range.endDate);
+  const activity = useProviderUsageActivity(
+    activityRange.startDate,
+    activityRange.endDate,
+  );
   const settings = useSettingsQuery();
   const refreshQuota = useRefreshProviderQuota();
   const syncSession = useSyncProviderSessionUsage();
@@ -86,6 +98,7 @@ export function UsageDashboardPage({
 
   const renderedErrors = [
     ...(dashboard.error ? [errorText(dashboard.error)] : []),
+    ...(activity.error ? [errorText(activity.error)] : []),
     ...errors,
   ].filter((message, index, messages) => messages.indexOf(message) === index);
 
@@ -148,9 +161,12 @@ export function UsageDashboardPage({
 
       {dashboard.isLoading ? (
         <div className="space-y-4" aria-hidden="true">
-          <div className="grid gap-4 lg:grid-cols-2">
-            <div className="h-44 animate-pulse rounded-xl bg-muted/60" />
-            <div className="h-44 animate-pulse rounded-xl bg-muted/60" />
+          <div className="grid gap-4 min-[900px]:grid-cols-[300px_minmax(0,1fr)]">
+            <div className="h-[28rem] animate-pulse rounded-xl bg-muted/60" />
+            <div className="space-y-4">
+              <div className="h-52 animate-pulse rounded-xl bg-muted/60" />
+              <div className="h-80 animate-pulse rounded-xl bg-muted/60" />
+            </div>
           </div>
           <div className="h-16 animate-pulse rounded-xl bg-muted/60" />
         </div>
@@ -159,6 +175,10 @@ export function UsageDashboardPage({
           projection={projection}
           startAt={range.startDate}
           endAt={range.endDate}
+          activityBuckets={activity.data ?? []}
+          activityStartAt={activityRange.startDate}
+          activityEndAt={activityRange.endDate}
+          isActivityLoading={activity.isLoading}
           onOpenSettings={onOpenSettings}
           onRefreshQuota={(providerId) =>
             run(() => refreshQuota.mutateAsync(providerId))

@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ProviderIcon } from "@/components/ProviderIcon";
 import { ManualResetCredits } from "@/components/ManualResetCredits";
+import { cn } from "@/lib/utils";
 import type { ProviderUsageView } from "@/types/usageDashboard";
 import { useTranslation } from "react-i18next";
 import { QuotaMeter } from "./QuotaMeter";
@@ -23,6 +24,7 @@ interface Props {
   isRefreshingQuota?: boolean;
   isSyncingSessions?: boolean;
   remainingThresholds?: RemainingThresholds;
+  layout?: "default" | "sidebar";
 }
 
 type RelativeReset = {
@@ -50,8 +52,10 @@ export function SubscriptionProviderCard({
   isRefreshingQuota = false,
   isSyncingSessions = false,
   remainingThresholds = DEFAULT_REMAINING_THRESHOLDS,
+  layout = "default",
 }: Props) {
   const { t, i18n } = useTranslation();
+  const sidebar = layout === "sidebar";
   const canRefreshQuota = Boolean(usage.provider.quotaSource);
   const quota = canRefreshQuota ? usage.quota : null;
   const fetchState = canRefreshQuota ? usage.quotaFetchState : null;
@@ -107,6 +111,7 @@ export function SubscriptionProviderCard({
     return (
       <QuotaMeter
         key={label}
+        flat={sidebar}
         label={label}
         meterLabel={label}
         fillPercent={remaining}
@@ -139,42 +144,77 @@ export function SubscriptionProviderCard({
     );
   };
 
-  const tokenItems = [
-    [
-      t("usageDashboard.inputTokens", { defaultValue: "Input" }),
-      usage.inputTokens,
-    ],
-    [
-      t("usageDashboard.outputTokens", { defaultValue: "Output" }),
-      usage.outputTokens,
-    ],
-    [
-      t("usageDashboard.cacheReadTokens", { defaultValue: "Cache read" }),
-      usage.cacheReadTokens,
-    ],
-    [
-      t("usageDashboard.cacheCreationTokens", {
-        defaultValue: "Cache creation",
-      }),
-      usage.cacheCreationTokens,
-    ],
-    [t("usageDashboard.totalTokens", { defaultValue: "Total" }), totalTokens],
-  ] as const;
+  const tokenItems = sidebar
+    ? [
+        {
+          label: t("usageDashboard.totalTokens", { defaultValue: "Total" }),
+          value: totalTokens,
+          text: formatTokensCompact(totalTokens),
+        },
+        {
+          label: t("usageDashboard.records", { defaultValue: "Records" }),
+          value: usage.eventCount,
+          text: usage.eventCount.toLocaleString(
+            i18n.resolvedLanguage ?? i18n.language,
+          ),
+        },
+      ]
+    : [
+        {
+          label: t("usageDashboard.inputTokens", { defaultValue: "Input" }),
+          value: usage.inputTokens,
+          text: formatTokensCompact(usage.inputTokens),
+        },
+        {
+          label: t("usageDashboard.outputTokens", { defaultValue: "Output" }),
+          value: usage.outputTokens,
+          text: formatTokensCompact(usage.outputTokens),
+        },
+        {
+          label: t("usageDashboard.cacheReadTokens", {
+            defaultValue: "Cache read",
+          }),
+          value: usage.cacheReadTokens,
+          text: formatTokensCompact(usage.cacheReadTokens),
+        },
+        {
+          label: t("usageDashboard.cacheCreationTokens", {
+            defaultValue: "Cache creation",
+          }),
+          value: usage.cacheCreationTokens,
+          text: formatTokensCompact(usage.cacheCreationTokens),
+        },
+        {
+          label: t("usageDashboard.totalTokens", { defaultValue: "Total" }),
+          value: totalTokens,
+          text: formatTokensCompact(totalTokens),
+        },
+      ];
 
   const lastSuccessAt = fetchState?.lastSuccessAt ?? quota?.fetchedAt;
 
   return (
     <Card
       data-testid={`subscription-provider-${usage.provider.id}`}
-      className="overflow-hidden"
+      data-layout={layout}
+      className={cn(
+        "overflow-hidden",
+        sidebar &&
+          "rounded-none border-x-0 border-b-0 bg-transparent shadow-none",
+      )}
     >
-      <div className="flex items-center justify-between gap-3 px-5 pt-4">
+      <div
+        className={cn(
+          "flex items-center justify-between gap-3 pt-4",
+          sidebar ? "px-0" : "px-5",
+        )}
+      >
         <div className="flex min-w-0 items-center gap-3">
           <ProviderIcon
             icon={icon}
             color={iconColor}
             name={usage.provider.name}
-            size={34}
+            size={sidebar ? 30 : 34}
             className="shrink-0 rounded-[10px] border border-border/50"
           />
           <div className="min-w-0">
@@ -212,7 +252,12 @@ export function SubscriptionProviderCard({
         ) : null}
       </div>
 
-      <div className="grid gap-2.5 px-5 pt-4 sm:grid-cols-2">
+      <div
+        className={cn(
+          "grid gap-2.5 pt-4",
+          sidebar ? "grid-cols-1 px-0" : "px-5 sm:grid-cols-2",
+        )}
+      >
         {quotaWindow(
           t("usageDashboard.fiveHourWindow", { defaultValue: "5-hour window" }),
           quota?.fiveHourUtilizationPercent,
@@ -227,16 +272,22 @@ export function SubscriptionProviderCard({
         )}
       </div>
 
-      <div className="px-5 pt-2">
+      <div className={cn("pt-2", sidebar ? "px-0" : "px-5")}>
         <ManualResetCredits
           availableCount={quota?.manualResetsRemaining ?? null}
           credits={quota?.manualResetCredits ?? []}
+          compact={sidebar}
         />
       </div>
 
-      <div className="px-5 pt-4">
-        <dl className="grid grid-cols-5 gap-2 rounded-lg bg-muted/25 px-3 py-2.5 dark:bg-muted/15">
-          {tokenItems.map(([label, value]) => (
+      <div className={cn("pt-4", sidebar ? "px-0" : "px-5")}>
+        <dl
+          className={cn(
+            "grid gap-2 rounded-lg bg-muted/25 px-3 py-2.5 dark:bg-muted/15",
+            sidebar ? "grid-cols-2" : "grid-cols-5",
+          )}
+        >
+          {tokenItems.map(({ label, value, text }) => (
             <div key={label} className="min-w-0">
               <dt className="truncate text-[11px] text-muted-foreground">
                 {label}
@@ -245,7 +296,7 @@ export function SubscriptionProviderCard({
                 className="mt-0.5 truncate text-sm font-semibold metric"
                 title={value.toLocaleString()}
               >
-                {formatTokensCompact(value)}
+                {text}
               </dd>
             </div>
           ))}
@@ -253,12 +304,19 @@ export function SubscriptionProviderCard({
       </div>
 
       {fetchState?.stale && fetchState.lastError ? (
-        <p className="px-5 pt-2 text-xs text-warning">
+        <p
+          className={cn("pt-2 text-xs text-warning", sidebar ? "px-0" : "px-5")}
+        >
           {t("usageDashboard.stale", { defaultValue: "Stale" })}:{" "}
           {fetchState.lastError}
         </p>
       ) : null}
-      <div className="mt-4 flex items-center gap-2 border-t border-border/60 px-5 py-3">
+      <div
+        className={cn(
+          "mt-4 flex flex-wrap items-center gap-2 border-t border-border/60 py-3",
+          sidebar ? "px-0" : "px-5",
+        )}
+      >
         {canRefreshQuota ? (
           <Button
             size="sm"

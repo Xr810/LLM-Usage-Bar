@@ -3,8 +3,10 @@ import { PlugZap } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import type { UsageTrendBucketView } from "@/types/usageDashboard";
 import type { ProviderDashboardProjection } from "./usageDashboardProjection";
 import { MeteredProviderCard } from "./MeteredProviderCard";
+import { ProviderActivityHeatmap } from "./ProviderActivityHeatmap";
 import { SubscriptionProviderCard } from "./SubscriptionProviderCard";
 import { ProviderUsageTrendChart } from "./ProviderUsageTrendChart";
 import { formatTokensCompact } from "./usagePresentation";
@@ -14,6 +16,10 @@ interface ProviderUsagePageProps {
   projection: ProviderDashboardProjection;
   startAt: number;
   endAt: number;
+  activityBuckets: UsageTrendBucketView[];
+  activityStartAt: number;
+  activityEndAt: number;
+  isActivityLoading?: boolean;
   onRefreshQuota: (providerId: string) => Promise<unknown>;
   onSyncSessions: (providerId: string) => Promise<void>;
   onOpenSettings?: () => void;
@@ -26,6 +32,10 @@ export function ProviderUsagePage({
   projection,
   startAt,
   endAt,
+  activityBuckets,
+  activityStartAt,
+  activityEndAt,
+  isActivityLoading = false,
   onRefreshQuota,
   onSyncSessions,
   onOpenSettings,
@@ -94,45 +104,95 @@ export function ProviderUsagePage({
 
   return (
     <div className="space-y-7">
-      <ProviderUsageTrendChart
-        granularity={projection.trendGranularity}
-        buckets={projection.trendBuckets}
-        totalTokens={projection.overallTotalTokens}
-        requestCount={projection.overallRequestCount}
-        totalCostUsd={projection.overallTotalCostUsd}
-        costStatus={projection.overallCostStatus}
-      />
+      <div className="grid items-start gap-4 min-[900px]:grid-cols-[300px_minmax(0,1fr)] min-[1180px]:grid-cols-[330px_minmax(0,1fr)]">
+        <section
+          className="overflow-hidden rounded-xl border bg-card px-4 shadow-card"
+          aria-labelledby="subscription-heading"
+        >
+          <div className="flex items-start justify-between gap-3 py-4">
+            <div>
+              <h2 id="subscription-heading" className="text-sm font-semibold">
+                {t("usageDashboard.remainingQuota", {
+                  defaultValue: "Remaining quota",
+                })}
+              </h2>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                {t("usageDashboard.subscriptionAccounts", {
+                  defaultValue: "Subscription accounts",
+                })}
+              </p>
+            </div>
+            <span className="shrink-0 text-xs text-muted-foreground metric">
+              {t("usageDashboard.accountCount", {
+                count: projection.subscriptionProviders.length,
+                defaultValue: "{{count}} accounts",
+              })}
+            </span>
+          </div>
 
-      <section className="space-y-3" aria-labelledby="subscription-heading">
-        {sectionHeading(
-          "subscription-heading",
-          t("usageDashboard.subscriptionAccounts", {
-            defaultValue: "Subscription accounts",
-          }),
-          projection.subscriptionProviders.length,
-        )}
-        {projection.subscriptionProviders.length ? (
-          <div className="grid gap-4 lg:grid-cols-2">
-            {projection.subscriptionProviders.map((usage) => (
-              <SubscriptionProviderCard
-                key={usage.provider.id}
-                usage={usage}
-                onRefreshQuota={onRefreshQuota}
-                onSyncSessions={onSyncSessions}
-                isRefreshingQuota={isRefreshingQuota}
-                isSyncingSessions={isSyncingSessions}
-                remainingThresholds={remainingThresholds}
-              />
-            ))}
-          </div>
-        ) : (
-          <div className="rounded-xl border border-dashed border-border bg-muted/20 px-4 py-6 text-center text-sm text-muted-foreground dark:bg-muted/10">
-            {t("usageDashboard.noSubscriptionProviders", {
-              defaultValue: "No subscription Provider accounts.",
-            })}
-          </div>
-        )}
-      </section>
+          {projection.subscriptionProviders.length ? (
+            <div>
+              {projection.subscriptionProviders.map((usage) => (
+                <SubscriptionProviderCard
+                  key={usage.provider.id}
+                  usage={usage}
+                  layout="sidebar"
+                  onRefreshQuota={onRefreshQuota}
+                  onSyncSessions={onSyncSessions}
+                  isRefreshingQuota={isRefreshingQuota}
+                  isSyncingSessions={isSyncingSessions}
+                  remainingThresholds={remainingThresholds}
+                />
+              ))}
+            </div>
+          ) : (
+            <div className="border-t border-dashed border-border py-8 text-center text-sm text-muted-foreground">
+              {t("usageDashboard.noSubscriptionProviders", {
+                defaultValue: "No subscription Provider accounts.",
+              })}
+            </div>
+          )}
+
+          <dl className="grid grid-cols-2 gap-2 border-t border-border/60 py-4">
+            <div className="rounded-lg bg-muted/20 px-3 py-2.5">
+              <dt className="text-[10px] text-muted-foreground">
+                {t("usageDashboard.selectedRangeTokens", {
+                  defaultValue: "Selected range",
+                })}
+              </dt>
+              <dd
+                className="mt-1 text-base font-semibold metric"
+                title={projection.overallTotalTokens.toLocaleString()}
+              >
+                {formatTokensCompact(projection.overallTotalTokens)}
+              </dd>
+            </div>
+            <div className="rounded-lg bg-muted/20 px-3 py-2.5">
+              <dt className="text-[10px] text-muted-foreground">
+                {t("usageDashboard.records", { defaultValue: "Records" })}
+              </dt>
+              <dd className="mt-1 text-base font-semibold metric">
+                {projection.overallRequestCount.toLocaleString()}
+              </dd>
+            </div>
+          </dl>
+        </section>
+
+        <div className="min-w-0 space-y-4">
+          <ProviderActivityHeatmap
+            buckets={activityBuckets}
+            startAt={activityStartAt}
+            endAt={activityEndAt}
+            isLoading={isActivityLoading}
+          />
+          <ProviderUsageTrendChart
+            granularity={projection.trendGranularity}
+            buckets={projection.trendBuckets}
+            totalTokens={projection.overallTotalTokens}
+            recordCount={projection.overallRequestCount}
+          />
+        </div>
+      </div>
 
       <section className="space-y-3" aria-labelledby="metered-heading">
         {sectionHeading(

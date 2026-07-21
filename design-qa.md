@@ -41,6 +41,81 @@ final result: passed
 
 ---
 
+# Provider Activity Workbench (Option 3) — Design QA
+
+Date: 2026-07-21
+
+Source visual truth:
+
+- Selected local prototype: `/Users/max/.codex/visualizations/2026/07/21/019f8291-b3f1-7740-82f0-0b4f6a7489a2/llm-usage-activity-prototypes/option-3.html`
+- Settled source capture: `qa-artifacts/option-3-source.png`
+
+Implementation evidence:
+
+- Reference and implementation in one comparison input: `qa-artifacts/option-3-comparison-final.png`
+- Matching `1440 × 1024` implementation viewport: `qa-artifacts/option-3-implementation-final.png`
+- Final full page at the normal desktop browser viewport: `qa-artifacts/option-3-implementation-full.png`
+- Narrow responsive state: `qa-artifacts/option-3-narrow-window.png`
+
+Viewport and state:
+
+- Comparison source and implementation: `1440 × 1024`, dark appearance, two populated subscription Providers, 365 local calendar days, and a populated 30-day daily trend.
+- Responsive check: `820 × 650` CSS viewport, stacked layout, no horizontal overflow (`scrollWidth = innerWidth = 820`).
+- The local visual harness used realistic non-production data. Production range switching and backend command wiring are covered by the focused component/page tests.
+
+## Findings
+
+No actionable P0, P1, or P2 difference remains. The implementation preserves
+the selected Option 3 hierarchy: remaining quota in a fixed-width left rail,
+yearly daily activity above the selected-range Token trend, and metered accounts
+below the workbench. Existing application chrome, Provider icons, refresh/sync
+actions, records, and metered-account content are intentionally retained rather
+than removed to imitate the lower-fidelity prototype.
+
+## Fidelity surfaces
+
+- Layout and spacing: the desktop workbench uses a `330 px` quota rail and a
+  flexible chart column; below `900 px` it stacks without horizontal overflow.
+- Hierarchy: quota percentages remain the first glance target, followed by daily
+  activity density and then the selected-range Token line.
+- Visual tokens: surfaces, borders, typography, success/warning quota colors,
+  primary activity scale, chart line, and tooltip use the existing application
+  design system.
+- Copy and content: the annual heatmap reports local calendar days, active-day
+  count, recent streak, Tokens, and record count. The trend reports total,
+  peak, and records without presenting records as messages.
+- Assets: existing Provider icons and Lucide actions are retained; no placeholder
+  or approximate graphic assets were introduced.
+
+## Comparison history
+
+- Initial comparison exposed two P2 fidelity issues: each quota window still had
+  an inset card treatment, and the right-side visual stack was materially shorter
+  than the selected prototype.
+- Fix: sidebar quota meters now render flat within their Provider section, the
+  activity panel has a desktop minimum height with a calmer vertical center, and
+  the trend plot increased to `288 px`. Activity intensity now uses a square-root
+  scale so low, medium, and high days remain visibly distinct.
+- Post-fix comparison shows the flatter quota rhythm and a more balanced right
+  column while preserving the denser production information model.
+
+## Focused evidence and interaction checks
+
+The `1440 × 1024` comparison is the focused workbench evidence; the full-page
+capture verifies the retained metered-account continuation below it. Standalone
+implementation, final comparison, default-window, and narrow-window loads
+reported no console errors or warnings. Accessibility snapshots expose every
+activity day with its date, Token total, and record count, and the latest-day
+detail is visible without requiring hover. Automated tests verify Today/7-day/
+30-day switching, hourly-versus-daily granularity, heatmap zero fill, per-day
+details, quota actions, and record semantics.
+Only one day cell participates in the tab order at a time; arrow keys move the
+roving focus across the grid, avoiding a 365-stop keyboard path.
+
+final result: passed
+
+---
+
 # Menu Bar Usage Popover — Final Design QA
 
 Date: 2026-07-16  

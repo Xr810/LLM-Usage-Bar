@@ -23,6 +23,20 @@ function getPresetLookbackStart(
   );
 }
 
+export function resolveProviderActivityRange(
+  nowMs: number = Date.now(),
+): ResolvedUsageRange {
+  const today = getStartOfLocalDayDate(nowMs);
+  const start = new Date(today);
+  start.setDate(start.getDate() - 364);
+  const end = new Date(today);
+  end.setDate(end.getDate() + 1);
+  return {
+    startDate: Math.floor(start.getTime() / 1_000),
+    endDate: Math.floor(end.getTime() / 1_000),
+  };
+}
+
 export function resolveUsageRange(
   selection: UsageRangeSelection,
   nowMs: number = Date.now(),

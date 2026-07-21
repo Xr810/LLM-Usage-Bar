@@ -21,6 +21,8 @@ interface QuotaMeterProps {
   meterLabel: string;
   /** Small muted line under the bar (reset countdown etc.) */
   footer?: ReactNode;
+  /** Removes the inset card treatment when the meter already sits in a sidebar card. */
+  flat?: boolean;
 }
 
 /**
@@ -34,9 +36,17 @@ export function QuotaMeter({
   tone,
   meterLabel,
   footer,
+  flat = false,
 }: QuotaMeterProps) {
   return (
-    <div className="rounded-lg border border-border/50 bg-muted/25 px-3 py-2.5 dark:bg-muted/15">
+    <div
+      className={cn(
+        "py-2.5",
+        flat
+          ? "border-0 px-0"
+          : "rounded-lg border border-border/50 bg-muted/25 px-3 dark:bg-muted/15",
+      )}
+    >
       <div className="flex items-baseline justify-between gap-2">
         <span className="truncate text-xs text-muted-foreground">{label}</span>
         <span className="shrink-0 text-sm font-semibold tracking-tight metric">

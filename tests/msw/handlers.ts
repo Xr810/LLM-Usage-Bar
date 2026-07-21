@@ -1490,6 +1490,38 @@ export const handlers = [
       });
     },
   ),
+  http.post(
+    `${TAURI_ENDPOINT}/get_provider_usage_activity`,
+    async ({ request }) => {
+      const { startAt, endAt } = await withJson<{
+        startAt: number;
+        endAt: number;
+      }>(request);
+      if (typeof startAt !== "number" || typeof endAt !== "number") {
+        return HttpResponse.json("invalid_provider_activity_request", {
+          status: 400,
+        });
+      }
+      return success([
+        {
+          startAt,
+          endAt: Math.min(startAt + 24 * 60 * 60, endAt),
+          eventCount: 3,
+          inputTokens: 500,
+          outputTokens: 250,
+          cacheReadTokens: 500,
+          cacheCreationTokens: 0,
+          totalTokens: 1_250,
+          totalCostUsd: "0.125",
+          costSourceCounts: {
+            upstream: 1,
+            estimated: 2,
+            unavailable: 0,
+          },
+        },
+      ]);
+    },
+  ),
   http.post(`${TAURI_ENDPOINT}/get_usage_events`, async ({ request }) => {
     const { agentModuleId, providerId } = await withJson<{
       agentModuleId: string;
