@@ -151,22 +151,25 @@ describe("SubscriptionProviderCard localized reset countdown", () => {
     ).toBeInTheDocument();
   });
 
-  it("refreshes ChatGPT quota through the managed Codex OAuth source", () => {
+  it("keeps Provider actions wired in the default layout", () => {
     const usage = subscriptionUsage();
     const onRefreshQuota = vi.fn().mockResolvedValue({});
+    const onSyncSessions = vi.fn().mockResolvedValue(undefined);
 
     render(
       <SubscriptionProviderCard
         usage={usage}
         onRefreshQuota={onRefreshQuota}
-        onSyncSessions={vi.fn()}
+        onSyncSessions={onSyncSessions}
       />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Refresh quota" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sync sessions" }));
 
     expect(usage.provider.quotaSource).toBe("codex_oauth");
     expect(onRefreshQuota).toHaveBeenCalledWith("system-chatgpt-subscription");
+    expect(onSyncSessions).toHaveBeenCalledWith("system-chatgpt-subscription");
   });
 
   it.each([
@@ -280,7 +283,7 @@ describe("SubscriptionProviderCard localized reset countdown", () => {
     ).toBeNull();
   });
 
-  it("keeps quota and Provider actions available in the sidebar layout", () => {
+  it("keeps quota details but hides Provider actions in the sidebar layout", () => {
     render(
       <SubscriptionProviderCard
         usage={subscriptionUsage()}
@@ -296,10 +299,10 @@ describe("SubscriptionProviderCard localized reset countdown", () => {
     expect(screen.getByText("5-hour window")).toBeInTheDocument();
     expect(screen.getByText("Weekly allowance")).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Refresh quota" }),
-    ).toBeInTheDocument();
+      screen.queryByRole("button", { name: "Refresh quota" }),
+    ).toBeNull();
     expect(
-      screen.getByRole("button", { name: "Sync sessions" }),
-    ).toBeInTheDocument();
+      screen.queryByRole("button", { name: "Sync sessions" }),
+    ).toBeNull();
   });
 });

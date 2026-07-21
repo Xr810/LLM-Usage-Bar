@@ -311,44 +311,43 @@ export function SubscriptionProviderCard({
           {fetchState.lastError}
         </p>
       ) : null}
-      <div
-        className={cn(
-          "mt-4 flex flex-wrap items-center gap-2 border-t border-border/60 py-3",
-          sidebar ? "px-0" : "px-5",
-        )}
-      >
-        {canRefreshQuota ? (
+      {!sidebar ? (
+        <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-border/60 px-5 py-3">
+          {canRefreshQuota ? (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-8 px-2.5 text-xs"
+              disabled={isRefreshingQuota}
+              onClick={() => void onRefreshQuota(usage.provider.id)}
+            >
+              <RefreshCw
+                className={
+                  isRefreshingQuota
+                    ? "h-3.5 w-3.5 animate-spin"
+                    : "h-3.5 w-3.5"
+                }
+                aria-hidden="true"
+              />
+              {t("usageDashboard.refreshQuota", {
+                defaultValue: "Refresh quota",
+              })}
+            </Button>
+          ) : null}
           <Button
             size="sm"
             variant="ghost"
             className="h-8 px-2.5 text-xs"
-            disabled={isRefreshingQuota}
-            onClick={() => void onRefreshQuota(usage.provider.id)}
+            disabled={isSyncingSessions}
+            onClick={() => void onSyncSessions(usage.provider.id)}
           >
-            <RefreshCw
-              className={
-                isRefreshingQuota ? "h-3.5 w-3.5 animate-spin" : "h-3.5 w-3.5"
-              }
-              aria-hidden="true"
-            />
-            {t("usageDashboard.refreshQuota", {
-              defaultValue: "Refresh quota",
+            <FolderSync className="h-3.5 w-3.5" aria-hidden="true" />
+            {t("usageDashboard.syncSessions", {
+              defaultValue: "Sync sessions",
             })}
           </Button>
-        ) : null}
-        <Button
-          size="sm"
-          variant="ghost"
-          className="h-8 px-2.5 text-xs"
-          disabled={isSyncingSessions}
-          onClick={() => void onSyncSessions(usage.provider.id)}
-        >
-          <FolderSync className="h-3.5 w-3.5" aria-hidden="true" />
-          {t("usageDashboard.syncSessions", {
-            defaultValue: "Sync sessions",
-          })}
-        </Button>
-      </div>
+        </div>
+      ) : null}
     </Card>
   );
 }

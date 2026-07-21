@@ -68,9 +68,10 @@ Viewport and state:
 No actionable P0, P1, or P2 difference remains. The implementation preserves
 the selected Option 3 hierarchy: remaining quota in a fixed-width left rail,
 yearly daily activity above the selected-range Token trend, and metered accounts
-below the workbench. Existing application chrome, Provider icons, refresh/sync
-actions, records, and metered-account content are intentionally retained rather
-than removed to imitate the lower-fidelity prototype.
+below the workbench. Existing application chrome, Provider icons, records, and
+metered-account content are intentionally retained rather than removed to
+imitate the lower-fidelity prototype. The later sidebar-action follow-up below
+supersedes this pass's original decision to retain refresh/sync actions.
 
 ## Fidelity surfaces
 
@@ -84,8 +85,8 @@ than removed to imitate the lower-fidelity prototype.
 - Copy and content: the annual heatmap reports local calendar days, active-day
   count, recent streak, Tokens, and record count. The trend reports total,
   peak, and records without presenting records as messages.
-- Assets: existing Provider icons and Lucide actions are retained; no placeholder
-  or approximate graphic assets were introduced.
+- Assets: existing Provider icons are retained; no placeholder or approximate
+  graphic assets were introduced.
 
 ## Comparison history
 
@@ -108,9 +109,78 @@ reported no console errors or warnings. Accessibility snapshots expose every
 activity day with its date, Token total, and record count, and the latest-day
 detail is visible without requiring hover. Automated tests verify Today/7-day/
 30-day switching, hourly-versus-daily granularity, heatmap zero fill, per-day
-details, quota actions, and record semantics.
+details, default-layout quota actions, sidebar action omission, and record
+semantics.
 Only one day cell participates in the tab order at a time; arrow keys move the
 roving focus across the grid, avoiding a 365-stop keyboard path.
+
+final result: passed
+
+---
+
+# Provider Activity Workbench — Sidebar Action Removal QA
+
+Date: 2026-07-21
+
+Source visual truth:
+
+- User-supplied installed-app capture: `/Users/max/Library/Application Support/CleanShot/media/media_2eoVYirgFy/CleanShot 2026-07-21 at 15.39.53@2x.png`
+
+Implementation evidence:
+
+- Browser-rendered implementation: `qa-artifacts/option-3-sidebar-actions-removed.png`
+- Full-view source/implementation comparison: `qa-artifacts/option-3-sidebar-actions-removed-comparison.png`
+
+Viewport and state:
+
+- Source: `1358 × 1270` image, light appearance, one populated ChatGPT
+  subscription Provider.
+- Implementation: in-app Browser viewport override `1358 × 1270`; the captured
+  page surface is `1358 × 1121` after excluding browser chrome. It uses the same
+  light appearance, one ChatGPT subscription Provider, unavailable 5-hour quota,
+  85% weekly quota remaining, three manual resets, and matching summary values.
+
+## Findings
+
+No actionable P0, P1, or P2 difference remains for the requested change. The
+sidebar no longer renders Refresh quota or Sync sessions, and the surrounding
+action divider and reserved vertical space are removed with the action row.
+The two controls remain available in the component's default layout, outside
+this dashboard sidebar scope.
+
+## Fidelity surfaces
+
+- Fonts and typography: the preview uses the application's existing font stack,
+  weights, metric numerals, and Chinese copy; no text hierarchy changed.
+- Spacing and layout rhythm: removing the complete action footer closes the gap
+  cleanly between per-Provider totals and the sidebar range summary without
+  leaving an orphan divider or empty row.
+- Colors and visual tokens: the existing light surfaces, borders, quota status
+  green, muted copy, radii, and shadows are unchanged.
+- Image and asset fidelity: the existing ChatGPT Provider icon remains; the two
+  Lucide action icons disappear together with their controls, and no replacement
+  asset is introduced.
+- Copy and content: quota windows, manual reset count, Token total, and record
+  total remain intact. Only the explicitly rejected Refresh quota and Sync
+  sessions controls are absent.
+
+## Comparison history
+
+- Initial/source state: the user capture shows Refresh quota and Sync sessions
+  below the per-Provider totals.
+- Fix: the sidebar layout now omits the entire action footer while preserving the
+  default card layout and its handlers.
+- Post-fix evidence: the combined comparison shows the left source with the two
+  controls and the right implementation with a compact, uninterrupted sidebar.
+
+## Focused evidence and interaction checks
+
+The full-view combined image keeps the complete workbench visible while making
+the affected left rail readable, so a separate crop was not needed. Browser DOM
+checks found zero buttons named Refresh quota and zero named Sync sessions.
+The rendered page had no horizontal overflow (`scrollWidth = innerWidth = 1358`)
+and reported no console errors or warnings. The focused component test passed all
+10 cases, including sidebar omission and default-layout action behavior.
 
 final result: passed
 

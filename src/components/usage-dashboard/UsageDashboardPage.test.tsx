@@ -85,29 +85,17 @@ describe("UsageDashboardPage Provider-only contract", () => {
     ).toBeGreaterThan(300 * 24 * 60 * 60);
   });
 
-  it("refreshes quota and syncs sessions by Provider identity", async () => {
-    const user = userEvent.setup();
+  it("does not expose manual Provider actions in the monitoring sidebar", async () => {
     renderPage();
     await screen.findByText("ChatGPT Plus/Pro");
 
-    await user.click(
-      screen.getAllByRole("button", { name: "Refresh quota" })[0],
-    );
-    await waitFor(() =>
-      expect(commandCalls("refresh_provider_quota").length).toBe(1),
-    );
-    expect(commandCalls("refresh_provider_quota")[0]?.[1]).toEqual({
-      providerId: "system-chatgpt-subscription",
-    });
-
-    await user.click(
-      screen.getAllByRole("button", { name: "Sync sessions" })[0],
-    );
-    await waitFor(() =>
-      expect(commandCalls("sync_provider_session_usage").length).toBe(1),
-    );
-    expect(commandCalls("sync_provider_session_usage")[0]?.[1]).toEqual({
-      providerId: "system-chatgpt-subscription",
-    });
+    expect(
+      screen.queryByRole("button", { name: "Refresh quota" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Sync sessions" }),
+    ).toBeNull();
+    expect(commandCalls("refresh_provider_quota")).toHaveLength(0);
+    expect(commandCalls("sync_provider_session_usage")).toHaveLength(0);
   });
 });
