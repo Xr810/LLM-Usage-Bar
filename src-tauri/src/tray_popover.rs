@@ -1,3 +1,5 @@
+#[cfg(target_os = "macos")]
+use objc2_web_kit::WKWebView;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex, OnceLock};
 #[cfg(any(target_os = "macos", test))]
@@ -7,6 +9,11 @@ use tauri::{AppHandle, Emitter, Manager};
 use tauri::{PhysicalPosition, PhysicalRect, PhysicalSize};
 #[cfg(target_os = "macos")]
 use tauri::{Rect, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+#[cfg(target_os = "macos")]
+use window_vibrancy::{
+    apply_liquid_glass, apply_vibrancy, LiquidGlassOptions, NSGlassEffectViewStyle,
+    NSVisualEffectMaterial, NSVisualEffectState,
+};
 
 use crate::error::AppError;
 
@@ -15,6 +22,8 @@ pub const TRAY_POPOVER_LABEL: &str = "tray-popover";
 const POPOVER_WIDTH: f64 = 380.0;
 #[cfg(target_os = "macos")]
 const POPOVER_HEIGHT: f64 = 520.0;
+#[cfg(target_os = "macos")]
+const POPOVER_CORNER_RADIUS: f64 = 16.0;
 #[cfg(any(target_os = "macos", test))]
 const POPOVER_GAP_PHYSICAL: i32 = 8;
 
@@ -160,12 +169,60 @@ fn main_window_error(operation: &str, error: impl std::fmt::Display) -> AppError
 }
 
 #[cfg(target_os = "macos")]
+fn apply_popover_vibrancy(window: &WebviewWindow) {
+    match apply_vibrancy(
+        window,
+        NSVisualEffectMaterial::Popover,
+        Some(NSVisualEffectState::Active),
+        Some(POPOVER_CORNER_RADIUS),
+    ) {
+        Ok(()) => log::info!("tray popover native material: vibrancy fallback"),
+        Err(error) => log::warn!("tray popover vibrancy fallback failed: {error}"),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn apply_popover_native_material(window: &WebviewWindow) {
+    let material_window = window.clone();
+    if let Err(error) = window.with_webview(move |webview| {
+        // Tauri exposes the platform webview as WKWebView on macOS. Keeping the
+        // concrete type here preserves that contract before it is safely
+        // upcast to NSView by LiquidGlassOptions::content_view.
+        let content_view = unsafe { webview.inner().cast::<WKWebView>().as_ref() };
+        let Some(content_view) = content_view else {
+            log::warn!("tray popover Liquid Glass skipped: WKWebView pointer was null");
+            apply_popover_vibrancy(&material_window);
+            return;
+        };
+
+        let options = LiquidGlassOptions::new(NSGlassEffectViewStyle::Regular)
+            .radius(POPOVER_CORNER_RADIUS)
+            .opaque(false)
+            .content_view(content_view);
+
+        match apply_liquid_glass(&material_window, options) {
+            Ok(()) => log::info!("tray popover native material: Liquid Glass"),
+            Err(window_vibrancy::Error::UnsupportedPlatformVersion(_)) => {
+                log::debug!("tray popover Liquid Glass unavailable; using vibrancy fallback");
+                apply_popover_vibrancy(&material_window);
+            }
+            Err(error) => {
+                log::warn!("tray popover Liquid Glass failed: {error}; using vibrancy fallback");
+                apply_popover_vibrancy(&material_window);
+            }
+        }
+    }) {
+        log::warn!("tray popover native material setup failed: {error}");
+    }
+}
+
+#[cfg(target_os = "macos")]
 pub fn ensure_window(app: &AppHandle) -> Result<WebviewWindow, AppError> {
     if let Some(window) = app.get_webview_window(TRAY_POPOVER_LABEL) {
         return Ok(window);
     }
 
-    WebviewWindowBuilder::new(
+    let window = WebviewWindowBuilder::new(
         app,
         TRAY_POPOVER_LABEL,
         WebviewUrl::App("index.html".into()),
@@ -179,7 +236,10 @@ pub fn ensure_window(app: &AppHandle) -> Result<WebviewWindow, AppError> {
     .always_on_top(true)
     .accept_first_mouse(true)
     .build()
-    .map_err(|error| popover_error("creation", error))
+    .map_err(|error| popover_error("creation", error))?;
+
+    apply_popover_native_material(&window);
+    Ok(window)
 }
 
 #[cfg(target_os = "macos")]

@@ -69,20 +69,26 @@ export function TrayUsageFooter({
           {t("trayUsage.openDetails", { defaultValue: "Open details" })}
         </span>
       </button>
-      {iconActions.map((action) => (
-        <button
-          key={action.key}
-          type="button"
-          onClick={action.onClick}
-          disabled={action.disabled}
-          aria-label={action.label}
-          title={action.label}
-          className="tray-usage-footer-button grid h-8 w-8 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:pointer-events-none disabled:opacity-50"
-        >
-          {action.icon}
-          <span className="sr-only">{action.label}</span>
-        </button>
-      ))}
+      <div
+        className="tray-usage-action-group shrink-0"
+        role="group"
+        aria-label={t("common.actions", { defaultValue: "Actions" })}
+      >
+        {iconActions.map((action) => (
+          <button
+            key={action.key}
+            type="button"
+            onClick={action.onClick}
+            disabled={action.disabled}
+            aria-label={action.label}
+            title={action.label}
+            className="tray-usage-footer-button grid h-8 w-8 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60 disabled:pointer-events-none disabled:opacity-50"
+          >
+            {action.icon}
+            <span className="sr-only">{action.label}</span>
+          </button>
+        ))}
+      </div>
     </footer>
   );
 }

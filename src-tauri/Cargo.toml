@@ -112,8 +112,13 @@ rquickjs = { version = "0.8", features = ["bindgen"] }
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = ["NSColor"] }
+objc2-web-kit = { version = "0.3.2", default-features = false, features = [
+  "objc2-app-kit",
+  "WKWebView",
+] }
 security-framework = { version = "3.7", default-features = false }
 security-framework-sys = { version = "2.17", default-features = false }
+window-vibrancy = "0.8.0"
 
 # Optimize release binary size to help reduce AppImage footprint
 [profile.release]
