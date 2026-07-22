@@ -1,5 +1,5 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { UsageTrendBucketView } from "@/types/usageDashboard";
 import {
   buildProviderActivityDays,
@@ -32,6 +32,8 @@ function bucket(
 describe("ProviderActivityHeatmap", () => {
   const startAt = timestamp(2026, 6, 1);
   const endAt = timestamp(2026, 6, 4);
+
+  afterEach(() => vi.restoreAllMocks());
 
   it("merges hourly buckets into local days and fills missing dates", () => {
     const days = buildProviderActivityDays(
@@ -80,15 +82,74 @@ describe("ProviderActivityHeatmap", () => {
     expect(cells[0]).toHaveAccessibleName(/1,250 Token · 2 records/);
     expect(cells[1]).toHaveAttribute("data-activity-level", "0");
     expect(cells[2]).toHaveAttribute("data-activity-level", "4");
+    expect(cells[0]).toHaveAttribute("aria-pressed", "false");
+    expect(
+      cells[0]!.querySelector("[data-activity-cell-visual]"),
+    ).toBeInTheDocument();
     expect(cells.filter((cell) => cell.tabIndex === 0)).toEqual([cells[2]]);
+    expect(screen.queryByText(/2026.*7.*3/)).toBeNull();
+    expect(screen.getByText("Hover to preview · Click to pin")).toBeVisible();
 
     fireEvent.mouseEnter(cells[0]!);
+    expect(screen.getByText(/2026.*7.*1/)).toBeInTheDocument();
     expect(screen.getByText(/1.3K Token · 2 records/)).toBeInTheDocument();
     expect(screen.queryByText(/messages/i)).toBeNull();
+    fireEvent.mouseLeave(cells[0]!);
+    expect(screen.queryByText(/2026.*7.*1/)).toBeNull();
 
-    cells[2]!.focus();
+    fireEvent.mouseEnter(cells[1]!);
+    expect(screen.getByText(/2026.*7.*2/)).toBeInTheDocument();
+    expect(screen.getByText("0 Token · 0 records")).toBeInTheDocument();
+    fireEvent.mouseLeave(cells[1]!);
+
+    fireEvent.click(cells[0]!);
+    expect(cells[0]).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText(/2026.*7.*1/)).toBeInTheDocument();
+    fireEvent.mouseEnter(cells[1]!);
+    expect(screen.getByText(/2026.*7.*2/)).toBeInTheDocument();
+    fireEvent.mouseLeave(cells[1]!);
+    expect(screen.getByText(/2026.*7.*1/)).toBeInTheDocument();
+    fireEvent.click(cells[0]!);
+    expect(cells[0]).toHaveAttribute("aria-pressed", "false");
+    expect(screen.queryByText(/2026.*7.*1/)).toBeNull();
+
+    act(() => cells[2]!.focus());
+    expect(screen.getByText(/2026.*7.*3/)).toBeInTheDocument();
     fireEvent.keyDown(cells[2]!, { key: "ArrowUp" });
     expect(cells[1]).toHaveFocus();
     expect(cells.filter((cell) => cell.tabIndex === 0)).toEqual([cells[1]]);
+    act(() => cells[1]!.blur());
+    expect(screen.queryByText(/2026.*7.*2/)).toBeNull();
+  });
+
+  it("starts at the latest dates without overwriting later user scrolling", () => {
+    vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockReturnValue(720);
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(600);
+
+    const { rerender } = render(
+      <ProviderActivityHeatmap
+        buckets={[bucket(timestamp(2026, 6, 3, 9), 9_500, 6)]}
+        startAt={startAt}
+        endAt={endAt}
+      />,
+    );
+    const viewport = document.querySelector<HTMLElement>(
+      "[data-activity-scroll]",
+    );
+
+    expect(viewport).not.toBeNull();
+    expect(viewport?.scrollLeft).toBe(120);
+
+    if (!viewport) throw new Error("activity scroll viewport missing");
+    viewport.scrollLeft = 48;
+    rerender(
+      <ProviderActivityHeatmap
+        buckets={[bucket(timestamp(2026, 6, 2, 9), 4_200, 3)]}
+        startAt={startAt}
+        endAt={endAt}
+      />,
+    );
+
+    expect(viewport.scrollLeft).toBe(48);
   });
 });

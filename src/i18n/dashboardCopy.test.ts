@@ -93,6 +93,7 @@ const requiredKeys = [
   "usageDashboard.activityRange",
   "usageDashboard.activityChartLabel",
   "usageDashboard.activeDays",
+  "usageDashboard.activityInteractionHint",
   "usageDashboard.recentStreak",
   "usageDashboard.lowActivity",
   "usageDashboard.highActivity",

@@ -141,6 +141,8 @@ export function useProviderUsageDashboard(startAt: number, endAt: number) {
   return useQuery({
     queryKey: usageDashboardKeys.providerDashboard(startAt, endAt),
     queryFn: () => usageDashboardApi.getProviderDashboard(startAt, endAt),
+    placeholderData: (previousData) =>
+      previousData?.startAt === startAt ? previousData : undefined,
     enabled: startAt < endAt,
   });
 }

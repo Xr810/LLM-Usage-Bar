@@ -11,6 +11,7 @@ import {
   useDeleteAgentProviderBinding,
   useRefreshProviderQuota,
   useReorderAgentModules,
+  useProviderUsageDashboard,
   useSaveAgentModule,
   useSaveAgentProviderBinding,
   useSaveUsageProvider,
@@ -302,6 +303,74 @@ describe("Agent cache isolation", () => {
 
     await waitFor(() => expect(events.result.current.isError).toBe(true));
     expect(events.result.current.data).toBeUndefined();
+  });
+});
+
+describe("Provider dashboard live range continuity", () => {
+  beforeEach(() => invokeMock.mockReset());
+
+  it("keeps the previous dashboard mounted while only the live end advances", async () => {
+    let resolveNextDashboard:
+      | ((dashboard: {
+          startAt: number;
+          endAt: number;
+          providers: never[];
+          trendGranularity: "day";
+          trendBuckets: never[];
+          warnings: never[];
+        }) => void)
+      | undefined;
+    invokeMock.mockImplementation(
+      (
+        command: string,
+        args: { startAt: number; endAt: number } | undefined,
+      ) => {
+        if (command !== "get_provider_usage_dashboard" || !args) {
+          return Promise.resolve(undefined);
+        }
+        if (args.endAt === 20) {
+          return Promise.resolve({
+            startAt: 10,
+            endAt: 20,
+            providers: [],
+            trendGranularity: "day",
+            trendBuckets: [],
+            warnings: [],
+          });
+        }
+        return new Promise((resolve) => {
+          resolveNextDashboard = resolve;
+        });
+      },
+    );
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const dashboard = renderHook(
+      ({ endAt }) => useProviderUsageDashboard(10, endAt),
+      {
+        initialProps: { endAt: 20 },
+        wrapper: wrapper(client),
+      },
+    );
+
+    await waitFor(() => expect(dashboard.result.current.data?.endAt).toBe(20));
+    dashboard.rerender({ endAt: 30 });
+
+    expect(dashboard.result.current.data?.endAt).toBe(20);
+    expect(dashboard.result.current.isPlaceholderData).toBe(true);
+
+    await act(async () =>
+      resolveNextDashboard?.({
+        startAt: 10,
+        endAt: 30,
+        providers: [],
+        trendGranularity: "day",
+        trendBuckets: [],
+        warnings: [],
+      }),
+    );
+    await waitFor(() => expect(dashboard.result.current.data?.endAt).toBe(30));
   });
 });
 

@@ -13,6 +13,7 @@
     "activityRange": "過去 12 か月 · ローカル暦日",
     "activityChartLabel": "過去 12 か月の日別 Token アクティビティ",
     "activeDays": "アクティブ日数 {{count}} 日",
+    "activityInteractionHint": "ホバーで確認 · クリックで固定",
     "recentStreak": "直近の連続利用 {{count}} 日",
     "lowActivity": "低",
     "highActivity": "高",

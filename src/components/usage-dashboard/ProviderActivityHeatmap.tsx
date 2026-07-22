@@ -1,5 +1,7 @@
 import {
+  useLayoutEffect,
   useMemo,
+  useRef,
   useState,
   type CSSProperties,
   type KeyboardEvent,
@@ -148,6 +150,14 @@ export function ProviderActivityHeatmap({
   );
   const [hoveredDayKey, setHoveredDayKey] = useState<string | null>(null);
   const [keyboardDayKey, setKeyboardDayKey] = useState<string | null>(null);
+  const [focusedDayKey, setFocusedDayKey] = useState<string | null>(null);
+  const [pinnedDayKey, setPinnedDayKey] = useState<string | null>(null);
+  const scrollViewportRef = useRef<HTMLDivElement>(null);
+  const didPositionInitialScrollRef = useRef(false);
+  const dayByKey = useMemo(
+    () => new Map(days.map((day) => [day.key, day])),
+    [days],
+  );
   const leadingBlanks = days[0]?.date.getDay() ?? 0;
   const weekCount = Math.ceil((leadingBlanks + days.length) / 7);
   const trailingBlanks = weekCount * 7 - leadingBlanks - days.length;
@@ -155,16 +165,13 @@ export function ProviderActivityHeatmap({
   const streak = recentActivityStreak(days);
   const latestActiveDay = latestActiveActivityDay(days);
   const fallbackDayKey = latestActiveDay?.key ?? days.at(-1)?.key ?? null;
-  const effectiveKeyboardDayKey = days.some(
-    (day) => day.key === keyboardDayKey,
-  )
+  const effectiveKeyboardDayKey = dayByKey.has(keyboardDayKey ?? "")
     ? keyboardDayKey
     : fallbackDayKey;
-  const detailDayKey = hoveredDayKey ?? effectiveKeyboardDayKey;
-  const focusedDay = detailDayKey
-    ? days.find((day) => day.key === detailDayKey)
-    : undefined;
-  const detailDay = focusedDay ?? latestActiveDay ?? days.at(-1);
+  const hoveredDay = hoveredDayKey ? dayByKey.get(hoveredDayKey) : undefined;
+  const focusedDay = focusedDayKey ? dayByKey.get(focusedDayKey) : undefined;
+  const pinnedDay = pinnedDayKey ? dayByKey.get(pinnedDayKey) : undefined;
+  const detailDay = hoveredDay ?? focusedDay ?? pinnedDay;
   const monthByWeek = new Map<number, string>();
   days.forEach((day, index) => {
     const week = Math.floor((leadingBlanks + index) / 7);
@@ -177,15 +184,31 @@ export function ProviderActivityHeatmap({
   });
 
   const gridStyle = {
-    gridTemplateRows: "repeat(7, var(--activity-cell))",
-    gridAutoColumns: "var(--activity-cell)",
+    gridTemplateRows: "repeat(7, var(--activity-slot))",
+    gridAutoColumns: "var(--activity-slot)",
     gridAutoFlow: "column",
-    gap: "var(--activity-gap)",
   } as CSSProperties;
   const monthStyle = {
-    gridTemplateColumns: `repeat(${Math.max(weekCount, 1)}, var(--activity-cell))`,
-    columnGap: "var(--activity-gap)",
+    gridTemplateColumns: `repeat(${Math.max(weekCount, 1)}, var(--activity-slot))`,
   } as CSSProperties;
+
+  useLayoutEffect(() => {
+    const viewport = scrollViewportRef.current;
+    if (
+      !viewport ||
+      isLoading ||
+      days.length === 0 ||
+      didPositionInitialScrollRef.current
+    ) {
+      return;
+    }
+
+    viewport.scrollLeft = Math.max(
+      0,
+      viewport.scrollWidth - viewport.clientWidth,
+    );
+    didPositionInitialScrollRef.current = true;
+  }, [days.length, isLoading]);
 
   const moveKeyboardFocus = (
     event: KeyboardEvent<HTMLButtonElement>,
@@ -209,6 +232,11 @@ export function ProviderActivityHeatmap({
           : delta == null
             ? null
             : Math.min(days.length - 1, Math.max(0, index + delta));
+    if (event.key === "Escape") {
+      event.preventDefault();
+      setPinnedDayKey(null);
+      return;
+    }
     if (nextIndex == null || nextIndex === index) return;
     event.preventDefault();
     const buttons = event.currentTarget
@@ -219,8 +247,8 @@ export function ProviderActivityHeatmap({
 
   return (
     <section aria-labelledby="provider-activity-heading">
-      <Card className="relative overflow-hidden p-5 min-[900px]:min-h-[340px]">
-        <div className="flex items-start justify-between gap-4">
+      <Card className="relative overflow-hidden p-5">
+        <div className="flex flex-wrap items-start justify-between gap-x-5 gap-y-2">
           <div>
             <h2
               id="provider-activity-heading"
@@ -236,33 +264,21 @@ export function ProviderActivityHeatmap({
               })}
             </p>
           </div>
-          <span className="shrink-0 text-xs text-muted-foreground metric">
-            {t("usageDashboard.activeDays", {
-              count: activeDays,
-              defaultValue: "{{count}} active days",
-            })}
-          </span>
-        </div>
-
-        {isLoading ? (
-          <div
-            className="mt-6 h-32 animate-pulse rounded-lg bg-muted/45"
-            aria-hidden="true"
-          />
-        ) : (
-          <div
-            className="mt-5 overflow-x-auto pb-1 [--activity-cell:10px] [--activity-gap:2px] min-[900px]:mt-9 min-[1180px]:[--activity-cell:13px] min-[1180px]:[--activity-gap:4px]"
-            aria-label={t("usageDashboard.activityChartLabel", {
-              defaultValue: "Daily token activity for the last 12 months",
-            })}
-          >
-            <div className="relative w-max min-w-full">
+          <div className="ml-auto min-w-[190px] text-right">
+            <span className="text-xs text-muted-foreground metric">
+              {t("usageDashboard.activeDays", {
+                count: activeDays,
+                defaultValue: "{{count}} active days",
+              })}
+            </span>
+            <div
+              className="mt-1 min-h-8 text-[11px]"
+              data-activity-detail
+              aria-live="polite"
+            >
               {detailDay ? (
-                <div
-                  className="absolute right-0 top-0 z-10 hidden rounded-lg border border-border bg-popover px-3 py-2 text-[11px] shadow-pop sm:block"
-                  aria-live="polite"
-                >
-                  <strong className="block text-xs font-medium text-foreground">
+                <>
+                  <strong className="block font-medium text-foreground">
                     {detailDay.date.toLocaleDateString(locale, {
                       year: "numeric",
                       month: "short",
@@ -276,9 +292,33 @@ export function ProviderActivityHeatmap({
                       defaultValue: "{{count}} records",
                     })}
                   </span>
-                </div>
-              ) : null}
+                </>
+              ) : (
+                <span className="text-muted-foreground/75">
+                  {t("usageDashboard.activityInteractionHint", {
+                    defaultValue: "Hover to preview · Click to pin",
+                  })}
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
 
+        {isLoading ? (
+          <div
+            className="mt-6 h-32 animate-pulse rounded-lg bg-muted/45"
+            aria-hidden="true"
+          />
+        ) : (
+          <div
+            ref={scrollViewportRef}
+            data-activity-scroll
+            className="mt-5 overflow-x-auto overscroll-x-contain pb-1 [--activity-cell:10px] [--activity-slot:12px] min-[1180px]:[--activity-cell:13px] min-[1180px]:[--activity-slot:17px]"
+            aria-label={t("usageDashboard.activityChartLabel", {
+              defaultValue: "Daily token activity for the last 12 months",
+            })}
+          >
+            <div className="relative w-max min-w-full">
               <div className="grid w-max" style={gridStyle} data-activity-grid>
                 {Array.from({ length: leadingBlanks }, (_, index) => (
                   <span key={`leading-${index}`} aria-hidden="true" />
@@ -303,18 +343,36 @@ export function ProviderActivityHeatmap({
                       data-activity-date={day.key}
                       data-activity-level={day.level}
                       aria-label={detail}
-                      title={detail}
-                      className={cn(
-                        "rounded-[3px] transition-transform hover:scale-125 focus-visible:scale-125 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-card",
-                        CELL_TONES[day.level],
-                      )}
+                      aria-pressed={day.key === pinnedDayKey}
+                      className="group flex h-[var(--activity-slot)] w-[var(--activity-slot)] cursor-pointer items-center justify-center rounded-[4px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       onMouseEnter={() => setHoveredDayKey(day.key)}
                       onMouseLeave={() => setHoveredDayKey(null)}
-                      onFocus={() => setKeyboardDayKey(day.key)}
-                      onKeyDown={(event) =>
-                        moveKeyboardFocus(event, index)
+                      onClick={() =>
+                        setPinnedDayKey((currentDayKey) =>
+                          currentDayKey === day.key ? null : day.key,
+                        )
                       }
-                    />
+                      onFocus={() => {
+                        setKeyboardDayKey(day.key);
+                        setFocusedDayKey(day.key);
+                      }}
+                      onBlur={() =>
+                        setFocusedDayKey((currentDayKey) =>
+                          currentDayKey === day.key ? null : currentDayKey,
+                        )
+                      }
+                      onKeyDown={(event) => moveKeyboardFocus(event, index)}
+                    >
+                      <span
+                        data-activity-cell-visual
+                        className={cn(
+                          "pointer-events-none h-[var(--activity-cell)] w-[var(--activity-cell)] rounded-[3px] transition-transform duration-100 ease-out group-hover:scale-110 group-focus-visible:scale-110",
+                          CELL_TONES[day.level],
+                          day.key === pinnedDayKey &&
+                            "ring-2 ring-primary ring-offset-1 ring-offset-card",
+                        )}
+                      />
+                    </button>
                   );
                 })}
                 {Array.from({ length: trailingBlanks }, (_, index) => (
