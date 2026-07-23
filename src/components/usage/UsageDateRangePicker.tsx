@@ -21,7 +21,7 @@ import type { UsageRangePreset, UsageRangeSelection } from "@/types/usage";
 
 type DraftField = "start" | "end";
 
-const PRESETS: UsageRangePreset[] = ["today", "1d", "7d", "14d", "30d"];
+const PRESETS: UsageRangePreset[] = ["today", "1d", "7d", "14d", "30d", "1y"];
 
 interface UsageDateRangePickerProps {
   selection: UsageRangeSelection;
@@ -322,7 +322,7 @@ export function UsageDateRangePicker({
         <Button
           type="button"
           variant={selection.preset === "custom" ? "default" : "outline"}
-          className="h-9 w-[100px] justify-start gap-1.5 text-xs"
+          className="h-9 w-[128px] justify-start gap-1.5 px-3 text-xs"
           title={triggerLabel}
         >
           <CalendarDays className="h-4 w-4 shrink-0" />
@@ -357,7 +357,10 @@ export function UsageDateRangePicker({
           {/* Left: date fields */}
           <div className="usage-range-fields space-y-2">
             <p className="text-xs text-muted-foreground">
-              {t("usage.customRangeHint", "支持日期与时间，最长 30 天")}
+              {t(
+                "usage.customRangeHint",
+                "支持日期与时间，可选择超过 1 年的范围",
+              )}
             </p>
             {renderField("start")}
             {renderField("end")}

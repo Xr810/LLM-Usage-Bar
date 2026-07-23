@@ -44,7 +44,7 @@ describe("UsageDashboardPage Provider-only contract", () => {
     expect(screen.queryByRole("tablist", { name: "Agents" })).toBeNull();
   });
 
-  it("queries exact Provider-wide ranges for today, 7 days, and 30 days", async () => {
+  it("queries exact Provider-wide ranges for today, 7 days, 30 days, and 1 year", async () => {
     const user = userEvent.setup();
     renderPage();
     await screen.findByText("ChatGPT Plus/Pro");
@@ -69,12 +69,26 @@ describe("UsageDashboardPage Provider-only contract", () => {
         commandCalls("get_provider_usage_dashboard").length,
       ).toBeGreaterThan(3),
     );
+    await user.click(screen.getByRole("button", { name: "1 year" }));
+    await waitFor(() =>
+      expect(
+        commandCalls("get_provider_usage_dashboard").length,
+      ).toBeGreaterThan(4),
+    );
+    expect(screen.getByTestId("usage-trend-range")).toHaveTextContent("1 year");
 
     for (const call of commandCalls("get_provider_usage_dashboard")) {
       const args = call[1] ?? {};
       expect(args).not.toHaveProperty("agentModuleId");
       expect(Number(args.endAt)).toBeGreaterThan(Number(args.startAt));
     }
+
+    const oneYearCall = commandCalls("get_provider_usage_dashboard").at(-1);
+    const oneYearArgs = oneYearCall?.[1] ?? {};
+    const oneYearDuration =
+      Number(oneYearArgs.endAt) - Number(oneYearArgs.startAt);
+    expect(oneYearDuration).toBeGreaterThan(364 * 24 * 60 * 60);
+    expect(oneYearDuration).toBeLessThan(366 * 24 * 60 * 60);
 
     const activityCalls = commandCalls("get_provider_usage_activity");
     expect(activityCalls).toHaveLength(1);

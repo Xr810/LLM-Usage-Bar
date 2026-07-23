@@ -21,6 +21,7 @@ interface ProviderUsageTrendChartProps {
   buckets: UsageTrendBucketView[];
   totalTokens: number;
   recordCount: number;
+  rangeLabel: string;
 }
 
 type ChartPoint = UsageTrendBucketView & {
@@ -33,6 +34,7 @@ export function ProviderUsageTrendChart({
   buckets,
   totalTokens,
   recordCount,
+  rangeLabel,
 }: ProviderUsageTrendChartProps) {
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage || i18n.language || "en";
@@ -105,13 +107,17 @@ export function ProviderUsageTrendChart({
               })}
             </h2>
             <p className="mt-1 text-[11px] text-muted-foreground">
-              {granularity === "hour"
-                ? t("usageDashboard.hourlyBuckets", {
-                    defaultValue: "Hourly",
-                  })
-                : t("usageDashboard.dailyBuckets", {
-                    defaultValue: "Daily",
-                  })}
+              <span>
+                {granularity === "hour"
+                  ? t("usageDashboard.hourlyBuckets", {
+                      defaultValue: "Hourly",
+                    })
+                  : t("usageDashboard.dailyBuckets", {
+                      defaultValue: "Daily",
+                    })}
+              </span>
+              <span aria-hidden="true"> · </span>
+              <span data-testid="usage-trend-range">{rangeLabel}</span>
             </p>
           </div>
           <div className="text-right">

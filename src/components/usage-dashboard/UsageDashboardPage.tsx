@@ -12,6 +12,7 @@ import {
 import { useProviderUsageActivity } from "@/lib/query/providerUsageActivity";
 import { useSettingsQuery } from "@/lib/query";
 import {
+  getUsageRangePresetLabel,
   resolveProviderActivityRange,
   resolveUsageRange,
 } from "@/lib/usageRange";
@@ -27,12 +28,12 @@ interface UsageDashboardPageProps {
   onOpenSettings?: () => void;
 }
 
-type RangePreset = "today" | "7d" | "30d";
+type RangePreset = "today" | "7d" | "30d" | "1y";
 
 export function UsageDashboardPage({
   onOpenSettings,
 }: UsageDashboardPageProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [rangeClockMs, setRangeClockMs] = useState(() => Date.now());
   const advanceRangeClock = useCallback(() => setRangeClockMs(Date.now()), []);
   useUsageEventBridge(advanceRangeClock);
@@ -50,6 +51,20 @@ export function UsageDashboardPage({
     () => resolveUsageRange(selection, rangeClockMs),
     [rangeClockMs, selection],
   );
+  const rangeLabel = useMemo(() => {
+    if (selection.preset !== "custom") {
+      return getUsageRangePresetLabel(selection.preset, t);
+    }
+    const locale = i18n.resolvedLanguage || i18n.language || "en";
+    const formatter = new Intl.DateTimeFormat(locale, {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    });
+    const start = new Date(range.startDate * 1_000);
+    const end = new Date(range.endDate * 1_000);
+    return `${formatter.format(start)} – ${formatter.format(end)}`;
+  }, [i18n.language, i18n.resolvedLanguage, range, selection.preset, t]);
   const activityRange = useMemo(
     () => resolveProviderActivityRange(rangeClockMs),
     [rangeClockMs],
@@ -102,15 +117,19 @@ export function UsageDashboardPage({
     ...errors,
   ].filter((message, index, messages) => messages.indexOf(message) === index);
 
-  const presetOptions = (["today", "7d", "30d"] as const).map((preset) => ({
-    value: preset as RangePreset,
-    label:
-      preset === "today"
-        ? t("usageDashboard.today", { defaultValue: "Today" })
-        : preset === "7d"
-          ? t("usageDashboard.sevenDays", { defaultValue: "7 days" })
-          : t("usageDashboard.thirtyDays", { defaultValue: "30 days" }),
-  }));
+  const presetOptions = (["today", "7d", "30d", "1y"] as const).map(
+    (preset) => ({
+      value: preset as RangePreset,
+      label:
+        preset === "today"
+          ? t("usageDashboard.today", { defaultValue: "Today" })
+          : preset === "7d"
+            ? t("usageDashboard.sevenDays", { defaultValue: "7 days" })
+            : preset === "30d"
+              ? t("usageDashboard.thirtyDays", { defaultValue: "30 days" })
+              : t("usageDashboard.oneYear", { defaultValue: "1 year" }),
+    }),
+  );
 
   return (
     <div className="space-y-5 pb-8">
@@ -175,6 +194,7 @@ export function UsageDashboardPage({
           projection={projection}
           startAt={range.startDate}
           endAt={range.endDate}
+          rangeLabel={rangeLabel}
           activityBuckets={activity.data ?? []}
           activityStartAt={activityRange.startDate}
           activityEndAt={activityRange.endDate}

@@ -1,7 +1,6 @@
 import type { UsageRangePreset, UsageRangeSelection } from "@/types/usage";
 
 const DAY_SECONDS = 24 * 60 * 60;
-const DAY_MS = DAY_SECONDS * 1000;
 
 export interface ResolvedUsageRange {
   startDate: number;
@@ -17,10 +16,11 @@ function getPresetLookbackStart(
   preset: Exclude<UsageRangePreset, "today" | "1d" | "custom">,
   nowMs: number,
 ): number {
-  const dayCount = preset === "7d" ? 7 : preset === "14d" ? 14 : 30;
-  return Math.floor(
-    getStartOfLocalDayDate(nowMs - (dayCount - 1) * DAY_MS).getTime() / 1000,
-  );
+  const dayCount =
+    preset === "7d" ? 7 : preset === "14d" ? 14 : preset === "30d" ? 30 : 365;
+  const start = getStartOfLocalDayDate(nowMs);
+  start.setDate(start.getDate() - (dayCount - 1));
+  return Math.floor(start.getTime() / 1_000);
 }
 
 export function resolveProviderActivityRange(
@@ -60,6 +60,7 @@ export function resolveUsageRange(
     case "7d":
     case "14d":
     case "30d":
+    case "1y":
       return {
         startDate: getPresetLookbackStart(selection.preset, nowMs),
         endDate,
@@ -92,6 +93,8 @@ export function getUsageRangePresetLabel(
       return t("usage.preset14d", { defaultValue: "14d" });
     case "30d":
       return t("usage.preset30d", { defaultValue: "30d" });
+    case "1y":
+      return t("usage.preset1y", { defaultValue: "1 year" });
     case "custom":
       return t("usage.customRange", { defaultValue: "日历筛选" });
   }

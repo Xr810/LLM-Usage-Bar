@@ -16,6 +16,7 @@ interface ProviderUsagePageProps {
   projection: ProviderDashboardProjection;
   startAt: number;
   endAt: number;
+  rangeLabel: string;
   activityBuckets: UsageTrendBucketView[];
   activityStartAt: number;
   activityEndAt: number;
@@ -32,6 +33,7 @@ export function ProviderUsagePage({
   projection,
   startAt,
   endAt,
+  rangeLabel,
   activityBuckets,
   activityStartAt,
   activityEndAt,
@@ -190,6 +192,7 @@ export function ProviderUsagePage({
             buckets={projection.trendBuckets}
             totalTokens={projection.overallTotalTokens}
             recordCount={projection.overallRequestCount}
+            rangeLabel={rangeLabel}
           />
         </div>
       </div>

@@ -33,6 +33,7 @@ describe("ProviderUsageTrendChart", () => {
         ]}
         totalTokens={6_500}
         recordCount={5}
+        rangeLabel="30 days"
       />,
     );
 
@@ -40,6 +41,9 @@ describe("ProviderUsageTrendChart", () => {
       screen.getByRole("heading", { name: "Usage trend" }),
     ).toBeInTheDocument();
     expect(screen.getByText("6.5K")).toBeInTheDocument();
+    expect(screen.getByTestId("usage-trend-range")).toHaveTextContent(
+      "30 days",
+    );
     expect(screen.getByText(/Peak 5K/)).toHaveTextContent("5 records");
     expect(
       screen.getByRole("img", { name: "Token usage by day" }),
@@ -54,6 +58,7 @@ describe("ProviderUsageTrendChart", () => {
         buckets={[bucket(1_720_000_000, 0, 0)]}
         totalTokens={0}
         recordCount={0}
+        rangeLabel="Today"
       />,
     );
 
