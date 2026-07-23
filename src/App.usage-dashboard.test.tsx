@@ -57,15 +57,17 @@ describe("Provider-only usage dashboard main path", () => {
     expect(screen.getAllByText("OpenRouter")).toHaveLength(2);
   });
 
-  it("settings exposes Provider monitoring and diagnostics only", async () => {
+  it("opens General from the global Settings button", async () => {
     const user = userEvent.setup();
     renderApp();
     await screen.findByRole("heading", { name: "Provider monitoring" });
 
     await user.click(screen.getByRole("button", { name: "Settings" }));
-    expect(
-      await screen.findByRole("tab", { name: "Providers" }),
-    ).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByRole("tab", { name: "General" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(screen.getByRole("tab", { name: "Providers" })).toBeInTheDocument();
     expect(
       screen.getByRole("tab", { name: "Diagnostics" }),
     ).toBeInTheDocument();

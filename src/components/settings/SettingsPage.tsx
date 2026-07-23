@@ -27,10 +27,10 @@ interface SettingsDialogProps {
 type SettingsTab = "general" | "providers" | "diagnostics";
 
 function resolveSettingsTab(tab?: string): SettingsTab {
-  if (tab === "general" || tab === "diagnostics") {
+  if (tab === "providers" || tab === "diagnostics") {
     return tab;
   }
-  return "providers";
+  return "general";
 }
 
 export function SettingsPage({

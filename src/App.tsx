@@ -15,17 +15,21 @@ export default function App() {
     open: boolean;
     tab: string;
     providerId: string | null;
-  }>({ open: false, tab: "providers", providerId: null });
+  }>({ open: false, tab: "general", providerId: null });
   const { data: settings } = useSettingsQuery();
   const useAppWindowControls = settings?.useAppWindowControls ?? false;
 
-  const openManualSettings = useCallback(() => {
-    setSettingsTarget({ open: true, tab: "providers", providerId: null });
+  const openGeneralSettings = useCallback(() => {
+    setSettingsTarget({ open: true, tab: "general", providerId: null });
   }, []);
 
   const openProviderSettings = useCallback((providerId: string | null) => {
     setSettingsTarget({ open: true, tab: "providers", providerId });
   }, []);
+
+  const openProviderConfiguration = useCallback(() => {
+    openProviderSettings(null);
+  }, [openProviderSettings]);
 
   const openUsage = useCallback(() => {
     setSettingsTarget((current) => ({
@@ -91,7 +95,7 @@ export default function App() {
           className="flex items-center gap-1"
           style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
         >
-          <Button size="sm" variant="ghost" onClick={openManualSettings}>
+          <Button size="sm" variant="ghost" onClick={openGeneralSettings}>
             <Settings className="mr-1.5 h-3.5 w-3.5" />
             {t("common.settings", { defaultValue: "Settings" })}
           </Button>
@@ -136,7 +140,7 @@ export default function App() {
       </header>
 
       <main className="min-h-0 flex-1 overflow-y-auto px-5 pt-5">
-        <UsageDashboardPage onOpenSettings={openManualSettings} />
+        <UsageDashboardPage onOpenSettings={openProviderConfiguration} />
       </main>
 
       <SettingsPage

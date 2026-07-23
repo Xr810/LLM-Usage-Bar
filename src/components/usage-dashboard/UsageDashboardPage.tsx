@@ -147,24 +147,6 @@ export function UsageDashboardPage({
             })}
           </p>
         </div>
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          <SegmentedControl
-            options={presetOptions}
-            value={
-              selection.preset === "custom"
-                ? ("" as RangePreset)
-                : (selection.preset as RangePreset)
-            }
-            onChange={(preset) => setSelection({ preset })}
-          />
-          <UsageDateRangePicker
-            selection={selection}
-            onApply={setSelection}
-            triggerLabel={t("usageDashboard.customRange", {
-              defaultValue: "Custom range",
-            })}
-          />
-        </div>
       </div>
 
       {[...(dashboard.data?.warnings ?? []), ...warnings].map((warning) => (
@@ -195,6 +177,32 @@ export function UsageDashboardPage({
           startAt={range.startDate}
           endAt={range.endDate}
           rangeLabel={rangeLabel}
+          rangeControls={
+            <div
+              className="flex flex-wrap items-center justify-end gap-2"
+              role="group"
+              aria-label={t("usage.timeRange", {
+                defaultValue: "Time range",
+              })}
+            >
+              <SegmentedControl
+                options={presetOptions}
+                value={
+                  selection.preset === "custom"
+                    ? ("" as RangePreset)
+                    : (selection.preset as RangePreset)
+                }
+                onChange={(preset) => setSelection({ preset })}
+              />
+              <UsageDateRangePicker
+                selection={selection}
+                onApply={setSelection}
+                triggerLabel={t("usageDashboard.customRange", {
+                  defaultValue: "Custom range",
+                })}
+              />
+            </div>
+          }
           activityBuckets={activity.data ?? []}
           activityStartAt={activityRange.startDate}
           activityEndAt={activityRange.endDate}

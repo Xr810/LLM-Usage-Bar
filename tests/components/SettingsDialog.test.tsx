@@ -58,14 +58,16 @@ vi.mock("@/components/ui/dialog", () => ({
 }));
 
 describe("SettingsPage Provider-only sections", () => {
-  it("defaults every historical tab to Providers and exposes Diagnostics only", async () => {
+  it("defaults unknown historical tabs to General and keeps Provider tools available", async () => {
     const user = userEvent.setup();
     render(<SettingsPage open onOpenChange={() => {}} defaultTab="advanced" />);
 
-    expect(screen.getByRole("tab", { name: "Providers" })).toHaveAttribute(
+    expect(screen.getByRole("tab", { name: "General" })).toHaveAttribute(
       "aria-selected",
       "true",
     );
+    expect(screen.getByText("Startup settings content")).toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "Providers" }));
     expect(
       screen.getByRole("button", { name: "Add Provider" }),
     ).toBeInTheDocument();
@@ -79,12 +81,12 @@ describe("SettingsPage Provider-only sections", () => {
   });
 
   it.each(["agents", "modules", "proxy", "unknown"])(
-    "maps legacy default %s to Providers",
+    "maps legacy default %s to General",
     (defaultTab) => {
       render(
         <SettingsPage open onOpenChange={() => {}} defaultTab={defaultTab} />,
       );
-      expect(screen.getByRole("tab", { name: "Providers" })).toHaveAttribute(
+      expect(screen.getByRole("tab", { name: "General" })).toHaveAttribute(
         "aria-selected",
         "true",
       );
@@ -106,6 +108,7 @@ describe("SettingsPage Provider-only sections", () => {
       <SettingsPage
         open
         onOpenChange={() => {}}
+        defaultTab="providers"
         defaultProviderId="system-openrouter-api"
         onProviderTargetHandled={onProviderTargetHandled}
       />,

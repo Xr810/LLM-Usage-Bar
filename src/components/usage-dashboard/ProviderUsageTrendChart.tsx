@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Area,
@@ -22,6 +22,7 @@ interface ProviderUsageTrendChartProps {
   totalTokens: number;
   recordCount: number;
   rangeLabel: string;
+  rangeControls?: ReactNode;
 }
 
 type ChartPoint = UsageTrendBucketView & {
@@ -35,6 +36,7 @@ export function ProviderUsageTrendChart({
   totalTokens,
   recordCount,
   rangeLabel,
+  rangeControls,
 }: ProviderUsageTrendChartProps) {
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage || i18n.language || "en";
@@ -142,6 +144,15 @@ export function ProviderUsageTrendChart({
             </p>
           </div>
         </div>
+
+        {rangeControls ? (
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/60 bg-muted/20 px-3 py-2.5">
+            <p className="text-xs font-medium text-foreground">
+              {t("usage.timeRange", { defaultValue: "Time range" })}
+            </p>
+            {rangeControls}
+          </div>
+        ) : null}
 
         {hasUsage ? (
           <div

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { commandCalls } from "../../../tests/msw/tauriMocks";
@@ -36,6 +36,19 @@ describe("UsageDashboardPage Provider-only contract", () => {
     ).toBeInTheDocument();
     expect(
       screen.getByRole("heading", { name: "Usage trend" }),
+    ).toBeInTheDocument();
+    const trend = screen.getByRole("region", { name: "Usage trend" });
+    const rangeControls = within(trend).getByRole("group", {
+      name: /time range/i,
+    });
+    expect(
+      within(rangeControls).getByRole("button", { name: "Today" }),
+    ).toBeInTheDocument();
+    expect(
+      within(rangeControls).getByRole("button", { name: "1 year" }),
+    ).toBeInTheDocument();
+    expect(
+      within(rangeControls).getByRole("button", { name: "Custom range" }),
     ).toBeInTheDocument();
     expect(screen.getByText("Daily")).toBeInTheDocument();
     expect(

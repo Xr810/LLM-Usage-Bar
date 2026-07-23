@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { PlugZap } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -17,6 +18,7 @@ interface ProviderUsagePageProps {
   startAt: number;
   endAt: number;
   rangeLabel: string;
+  rangeControls?: ReactNode;
   activityBuckets: UsageTrendBucketView[];
   activityStartAt: number;
   activityEndAt: number;
@@ -34,6 +36,7 @@ export function ProviderUsagePage({
   startAt,
   endAt,
   rangeLabel,
+  rangeControls,
   activityBuckets,
   activityStartAt,
   activityEndAt,
@@ -193,6 +196,7 @@ export function ProviderUsagePage({
             totalTokens={projection.overallTotalTokens}
             recordCount={projection.overallRequestCount}
             rangeLabel={rangeLabel}
+            rangeControls={rangeControls}
           />
         </div>
       </div>

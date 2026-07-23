@@ -22,7 +22,14 @@ describe("SettingsPage Provider-only integration", () => {
     const user = userEvent.setup();
     renderSettings();
 
-    expect(await screen.findByText("Official Subscription")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "General" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await user.click(screen.getByRole("tab", { name: "Providers" }));
+    expect(
+      await screen.findByText("Official Subscription"),
+    ).toBeInTheDocument();
     expect(screen.getByText("Azure API")).toBeInTheDocument();
     expect(screen.getAllByText("OpenRouter")).not.toHaveLength(0);
     expect(screen.queryByRole("tab", { name: "Agents" })).toBeNull();
@@ -105,17 +112,17 @@ describe("SettingsPage Provider-only integration", () => {
     });
   });
 
-  it("maps legacy tabs to Providers and does not query while closed", async () => {
+  it("maps legacy tabs to General and does not query Providers while closed", async () => {
     const providers = vi.spyOn(usageDashboardApi, "listProviders");
     const closed = renderSettings(false, "agents");
     expect(providers).not.toHaveBeenCalled();
     closed.unmount();
 
     renderSettings(true, "proxy");
-    expect(await screen.findByText("Official Subscription")).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Providers" })).toHaveAttribute(
+    expect(screen.getByRole("tab", { name: "General" })).toHaveAttribute(
       "aria-selected",
       "true",
     );
+    expect(providers).not.toHaveBeenCalled();
   });
 });
