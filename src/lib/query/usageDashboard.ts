@@ -1,5 +1,10 @@
 import { useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { usageDashboardApi } from "@/lib/api/usageDashboard";
 import { claudeCliAuthApi } from "@/lib/api/claudeCliAuth";
 import type {
@@ -141,8 +146,7 @@ export function useProviderUsageDashboard(startAt: number, endAt: number) {
   return useQuery({
     queryKey: usageDashboardKeys.providerDashboard(startAt, endAt),
     queryFn: () => usageDashboardApi.getProviderDashboard(startAt, endAt),
-    placeholderData: (previousData) =>
-      previousData?.startAt === startAt ? previousData : undefined,
+    placeholderData: keepPreviousData,
     enabled: startAt < endAt,
   });
 }

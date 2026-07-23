@@ -306,8 +306,75 @@ describe("Agent cache isolation", () => {
   });
 });
 
-describe("Provider dashboard live range continuity", () => {
+describe("Provider dashboard range continuity", () => {
   beforeEach(() => invokeMock.mockReset());
+
+  it("keeps the previous dashboard mounted while the selected range changes", async () => {
+    let resolveNextDashboard:
+      | ((dashboard: {
+          startAt: number;
+          endAt: number;
+          providers: never[];
+          trendGranularity: "day";
+          trendBuckets: never[];
+          warnings: never[];
+        }) => void)
+      | undefined;
+    invokeMock.mockImplementation(
+      (
+        command: string,
+        args: { startAt: number; endAt: number } | undefined,
+      ) => {
+        if (command !== "get_provider_usage_dashboard" || !args) {
+          return Promise.resolve(undefined);
+        }
+        if (args.startAt === 10 && args.endAt === 20) {
+          return Promise.resolve({
+            startAt: 10,
+            endAt: 20,
+            providers: [],
+            trendGranularity: "day",
+            trendBuckets: [],
+            warnings: [],
+          });
+        }
+        return new Promise((resolve) => {
+          resolveNextDashboard = resolve;
+        });
+      },
+    );
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const dashboard = renderHook(
+      ({ startAt, endAt }) => useProviderUsageDashboard(startAt, endAt),
+      {
+        initialProps: { startAt: 10, endAt: 20 },
+        wrapper: wrapper(client),
+      },
+    );
+
+    await waitFor(() => expect(dashboard.result.current.data?.endAt).toBe(20));
+    dashboard.rerender({ startAt: 100, endAt: 200 });
+
+    expect(dashboard.result.current.data?.startAt).toBe(10);
+    expect(dashboard.result.current.isPlaceholderData).toBe(true);
+    expect(dashboard.result.current.isLoading).toBe(false);
+
+    await act(async () =>
+      resolveNextDashboard?.({
+        startAt: 100,
+        endAt: 200,
+        providers: [],
+        trendGranularity: "day",
+        trendBuckets: [],
+        warnings: [],
+      }),
+    );
+    await waitFor(() =>
+      expect(dashboard.result.current.data?.startAt).toBe(100),
+    );
+  });
 
   it("keeps the previous dashboard mounted while only the live end advances", async () => {
     let resolveNextDashboard:
