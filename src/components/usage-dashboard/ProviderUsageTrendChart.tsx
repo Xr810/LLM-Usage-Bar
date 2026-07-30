@@ -30,6 +30,35 @@ type ChartPoint = UsageTrendBucketView & {
   tooltipLabel: string;
 };
 
+interface ProviderUsageTrendTooltipProps {
+  active?: boolean;
+  payload?: ReadonlyArray<{ payload?: ChartPoint }>;
+}
+
+export function ProviderUsageTrendTooltip({
+  active,
+  payload,
+}: ProviderUsageTrendTooltipProps) {
+  const { t } = useTranslation();
+  const point = payload?.[0]?.payload;
+  if (!active || !point) return null;
+
+  return (
+    <div className="rounded-lg border border-border bg-popover px-3 py-2 shadow-pop">
+      <p className="text-xs font-medium text-foreground">
+        {point.tooltipLabel}
+      </p>
+      <p className="mt-1 text-xs text-muted-foreground metric">
+        {formatTokensCompact(point.totalTokens)} Token ·{" "}
+        {t("usageDashboard.recordCount", {
+          count: point.eventCount,
+          defaultValue: "{{count}} records",
+        })}
+      </p>
+    </div>
+  );
+}
+
 export function ProviderUsageTrendChart({
   granularity,
   buckets,
@@ -78,25 +107,6 @@ export function ProviderUsageTrendChart({
     (peak, bucket) => Math.max(peak, bucket.totalTokens),
     0,
   );
-
-  const tooltip = ({ active, payload }: any) => {
-    const point = payload?.[0]?.payload as ChartPoint | undefined;
-    if (!active || !point) return null;
-    return (
-      <div className="rounded-lg border border-border bg-popover px-3 py-2 shadow-pop">
-        <p className="text-xs font-medium text-foreground">
-          {point.tooltipLabel}
-        </p>
-        <p className="mt-1 text-xs text-muted-foreground metric">
-          {point.totalTokens.toLocaleString(locale)} Token ·{" "}
-          {t("usageDashboard.recordCount", {
-            count: point.eventCount,
-            defaultValue: "{{count}} records",
-          })}
-        </p>
-      </div>
-    );
-  };
 
   return (
     <section aria-labelledby="usage-trend-heading">
@@ -190,7 +200,7 @@ export function ProviderUsageTrendChart({
                 />
                 <YAxis hide domain={[0, "dataMax"]} />
                 <Tooltip
-                  content={tooltip}
+                  content={ProviderUsageTrendTooltip}
                   cursor={{ stroke: "hsl(var(--border))" }}
                 />
                 <Area

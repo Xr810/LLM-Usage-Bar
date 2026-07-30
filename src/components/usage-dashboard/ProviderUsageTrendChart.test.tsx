@@ -1,7 +1,10 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { UsageTrendBucketView } from "@/types/usageDashboard";
-import { ProviderUsageTrendChart } from "./ProviderUsageTrendChart";
+import {
+  ProviderUsageTrendChart,
+  ProviderUsageTrendTooltip,
+} from "./ProviderUsageTrendChart";
 
 function bucket(
   startAt: number,
@@ -23,6 +26,22 @@ function bucket(
 }
 
 describe("ProviderUsageTrendChart", () => {
+  it("uses compact token units in the tooltip", () => {
+    const point = {
+      ...bucket(1_720_000_000, 368_144_526, 1_526),
+      label: "7/19",
+      tooltipLabel: "July 19, 2026",
+    };
+
+    render(<ProviderUsageTrendTooltip active payload={[{ payload: point }]} />);
+
+    expect(screen.getByText("July 19, 2026")).toBeInTheDocument();
+    expect(screen.getByText(/368\.1M Token/)).toHaveTextContent(
+      "368.1M Token · 1526 records",
+    );
+    expect(screen.queryByText(/368,144,526/)).toBeNull();
+  });
+
   it("presents one total-token trend with peak and record semantics", () => {
     render(
       <ProviderUsageTrendChart
