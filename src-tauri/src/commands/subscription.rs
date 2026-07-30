@@ -7,7 +7,8 @@ use crate::store::AppState;
 
 /// 查询官方订阅额度
 ///
-/// 读取 CLI 工具已有的 OAuth 凭据并调用官方 API 获取使用额度。
+/// Claude Pro/Max 读取 Claude Desktop 本地额度历史，并以 Claude Code
+/// status-line 作为补充；其他工具使用各自的现有额度查询实现。
 /// `Ok`（成功或确定性失败）写入 `UsageCache`、通知托盘刷新并 emit
 /// `usage-cache-updated`，让前端 React Query 与托盘共享同一份最新数据；失败
 /// 快照写入后 `format_subscription_summary` 会通过 `success=false` 守卫返回

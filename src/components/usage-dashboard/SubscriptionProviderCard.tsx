@@ -64,13 +64,29 @@ export function SubscriptionProviderCard({
     usage.outputTokens +
     usage.cacheReadTokens +
     usage.cacheCreationTokens;
-  const sourceText = usage.provider.tokenSources
+  const tokenSourceText = usage.provider.tokenSources
     .map((source) =>
       source === "proxy"
         ? t("usageDashboard.sourceProxy", { defaultValue: "Proxy" })
         : t("usageDashboard.sourceSession", { defaultValue: "Session log" }),
     )
     .join(" + ");
+  const sourceText =
+    usage.provider.quotaSource === "claude_local"
+      ? [
+          t("usageDashboard.sourceClaudeLocalQuota", {
+            defaultValue:
+              "Quota: latest local sample per window (Desktop / Pro Code; account match unverified)",
+          }),
+          tokenSourceText
+            ? t("usageDashboard.sourceClaudeCodeUnattributed", {
+                defaultValue: "Tokens: Claude Code log (Provider unverified)",
+              })
+            : null,
+        ]
+          .filter(Boolean)
+          .join(" · ")
+      : tokenSourceText;
   const { icon, iconColor } = dashboardProviderIcon(usage.provider);
 
   const quotaWindow = (
@@ -191,7 +207,10 @@ export function SubscriptionProviderCard({
         },
       ];
 
-  const lastSuccessAt = fetchState?.lastSuccessAt ?? quota?.fetchedAt;
+  const lastSuccessAt =
+    usage.provider.quotaSource === "claude_local"
+      ? (quota?.sourceObservedAt ?? quota?.fetchedAt)
+      : (fetchState?.lastSuccessAt ?? quota?.fetchedAt);
 
   return (
     <Card

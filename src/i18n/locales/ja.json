@@ -36,6 +36,8 @@
     "metered": "従量制",
     "sourceSession": "セッションログ",
     "sourceProxy": "ローカルプロキシ",
+    "sourceClaudeLocalQuota": "クォータ：各ウィンドウの最新ローカルサンプル（Desktop / Pro 利用時の Code、アカウント一致は未確認）",
+    "sourceClaudeCodeUnattributed": "トークン：Claude Code ログ（Provider 未確認）",
     "tokens": "トークン",
     "requests": "リクエスト",
     "recentRequests": "最近のリクエスト",

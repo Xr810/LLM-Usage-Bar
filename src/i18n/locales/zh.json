@@ -36,6 +36,8 @@
     "metered": "按量",
     "sourceSession": "会话日志",
     "sourceProxy": "本地代理",
+    "sourceClaudeLocalQuota": "额度：按窗口取最新本地样本（Desktop / 使用 Pro 的 Code；账号一致性未核验）",
+    "sourceClaudeCodeUnattributed": "Token：Claude Code 日志（Provider 未核验）",
     "tokens": "令牌",
     "requests": "请求",
     "recentRequests": "近期请求",

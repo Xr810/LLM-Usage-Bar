@@ -21,6 +21,7 @@ pub const SILICONFLOW_API_ID: &str = "system-siliconflow-api";
 pub const NVIDIA_NIM_API_ID: &str = "system-nvidia-nim-api";
 pub const CEREBRAS_API_ID: &str = "system-cerebras-api";
 pub const MANAGED_CODEX_QUOTA_SOURCE: &str = "codex_oauth";
+pub const CLAUDE_LOCAL_QUOTA_SOURCE: &str = "claude_local";
 
 pub struct SystemProviderDefinition {
     pub id: &'static str,
@@ -101,8 +102,8 @@ pub fn system_provider_definitions() -> Vec<SystemProviderDefinition> {
             token_sources: &[TokenSource::SessionLog],
             auth_kind: SystemProviderAuthKind::ClaudeCli,
             default_enabled: true,
-            quota_source: None,
-            quota_interval_seconds: None,
+            quota_source: Some(CLAUDE_LOCAL_QUOTA_SOURCE),
+            quota_interval_seconds: Some(300),
             upstream_protocol: None,
             connection_test_path: None,
             route_config: None,

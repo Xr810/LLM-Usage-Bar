@@ -442,6 +442,7 @@ pub struct CostSourceCounts {
 pub struct QuotaStatusView {
     pub snapshot_id: String,
     pub fetched_at: i64,
+    pub source_observed_at: Option<i64>,
     pub five_hour_utilization_percent: Option<String>,
     pub five_hour_resets_at: Option<String>,
     pub seven_day_utilization_percent: Option<String>,
@@ -455,6 +456,12 @@ impl QuotaStatusView {
         Self {
             snapshot_id: snapshot.snapshot_id.clone(),
             fetched_at: snapshot.fetched_at,
+            source_observed_at: snapshot
+                .raw_payload
+                .get("queriedAt")
+                .and_then(Value::as_i64)
+                .filter(|timestamp_ms| *timestamp_ms > 0)
+                .map(|timestamp_ms| timestamp_ms / 1_000),
             five_hour_utilization_percent: snapshot.five_hour_utilization_percent.clone(),
             five_hour_resets_at: snapshot.five_hour_resets_at.clone(),
             seven_day_utilization_percent: snapshot.seven_day_utilization_percent.clone(),
@@ -700,6 +707,7 @@ mod tests {
             seven_day_resets_at: Some("2026-07-25T04:51:08Z".to_string()),
             manual_resets_remaining: Some(3),
             raw_payload: json!({
+                "queriedAt": 1_234_000,
                 "manualResetCredits": {
                     "availableCount": 3,
                     "credits": [
@@ -733,6 +741,7 @@ mod tests {
         let status = QuotaStatusView::from_snapshot(&snapshot);
 
         assert_eq!(status.manual_resets_remaining, Some(3));
+        assert_eq!(status.source_observed_at, Some(1_234));
         assert_eq!(status.manual_reset_credits.len(), 2);
         assert_eq!(
             status.manual_reset_credits[0].title.as_deref(),

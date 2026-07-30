@@ -1964,8 +1964,8 @@ mod migration_v16_to_v17 {
                     },
                 )
                 .unwrap();
-            assert_eq!(claude.0, None);
-            assert_eq!(claude.1, None);
+            assert_eq!(claude.0.as_deref(), Some("claude_local"));
+            assert_eq!(claude.1, Some(300));
 
             assert_eq!(
                 conn.query_row(

@@ -140,6 +140,7 @@ export interface CostSourceCounts {
 export interface QuotaStatusView {
   snapshotId: string;
   fetchedAt: number;
+  sourceObservedAt?: number | null;
   fiveHourUtilizationPercent: string | null;
   fiveHourResetsAt: string | null;
   sevenDayUtilizationPercent: string | null;

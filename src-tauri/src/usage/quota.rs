@@ -9,7 +9,7 @@ use crate::services::subscription::{
 use crate::usage::domain::{
     BillingKind, QuotaFetchState, QuotaSnapshot, QuotaStatusView, UsageProviderStored,
 };
-use crate::usage::system_providers::MANAGED_CODEX_QUOTA_SOURCE;
+use crate::usage::system_providers::{CLAUDE_LOCAL_QUOTA_SOURCE, MANAGED_CODEX_QUOTA_SOURCE};
 use futures::future::BoxFuture;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -84,6 +84,21 @@ impl QuotaCollector for SubscriptionQuotaCollector {
         _provider: &'a UsageProviderStored,
     ) -> BoxFuture<'a, Result<SubscriptionQuota, String>> {
         Box::pin(async move { get_subscription_quota(self.source).await })
+    }
+}
+
+struct ClaudeLocalQuotaCollector;
+
+impl QuotaCollector for ClaudeLocalQuotaCollector {
+    fn source(&self) -> &'static str {
+        CLAUDE_LOCAL_QUOTA_SOURCE
+    }
+
+    fn collect<'a>(
+        &'a self,
+        _provider: &'a UsageProviderStored,
+    ) -> BoxFuture<'a, Result<SubscriptionQuota, String>> {
+        Box::pin(async move { crate::claude_quota::collect_local_quota() })
     }
 }
 
@@ -175,6 +190,7 @@ impl QuotaService {
         vec![
             Arc::new(SubscriptionQuotaCollector { source: "claude" }),
             Arc::new(SubscriptionQuotaCollector { source: "codex" }),
+            Arc::new(ClaudeLocalQuotaCollector),
             Arc::new(CodingPlanQuotaCollector),
         ]
     }
@@ -324,7 +340,8 @@ impl QuotaService {
         provider: &UsageProviderStored,
         quota_source: &str,
     ) -> Result<(), AppError> {
-        if !matches!(quota_source, "claude" | "codex") && quota_source != MANAGED_CODEX_QUOTA_SOURCE
+        if !matches!(quota_source, "claude" | "codex" | CLAUDE_LOCAL_QUOTA_SOURCE)
+            && quota_source != MANAGED_CODEX_QUOTA_SOURCE
         {
             return Ok(());
         }
@@ -579,7 +596,7 @@ mod tests {
         TIER_FIVE_HOUR, TIER_SEVEN_DAY,
     };
     use crate::usage::domain::{BillingKind, TokenSource, UsageProviderInput};
-    use crate::usage::system_providers::CHATGPT_SUBSCRIPTION_ID;
+    use crate::usage::system_providers::{CHATGPT_SUBSCRIPTION_ID, CLAUDE_SUBSCRIPTION_ID};
     use serde_json::json;
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -635,6 +652,8 @@ mod tests {
     fn isolated_quota_test_db() -> Arc<Database> {
         let db = Arc::new(Database::memory().unwrap());
         db.set_usage_provider_enabled(CHATGPT_SUBSCRIPTION_ID, false)
+            .unwrap();
+        db.set_usage_provider_enabled(CLAUDE_SUBSCRIPTION_ID, false)
             .unwrap();
         db
     }
@@ -745,7 +764,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn production_preserves_legacy_collectors_and_adds_only_managed_codex_oauth() {
+    async fn production_registers_local_subscription_collectors() {
         let data_dir = std::env::temp_dir().join(format!(
             "llm-usage-bar-empty-codex-oauth-{}",
             Uuid::new_v4()
@@ -763,7 +782,16 @@ mod tests {
             .collect::<Vec<_>>();
         sources.sort_unstable();
 
-        assert_eq!(sources, ["claude", "codex", "codex_oauth", "coding_plan"]);
+        assert_eq!(
+            sources,
+            [
+                "claude",
+                "claude_local",
+                "codex",
+                "codex_oauth",
+                "coding_plan"
+            ]
+        );
         assert!(!service.collectors.contains_key("claude_oauth"));
         assert_eq!(Arc::strong_count(&manager), 2);
 
@@ -1123,7 +1151,7 @@ mod tests {
 
     #[tokio::test]
     async fn machine_local_quota_source_cannot_be_attributed_to_two_providers() {
-        for source in ["claude", "codex", "codex_oauth"] {
+        for source in ["claude", "claude_local", "codex", "codex_oauth"] {
             let db = isolated_quota_test_db();
             for id in ["first", "second"] {
                 let mut input = provider(id, BillingKind::Subscription, true);

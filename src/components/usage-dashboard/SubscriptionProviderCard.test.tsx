@@ -172,6 +172,51 @@ describe("SubscriptionProviderCard localized reset countdown", () => {
     expect(onSyncSessions).toHaveBeenCalledWith("system-chatgpt-subscription");
   });
 
+  it("separates Claude quota provenance from unverified Code token logs", () => {
+    const usage = subscriptionUsage();
+    usage.provider.id = "system-claude-subscription";
+    usage.provider.name = "Claude Pro/Max";
+    usage.provider.productGroupId = "claude-subscription";
+    usage.provider.sessionSourceBindings = ["claude"];
+    usage.provider.quotaSource = "claude_local";
+    usage.quota!.sourceObservedAt = 1_234;
+    usage.quota!.fetchedAt = 5_678;
+    usage.quotaFetchState = {
+      providerId: usage.provider.id,
+      lastAttemptAt: 9_999,
+      lastSuccessAt: 9_999,
+      lastError: null,
+      consecutiveFailures: 0,
+      stale: false,
+    };
+
+    render(
+      <SubscriptionProviderCard
+        usage={usage}
+        onRefreshQuota={vi.fn()}
+        onSyncSessions={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByTestId(
+        "subscription-provider-system-claude-subscription",
+      ),
+    ).toHaveTextContent(
+      "Quota: latest local sample per window (Desktop / Pro Code; account match unverified) · Tokens: Claude Code log (Provider unverified)",
+    );
+    expect(
+      screen.getByTestId(
+        "subscription-provider-system-claude-subscription",
+      ),
+    ).toHaveTextContent(new Date(1_234 * 1_000).toLocaleString());
+    expect(
+      screen.getByTestId(
+        "subscription-provider-system-claude-subscription",
+      ),
+    ).not.toHaveTextContent(new Date(9_999 * 1_000).toLocaleString());
+  });
+
   it.each([
     { used: "1", remaining: 99, toneClass: "bg-success" },
     { used: "50", remaining: 50, toneClass: "bg-warning" },

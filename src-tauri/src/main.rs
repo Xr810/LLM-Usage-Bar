@@ -2,6 +2,17 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|argument| argument == "--claude-statusline-bridge")
+    {
+        if let Err(error) = llm_usage_bar_lib::run_claude_statusline_bridge() {
+            eprintln!("Claude status-line bridge failed: {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
     // 在 Linux 上设置 WebKit 环境变量以解决 DMA-BUF 渲染问题
     // 某些 Linux 系统（如 Debian 13.2、Nvidia GPU）上 WebKitGTK 的 DMA-BUF 渲染器可能导致白屏/黑屏
     // 参考: https://github.com/tauri-apps/tauri/issues/9394
