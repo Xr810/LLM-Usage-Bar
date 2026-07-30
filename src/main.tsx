@@ -15,7 +15,7 @@ import { message } from "@tauri-apps/plugin-dialog";
 import { exit } from "@tauri-apps/plugin-process";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { isTauriRuntime } from "@/lib/platform";
-import { WindowSurface } from "./windowSurface";
+import { resolveWindowSurface, WindowSurface } from "./windowSurface";
 
 // 根据平台添加 body class，便于平台特定样式
 try {
@@ -23,6 +23,7 @@ try {
   const plat = (navigator.platform || "").toLowerCase();
   const isMac = /mac/i.test(ua) || plat.includes("mac");
   if (isMac) {
+    document.documentElement.classList.add("is-mac");
     document.body.classList.add("is-mac");
   }
 } catch {
@@ -91,8 +92,9 @@ async function bootstrap() {
 
   const root = ReactDOM.createRoot(document.getElementById("root")!);
   const windowLabel = getCurrentWebviewWindow().label;
-  if (windowLabel === "tray-popover") {
-    document.documentElement.dataset.windowSurface = "tray-popover";
+  const windowSurface = resolveWindowSurface(windowLabel);
+  document.documentElement.dataset.windowSurface = windowSurface;
+  if (windowSurface === "tray-popover") {
     root.render(
       <React.StrictMode>
         <QueryClientProvider client={queryClient}>

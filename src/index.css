@@ -226,6 +226,293 @@ input[type="password"]::-ms-clear {
   display: none;
 }
 
+.app-window-shell {
+  background: hsl(var(--background));
+}
+
+html.is-mac[data-window-surface="main-window"],
+html.is-mac[data-window-surface="main-window"] body,
+html.is-mac[data-window-surface="main-window"] #root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+}
+
+html.is-mac[data-window-surface="main-window"] {
+  --main-glass-shell: hsl(40 18% 97% / 0.42);
+  --main-glass-chrome: hsl(0 0% 100% / 0.26);
+  --main-glass-card: hsl(0 0% 100% / 0.34);
+  --main-glass-recessed: hsl(35 12% 42% / 0.08);
+  --main-glass-control: hsl(0 0% 100% / 0.34);
+  --main-glass-control-active: hsl(0 0% 100% / 0.62);
+  --main-glass-popover: hsl(0 0% 100% / 0.76);
+  --main-glass-border: hsl(30 10% 20% / 0.13);
+  --main-glass-divider: hsl(30 10% 20% / 0.09);
+  --main-glass-highlight: hsl(0 0% 100% / 0.64);
+  --main-glass-shadow: hsl(30 20% 10% / 0.11);
+  --main-glass-settings-backdrop: hsl(40 18% 97% / 0.68);
+  --main-glass-settings-sidebar: hsl(0 0% 100% / 0.5);
+  --main-glass-settings-content: hsl(40 14% 98% / 0.48);
+  --main-glass-settings-header: hsl(0 0% 100% / 0.58);
+  --main-glass-settings-card: hsl(0 0% 100% / 0.72);
+  --main-glass-settings-recessed: hsl(35 12% 42% / 0.13);
+  --main-glass-dialog-overlay: hsl(240 10% 4% / 0.16);
+}
+
+html.dark.is-mac[data-window-surface="main-window"] {
+  --main-glass-shell: hsl(240 9% 6% / 0.38);
+  --main-glass-chrome: hsl(240 7% 8% / 0.3);
+  --main-glass-card: hsl(0 0% 100% / 0.055);
+  --main-glass-recessed: hsl(0 0% 100% / 0.035);
+  --main-glass-control: hsl(0 0% 100% / 0.055);
+  --main-glass-control-active: hsl(0 0% 100% / 0.11);
+  --main-glass-popover: hsl(240 8% 9% / 0.78);
+  --main-glass-border: hsl(0 0% 100% / 0.11);
+  --main-glass-divider: hsl(0 0% 100% / 0.075);
+  --main-glass-highlight: hsl(0 0% 100% / 0.12);
+  --main-glass-shadow: hsl(0 0% 0% / 0.3);
+  --main-glass-settings-backdrop: hsl(240 9% 5% / 0.72);
+  --main-glass-settings-sidebar: hsl(240 8% 8% / 0.56);
+  --main-glass-settings-content: hsl(240 8% 7% / 0.5);
+  --main-glass-settings-header: hsl(240 8% 9% / 0.62);
+  --main-glass-settings-card: hsl(240 7% 11% / 0.72);
+  --main-glass-settings-recessed: hsl(0 0% 100% / 0.07);
+  --main-glass-dialog-overlay: hsl(240 10% 2% / 0.3);
+}
+
+html.is-mac[data-window-surface="main-window"] .app-window-shell {
+  background:
+    linear-gradient(180deg, hsl(0 0% 100% / 0.08), transparent 9rem),
+    var(--main-glass-shell);
+}
+
+html.is-mac[data-window-surface="main-window"]
+  .app-window-shell[data-settings-open="true"] {
+  background: transparent;
+}
+
+html.is-mac[data-window-surface="main-window"]
+  .app-window-shell[data-settings-open="true"]
+  > .app-titlebar-spacer,
+html.is-mac[data-window-surface="main-window"]
+  .app-window-shell[data-settings-open="true"]
+  > .app-window-header,
+html.is-mac[data-window-surface="main-window"]
+  .app-window-shell[data-settings-open="true"]
+  > .app-window-content {
+  visibility: hidden;
+}
+
+html.is-mac[data-window-surface="main-window"] .app-titlebar-spacer,
+html.is-mac[data-window-surface="main-window"] .app-window-header {
+  border-color: var(--main-glass-divider);
+  background: var(--main-glass-chrome);
+  -webkit-backdrop-filter: saturate(130%) blur(20px);
+  backdrop-filter: saturate(130%) blur(20px);
+}
+
+html.is-mac[data-window-surface="main-window"] .app-titlebar-spacer {
+  box-shadow: inset 0 1px 0 var(--main-glass-highlight);
+}
+
+html.is-mac[data-window-surface="main-window"] .app-window-content {
+  background: transparent;
+}
+
+html.is-mac[data-window-surface="main-window"] .app-window-content .bg-card,
+html.is-mac[data-window-surface="main-window"]
+  [data-surface-variant="fullscreen"]
+  .bg-card {
+  background: var(--main-glass-card);
+}
+
+html.is-mac[data-window-surface="main-window"]
+  .app-window-content
+  .rounded-xl.border.bg-card,
+html.is-mac[data-window-surface="main-window"]
+  [data-surface-variant="fullscreen"]
+  .rounded-xl.border.bg-card {
+  border-color: var(--main-glass-border);
+  box-shadow:
+    inset 0 1px 0 var(--main-glass-highlight),
+    0 10px 30px var(--main-glass-shadow);
+}
+
+html.is-mac[data-window-surface="main-window"]
+  .app-window-content
+  :is(
+    [class~="bg-muted/20"],
+    [class~="bg-muted/25"],
+    [class~="bg-muted/30"],
+    [class~="bg-muted/40"],
+    [class~="bg-muted/45"],
+    [class~="bg-muted/50"],
+    [class~="bg-muted/60"]
+  ),
+html.is-mac[data-window-surface="main-window"]
+  [data-surface-variant="fullscreen"]
+  :is(
+    [class~="bg-muted/20"],
+    [class~="bg-muted/25"],
+    [class~="bg-muted/30"],
+    [class~="bg-muted/40"],
+    [class~="bg-muted/45"],
+    [class~="bg-muted/50"],
+    [class~="bg-muted/60"]
+  ) {
+  background: var(--main-glass-recessed);
+}
+
+html.is-mac[data-window-surface="main-window"]
+  .usage-dashboard-toolbar
+  .bg-muted {
+  border: 1px solid var(--main-glass-border);
+  background: var(--main-glass-control);
+  box-shadow: inset 0 1px 0 var(--main-glass-highlight);
+}
+
+html.is-mac[data-window-surface="main-window"]
+  .usage-dashboard-toolbar
+  .bg-card {
+  background: var(--main-glass-control-active);
+}
+
+html.is-mac[data-window-surface="main-window"] .app-window-header button:hover {
+  background: var(--main-glass-control);
+}
+
+html.is-mac[data-window-surface="main-window"] .app-window-content .bg-popover,
+html.is-mac[data-window-surface="main-window"]
+  [data-radix-popper-content-wrapper]
+  .bg-popover {
+  border-color: var(--main-glass-border);
+  background: var(--main-glass-popover);
+  box-shadow:
+    inset 0 1px 0 var(--main-glass-highlight),
+    0 16px 38px var(--main-glass-shadow);
+  -webkit-backdrop-filter: saturate(130%) blur(24px);
+  backdrop-filter: saturate(130%) blur(24px);
+}
+
+html.is-mac[data-window-surface="main-window"]
+  [data-surface-overlay="default"] {
+  background: var(--main-glass-dialog-overlay);
+  -webkit-backdrop-filter: saturate(108%) blur(10px);
+  backdrop-filter: saturate(108%) blur(10px);
+}
+
+html.is-mac[data-window-surface="main-window"]
+  [data-surface-variant="default"] {
+  border-color: var(--main-glass-border);
+  background: var(--main-glass-popover);
+  box-shadow:
+    inset 0 1px 0 var(--main-glass-highlight),
+    0 24px 70px var(--main-glass-shadow);
+  -webkit-backdrop-filter: saturate(132%) blur(30px);
+  backdrop-filter: saturate(132%) blur(30px);
+}
+
+html.is-mac[data-window-surface="main-window"]
+  [data-surface-variant="default"]
+  :is(
+    [class~="bg-muted/20"],
+    [class~="bg-muted/25"],
+    [class~="bg-muted/30"],
+    [class~="bg-muted/40"],
+    [class~="bg-muted/45"],
+    [class~="bg-muted/50"],
+    [class~="bg-muted/60"]
+  ) {
+  background: var(--main-glass-recessed);
+}
+
+html.is-mac[data-window-surface="main-window"]
+  [data-sonner-toast].app-liquid-toast {
+  background: color-mix(in srgb, currentColor 7%, var(--main-glass-popover));
+  box-shadow:
+    inset 0 1px 0 var(--main-glass-highlight),
+    0 18px 46px var(--main-glass-shadow);
+  -webkit-backdrop-filter: saturate(128%) blur(26px);
+  backdrop-filter: saturate(128%) blur(26px);
+}
+
+html.is-mac[data-window-surface="main-window"]
+  [data-surface-variant="fullscreen"] {
+  background: var(--main-glass-settings-backdrop);
+  -webkit-backdrop-filter: saturate(112%) blur(30px);
+  backdrop-filter: saturate(112%) blur(30px);
+}
+
+html.is-mac[data-window-surface="main-window"]
+  [data-surface-variant="fullscreen"]
+  [data-settings-region="sidebar"] {
+  border-color: var(--main-glass-divider);
+  background: var(--main-glass-settings-sidebar);
+  -webkit-backdrop-filter: saturate(120%) blur(32px);
+  backdrop-filter: saturate(120%) blur(32px);
+}
+
+html.is-mac[data-window-surface="main-window"]
+  [data-surface-variant="fullscreen"]
+  [data-settings-region="pane"] {
+  background: var(--main-glass-settings-content);
+  -webkit-backdrop-filter: saturate(116%) blur(26px);
+  backdrop-filter: saturate(116%) blur(26px);
+}
+
+html.is-mac[data-window-surface="main-window"]
+  [data-surface-variant="fullscreen"]
+  [data-settings-region="header"] {
+  border-color: var(--main-glass-divider);
+  background: var(--main-glass-settings-header);
+  -webkit-backdrop-filter: saturate(120%) blur(24px);
+  backdrop-filter: saturate(120%) blur(24px);
+}
+
+html.is-mac[data-window-surface="main-window"]
+  [data-surface-variant="fullscreen"]
+  .bg-card {
+  background: var(--main-glass-settings-card);
+}
+
+html.is-mac[data-window-surface="main-window"]
+  [data-surface-variant="fullscreen"]
+  :is(
+    [class~="bg-muted/20"],
+    [class~="bg-muted/25"],
+    [class~="bg-muted/30"],
+    [class~="bg-muted/40"],
+    [class~="bg-muted/45"],
+    [class~="bg-muted/50"],
+    [class~="bg-muted/60"]
+  ) {
+  background: var(--main-glass-settings-recessed);
+}
+
+html.is-mac[data-window-surface="main-window"]
+  :is(
+    button,
+    input,
+    select,
+    textarea,
+    [role="button"],
+    [role="tab"],
+    [role="switch"]
+  ):focus-visible,
+html[data-window-surface="tray-popover"]
+  :is(button, a, input, select, [role="button"], [role="tab"]):focus-visible {
+  outline: 2px solid
+    color-mix(in srgb, hsl(var(--primary)) 60%, hsl(var(--foreground)));
+  outline-offset: 2px;
+}
+
+html[data-window-surface="tray-popover"]
+  .tray-usage-action-group
+  .tray-usage-footer-button:focus-visible {
+  outline-offset: -3px;
+}
+
 html[data-window-surface="tray-popover"],
 html[data-window-surface="tray-popover"] body,
 html[data-window-surface="tray-popover"] #root {
@@ -471,6 +758,103 @@ html[data-window-surface="tray-popover"] .tray-usage-footer-label {
 }
 
 @media (prefers-reduced-transparency: reduce) {
+  html.is-mac[data-window-surface="main-window"] .app-window-shell,
+  html.is-mac[data-window-surface="main-window"]
+    [data-surface-variant="default"],
+  html.is-mac[data-window-surface="main-window"]
+    [data-surface-variant="fullscreen"] {
+    background: hsl(var(--background));
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
+  html.is-mac[data-window-surface="main-window"] .app-titlebar-spacer,
+  html.is-mac[data-window-surface="main-window"] .app-window-header,
+  html.is-mac[data-window-surface="main-window"]
+    [data-surface-variant="fullscreen"]
+    [data-settings-region="sidebar"],
+  html.is-mac[data-window-surface="main-window"]
+    [data-surface-variant="fullscreen"]
+    [data-settings-region="pane"],
+  html.is-mac[data-window-surface="main-window"]
+    [data-surface-variant="fullscreen"]
+    [data-settings-region="header"] {
+    background: hsl(var(--background));
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
+  html.is-mac[data-window-surface="main-window"]
+    [data-surface-overlay="default"] {
+    background: hsl(0 0% 0% / 0.45);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
+  html.is-mac[data-window-surface="main-window"]
+    [data-sonner-toast].app-liquid-toast {
+    background: hsl(var(--popover));
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
+  html.is-mac[data-window-surface="main-window"] .app-window-content .bg-card,
+  html.is-mac[data-window-surface="main-window"]
+    [data-surface-variant="fullscreen"]
+    .bg-card {
+    background: hsl(var(--card));
+  }
+
+  html.is-mac[data-window-surface="main-window"]
+    .app-window-content
+    :is(
+      [class~="bg-muted/20"],
+      [class~="bg-muted/25"],
+      [class~="bg-muted/30"],
+      [class~="bg-muted/40"],
+      [class~="bg-muted/45"],
+      [class~="bg-muted/50"],
+      [class~="bg-muted/60"]
+    ),
+  html.is-mac[data-window-surface="main-window"]
+    [data-surface-variant="default"]
+    :is(
+      [class~="bg-muted/20"],
+      [class~="bg-muted/25"],
+      [class~="bg-muted/30"],
+      [class~="bg-muted/40"],
+      [class~="bg-muted/45"],
+      [class~="bg-muted/50"],
+      [class~="bg-muted/60"]
+    ),
+  html.is-mac[data-window-surface="main-window"]
+    [data-surface-variant="fullscreen"]
+    :is(
+      [class~="bg-muted/20"],
+      [class~="bg-muted/25"],
+      [class~="bg-muted/30"],
+      [class~="bg-muted/40"],
+      [class~="bg-muted/45"],
+      [class~="bg-muted/50"],
+      [class~="bg-muted/60"]
+    ) {
+    background: hsl(var(--muted));
+  }
+
+  html.is-mac[data-window-surface="main-window"]
+    .usage-dashboard-toolbar
+    .bg-muted,
+  html.is-mac[data-window-surface="main-window"]
+    .app-window-content
+    .bg-popover,
+  html.is-mac[data-window-surface="main-window"]
+    [data-radix-popper-content-wrapper]
+    .bg-popover {
+    background: hsl(var(--popover));
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
   html[data-window-surface="tray-popover"] .tray-popover-frame {
     background: hsl(var(--popover));
   }
@@ -488,13 +872,66 @@ html[data-window-surface="tray-popover"] .tray-usage-footer-label {
 }
 
 @media (prefers-contrast: more) {
+  html.is-mac[data-window-surface="main-window"] {
+    --main-glass-border: hsl(var(--foreground) / 0.42);
+    --main-glass-divider: hsl(var(--foreground) / 0.3);
+  }
+
+  html.is-mac[data-window-surface="main-window"]
+    [data-surface-variant="default"],
+  html.is-mac[data-window-surface="main-window"]
+    [data-surface-variant="fullscreen"] {
+    background: hsl(var(--background));
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
+  html.is-mac[data-window-surface="main-window"] .app-window-shell {
+    background: hsl(var(--background));
+  }
+
+  html.is-mac[data-window-surface="main-window"] .app-window-content .bg-card,
+  html.is-mac[data-window-surface="main-window"]
+    [data-surface-variant="fullscreen"]
+    .bg-card {
+    background: hsl(var(--card));
+  }
+
+  html.is-mac[data-window-surface="main-window"]
+    .app-window-content
+    .bg-popover,
+  html.is-mac[data-window-surface="main-window"]
+    [data-radix-popper-content-wrapper]
+    .bg-popover,
+  html.is-mac[data-window-surface="main-window"]
+    [data-sonner-toast].app-liquid-toast {
+    background: hsl(var(--popover));
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
   html[data-window-surface="tray-popover"] {
     --tray-glass-border: hsl(var(--foreground) / 0.38);
     --tray-glass-divider: hsl(var(--foreground) / 0.28);
   }
+
+  html[data-window-surface="tray-popover"] .tray-popover-frame,
+  html[data-window-surface="tray-popover"] .tray-usage-provider-row,
+  html[data-window-surface="tray-popover"] .tray-usage-footer {
+    background: hsl(var(--popover));
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
+  html.is-mac[data-window-surface="main-window"] .app-window-shell * {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+
   html[data-window-surface="tray-popover"] .tray-popover-frame * {
     scroll-behavior: auto !important;
     transition-duration: 0.01ms !important;
@@ -504,6 +941,74 @@ html[data-window-surface="tray-popover"] .tray-usage-footer-label {
 }
 
 @media (forced-colors: active) {
+  html.is-mac[data-window-surface="main-window"] .app-window-shell,
+  html.is-mac[data-window-surface="main-window"]
+    .app-window-content
+    .rounded-xl.border.bg-card,
+  html.is-mac[data-window-surface="main-window"]
+    [data-surface-variant="default"],
+  html.is-mac[data-window-surface="main-window"]
+    [data-surface-variant="fullscreen"] {
+    border-color: CanvasText;
+    background: Canvas;
+    color: CanvasText;
+    box-shadow: none;
+  }
+
+  html.is-mac[data-window-surface="main-window"]
+    [data-surface-overlay="default"] {
+    background: transparent;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
+  html.is-mac[data-window-surface="main-window"]
+    [data-sonner-toast].app-liquid-toast {
+    border-color: CanvasText;
+    background: Canvas;
+    color: CanvasText;
+    box-shadow: none;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
+  html.is-mac[data-window-surface="main-window"] .app-titlebar-spacer,
+  html.is-mac[data-window-surface="main-window"] .app-window-header,
+  html.is-mac[data-window-surface="main-window"]
+    .app-window-content
+    .bg-popover,
+  html.is-mac[data-window-surface="main-window"]
+    [data-radix-popper-content-wrapper]
+    .bg-popover,
+  html.is-mac[data-window-surface="main-window"]
+    [data-surface-variant="default"],
+  html.is-mac[data-window-surface="main-window"]
+    [data-surface-variant="fullscreen"],
+  html.is-mac[data-window-surface="main-window"] [data-settings-region] {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
+  html.is-mac[data-window-surface="main-window"]
+    :is(
+      button,
+      input,
+      select,
+      textarea,
+      [role="button"],
+      [role="tab"],
+      [role="switch"]
+    ):focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+
+  html[data-window-surface="tray-popover"]
+    :is(button, a, input, select, [role="button"], [role="tab"]):focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+
   html[data-window-surface="tray-popover"] .tray-popover-frame,
   html[data-window-surface="tray-popover"] .tray-usage-provider-row,
   html[data-window-surface="tray-popover"] .tray-usage-footer-button,
@@ -512,6 +1017,8 @@ html[data-window-surface="tray-popover"] .tray-usage-footer-label {
     background: Canvas;
     color: CanvasText;
     box-shadow: none;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
   }
 }
 

@@ -63,26 +63,28 @@ pub fn exit_lightweight_mode(app: &tauri::AppHandle) -> Result<(), String> {
         .find(|w| w.label == "main")
         .ok_or("主窗口配置未找到")?;
 
-    WebviewWindowBuilder::from_config(app, window_config)
+    let window = WebviewWindowBuilder::from_config(app, window_config)
         .map_err(|e| format!("加载主窗口配置失败: {e}"))?
         .build()
         .map_err(|e| format!("创建主窗口失败: {e}"))?;
 
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.unminimize();
-        let _ = window.show();
-        let _ = window.set_focus();
-        #[cfg(target_os = "linux")]
-        {
-            crate::linux_fix::nudge_main_window(window.clone());
-        }
+    #[cfg(target_os = "macos")]
+    crate::macos_material::apply_native_material(
+        &window,
+        crate::macos_material::NativeMaterialSurface::MainWindow,
+    );
+
+    let _ = window.unminimize();
+    let _ = window.show();
+    let _ = window.set_focus();
+    #[cfg(target_os = "linux")]
+    {
+        crate::linux_fix::nudge_main_window(window.clone());
     }
 
     #[cfg(target_os = "windows")]
     {
-        if let Some(window) = app.get_webview_window("main") {
-            let _ = window.set_skip_taskbar(false);
-        }
+        let _ = window.set_skip_taskbar(false);
     }
     #[cfg(target_os = "macos")]
     {

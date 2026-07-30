@@ -21,6 +21,8 @@ mod init_status;
 mod lightweight;
 #[cfg(target_os = "linux")]
 mod linux_fix;
+#[cfg(any(target_os = "macos", test))]
+mod macos_material;
 mod mcp;
 mod openclaw_config;
 mod opencode_config;
@@ -680,6 +682,14 @@ pub fn run() {
                 if let Err(error) = result {
                     log::warn!("Failed to reconcile launch-at-login state: {error}");
                 }
+            }
+
+            #[cfg(target_os = "macos")]
+            if let Some(window) = app.get_webview_window("main") {
+                macos_material::apply_native_material(
+                    &window,
+                    macos_material::NativeMaterialSurface::MainWindow,
+                );
             }
 
             // 注入 AppHandle 给 usage_events，让无 AppHandle 持有的写日志路径

@@ -116,12 +116,8 @@ describe("UsageDashboardPage Provider-only contract", () => {
     renderPage();
     await screen.findByText("ChatGPT Plus/Pro");
 
-    expect(
-      screen.queryByRole("button", { name: "Refresh quota" }),
-    ).toBeNull();
-    expect(
-      screen.queryByRole("button", { name: "Sync sessions" }),
-    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Refresh quota" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Sync sessions" })).toBeNull();
     expect(commandCalls("refresh_provider_quota")).toHaveLength(0);
     expect(commandCalls("sync_provider_session_usage")).toHaveLength(0);
   });

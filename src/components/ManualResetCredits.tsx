@@ -46,7 +46,7 @@ export function ManualResetCredits({
           defaultValue: "Usage limit resets",
         })}
       </span>
-      <span className="flex shrink-0 items-center gap-2">
+      <span className="flex shrink-0 items-center gap-3">
         <Badge variant="success" className={compact ? "px-1.5" : undefined}>
           {t("manualResetCredits.available", {
             count,

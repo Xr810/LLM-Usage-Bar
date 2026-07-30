@@ -17,7 +17,7 @@ export function Toaster() {
         duration: 2000,
         classNames: {
           toast:
-            "group rounded-md border bg-background text-foreground shadow-lg",
+            "app-liquid-toast group rounded-md border bg-background text-foreground shadow-lg",
           title: "text-sm font-semibold",
           description: "text-sm text-muted-foreground",
           closeButton:

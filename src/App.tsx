@@ -65,17 +65,20 @@ export default function App() {
   };
 
   return (
-    <div className="flex h-screen min-h-0 flex-col bg-background text-foreground">
+    <div
+      className="app-window-shell flex h-screen min-h-0 flex-col text-foreground"
+      data-settings-open={settingsTarget.open || undefined}
+    >
       {isMac() ? (
         <div
           aria-hidden="true"
-          className="h-7 shrink-0"
+          className="app-titlebar-spacer h-7 shrink-0"
           data-tauri-drag-region
           style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
         />
       ) : null}
       <header
-        className="grid shrink-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-4 border-b border-border/60 px-5 py-2.5"
+        className="app-window-header grid shrink-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-4 border-b border-border/60 px-5 py-2.5"
         data-tauri-drag-region
         style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
       >
@@ -139,7 +142,7 @@ export default function App() {
         </div>
       </header>
 
-      <main className="min-h-0 flex-1 overflow-y-auto px-5 pt-5">
+      <main className="app-window-content min-h-0 flex-1 overflow-y-auto px-5 pt-5">
         <UsageDashboardPage onOpenSettings={openProviderConfiguration} />
       </main>
 

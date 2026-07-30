@@ -132,8 +132,8 @@ export function UsageDashboardPage({
   );
 
   return (
-    <div className="space-y-5 pb-8">
-      <div className="flex flex-wrap items-end justify-between gap-3">
+    <div className="usage-dashboard-shell space-y-5 pb-8">
+      <div className="usage-dashboard-toolbar">
         <div>
           <h2 className="text-lg font-semibold tracking-tight">
             {t("usageDashboard.providerMonitoring", {

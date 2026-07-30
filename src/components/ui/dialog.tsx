@@ -72,9 +72,14 @@ const DialogContent = React.forwardRef<
 
     return (
       <DialogPortal>
-        <DialogOverlay zIndex={zIndex} className={overlayClassName} />
+        <DialogOverlay
+          zIndex={zIndex}
+          className={overlayClassName}
+          data-surface-overlay={variant}
+        />
         <DialogPrimitive.Content
           ref={ref}
+          data-surface-variant={variant}
           className={cn(variantClass, zIndexMap[zIndex], className)}
           onInteractOutside={(e) => {
             // 防止点击遮罩层关闭对话框
