@@ -355,10 +355,18 @@ struct CodexResetCredit {
     id: Option<String>,
     reset_type: Option<String>,
     status: Option<String>,
-    granted_at: Option<i64>,
-    expires_at: Option<i64>,
+    granted_at: Option<CodexResetCreditTimestamp>,
+    expires_at: Option<CodexResetCreditTimestamp>,
     title: Option<String>,
     description: Option<String>,
+}
+
+/// ChatGPT 的重置券详情端点目前返回 RFC 3339 字符串；兼容旧响应中的 Unix 秒。
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum CodexResetCreditTimestamp {
+    Unix(i64),
+    Rfc3339(String),
 }
 
 #[derive(Deserialize)]
@@ -391,6 +399,17 @@ fn window_seconds_to_tier_name(secs: i64) -> String {
 /// Unix 时间戳（秒）转 ISO 8601 字符串
 fn unix_ts_to_iso(ts: i64) -> Option<String> {
     chrono::DateTime::from_timestamp(ts, 0).map(|dt| dt.to_rfc3339())
+}
+
+fn codex_reset_credit_timestamp_to_iso(value: CodexResetCreditTimestamp) -> Option<String> {
+    match value {
+        CodexResetCreditTimestamp::Unix(timestamp) => unix_ts_to_iso(timestamp),
+        CodexResetCreditTimestamp::Rfc3339(timestamp) => {
+            chrono::DateTime::parse_from_rfc3339(timestamp.trim())
+                .ok()
+                .map(|value| value.to_rfc3339())
+        }
+    }
 }
 
 fn codex_additional_rate_limit_tier_name(index: usize, label: &str, window_seconds: i64) -> String {
@@ -467,12 +486,16 @@ fn normalize_codex_reset_credits(
                 .is_none_or(|status| status.eq_ignore_ascii_case("available"))
         })
         .filter_map(|credit| {
-            let expires_at = credit.expires_at.and_then(unix_ts_to_iso)?;
+            let expires_at = credit
+                .expires_at
+                .and_then(codex_reset_credit_timestamp_to_iso)?;
             Some(ManualResetCredit {
                 id: credit.id?,
                 reset_type: credit.reset_type,
                 status: credit.status,
-                granted_at: credit.granted_at.and_then(unix_ts_to_iso),
+                granted_at: credit
+                    .granted_at
+                    .and_then(codex_reset_credit_timestamp_to_iso),
                 expires_at,
                 title: credit.title,
                 description: credit.description,
@@ -1293,14 +1316,14 @@ mod tests {
                     "id": "reset-1",
                     "reset_type": "codexRateLimits",
                     "status": "available",
-                    "granted_at": 1782517465,
-                    "expires_at": 1785109465,
+                    "granted_at": "2026-06-26T23:44:25Z",
+                    "expires_at": "2026-07-26T23:44:25Z",
                     "title": "Full reset"
                 },
                 {
                     "id": "reset-2",
                     "status": "consumed",
-                    "expires_at": 1785524619,
+                    "expires_at": "2026-07-31T19:03:39Z",
                     "title": "Full reset"
                 },
                 {
