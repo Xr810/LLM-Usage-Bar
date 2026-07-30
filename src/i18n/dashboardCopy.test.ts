@@ -130,6 +130,8 @@ const requiredKeys = [
   "usageDashboard.noCustomProvidersConfigured",
   "usageDashboard.fixedSystemProvider",
   "usageDashboard.endpointLocked",
+  "usageDashboard.apiKeyPlaceholder",
+  "usageDashboard.verifyApiKey",
   "usageDashboard.saveSystemProviderApiKey",
   "usageDashboard.systemProviderApiKeyDescription",
   "usageDashboard.upstreamKeyConfigured",

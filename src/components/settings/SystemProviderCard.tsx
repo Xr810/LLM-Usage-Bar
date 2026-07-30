@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { CodexOAuthSection } from "@/components/providers/forms/CodexOAuthSection";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Card,
   CardContent,
@@ -16,7 +17,6 @@ import {
 import type { UsageProviderView } from "@/types/usageDashboard";
 import { ClaudeCliAuthSection } from "./ClaudeCliAuthSection";
 import { ProviderDailyBudgetField } from "./ProviderDailyBudgetField";
-import { SystemProviderApiKeyDialog } from "./SystemProviderApiKeyDialog";
 import { ProviderIcon } from "@/components/ProviderIcon";
 import { dashboardProviderIcon } from "@/components/usage-dashboard/usagePresentation";
 
@@ -34,7 +34,7 @@ export function SystemProviderCard({
   const { t } = useTranslation();
   const credentials = useSystemProviderCredentialActions();
   const setEnabled = useSetUsageProviderEnabled();
-  const [keyDialogOpen, setKeyDialogOpen] = useState(false);
+  const [apiKey, setApiKey] = useState("");
   const [failed, setFailed] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<
     "success" | "failed" | null
@@ -54,6 +54,35 @@ export function SystemProviderCard({
   const canTestConnection = provider.systemPresetKey !== "nvidia-nim-api";
   const { icon, iconColor } = dashboardProviderIcon(provider);
 
+  const verifyApiKey = async () => {
+    const transientKey = apiKey.trim();
+    if (!transientKey) return;
+
+    setApiKey("");
+    setConnectionStatus(null);
+    await run(async () => {
+      const updatedProvider = hasUpstreamKey
+        ? await credentials.replaceApiKey(
+            provider.id,
+            provider.upstreamCredentialVersion,
+            transientKey,
+          )
+        : await credentials.setApiKey(
+            provider.id,
+            provider.upstreamCredentialVersion,
+            transientKey,
+          );
+
+      if (canTestConnection) {
+        const result = await credentials.testConnection(
+          provider.id,
+          updatedProvider.upstreamCredentialVersion,
+        );
+        setConnectionStatus(result.status);
+      }
+    });
+  };
+
   return (
     <Card data-testid={`system-provider-${provider.id}`}>
       <CardHeader className="flex-row items-center justify-between gap-4 space-y-0">
@@ -71,11 +100,6 @@ export function SystemProviderCard({
               {t("usageDashboard.fixedSystemProvider", {
                 defaultValue: "Built-in Provider",
               })}
-              {provider.canonicalEndpoint
-                ? ` · ${t("usageDashboard.endpointLocked", {
-                    defaultValue: "Endpoint locked",
-                  })}`
-                : ""}
             </CardDescription>
           </div>
         </div>
@@ -114,106 +138,43 @@ export function SystemProviderCard({
           <ClaudeCliAuthSection />
         ) : null}
         {provider.systemAuthKind === "provider_api_key" ? (
-          <div className="space-y-3 rounded-lg bg-muted/25 px-3 py-3 dark:bg-muted/15">
-            {provider.canonicalEndpoint ? (
-              <div className="space-y-1">
-                <div className="text-xs text-muted-foreground">
-                  {t("usageDashboard.endpoint", { defaultValue: "Endpoint" })}
-                </div>
-                <code className="break-all text-xs">
-                  {provider.canonicalEndpoint}
-                </code>
-              </div>
-            ) : null}
-            <div className="text-sm">
-              {hasUpstreamKey
-                ? t("usageDashboard.upstreamKeyConfigured", {
-                    defaultValue: "Upstream API key configured",
-                  })
-                : provider.upstreamCredentialStatus === "unavailable"
-                  ? t("usageDashboard.credentialUnavailable", {
-                      defaultValue: "Credential unavailable",
-                    })
-                  : t("usageDashboard.upstreamKeyMissing", {
-                      defaultValue: "Upstream API key required",
-                    })}
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Button size="sm" onClick={() => setKeyDialogOpen(true)}>
-                {hasUpstreamKey
-                  ? t("usageDashboard.replaceApiKey", {
-                      defaultValue: "Replace API key",
-                    })
-                  : t("usageDashboard.setApiKey", {
-                      defaultValue: "Set API key",
-                    })}
-              </Button>
-              {hasUpstreamKey ? (
-                <>
-                  {canTestConnection ? (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={credentials.isPending}
-                      onClick={() =>
-                        void run(async () => {
-                          const result = await credentials.testConnection(
-                            provider.id,
-                            provider.upstreamCredentialVersion,
-                          );
-                          setConnectionStatus(result.status);
-                        })
-                      }
-                    >
-                      {t("usageDashboard.testConnection", {
-                        defaultValue: "Test connection",
-                      })}
-                    </Button>
-                  ) : null}
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={
-                      credentials.isPending ||
-                      !provider.canClearUpstreamCredential
-                    }
-                    onClick={() => {
-                      if (
-                        window.confirm(
-                          t("usageDashboard.clearUpstreamKeyConfirmation", {
-                            defaultValue:
-                              "Clear this Provider API key? Monitoring that requires it will stop.",
-                          }),
-                        )
-                      ) {
-                        void run(() =>
-                          credentials.clearApiKey(
-                            provider.id,
-                            provider.upstreamCredentialVersion,
-                          ),
-                        );
-                      }
-                    }}
-                  >
-                    {t("usageDashboard.clearApiKey", {
-                      defaultValue: "Clear API key",
-                    })}
-                  </Button>
-                </>
-              ) : null}
-            </div>
-            {!canTestConnection ? (
-              <div className="text-xs text-muted-foreground">
-                {t("usageDashboard.connectionTestUnavailable", {
-                  defaultValue:
-                    "This Provider's public model catalog cannot validate an API key. Verify it with an actual inference request.",
+          <div className="space-y-2">
+            <form
+              className="flex items-center gap-2"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void verifyApiKey();
+              }}
+            >
+              <Input
+                type="password"
+                autoComplete="off"
+                aria-label={t("usageDashboard.apiKey", {
+                  defaultValue: "API key",
                 })}
-              </div>
-            ) : null}
-            {(connectionStatus ?? provider.lastConnectionTestStatus) ? (
+                placeholder={t("usageDashboard.apiKeyPlaceholder", {
+                  defaultValue: "Enter API key",
+                })}
+                value={apiKey}
+                onChange={(event) => {
+                  setApiKey(event.target.value);
+                  setConnectionStatus(null);
+                }}
+              />
+              <Button
+                type="submit"
+                size="sm"
+                className="shrink-0"
+                disabled={credentials.isPending || apiKey.trim().length === 0}
+              >
+                {t("usageDashboard.verifyApiKey", {
+                  defaultValue: "Verify",
+                })}
+              </Button>
+            </form>
+            {connectionStatus ? (
               <div className="text-xs text-muted-foreground">
-                {(connectionStatus ?? provider.lastConnectionTestStatus) ===
-                "success"
+                {connectionStatus === "success"
                   ? t("usageDashboard.connectionSucceeded", {
                       defaultValue: "Connection succeeded",
                     })
@@ -243,28 +204,6 @@ export function SystemProviderCard({
           </div>
         ) : null}
       </CardContent>
-
-      {provider.systemAuthKind === "provider_api_key" ? (
-        <SystemProviderApiKeyDialog
-          open={keyDialogOpen}
-          provider={provider}
-          onOpenChange={setKeyDialogOpen}
-          isPending={credentials.isPending}
-          onSubmit={(apiKey) =>
-            hasUpstreamKey
-              ? credentials.replaceApiKey(
-                  provider.id,
-                  provider.upstreamCredentialVersion,
-                  apiKey,
-                )
-              : credentials.setApiKey(
-                  provider.id,
-                  provider.upstreamCredentialVersion,
-                  apiKey,
-                )
-          }
-        />
-      ) : null}
     </Card>
   );
 }

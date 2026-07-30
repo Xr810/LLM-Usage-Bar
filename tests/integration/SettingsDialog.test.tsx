@@ -59,19 +59,21 @@ describe("SettingsPage Provider-only integration", () => {
     ]);
     for (const card of systemCards) {
       expect(within(card).queryByRole("button", { name: /edit/i })).toBeNull();
-      expect(within(card).queryByRole("button", { name: /delete/i })).toBeNull();
+      expect(
+        within(card).queryByRole("button", { name: /delete/i }),
+      ).toBeNull();
       expect(within(card).queryByText("Agent bindings")).toBeNull();
     }
 
     const openAiCard = screen.getByTestId("system-provider-system-openai-api");
-    await user.click(within(openAiCard).getByRole("button", { name: "Set API key" }));
-    const dialog = screen.getByRole("dialog");
     const upstreamKey = "transient-upstream-provider-sentinel";
-    await user.type(within(dialog).getByLabelText("API key"), upstreamKey);
-    await user.click(within(dialog).getByRole("button", { name: "Save API key" }));
+    await user.type(within(openAiCard).getByLabelText("API key"), upstreamKey);
+    await user.click(
+      within(openAiCard).getByRole("button", { name: "Verify" }),
+    );
     await waitFor(() =>
       expect(
-        within(openAiCard).getByText("Upstream API key configured"),
+        within(openAiCard).getByText("Connection succeeded"),
       ).toBeInTheDocument(),
     );
 
@@ -81,8 +83,14 @@ describe("SettingsPage Provider-only integration", () => {
         view.baseElement.querySelectorAll<HTMLInputElement>("input"),
         (element) => element.value,
       ),
-      queries: view.client.getQueryCache().getAll().map((query) => query.state.data),
-      mutations: view.client.getMutationCache().getAll().map((mutation) => mutation.state.data),
+      queries: view.client
+        .getQueryCache()
+        .getAll()
+        .map((query) => query.state.data),
+      mutations: view.client
+        .getMutationCache()
+        .getAll()
+        .map((mutation) => mutation.state.data),
     });
     expect(frontendSnapshot).not.toContain(upstreamKey);
   });

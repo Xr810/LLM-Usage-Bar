@@ -133,6 +133,8 @@
     "endpointLocked": "Endpoint locked",
     "endpoint": "Endpoint",
     "apiKey": "API key",
+    "apiKeyPlaceholder": "Enter API key",
+    "verifyApiKey": "Verify",
     "saveSystemProviderApiKey": "Save {{name}} API key",
     "systemProviderApiKeyDescription": "The upstream key is sent directly to protected storage and is never displayed again.",
     "saveApiKey": "Save API key",

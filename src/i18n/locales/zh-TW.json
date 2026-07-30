@@ -133,6 +133,8 @@
     "endpointLocked": "Endpoint 已鎖定",
     "endpoint": "Endpoint",
     "apiKey": "API key",
+    "apiKeyPlaceholder": "填寫 API Key",
+    "verifyApiKey": "驗證",
     "saveSystemProviderApiKey": "儲存 {{name}} API key",
     "systemProviderApiKeyDescription": "上游 Key 會直接寫入受保護儲存空間，之後不會再次顯示。",
     "saveApiKey": "儲存 API key",

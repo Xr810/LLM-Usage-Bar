@@ -133,6 +133,8 @@
     "endpointLocked": "Endpoint は固定です",
     "endpoint": "Endpoint",
     "apiKey": "API key",
+    "apiKeyPlaceholder": "API key を入力",
+    "verifyApiKey": "検証",
     "saveSystemProviderApiKey": "{{name}} API key を保存",
     "systemProviderApiKeyDescription": "上流 Key は保護されたストレージへ直接保存され、以後表示されません。",
     "saveApiKey": "API key を保存",

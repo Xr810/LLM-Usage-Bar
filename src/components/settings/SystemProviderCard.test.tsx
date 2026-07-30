@@ -1,7 +1,13 @@
-import { render, screen } from "@testing-library/react";
-import { expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, expect, it, vi } from "vitest";
 import { SystemProviderCard } from "./SystemProviderCard";
 import type { UsageProviderView } from "@/types/usageDashboard";
+
+const mocks = vi.hoisted(() => ({
+  setApiKey: vi.fn(),
+  replaceApiKey: vi.fn(),
+  testConnection: vi.fn(),
+}));
 
 vi.mock("./ProviderDailyBudgetField", () => ({
   ProviderDailyBudgetField: ({
@@ -25,7 +31,9 @@ vi.mock("@/components/providers/forms/CodexOAuthSection", () => ({
 vi.mock("@/lib/query/usageDashboard", () => ({
   useSystemProviderCredentialActions: () => ({
     isPending: false,
-    testConnection: vi.fn(),
+    setApiKey: mocks.setApiKey,
+    replaceApiKey: mocks.replaceApiKey,
+    testConnection: mocks.testConnection,
   }),
   useSetUsageProviderEnabled: () => ({
     mutateAsync: vi.fn(),
@@ -33,7 +41,19 @@ vi.mock("@/lib/query/usageDashboard", () => ({
   }),
 }));
 
-it("locks system identity and endpoint without Edit or Delete actions", () => {
+beforeEach(() => {
+  mocks.setApiKey.mockReset().mockResolvedValue({
+    upstreamCredentialVersion: 1,
+  });
+  mocks.replaceApiKey.mockReset().mockResolvedValue({
+    upstreamCredentialVersion: 2,
+  });
+  mocks.testConnection.mockReset().mockResolvedValue({
+    status: "success",
+  });
+});
+
+it("shows one inline API key field and verifies with the saved credential version", async () => {
   render(
     <SystemProviderCard
       provider={
@@ -54,9 +74,30 @@ it("locks system identity and endpoint without Edit or Delete actions", () => {
     />,
   );
   expect(screen.getByText("OpenAI API")).toBeInTheDocument();
-  expect(screen.getByText("https://api.openai.com/v1")).toBeInTheDocument();
+  expect(screen.queryByText("https://api.openai.com/v1")).toBeNull();
+  expect(screen.queryByText("Endpoint locked")).toBeNull();
+  const input = screen.getByLabelText("API key") as HTMLInputElement;
+  expect(input).toHaveAttribute("placeholder", "Enter API key");
+  expect(input.type).toBe("password");
+  const verifyButton = screen.getByRole("button", { name: "Verify" });
+  expect(verifyButton).toBeDisabled();
+  fireEvent.change(input, { target: { value: "openai-test-key" } });
+  fireEvent.click(verifyButton);
+
+  await waitFor(() =>
+    expect(mocks.setApiKey).toHaveBeenCalledWith(
+      "system-openai-api",
+      0,
+      "openai-test-key",
+    ),
+  );
+  expect(mocks.testConnection).toHaveBeenCalledWith("system-openai-api", 1);
+  expect(input.value).toBe("");
+  expect(screen.getByText("Connection succeeded")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /edit/i })).toBeNull();
   expect(screen.queryByRole("button", { name: /delete/i })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Set API key" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Clear API key" })).toBeNull();
 });
 
 it("places a targeted budget editor after authentication for metered Providers", () => {
@@ -88,7 +129,7 @@ it("places a targeted budget editor after authentication for metered Providers",
     "data-targeted",
     "true",
   );
-  expect(cardText.indexOf("Upstream API key required")).toBeLessThan(
+  expect(cardText.indexOf("Verify")).toBeLessThan(
     cardText.indexOf("Daily budget"),
   );
   expect(cardText).not.toContain("Agent bindings");
@@ -119,7 +160,7 @@ it("does not render a budget editor for subscription Providers", () => {
   expect(screen.queryByText("Daily budget")).toBeNull();
 });
 
-it("does not claim that NVIDIA's public model catalog validates an API key", () => {
+it("saves NVIDIA's API key without calling its unsupported connection test", async () => {
   render(
     <SystemProviderCard
       provider={
@@ -142,8 +183,17 @@ it("does not claim that NVIDIA's public model catalog validates an API key", () 
     />,
   );
 
-  expect(screen.queryByRole("button", { name: "Test connection" })).toBeNull();
-  expect(
-    screen.getByText(/public model catalog cannot validate an API key/i),
-  ).toBeInTheDocument();
+  const input = screen.getByLabelText("API key");
+  fireEvent.change(input, { target: { value: "nvidia-test-key" } });
+  fireEvent.click(screen.getByRole("button", { name: "Verify" }));
+
+  await waitFor(() =>
+    expect(mocks.replaceApiKey).toHaveBeenCalledWith(
+      "system-nvidia-nim-api",
+      1,
+      "nvidia-test-key",
+    ),
+  );
+  expect(mocks.testConnection).not.toHaveBeenCalled();
+  expect(screen.queryByText("https://integrate.api.nvidia.com/v1")).toBeNull();
 });
