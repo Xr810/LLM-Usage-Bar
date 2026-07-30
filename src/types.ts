@@ -356,6 +356,10 @@ export interface Settings {
   // Remaining quota thresholds used by subscription bars and tray status.
   usageWarningRemainingPercent?: number;
   usageCriticalRemainingPercent?: number;
+  // API Providers share one daily budget by default. Per-Provider budgets are
+  // retained and become active only when this mode is explicitly enabled.
+  apiBudgetMode?: "shared" | "per_provider";
+  sharedApiDailyBudgetUsd?: string | null;
   // User has confirmed the stream check first-run notice
   streamCheckConfirmed?: boolean;
   // Whether to show the failover toggle independently on the main page

@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  ApiBudgetConfig,
+  ApiBudgetMode,
   MainWindowDestination,
   TrayUsageSnapshot,
 } from "@/types/trayUsage";
@@ -28,6 +30,18 @@ export const openMainFromTray = (destination: MainWindowDestination) =>
 
 export const takePendingMainWindowDestination = () =>
   invoke<MainWindowDestination | null>("take_pending_main_window_destination");
+
+export const getApiBudgetConfig = () =>
+  invoke<ApiBudgetConfig>("get_api_budget_config");
+
+export const setApiBudgetConfig = (
+  mode: ApiBudgetMode,
+  sharedDailyBudgetUsd: string | null,
+) =>
+  invoke<ApiBudgetConfig>("set_api_budget_config", {
+    mode,
+    sharedDailyBudgetUsd,
+  });
 
 export const setProviderDailyBudget = (
   providerId: string,

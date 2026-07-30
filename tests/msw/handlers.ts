@@ -10,6 +10,7 @@ import type {
   UsageProviderView,
 } from "@/types/usageDashboard";
 import type {
+  ApiBudgetConfig,
   MainWindowDestination,
   TrayUsageSnapshot,
 } from "@/types/trayUsage";
@@ -46,6 +47,16 @@ export const trayUsageSnapshotFixture: TrayUsageSnapshot = {
   stale: false,
   refreshError: null,
   refreshInProgress: false,
+  apiBudget: {
+    mode: "per_provider",
+    providerCount: 1,
+    todayCostUsd: "2.5",
+    dailyBudgetUsd: null,
+    budgetConsumedPercent: null,
+    costQuality: "complete",
+    status: "green",
+    warningReason: null,
+  },
   agents: [
     {
       agentModuleId: "codex",
@@ -157,6 +168,11 @@ export const trayUsageSnapshotFixture: TrayUsageSnapshot = {
       ],
     },
   ],
+};
+
+const apiBudgetConfigFixture: ApiBudgetConfig = {
+  mode: "shared",
+  sharedDailyBudgetUsd: null,
 };
 
 const withJson = async <T>(request: Request): Promise<T> => {
@@ -875,6 +891,30 @@ export const handlers = [
   http.post(`${TAURI_ENDPOINT}/refresh_tray_usage`, () =>
     success(trayUsageSnapshotFixture),
   ),
+  http.post(`${TAURI_ENDPOINT}/get_api_budget_config`, () =>
+    success(apiBudgetConfigFixture),
+  ),
+  http.post(`${TAURI_ENDPOINT}/set_api_budget_config`, async ({ request }) => {
+    const { mode, sharedDailyBudgetUsd } =
+      await withJson<ApiBudgetConfig>(request);
+    const trimmed =
+      typeof sharedDailyBudgetUsd === "string"
+        ? sharedDailyBudgetUsd.trim()
+        : null;
+    if (
+      (mode !== "shared" && mode !== "per_provider") ||
+      (sharedDailyBudgetUsd !== null &&
+        (trimmed === "" ||
+          !Number.isFinite(Number(trimmed)) ||
+          Number(trimmed) <= 0))
+    ) {
+      return rejectUsageRequest("invalid_daily_budget");
+    }
+    return success({
+      mode,
+      sharedDailyBudgetUsd: trimmed,
+    } satisfies ApiBudgetConfig);
+  }),
   http.post(`${TAURI_ENDPOINT}/hide_tray_popover`, () => success(null)),
   http.post(`${TAURI_ENDPOINT}/open_main_from_tray`, () => success(null)),
   http.post(`${TAURI_ENDPOINT}/take_pending_main_window_destination`, () => {

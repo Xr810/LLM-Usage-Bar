@@ -22,12 +22,14 @@ import { dashboardProviderIcon } from "@/components/usage-dashboard/usagePresent
 
 interface SystemProviderCardProps {
   provider: UsageProviderView;
+  showBudget?: boolean;
   targetProviderId?: string;
   onTargetHandled?: () => void;
 }
 
 export function SystemProviderCard({
   provider,
+  showBudget = true,
   targetProviderId,
   onTargetHandled,
 }: SystemProviderCardProps) {
@@ -186,7 +188,7 @@ export function SystemProviderCard({
           </div>
         ) : null}
 
-        {provider.billingKind === "metered" ? (
+        {provider.billingKind === "metered" && showBudget ? (
           <ProviderDailyBudgetField
             providerId={provider.id}
             providerName={provider.name}

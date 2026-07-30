@@ -85,6 +85,18 @@ vi.mock("@/lib/query/usageDashboard", () => ({
   }),
 }));
 
+vi.mock("@/lib/query/trayUsage", () => ({
+  useApiBudgetConfig: () => ({
+    data: { mode: "shared", sharedDailyBudgetUsd: null },
+    isLoading: false,
+    error: null,
+  }),
+  useSetApiBudgetConfig: () => ({
+    mutateAsync: vi.fn(),
+    isPending: false,
+  }),
+}));
+
 vi.mock("@/components/usage-dashboard/UsageProviderDialog", () => ({
   UsageProviderDialog: ({
     open,
@@ -128,6 +140,10 @@ describe("UsageProvidersSettings", () => {
 
     expect(screen.getByText("Official Subscription")).toBeInTheDocument();
     expect(screen.getByText("Metered API")).toBeInTheDocument();
+    expect(
+      screen.getByLabelText("Combined API daily limit (USD)"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Daily budget field")).toBeNull();
 
     fireEvent.click(
       screen.getByRole("button", { name: "Edit Official Subscription" }),

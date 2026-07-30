@@ -4,17 +4,21 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { http, HttpResponse } from "msw";
 import { describe, expect, it, vi } from "vitest";
 import {
+  getApiBudgetConfig,
   getTrayUsageSnapshot,
   hideTrayPopover,
   openMainFromTray,
   quitFromTray,
   setProviderDailyBudget,
+  setApiBudgetConfig,
   takePendingMainWindowDestination,
 } from "@/lib/api/trayUsage";
 import {
   trayUsageKeys,
+  useApiBudgetConfig,
   useRefreshTrayUsage,
   useSetProviderDailyBudget,
+  useSetApiBudgetConfig,
   useTrayUsageEventBridge,
   useTrayUsageSnapshot,
 } from "@/lib/query/trayUsage";
@@ -116,9 +120,42 @@ describe("tray usage wire contract", () => {
       JSON.stringify(commandCalls("set_provider_daily_budget")),
     ).not.toContain("expectedVersion");
   });
+
+  it("uses dedicated shared-budget commands and preserves decimal strings", async () => {
+    await getApiBudgetConfig();
+    await setApiBudgetConfig("shared", "020.00");
+
+    expect(commandCalls("get_api_budget_config")).toHaveLength(1);
+    expect(commandCalls("set_api_budget_config")).toEqual([
+      [
+        "set_api_budget_config",
+        { mode: "shared", sharedDailyBudgetUsd: "020.00" },
+      ],
+    ]);
+  });
 });
 
 describe("tray usage query bridge", () => {
+  it("caches the API budget mode and updates it through the dedicated mutation", async () => {
+    const client = createQueryClient();
+    const wrapper = createQueryWrapper(client);
+    const query = renderHook(() => useApiBudgetConfig(), { wrapper });
+    await waitFor(() => expect(query.result.current.isSuccess).toBe(true));
+
+    const mutation = renderHook(() => useSetApiBudgetConfig(), { wrapper });
+    await act(async () => {
+      await mutation.result.current.mutateAsync({
+        mode: "per_provider",
+        sharedDailyBudgetUsd: "20",
+      });
+    });
+
+    expect(client.getQueryData(trayUsageKeys.apiBudget())).toEqual({
+      mode: "per_provider",
+      sharedDailyBudgetUsd: "20",
+    });
+  });
+
   it("updates the Provider cache and invalidates tray plus dashboard summaries after a budget save", async () => {
     const client = createQueryClient();
     const providers = await usageDashboardApi.listProviders();

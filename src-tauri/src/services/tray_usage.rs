@@ -448,6 +448,7 @@ mod tests {
             stale: false,
             refresh_error: None,
             refresh_in_progress: false,
+            api_budget: crate::usage::tray_snapshot::TrayApiBudgetView::default(),
             agents: vec![TrayAgentUsageView {
                 agent_module_id: row.to_string(),
                 name: row.to_string(),

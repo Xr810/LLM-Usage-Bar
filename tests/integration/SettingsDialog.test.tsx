@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { SettingsPage } from "@/components/settings/SettingsPage";
 import { usageDashboardApi } from "@/lib/api/usageDashboard";
+import { commandCalls } from "../msw/tauriMocks";
 
 const renderSettings = (open = true, defaultTab?: string) => {
   const client = new QueryClient({
@@ -11,7 +12,11 @@ const renderSettings = (open = true, defaultTab?: string) => {
   });
   const view = render(
     <QueryClientProvider client={client}>
-      <SettingsPage open={open} onOpenChange={() => {}} defaultTab={defaultTab} />
+      <SettingsPage
+        open={open}
+        onOpenChange={() => {}}
+        defaultTab={defaultTab}
+      />
     </QueryClientProvider>,
   );
   return { ...view, client };
@@ -95,7 +100,7 @@ describe("SettingsPage Provider-only integration", () => {
     expect(frontendSnapshot).not.toContain(upstreamKey);
   });
 
-  it("edits daily budgets only on metered Provider accounts", async () => {
+  it("defaults to a shared API limit and reveals Provider limits only after opt-in", async () => {
     const user = userEvent.setup();
     renderSettings(true, "providers");
 
@@ -104,12 +109,33 @@ describe("SettingsPage Provider-only integration", () => {
     );
     const openAiCard = screen.getByTestId("system-provider-system-openai-api");
     expect(within(chatGptCard).queryByRole("spinbutton")).toBeNull();
+    expect(within(openAiCard).queryByRole("spinbutton")).toBeNull();
 
-    const budget = within(openAiCard).getByRole("spinbutton", {
+    const sharedBudget = screen.getByRole("spinbutton", {
+      name: "Combined API daily limit (USD)",
+    });
+    await user.type(sharedBudget, "20");
+    await user.click(screen.getByRole("button", { name: "Save budget" }));
+    await waitFor(() =>
+      expect(commandCalls("set_api_budget_config").at(-1)?.[1]).toEqual({
+        mode: "shared",
+        sharedDailyBudgetUsd: "20",
+      }),
+    );
+
+    await user.click(
+      screen.getByRole("switch", {
+        name: "Set a separate limit for each Provider",
+      }),
+    );
+
+    const budget = await within(openAiCard).findByRole("spinbutton", {
       name: /openai api.*daily budget/i,
     });
     await user.type(budget, "12.34");
-    await user.click(within(openAiCard).getByRole("button", { name: "Save budget" }));
+    await user.click(
+      within(openAiCard).getByRole("button", { name: "Save budget" }),
+    );
 
     await waitFor(async () => {
       expect(

@@ -21,8 +21,10 @@ import {
 } from "@/lib/query/usageDashboard";
 import type { UsageProviderView } from "@/types/usageDashboard";
 import { ProviderDailyBudgetField } from "./ProviderDailyBudgetField";
+import { ApiBudgetSettings } from "./ApiBudgetSettings";
 import { ProviderIcon } from "@/components/ProviderIcon";
 import { dashboardProviderIcon } from "@/components/usage-dashboard/usagePresentation";
+import { useApiBudgetConfig } from "@/lib/query/trayUsage";
 
 const SYSTEM_PROVIDER_ORDER = [
   "chatgpt-subscription",
@@ -75,6 +77,7 @@ export function UsageProvidersSettings({
 }: UsageProvidersSettingsProps = {}) {
   const { t } = useTranslation();
   const providersQuery = useUsageProviders();
+  const budgetConfigQuery = useApiBudgetConfig();
   const saveProvider = useSaveUsageProvider();
   const deleteProvider = useDeleteUsageProvider();
   const setEnabled = useSetUsageProviderEnabled();
@@ -93,13 +96,25 @@ export function UsageProvidersSettings({
     }
   };
 
-  const queryErrors = providersQuery.error
+  const queryErrors: string[] = providersQuery.error
     ? [
         providersQuery.error instanceof Error
           ? providersQuery.error.message
           : String(providersQuery.error),
       ]
     : [];
+  if (budgetConfigQuery.error) {
+    queryErrors.push(
+      budgetConfigQuery.error instanceof Error
+        ? budgetConfigQuery.error.message
+        : String(budgetConfigQuery.error),
+    );
+  }
+  const budgetConfig = budgetConfigQuery.data ?? {
+    mode: "shared" as const,
+    sharedDailyBudgetUsd: null,
+  };
+  const independentProviderBudgets = budgetConfig.mode === "per_provider";
   const providers = providersQuery.data ?? [];
   const systemProviders = providers
     .filter(
@@ -179,6 +194,28 @@ export function UsageProvidersSettings({
         </CardHeader>
       </Card>
 
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">
+            {t("usageDashboard.apiSpendingLimits", {
+              defaultValue: "API spending limits",
+            })}
+          </CardTitle>
+          <CardDescription>
+            {t("usageDashboard.apiSpendingLimitsDescription", {
+              defaultValue:
+                "Use one combined limit for all enabled API Providers, or opt into separate Provider limits.",
+            })}
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ApiBudgetSettings
+            config={budgetConfig}
+            isLoading={budgetConfigQuery.isLoading}
+          />
+        </CardContent>
+      </Card>
+
       {providersQuery.isLoading ? (
         <div>{t("common.loading", { defaultValue: "Loading" })}</div>
       ) : null}
@@ -187,6 +224,7 @@ export function UsageProvidersSettings({
         <SystemProviderCard
           key={provider.id}
           provider={provider}
+          showBudget={independentProviderBudgets && provider.enabled}
           targetProviderId={targetProviderId}
           onTargetHandled={onTargetHandled}
         />
@@ -308,7 +346,9 @@ export function UsageProvidersSettings({
                     {t("common.delete", { defaultValue: "Delete" })}
                   </Button>
                 </div>
-                {provider.billingKind === "metered" ? (
+                {provider.billingKind === "metered" &&
+                provider.enabled &&
+                independentProviderBudgets ? (
                   <div className="w-full">
                     <ProviderDailyBudgetField
                       providerId={provider.id}

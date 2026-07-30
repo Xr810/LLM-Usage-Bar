@@ -1,18 +1,54 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  getApiBudgetConfig,
   getTrayUsageSnapshot,
   refreshTrayUsage,
   setProviderDailyBudget,
+  setApiBudgetConfig,
 } from "@/lib/api/trayUsage";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
-import type { TrayUsageSnapshot } from "@/types/trayUsage";
+import type {
+  ApiBudgetConfig,
+  ApiBudgetMode,
+  TrayUsageSnapshot,
+} from "@/types/trayUsage";
 import type { UsageProviderView } from "@/types/usageDashboard";
 import { usageDashboardKeys } from "@/lib/query/usageDashboard";
 
 export const trayUsageKeys = {
   all: ["tray-usage"] as const,
   snapshot: () => [...trayUsageKeys.all, "snapshot"] as const,
+  apiBudget: () => [...trayUsageKeys.all, "api-budget"] as const,
 };
+
+export function useApiBudgetConfig() {
+  return useQuery({
+    queryKey: trayUsageKeys.apiBudget(),
+    queryFn: getApiBudgetConfig,
+  });
+}
+
+export function useSetApiBudgetConfig() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      mode,
+      sharedDailyBudgetUsd,
+    }: {
+      mode: ApiBudgetMode;
+      sharedDailyBudgetUsd: string | null;
+    }) => setApiBudgetConfig(mode, sharedDailyBudgetUsd),
+    onSuccess: async (config) => {
+      queryClient.setQueryData<ApiBudgetConfig>(
+        trayUsageKeys.apiBudget(),
+        config,
+      );
+      await queryClient.invalidateQueries({
+        queryKey: trayUsageKeys.snapshot(),
+      });
+    },
+  });
+}
 
 export function useTrayUsageSnapshot() {
   return useQuery({

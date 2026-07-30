@@ -12,7 +12,26 @@ export interface TrayUsageSnapshot {
   stale: boolean;
   refreshError: string | null;
   refreshInProgress: boolean;
+  apiBudget: TrayApiBudgetView;
   agents: TrayAgentUsageView[];
+}
+
+export type ApiBudgetMode = "shared" | "per_provider";
+
+export interface ApiBudgetConfig {
+  mode: ApiBudgetMode;
+  sharedDailyBudgetUsd: string | null;
+}
+
+export interface TrayApiBudgetView {
+  mode: ApiBudgetMode;
+  providerCount: number;
+  todayCostUsd: string | null;
+  dailyBudgetUsd: string | null;
+  budgetConsumedPercent: string | null;
+  costQuality: TrayCostQuality;
+  status: TrayUsageStatus;
+  warningReason: string | null;
 }
 
 export interface TrayAgentUsageView {

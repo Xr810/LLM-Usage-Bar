@@ -11,7 +11,9 @@ use super::status::{
 };
 use crate::database::Database;
 use crate::error::AppError;
+use crate::settings::{ApiBudgetConfig, ApiBudgetMode};
 use chrono::{DateTime, Local, LocalResult, NaiveDate, SecondsFormat, TimeZone, Utc};
+use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -28,6 +30,7 @@ pub struct TrayUsageSnapshot {
     pub stale: bool,
     pub refresh_error: Option<String>,
     pub refresh_in_progress: bool,
+    pub api_budget: TrayApiBudgetView,
     pub agents: Vec<TrayAgentUsageView>,
 }
 
@@ -40,7 +43,36 @@ impl TrayUsageSnapshot {
             stale: false,
             refresh_error: None,
             refresh_in_progress: false,
+            api_budget: TrayApiBudgetView::default(),
             agents: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrayApiBudgetView {
+    pub mode: ApiBudgetMode,
+    pub provider_count: usize,
+    pub today_cost_usd: Option<String>,
+    pub daily_budget_usd: Option<String>,
+    pub budget_consumed_percent: Option<String>,
+    pub cost_quality: CostQuality,
+    pub status: UsageStatus,
+    pub warning_reason: Option<String>,
+}
+
+impl Default for TrayApiBudgetView {
+    fn default() -> Self {
+        Self {
+            mode: ApiBudgetMode::Shared,
+            provider_count: 0,
+            today_cost_usd: Some("0".to_string()),
+            daily_budget_usd: None,
+            budget_consumed_percent: None,
+            cost_quality: CostQuality::Complete,
+            status: UsageStatus::Unknown,
+            warning_reason: Some("daily_budget_missing".to_string()),
         }
     }
 }
@@ -193,6 +225,14 @@ impl TrayUsageProjector {
     }
 
     pub fn project_at(&self, now: DateTime<Local>) -> Result<TrayUsageSnapshot, AppError> {
+        self.project_at_with_budget_config(now, None)
+    }
+
+    fn project_at_with_budget_config(
+        &self,
+        now: DateTime<Local>,
+        budget_config_override: Option<ApiBudgetConfig>,
+    ) -> Result<TrayUsageSnapshot, AppError> {
         let generated_at = now.timestamp();
         let windows = TrayUsageWindows::from_local_now(now)
             .ok_or_else(|| AppError::Message("invalid_tray_usage_windows".to_string()))?;
@@ -211,9 +251,22 @@ impl TrayUsageProjector {
             warning_remaining_percent: settings.usage_warning_remaining_percent,
             critical_remaining_percent: settings.usage_critical_remaining_percent,
         };
-        let projected_providers =
-            self.project_providers(&providers, windows, generated_at, thresholds)?;
-        let status = worst_status(projected_providers.iter().map(|provider| provider.status));
+        let api_budget_config =
+            budget_config_override.unwrap_or_else(|| settings.api_budget_config());
+        let projected_providers = self.project_providers(
+            &providers,
+            windows,
+            generated_at,
+            thresholds,
+            api_budget_config.mode,
+        )?;
+        let api_budget = project_api_budget(&projected_providers, &api_budget_config);
+        let status = worst_status(
+            projected_providers
+                .iter()
+                .map(|provider| provider.status)
+                .chain(std::iter::once(api_budget.status)),
+        );
         let projected_agents = vec![TrayAgentUsageView {
             agent_module_id: "providers".to_string(),
             name: "Providers".to_string(),
@@ -229,6 +282,7 @@ impl TrayUsageProjector {
             stale: false,
             refresh_error: None,
             refresh_in_progress: false,
+            api_budget,
             agents: projected_agents,
         })
     }
@@ -239,6 +293,7 @@ impl TrayUsageProjector {
         windows: TrayUsageWindows,
         now_timestamp: i64,
         thresholds: SubscriptionThresholds,
+        api_budget_mode: ApiBudgetMode,
     ) -> Result<Vec<TrayProviderUsageView>, AppError> {
         providers
             .iter()
@@ -293,8 +348,11 @@ impl TrayUsageProjector {
                         })
                     }
                     BillingKind::Metered => {
+                        let provider_budget = (api_budget_mode == ApiBudgetMode::PerProvider)
+                            .then_some(provider.daily_budget_usd.as_deref())
+                            .flatten();
                         let (metered, classification) =
-                            self.project_metered(provider, &today, &rolling_30_day)?;
+                            self.project_metered(provider_budget, &today, &rolling_30_day)?;
                         Ok(TrayProviderUsageView {
                             provider_id: provider.id.clone(),
                             provider_name: provider.name.clone(),
@@ -371,31 +429,108 @@ impl TrayUsageProjector {
 
     fn project_metered(
         &self,
-        provider: &UsageProviderView,
+        daily_budget_usd: Option<&str>,
         today: &ProviderRangeAggregate,
         rolling_30_day: &ProviderRangeAggregate,
     ) -> Result<(TrayMeteredUsageView, SourceClassification), AppError> {
         let quality = cost_quality(today);
         let today_cost_usd = display_cost(today);
         let rolling_30_day_cost_usd = display_cost(rolling_30_day);
-        let classification = classify_metered(
-            today_cost_usd.as_deref(),
-            provider.daily_budget_usd.as_deref(),
-            quality,
-        );
+        let classification = classify_metered(today_cost_usd.as_deref(), daily_budget_usd, quality);
         let total_tokens = checked_total_tokens(rolling_30_day)?;
 
         Ok((
             TrayMeteredUsageView {
                 today_cost_usd,
                 rolling_30_day_cost_usd,
-                daily_budget_usd: provider.daily_budget_usd.clone(),
+                daily_budget_usd: daily_budget_usd.map(str::to_string),
                 budget_consumed_percent: classification.consumed_percent.clone(),
                 total_tokens,
                 cost_quality: quality,
             },
             classification,
         ))
+    }
+}
+
+fn project_api_budget(
+    providers: &[TrayProviderUsageView],
+    config: &ApiBudgetConfig,
+) -> TrayApiBudgetView {
+    let metered = providers
+        .iter()
+        .filter_map(|provider| provider.metered.as_ref().map(|usage| (provider, usage)))
+        .collect::<Vec<_>>();
+    let mut total = Decimal::ZERO;
+    let mut has_known_cost = false;
+    let mut has_estimated = false;
+    let mut has_partial_or_unavailable = false;
+
+    for (_, usage) in &metered {
+        match usage.cost_quality {
+            CostQuality::Estimated => has_estimated = true,
+            CostQuality::Partial | CostQuality::Unavailable => has_partial_or_unavailable = true,
+            CostQuality::Complete => {}
+        }
+        match usage
+            .today_cost_usd
+            .as_deref()
+            .and_then(|value| Decimal::from_str_exact(value.trim()).ok())
+            .filter(|value| *value >= Decimal::ZERO)
+        {
+            Some(value) => {
+                if let Some(next) = total.checked_add(value) {
+                    total = next;
+                    has_known_cost = true;
+                } else {
+                    has_partial_or_unavailable = true;
+                }
+            }
+            None => has_partial_or_unavailable = true,
+        }
+    }
+
+    let today_cost_usd = if metered.is_empty() || has_known_cost {
+        Some(total.normalize().to_string())
+    } else {
+        None
+    };
+    let cost_quality = if !metered.is_empty() && !has_known_cost {
+        CostQuality::Unavailable
+    } else if has_partial_or_unavailable {
+        CostQuality::Partial
+    } else if has_estimated {
+        CostQuality::Estimated
+    } else {
+        CostQuality::Complete
+    };
+    let classification = if config.mode == ApiBudgetMode::Shared {
+        classify_metered(
+            today_cost_usd.as_deref(),
+            config.shared_daily_budget_usd.as_deref(),
+            cost_quality,
+        )
+    } else {
+        SourceClassification {
+            status: worst_status(metered.iter().map(|(provider, _)| provider.status)),
+            used_percent: None,
+            remaining_percent: None,
+            consumed_percent: None,
+            reason: None,
+        }
+    };
+
+    TrayApiBudgetView {
+        mode: config.mode,
+        provider_count: metered.len(),
+        today_cost_usd,
+        daily_budget_usd: (config.mode == ApiBudgetMode::Shared)
+            .then(|| config.shared_daily_budget_usd.clone())
+            .flatten(),
+        budget_consumed_percent: classification.consumed_percent,
+        cost_quality,
+        status: classification.status,
+        warning_reason: classification.reason.map(str::to_string),
     }
 }
 
@@ -779,7 +914,15 @@ mod tests {
         ))
         .unwrap();
 
-        let snapshot = TrayUsageProjector::new(db.clone()).project_at(now).unwrap();
+        let snapshot = TrayUsageProjector::new(db.clone())
+            .project_at_with_budget_config(
+                now,
+                Some(ApiBudgetConfig {
+                    mode: ApiBudgetMode::PerProvider,
+                    shared_daily_budget_usd: None,
+                }),
+            )
+            .unwrap();
 
         assert_eq!(snapshot.generated_at, now.timestamp());
         assert_eq!(snapshot.last_success_at, Some(now.timestamp()));
@@ -878,6 +1021,29 @@ mod tests {
         assert!(!serialized.contains("ignored-percent-secret-sentinel"));
         assert!(!serialized.contains("ignored-reset-secret"));
         assert!(!serialized.contains("ignored-payload-secret"));
+
+        let shared = TrayUsageProjector::new(db)
+            .project_at_with_budget_config(
+                now,
+                Some(ApiBudgetConfig {
+                    mode: ApiBudgetMode::Shared,
+                    shared_daily_budget_usd: Some("10".to_string()),
+                }),
+            )
+            .unwrap();
+        assert_eq!(shared.api_budget.provider_count, 3);
+        assert_eq!(shared.api_budget.today_cost_usd.as_deref(), Some("8.75"));
+        assert_eq!(
+            shared.api_budget.budget_consumed_percent.as_deref(),
+            Some("87.5")
+        );
+        assert_eq!(shared.api_budget.status, UsageStatus::Red);
+        assert!(find_provider(&shared, "codex", "b-metered")
+            .metered
+            .as_ref()
+            .unwrap()
+            .daily_budget_usd
+            .is_none());
     }
 
     #[test]
@@ -969,7 +1135,15 @@ mod tests {
             1,
         );
 
-        let snapshot = TrayUsageProjector::new(db.clone()).project_at(now).unwrap();
+        let snapshot = TrayUsageProjector::new(db.clone())
+            .project_at_with_budget_config(
+                now,
+                Some(ApiBudgetConfig {
+                    mode: ApiBudgetMode::PerProvider,
+                    shared_daily_budget_usd: None,
+                }),
+            )
+            .unwrap();
 
         let zero = find_provider(&snapshot, "codex", "a-zero");
         assert_eq!(zero.status, UsageStatus::Green);
@@ -1330,6 +1504,7 @@ mod tests {
             stale: true,
             refresh_error: Some("refresh_failed".to_string()),
             refresh_in_progress: false,
+            api_budget: TrayApiBudgetView::default(),
             agents: Vec::new(),
         };
 
@@ -1347,6 +1522,7 @@ mod tests {
             stale: false,
             refresh_error: None,
             refresh_in_progress: true,
+            api_budget: TrayApiBudgetView::default(),
             agents: vec![TrayAgentUsageView {
                 agent_module_id: "codex".to_string(),
                 name: "Codex".to_string(),
@@ -1444,6 +1620,16 @@ mod tests {
                 "stale": false,
                 "refreshError": null,
                 "refreshInProgress": true,
+                "apiBudget": {
+                    "mode": "shared",
+                    "providerCount": 0,
+                    "todayCostUsd": "0",
+                    "dailyBudgetUsd": null,
+                    "budgetConsumedPercent": null,
+                    "costQuality": "complete",
+                    "status": "unknown",
+                    "warningReason": "daily_budget_missing"
+                },
                 "agents": [{
                     "agentModuleId": "codex",
                     "name": "Codex",

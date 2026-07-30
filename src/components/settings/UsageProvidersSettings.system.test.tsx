@@ -31,6 +31,7 @@ const fixedProviders = [
     ? "subscription"
     : "metered",
   dailyBudgetUsd: null,
+  enabled: true,
 }));
 
 vi.mock("@/lib/query/usageDashboard", () => ({
@@ -42,6 +43,7 @@ vi.mock("@/lib/query/usageDashboard", () => ({
         systemPresetKey: null,
         billingKind: "metered",
         dailyBudgetUsd: "5",
+        enabled: true,
       },
       {
         id: "custom-subscription",
@@ -49,6 +51,7 @@ vi.mock("@/lib/query/usageDashboard", () => ({
         systemPresetKey: null,
         billingKind: "subscription",
         dailyBudgetUsd: null,
+        enabled: true,
       },
       ...fixedProviders.slice().reverse(),
     ],
@@ -63,18 +66,33 @@ vi.mock("@/lib/query/usageDashboard", () => ({
   }),
 }));
 
+vi.mock("@/lib/query/trayUsage", () => ({
+  useApiBudgetConfig: () => ({
+    data: { mode: "per_provider", sharedDailyBudgetUsd: null },
+    isLoading: false,
+    error: null,
+  }),
+  useSetApiBudgetConfig: () => ({
+    mutateAsync: vi.fn(),
+    isPending: false,
+  }),
+}));
+
 vi.mock("./SystemProviderCard", () => ({
   SystemProviderCard: ({
     provider,
     targetProviderId,
+    showBudget,
   }: {
     provider: { id: string; name: string };
     targetProviderId?: string;
+    showBudget?: boolean;
   }) => (
     <div
       data-testid="fixed-provider-card"
       data-provider-id={provider.id}
       data-targeted={targetProviderId === provider.id}
+      data-show-budget={showBudget}
     >
       {provider.name}
     </div>

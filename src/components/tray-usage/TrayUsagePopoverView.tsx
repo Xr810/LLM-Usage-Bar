@@ -142,6 +142,18 @@ export function TrayUsagePopoverView({
               />
               <TrayApiSpendingSection
                 rows={meteredRows}
+                budget={
+                  snapshot?.apiBudget ?? {
+                    mode: "shared",
+                    providerCount: 0,
+                    todayCostUsd: "0",
+                    dailyBudgetUsd: null,
+                    budgetConsumedPercent: null,
+                    costQuality: "complete",
+                    status: "unknown",
+                    warningReason: "daily_budget_missing",
+                  }
+                }
                 locale={locale}
                 showAgentName={false}
                 onOpenDetails={() => onOpenDetails()}

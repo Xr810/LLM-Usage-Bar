@@ -294,6 +294,21 @@ pub struct LocalMigrations {
     pub codex_official_history_unify_v1: Option<CodexOfficialHistoryUnifyMigration>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApiBudgetMode {
+    #[default]
+    Shared,
+    PerProvider,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApiBudgetConfig {
+    pub mode: ApiBudgetMode,
+    pub shared_daily_budget_usd: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CodexThirdPartyHistoryProviderBucketMigration {
@@ -375,6 +390,12 @@ pub struct AppSettings {
     /// Remaining-quota percentage below which subscription usage turns red.
     #[serde(default = "default_usage_critical_remaining_percent")]
     pub usage_critical_remaining_percent: u8,
+    /// API spend is governed by one shared daily budget unless the user opts
+    /// into the legacy per-Provider budget fields.
+    #[serde(default)]
+    pub api_budget_mode: ApiBudgetMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shared_api_daily_budget_usd: Option<String>,
     /// User has confirmed the stream check first-run notice
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stream_check_confirmed: Option<bool>,
@@ -521,6 +542,8 @@ impl Default for AppSettings {
             usage_dashboard_refresh_interval_ms: None,
             usage_warning_remaining_percent: default_usage_warning_remaining_percent(),
             usage_critical_remaining_percent: default_usage_critical_remaining_percent(),
+            api_budget_mode: ApiBudgetMode::Shared,
+            shared_api_daily_budget_usd: None,
             stream_check_confirmed: None,
             enable_failover_toggle: false,
             preserve_codex_official_auth_on_switch: false,
@@ -568,6 +591,13 @@ impl AppSettings {
         self.usage_critical_remaining_percent = self
             .usage_critical_remaining_percent
             .min(self.usage_warning_remaining_percent);
+        self.shared_api_daily_budget_usd = self
+            .shared_api_daily_budget_usd
+            .as_deref()
+            .map(crate::usage::budget_migration::canonicalize_daily_budget)
+            .transpose()
+            .ok()
+            .flatten();
 
         self.claude_config_dir = self
             .claude_config_dir
@@ -630,6 +660,13 @@ impl AppSettings {
             if s3.is_empty() {
                 self.s3_sync = None;
             }
+        }
+    }
+
+    pub fn api_budget_config(&self) -> ApiBudgetConfig {
+        ApiBudgetConfig {
+            mode: self.api_budget_mode,
+            shared_daily_budget_usd: self.shared_api_daily_budget_usd.clone(),
         }
     }
 
@@ -1202,6 +1239,26 @@ mod tests {
 
         assert_eq!(settings.usage_warning_remaining_percent, 50);
         assert_eq!(settings.usage_critical_remaining_percent, 20);
+        assert_eq!(settings.api_budget_mode, ApiBudgetMode::Shared);
+        assert_eq!(settings.shared_api_daily_budget_usd, None);
+    }
+
+    #[test]
+    fn shared_api_budget_is_canonicalized_without_touching_provider_budgets() {
+        let mut settings = AppSettings {
+            shared_api_daily_budget_usd: Some("020.00".to_string()),
+            ..AppSettings::default()
+        };
+
+        settings.normalize_paths();
+
+        assert_eq!(
+            settings.api_budget_config(),
+            ApiBudgetConfig {
+                mode: ApiBudgetMode::Shared,
+                shared_daily_budget_usd: Some("20".to_string()),
+            }
+        );
     }
 
     #[test]

@@ -1,4 +1,5 @@
 use crate::error::AppError;
+use crate::settings::{ApiBudgetConfig, ApiBudgetMode};
 use crate::store::AppState;
 pub use crate::tray_popover::MainWindowDestination;
 use crate::usage::domain::UsageProviderView;
@@ -58,6 +59,38 @@ pub async fn refresh_tray_usage(
         crate::usage_events::emit_dashboard_invalidated_only,
     )
     .await
+}
+
+#[tauri::command]
+pub fn get_api_budget_config() -> ApiBudgetConfig {
+    crate::settings::get_settings().api_budget_config()
+}
+
+#[tauri::command]
+pub async fn set_api_budget_config(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    mode: ApiBudgetMode,
+    shared_daily_budget_usd: Option<String>,
+) -> Result<ApiBudgetConfig, AppError> {
+    let canonical = shared_daily_budget_usd
+        .as_deref()
+        .map(crate::usage::budget_migration::canonicalize_daily_budget)
+        .transpose()?;
+    let mut settings = crate::settings::get_settings();
+    settings.api_budget_mode = mode;
+    settings.shared_api_daily_budget_usd = canonical;
+    crate::settings::update_settings(settings)?;
+
+    let publisher_app = app.clone();
+    state
+        .tray_usage_service
+        .rebuild_from_persisted(move |snapshot: &TrayUsageSnapshot| {
+            crate::tray_status::publish_tray_usage(&publisher_app, snapshot);
+        })
+        .await;
+    crate::usage_events::emit_dashboard_invalidated_only();
+    Ok(crate::settings::get_settings().api_budget_config())
 }
 
 #[tauri::command]

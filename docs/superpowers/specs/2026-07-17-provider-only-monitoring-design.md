@@ -68,9 +68,24 @@ The main window and menu-bar popover are Provider-first:
   cost, daily budget progress, last refresh, and source/error state;
 - filtering may use Provider, billing type, or status, but never Agent;
 - settings contain Provider credentials, source configuration, refresh interval,
-  enabled/visible state, and budget only;
+  enabled/visible state, and API budget controls only;
 - no Agent tabs, Agent module editor, Agent binding controls, switch controller,
   route takeover, or model switching action appears in the monitoring UI.
+
+### API Spending Limit Policy
+
+Metered API Providers use one shared daily spending limit by default. The app
+adds together today's cost for every enabled metered Provider account and
+compares that total with the shared limit. Subscription Provider quotas are not
+part of this API spending total.
+
+Settings expose one explicit switch for independent Provider limits. When the
+switch is enabled, each metered Provider uses its own `daily_budget_usd` value.
+Only enabled metered Providers participate in either mode or show an active
+budget editor.
+Turning the switch off does not delete those values; they remain dormant so the
+user can return to independent limits without reconstructing the configuration.
+Likewise, the shared limit remains stored while independent mode is active.
 
 ## Compatibility and Removal Policy
 
@@ -103,3 +118,10 @@ Provider records remain protected from deletion.
    CC Switch write.
 7. Existing history remains queryable by Provider after Agent UI removal.
 8. The v19 Agent switching migration and its switching tables are absent.
+9. Users can create any number of Custom Providers from a persistent creation
+   entry and can delete user-created Provider records without exposing deletion
+   for built-in Providers.
+10. API spending defaults to one shared daily limit across all enabled metered
+    Providers; individual Provider budget fields appear only after the user
+    enables independent limits, and switching modes does not erase either
+    configuration.

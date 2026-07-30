@@ -1721,6 +1721,8 @@ pub fn run() {
             commands::sync_provider_session_usage,
             commands::get_tray_usage_snapshot,
             commands::refresh_tray_usage,
+            commands::get_api_budget_config,
+            commands::set_api_budget_config,
             commands::set_provider_daily_budget,
             commands::hide_tray_popover,
             commands::open_main_from_tray,

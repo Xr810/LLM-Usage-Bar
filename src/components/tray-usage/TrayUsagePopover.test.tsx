@@ -22,6 +22,16 @@ const snapshot: TrayUsageSnapshot = {
   stale: false,
   refreshError: null,
   refreshInProgress: false,
+  apiBudget: {
+    mode: "per_provider",
+    providerCount: 1,
+    todayCostUsd: "8",
+    dailyBudgetUsd: null,
+    budgetConsumedPercent: null,
+    costQuality: "complete",
+    status: "red",
+    warningReason: null,
+  },
   agents: [
     {
       agentModuleId: "providers",
@@ -245,6 +255,63 @@ describe("TrayUsagePopover Provider-only UI", () => {
         name: "5-hour allowance for ChatGPT Plus/Pro",
       }),
     ).toHaveAttribute("aria-valuenow", "95");
+  });
+
+  it("shows one combined API limit while keeping Provider cost breakdowns", () => {
+    const shared = structuredClone(snapshot);
+    shared.apiBudget = {
+      mode: "shared",
+      providerCount: 1,
+      todayCostUsd: "8",
+      dailyBudgetUsd: "20",
+      budgetConsumedPercent: "40",
+      costQuality: "complete",
+      status: "green",
+      warningReason: null,
+    };
+    shared.agents[0].providers[1].status = "unknown";
+    shared.agents[0].providers[1].metered!.dailyBudgetUsd = null;
+    shared.agents[0].providers[1].metered!.budgetConsumedPercent = null;
+
+    render(<TrayUsagePopoverView {...props({ snapshot: shared })} />);
+
+    expect(screen.getByText("Combined API spending")).toBeInTheDocument();
+    expect(screen.getByText("$8.00 of $20.00")).toBeInTheDocument();
+    expect(screen.getByText("OpenAI API")).toBeInTheDocument();
+    expect(
+      screen.getByRole("progressbar", {
+        name: "Combined daily limit across 1 API Providers",
+      }),
+    ).toHaveAttribute("aria-valuenow", "40");
+    expect(
+      screen.queryByRole("progressbar", {
+        name: "Daily budget for OpenAI API",
+      }),
+    ).toBeNull();
+  });
+
+  it("routes a missing combined limit to the shared budget settings", async () => {
+    const user = userEvent.setup();
+    const onOpenSettings = vi.fn();
+    const shared = structuredClone(snapshot);
+    shared.apiBudget = {
+      mode: "shared",
+      providerCount: 1,
+      todayCostUsd: "8",
+      dailyBudgetUsd: null,
+      budgetConsumedPercent: null,
+      costQuality: "complete",
+      status: "unknown",
+      warningReason: "daily_budget_missing",
+    };
+
+    render(
+      <TrayUsagePopoverView {...props({ snapshot: shared, onOpenSettings })} />,
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Set combined API daily limit" }),
+    );
+    expect(onOpenSettings).toHaveBeenCalledWith(null);
   });
 
   it("routes Provider row and footer actions without Agent identity", async () => {

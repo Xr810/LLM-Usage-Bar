@@ -18,6 +18,8 @@ export const settingsSchema = z.object({
   usageDashboardRefreshIntervalMs: z.number().optional(),
   usageWarningRemainingPercent: z.number().min(0).max(100).optional(),
   usageCriticalRemainingPercent: z.number().min(0).max(100).optional(),
+  apiBudgetMode: z.enum(["shared", "per_provider"]).optional(),
+  sharedApiDailyBudgetUsd: z.string().nullable().optional(),
   preserveCodexOfficialAuthOnSwitch: z.boolean().optional(),
   unifyCodexSessionHistory: z.boolean().optional(),
   language: z.enum(["en", "zh", "zh-TW", "ja"]).optional(),

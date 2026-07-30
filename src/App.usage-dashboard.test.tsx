@@ -75,7 +75,7 @@ describe("Provider-only usage dashboard main path", () => {
     expect(screen.queryByRole("tab", { name: "Proxy setup" })).toBeNull();
   });
 
-  it("opens a Provider budget destination without selecting an Agent", async () => {
+  it("routes a legacy Provider budget destination to the default shared limit", async () => {
     setPendingMainWindowDestination({
       kind: "providerBudget",
       providerId: "system-openrouter-api",
@@ -83,10 +83,13 @@ describe("Provider-only usage dashboard main path", () => {
     renderApp();
 
     await waitFor(() =>
-      expect(
-        document.getElementById("provider-budget-input-system-openrouter-api"),
-      ).toBeInstanceOf(HTMLInputElement),
+      expect(document.getElementById("shared-api-budget-input")).toBeInstanceOf(
+        HTMLInputElement,
+      ),
     );
+    expect(
+      document.getElementById("provider-budget-input-system-openrouter-api"),
+    ).toBeNull();
     expect(screen.queryByRole("tablist", { name: "Agents" })).toBeNull();
   });
 
