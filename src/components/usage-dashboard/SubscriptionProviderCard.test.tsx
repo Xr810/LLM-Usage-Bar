@@ -199,21 +199,15 @@ describe("SubscriptionProviderCard localized reset countdown", () => {
     );
 
     expect(
-      screen.getByTestId(
-        "subscription-provider-system-claude-subscription",
-      ),
+      screen.getByTestId("subscription-provider-system-claude-subscription"),
     ).toHaveTextContent(
       "Quota: latest local sample per window (Desktop / Pro Code; account match unverified) · Tokens: Claude Code log (Provider unverified)",
     );
     expect(
-      screen.getByTestId(
-        "subscription-provider-system-claude-subscription",
-      ),
+      screen.getByTestId("subscription-provider-system-claude-subscription"),
     ).toHaveTextContent(new Date(1_234 * 1_000).toLocaleString());
     expect(
-      screen.getByTestId(
-        "subscription-provider-system-claude-subscription",
-      ),
+      screen.getByTestId("subscription-provider-system-claude-subscription"),
     ).not.toHaveTextContent(new Date(9_999 * 1_000).toLocaleString());
   });
 
@@ -343,11 +337,7 @@ describe("SubscriptionProviderCard localized reset countdown", () => {
     ).toHaveAttribute("data-layout", "sidebar");
     expect(screen.getByText("5-hour window")).toBeInTheDocument();
     expect(screen.getByText("Weekly allowance")).toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: "Refresh quota" }),
-    ).toBeNull();
-    expect(
-      screen.queryByRole("button", { name: "Sync sessions" }),
-    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Refresh quota" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Sync sessions" })).toBeNull();
   });
 });

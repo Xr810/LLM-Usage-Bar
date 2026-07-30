@@ -342,9 +342,7 @@ export function SubscriptionProviderCard({
             >
               <RefreshCw
                 className={
-                  isRefreshingQuota
-                    ? "h-3.5 w-3.5 animate-spin"
-                    : "h-3.5 w-3.5"
+                  isRefreshingQuota ? "h-3.5 w-3.5 animate-spin" : "h-3.5 w-3.5"
                 }
                 aria-hidden="true"
               />
