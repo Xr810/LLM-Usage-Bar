@@ -142,7 +142,7 @@ mod tests {
     }
 
     #[test]
-    fn bundled_status_icons_are_centered_antialiased_rgba_assets() {
+    fn bundled_status_icons_are_single_lamp_signals() {
         for (status, expected_rgb) in [
             (UsageStatus::Green, [0x34, 0xC7, 0x59]),
             (UsageStatus::Yellow, [0xFF, 0xCC, 0x00]),
@@ -170,6 +170,16 @@ mod tests {
                 "{status:?} must retain an antialiased edge"
             );
 
+            let housing = pixel(&image, 9, 2);
+            assert!(
+                housing[3] >= 200,
+                "{status:?} housing must be visible above the lamp"
+            );
+            assert!(
+                housing[..3].iter().all(|channel| *channel <= 80),
+                "{status:?} housing must remain dark"
+            );
+
             let nonzero = (0..18)
                 .flat_map(|y| (0..18).map(move |x| (x, y)))
                 .filter(|&(x, y)| pixel(&image, x, y)[3] != 0)
@@ -180,8 +190,8 @@ mod tests {
             let max_y = nonzero.iter().map(|(_, y)| *y).max().unwrap();
             let width = max_x - min_x + 1;
             let height = max_y - min_y + 1;
-            assert!((10..=12).contains(&width), "{status:?} width {width}");
-            assert!((10..=12).contains(&height), "{status:?} height {height}");
+            assert!((14..=16).contains(&width), "{status:?} width {width}");
+            assert!((16..=18).contains(&height), "{status:?} height {height}");
             assert_eq!(min_x + max_x, 17, "{status:?} horizontal center");
             assert_eq!(min_y + max_y, 17, "{status:?} vertical center");
         }
