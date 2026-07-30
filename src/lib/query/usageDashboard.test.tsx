@@ -229,6 +229,13 @@ describe("usageDashboardApi wire contract", () => {
     expect(providerInput).not.toHaveProperty("dashboardModuleId");
     expect(providerInput).not.toHaveProperty("quotaConfig");
   });
+
+  it("deletes exactly one user-created Provider by ID", async () => {
+    await usageDashboardApi.deleteProvider("custom-q");
+    expect(invokeMock).toHaveBeenCalledWith("delete_usage_provider", {
+      providerId: "custom-q",
+    });
+  });
 });
 
 describe("Agent-scoped usage query keys", () => {

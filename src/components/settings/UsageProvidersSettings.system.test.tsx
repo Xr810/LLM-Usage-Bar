@@ -56,6 +56,7 @@ vi.mock("@/lib/query/usageDashboard", () => ({
     error: null,
   }),
   useSaveUsageProvider: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useDeleteUsageProvider: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useSetUsageProviderEnabled: () => ({
     mutateAsync: vi.fn(),
     isPending: false,
@@ -138,7 +139,16 @@ it("renders the built-in Provider catalog in canonical order before custom Provi
     screen.queryByRole("button", { name: "Edit ChatGPT Plus/Pro" }),
   ).toBeNull();
   expect(
+    screen.queryByRole("button", { name: "Delete ChatGPT Plus/Pro" }),
+  ).toBeNull();
+  expect(
     screen.getByRole("button", { name: "Edit Custom Example" }),
+  ).toBeInTheDocument();
+  expect(
+    screen.getByRole("button", { name: "Delete Custom Example" }),
+  ).toBeInTheDocument();
+  expect(
+    screen.getByRole("button", { name: "Add Provider" }),
   ).toBeInTheDocument();
 });
 

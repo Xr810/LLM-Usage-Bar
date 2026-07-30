@@ -4,6 +4,7 @@ import { UsageProvidersSettings } from "./UsageProvidersSettings";
 
 const mocks = vi.hoisted(() => ({
   saveProvider: vi.fn(),
+  deleteProvider: vi.fn(),
   setEnabled: vi.fn(),
   bindingMutation: vi.fn(),
 }));
@@ -70,6 +71,10 @@ vi.mock("@/lib/query/usageDashboard", () => ({
     mutateAsync: mocks.saveProvider,
     isPending: false,
   }),
+  useDeleteUsageProvider: () => ({
+    mutateAsync: mocks.deleteProvider,
+    isPending: false,
+  }),
   useSetUsageProviderEnabled: () => ({
     mutateAsync: mocks.setEnabled,
     isPending: false,
@@ -113,6 +118,7 @@ vi.mock("./ProviderDailyBudgetField", () => ({
 describe("UsageProvidersSettings", () => {
   beforeEach(() => {
     mocks.saveProvider.mockReset().mockResolvedValue(undefined);
+    mocks.deleteProvider.mockReset().mockResolvedValue(undefined);
     mocks.setEnabled.mockReset().mockResolvedValue(undefined);
     mocks.bindingMutation.mockReset().mockResolvedValue(undefined);
   });
@@ -156,6 +162,29 @@ describe("UsageProvidersSettings", () => {
       }),
     );
     expect(mocks.bindingMutation).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("button", { name: "Add Provider" }),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the custom creation entry and deletes a selected custom Provider after confirmation", async () => {
+    render(<UsageProvidersSettings />);
+
+    expect(
+      screen.getByRole("button", { name: "Add Provider" }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Delete Metered API" }));
+    expect(
+      screen.getByText(/Are you sure.*Metered API.*cannot be undone/),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    await waitFor(() =>
+      expect(mocks.deleteProvider).toHaveBeenCalledWith("metered"),
+    );
+    expect(
+      screen.getByRole("button", { name: "Add Provider" }),
+    ).toBeInTheDocument();
   });
 
   it("surfaces Provider mutation failures", async () => {

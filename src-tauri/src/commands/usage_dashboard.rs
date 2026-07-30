@@ -253,6 +253,16 @@ pub async fn save_usage_provider(
 }
 
 #[tauri::command]
+pub fn delete_usage_provider(
+    state: State<'_, AppState>,
+    provider_id: String,
+) -> Result<(), AppError> {
+    state.db.delete_usage_provider(&provider_id)?;
+    crate::usage_events::notify_dashboard_invalidated();
+    Ok(())
+}
+
+#[tauri::command]
 pub fn set_usage_provider_enabled(
     state: State<'_, AppState>,
     provider_id: String,

@@ -87,6 +87,11 @@ until the user opts in and configures that account. A built-in card represents
 one monitorable Provider account; additional accounts require distinct records
 rather than Agent bindings.
 
+Custom Providers are a collection, not a singleton preset. The custom-Provider
+creation entry remains visible after every save, each creation produces a
+separate Provider record, and users can delete records they created. Built-in
+Provider records remain protected from deletion.
+
 ## Acceptance Criteria
 
 1. Main window and tray show Provider accounts without Agent navigation.

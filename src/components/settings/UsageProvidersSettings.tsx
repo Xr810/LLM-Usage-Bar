@@ -11,8 +11,10 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { UsageProviderDialog } from "@/components/usage-dashboard/UsageProviderDialog";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { SystemProviderCard } from "./SystemProviderCard";
 import {
+  useDeleteUsageProvider,
   useSaveUsageProvider,
   useSetUsageProviderEnabled,
   useUsageProviders,
@@ -74,9 +76,11 @@ export function UsageProvidersSettings({
   const { t } = useTranslation();
   const providersQuery = useUsageProviders();
   const saveProvider = useSaveUsageProvider();
+  const deleteProvider = useDeleteUsageProvider();
   const setEnabled = useSetUsageProviderEnabled();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<UsageProviderView | null>(null);
+  const [deleting, setDeleting] = useState<UsageProviderView | null>(null);
   const [providerSearch, setProviderSearch] = useState("");
   const [error, setError] = useState<string | null>(null);
 
@@ -293,6 +297,16 @@ export function UsageProvidersSettings({
                       ? t("common.disable", { defaultValue: "Disable" })
                       : t("common.enable", { defaultValue: "Enable" })}
                   </Button>
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    className="h-8 px-2.5 text-xs"
+                    disabled={deleteProvider.isPending}
+                    aria-label={`${t("common.delete", { defaultValue: "Delete" })} ${provider.name}`}
+                    onClick={() => setDeleting(provider)}
+                  >
+                    {t("common.delete", { defaultValue: "Delete" })}
+                  </Button>
                 </div>
                 {provider.billingKind === "metered" ? (
                   <div className="w-full">
@@ -345,6 +359,25 @@ export function UsageProvidersSettings({
         provider={editing}
         onSave={(input) => saveProvider.mutateAsync(input)}
         isPending={saveProvider.isPending}
+      />
+      <ConfirmDialog
+        isOpen={deleting !== null}
+        title={t("confirm.deleteProvider", {
+          defaultValue: "Delete Provider",
+        })}
+        message={t("confirm.deleteProviderMessage", {
+          name: deleting?.name ?? "",
+          defaultValue: `Are you sure you want to delete provider "${deleting?.name ?? ""}"? This action cannot be undone.`,
+        })}
+        confirmText={t("common.delete", { defaultValue: "Delete" })}
+        onConfirm={() => {
+          const provider = deleting;
+          setDeleting(null);
+          if (provider) {
+            void run(() => deleteProvider.mutateAsync(provider.id));
+          }
+        }}
+        onCancel={() => setDeleting(null)}
       />
     </div>
   );

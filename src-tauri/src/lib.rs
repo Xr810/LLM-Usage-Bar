@@ -1708,6 +1708,7 @@ pub fn run() {
             commands::start_claude_cli_login,
             commands::logout_claude_cli,
             commands::save_usage_provider,
+            commands::delete_usage_provider,
             commands::set_usage_provider_enabled,
             commands::get_route_bindings,
             commands::set_route_binding,

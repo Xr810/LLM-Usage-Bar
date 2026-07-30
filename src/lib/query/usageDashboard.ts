@@ -269,6 +269,15 @@ export function useSaveUsageProvider() {
   });
 }
 
+export function useDeleteUsageProvider() {
+  const invalidate = useInvalidateUsageDashboard();
+  return useMutation({
+    mutationFn: (providerId: string) =>
+      usageDashboardApi.deleteProvider(providerId),
+    onSuccess: invalidate,
+  });
+}
+
 export function useSetUsageProviderEnabled() {
   const invalidate = useInvalidateUsageDashboard();
   return useMutation({

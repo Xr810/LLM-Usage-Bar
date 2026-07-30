@@ -557,6 +557,55 @@ impl Database {
         Ok(())
     }
 
+    pub fn delete_usage_provider(&self, id: &str) -> Result<(), AppError> {
+        let _operation_guard = lock_conn!(self.usage_source_binding_operation);
+        let mut conn = lock_conn!(self.conn);
+        let transaction = conn.transaction()?;
+        let system_preset_key = transaction
+            .query_row(
+                "SELECT system_preset_key FROM usage_providers WHERE id = ?1",
+                [id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .ok_or_else(|| AppError::Message("usage_provider_not_found".to_string()))?;
+        if system_preset_key.is_some() {
+            return Err(AppError::Message("system_provider_immutable".to_string()));
+        }
+
+        let is_referenced: bool = transaction.query_row(
+            "SELECT EXISTS(
+                 SELECT 1 FROM route_bindings WHERE provider_id = ?1
+                 UNION ALL
+                 SELECT 1 FROM usage_source_bindings WHERE provider_id = ?1
+                 UNION ALL
+                 SELECT 1 FROM usage_events WHERE provider_id = ?1
+                 UNION ALL
+                 SELECT 1 FROM quota_snapshots WHERE provider_id = ?1
+                 UNION ALL
+                 SELECT 1 FROM quota_fetch_state WHERE provider_id = ?1
+                 UNION ALL
+                 SELECT 1 FROM agent_provider_bindings WHERE provider_id = ?1
+             )",
+            [id],
+            |row| row.get(0),
+        )?;
+        if is_referenced {
+            return Err(AppError::Localized {
+                key: "usage_provider_in_use",
+                zh: "此自定义 Provider 已有关联配置或历史用量，无法直接删除。".to_string(),
+                en: "This Custom Provider has linked configuration or usage history and cannot be deleted directly."
+                    .to_string(),
+            });
+        }
+
+        if transaction.execute("DELETE FROM usage_providers WHERE id = ?1", [id])? != 1 {
+            return Err(AppError::Message("usage_provider_not_found".to_string()));
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
     pub(crate) fn is_system_provider(&self, provider_id: &str) -> Result<bool, AppError> {
         let conn = lock_conn!(self.conn);
         conn.query_row(
@@ -772,6 +821,51 @@ mod tests {
             quota_config: Some(json!({"access_token": "quota-secret"})),
             enabled: true,
         }
+    }
+
+    #[test]
+    fn custom_providers_are_independent_and_individually_deletable() {
+        let db = Database::memory().unwrap();
+        db.save_usage_provider(&provider(
+            "custom-q",
+            BillingKind::Metered,
+            vec![TokenSource::Proxy],
+        ))
+        .unwrap();
+        db.save_usage_provider(&provider(
+            "custom-r",
+            BillingKind::Metered,
+            vec![TokenSource::Proxy],
+        ))
+        .unwrap();
+
+        db.delete_usage_provider("custom-q").unwrap();
+
+        assert!(db.get_usage_provider("custom-q").unwrap().is_none());
+        assert!(db.get_usage_provider("custom-r").unwrap().is_some());
+        assert_eq!(
+            db.delete_usage_provider("system-openrouter-api")
+                .unwrap_err()
+                .to_string(),
+            "system_provider_immutable"
+        );
+    }
+
+    #[test]
+    fn custom_provider_delete_preserves_linked_usage_and_configuration() {
+        let db = Database::memory().unwrap();
+        db.save_usage_provider(&provider(
+            "custom-linked",
+            BillingKind::Metered,
+            vec![TokenSource::Proxy],
+        ))
+        .unwrap();
+        db.set_route_binding("claude", "custom-linked").unwrap();
+
+        let error = db.delete_usage_provider("custom-linked").unwrap_err();
+
+        assert!(error.to_string().contains("无法直接删除"));
+        assert!(db.get_usage_provider("custom-linked").unwrap().is_some());
     }
 
     #[test]

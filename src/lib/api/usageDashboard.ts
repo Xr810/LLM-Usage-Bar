@@ -136,6 +136,8 @@ export const usageDashboardApi = {
     invoke("list_usage_providers"),
   saveProvider: (input: UsageProviderInput): Promise<UsageProviderView> =>
     invoke("save_usage_provider", { input }),
+  deleteProvider: (providerId: string): Promise<void> =>
+    invoke("delete_usage_provider", { providerId }),
   setProviderEnabled: (providerId: string, enabled: boolean): Promise<void> =>
     invoke("set_usage_provider_enabled", { providerId, enabled }),
 
