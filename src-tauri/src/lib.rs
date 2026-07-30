@@ -664,6 +664,22 @@ pub fn run() {
                 )?;
             }
 
+            // Keep the OS login item aligned with the persisted setting on every
+            // manual launch. This also repairs the invalid `.app` LaunchAgent
+            // written by auto-launch 0.6 before the executable-path fix.
+            #[cfg(target_os = "macos")]
+            {
+                let launch_on_startup = crate::settings::get_settings().launch_on_startup;
+                let result = if launch_on_startup {
+                    crate::auto_launch::enable_auto_launch()
+                } else {
+                    crate::auto_launch::disable_auto_launch()
+                };
+                if let Err(error) = result {
+                    log::warn!("Failed to reconcile launch-at-login state: {error}");
+                }
+            }
+
             // 注入 AppHandle 给 usage_events，让无 AppHandle 持有的写日志路径
             // 也能向前端推送 `usage-log-recorded`。
             // 放在日志系统初始化之后，确保 init 的日志能正常输出。

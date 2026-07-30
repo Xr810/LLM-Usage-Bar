@@ -1,43 +1,32 @@
 use crate::error::AppError;
+#[cfg(target_os = "macos")]
+use auto_launch::MacOSLaunchMode;
 use auto_launch::{AutoLaunch, AutoLaunchBuilder};
 
-/// 获取 macOS 上的 .app bundle 路径
-/// 将 `/path/to/LLM Usage Bar.app/Contents/MacOS/LLM Usage Bar` 转换为 `/path/to/LLM Usage Bar.app`
-#[cfg(target_os = "macos")]
-fn get_macos_app_bundle_path(exe_path: &std::path::Path) -> Option<std::path::PathBuf> {
-    let path_str = exe_path.to_string_lossy();
-    // 查找 .app/Contents/MacOS/ 模式
-    if let Some(app_pos) = path_str.find(".app/Contents/MacOS/") {
-        let app_bundle_end = app_pos + 4; // ".app" 的结束位置
-        Some(std::path::PathBuf::from(&path_str[..app_bundle_end]))
-    } else {
-        None
-    }
+fn build_auto_launch(exe_path: &std::path::Path) -> Result<AutoLaunch, AppError> {
+    let app_name = "LLM Usage Bar";
+    let mut builder = AutoLaunchBuilder::new();
+    builder
+        .set_app_name(app_name)
+        .set_app_path(&exe_path.to_string_lossy());
+
+    // auto-launch 0.6 changed its macOS default from AppleScript to LaunchAgent.
+    // LaunchAgent must execute the binary inside the bundle; passing the `.app`
+    // directory produces an invalid ProgramArguments entry and launchd exits
+    // with EX_CONFIG.
+    #[cfg(target_os = "macos")]
+    builder.set_macos_launch_mode(MacOSLaunchMode::LaunchAgent);
+
+    builder
+        .build()
+        .map_err(|e| AppError::Message(format!("创建 AutoLaunch 失败: {e}")))
 }
 
 /// 初始化 AutoLaunch 实例
 fn get_auto_launch() -> Result<AutoLaunch, AppError> {
-    let app_name = "LLM Usage Bar";
     let exe_path =
         std::env::current_exe().map_err(|e| AppError::Message(format!("无法获取应用路径: {e}")))?;
-
-    // macOS 需要使用 .app bundle 路径，否则 AppleScript login item 会打开终端
-    #[cfg(target_os = "macos")]
-    let app_path = get_macos_app_bundle_path(&exe_path).unwrap_or(exe_path);
-
-    #[cfg(not(target_os = "macos"))]
-    let app_path = exe_path;
-
-    // 使用 AutoLaunchBuilder 消除平台差异
-    // macOS: 使用 AppleScript 方式（默认），需要 .app bundle 路径
-    // Windows/Linux: 使用注册表/XDG autostart
-    let auto_launch = AutoLaunchBuilder::new()
-        .set_app_name(app_name)
-        .set_app_path(&app_path.to_string_lossy())
-        .build()
-        .map_err(|e| AppError::Message(format!("创建 AutoLaunch 失败: {e}")))?;
-
-    Ok(auto_launch)
+    build_auto_launch(&exe_path)
 }
 
 /// 启用开机自启
@@ -70,50 +59,22 @@ pub fn is_auto_launch_enabled() -> Result<bool, AppError> {
 
 #[cfg(test)]
 mod tests {
-    #[allow(unused_imports)]
     use super::*;
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn test_get_macos_app_bundle_path_valid() {
+    fn macos_launch_agent_targets_bundle_executable() {
         let exe_path =
-            std::path::Path::new("/Applications/LLM Usage Bar.app/Contents/MacOS/LLM Usage Bar");
-        let result = get_macos_app_bundle_path(exe_path);
+            std::path::Path::new("/Applications/LLM Usage Bar.app/Contents/MacOS/llm-usage-bar");
+        let auto_launch = build_auto_launch(exe_path).unwrap();
+
         assert_eq!(
-            result,
-            Some(std::path::PathBuf::from("/Applications/LLM Usage Bar.app"))
+            auto_launch.get_app_path(),
+            "/Applications/LLM Usage Bar.app/Contents/MacOS/llm-usage-bar"
         );
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn test_get_macos_app_bundle_path_with_spaces() {
-        let exe_path = std::path::Path::new(
-            "/Users/test/My Apps/LLM Usage Bar.app/Contents/MacOS/LLM Usage Bar",
+        assert_ne!(
+            auto_launch.get_app_path(),
+            "/Applications/LLM Usage Bar.app"
         );
-        let result = get_macos_app_bundle_path(exe_path);
-        assert_eq!(
-            result,
-            Some(std::path::PathBuf::from(
-                "/Users/test/My Apps/LLM Usage Bar.app"
-            ))
-        );
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn test_get_macos_app_bundle_path_not_in_bundle() {
-        let exe_path = std::path::Path::new("/usr/local/bin/llm-usage-bar");
-        let result = get_macos_app_bundle_path(exe_path);
-        assert_eq!(result, None);
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn test_get_macos_app_bundle_path_dev_build() {
-        // 开发环境下的路径通常不在 .app bundle 内
-        let exe_path = std::path::Path::new("/Users/dev/project/target/debug/llm-usage-bar");
-        let result = get_macos_app_bundle_path(exe_path);
-        assert_eq!(result, None);
     }
 }
