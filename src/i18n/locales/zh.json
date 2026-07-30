@@ -306,7 +306,10 @@
     "archivedHistory": "已归档 Agent 历史",
     "invalidLinks": "无效链接汇总",
     "invalidLinkCount_one": "{{count}} 条无效链接",
-    "invalidLinkCount_other": "{{count}} 条无效链接"
+    "invalidLinkCount_other": "{{count}} 条无效链接",
+    "emptyUnassignedGroups": "暂无未归属分组",
+    "emptyArchivedHistory": "暂无已归档 Agent 历史",
+    "emptyInvalidLinks": "暂无无效链接"
   },
   "preview": {
     "currentUi": "当前为界面预览。请打开 LLM Usage Bar 桌面应用读取本机用量。"

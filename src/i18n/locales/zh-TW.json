@@ -306,7 +306,10 @@
     "archivedHistory": "已封存 Agent 歷史",
     "invalidLinks": "無效連結摘要",
     "invalidLinkCount_one": "{{count}} 筆無效連結",
-    "invalidLinkCount_other": "{{count}} 筆無效連結"
+    "invalidLinkCount_other": "{{count}} 筆無效連結",
+    "emptyUnassignedGroups": "暫無未歸屬群組",
+    "emptyArchivedHistory": "暫無已封存 Agent 歷史",
+    "emptyInvalidLinks": "暫無無效連結"
   },
   "preview": {
     "currentUi": "目前是介面預覽。請開啟 LLM Usage Bar 桌面應用程式以讀取本機用量。"

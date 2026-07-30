@@ -306,7 +306,10 @@
     "archivedHistory": "アーカイブ済み Agent の履歴",
     "invalidLinks": "無効なリンクの集計",
     "invalidLinkCount_one": "無効なリンク {{count}} 件",
-    "invalidLinkCount_other": "無効なリンク {{count}} 件"
+    "invalidLinkCount_other": "無効なリンク {{count}} 件",
+    "emptyUnassignedGroups": "未割り当てグループはありません",
+    "emptyArchivedHistory": "アーカイブ済み Agent の履歴はありません",
+    "emptyInvalidLinks": "無効なリンクはありません"
   },
   "preview": {
     "currentUi": "現在は UI プレビューです。ローカル使用量を確認するには、LLM Usage Bar デスクトップアプリを開いてください。"

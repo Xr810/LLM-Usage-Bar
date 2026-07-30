@@ -1,4 +1,6 @@
+import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { ShieldCheck } from "lucide-react";
 import {
   Card,
   CardContent,
@@ -12,13 +14,58 @@ function formatTime(value: number) {
   return new Date(value * 1000).toLocaleString();
 }
 
+interface DiagnosticsSectionProps {
+  title: string;
+  count: number;
+  emptyText: string;
+  children: ReactNode;
+}
+
+function DiagnosticsSection({
+  title,
+  count,
+  emptyText,
+  children,
+}: DiagnosticsSectionProps) {
+  return (
+    <section className="overflow-hidden rounded-xl border bg-card shadow-card">
+      <header className="flex items-center justify-between gap-3 border-b border-border/60 bg-muted/30 px-4 py-2.5">
+        <h3 className="text-sm font-medium">{title}</h3>
+        <span className="rounded-full border border-border/60 bg-background px-2 py-0.5 text-xs tabular-nums text-muted-foreground">
+          {count}
+        </span>
+      </header>
+      {count === 0 ? (
+        <p className="px-4 py-7 text-center text-sm text-muted-foreground">
+          {emptyText}
+        </p>
+      ) : (
+        <div className="divide-y divide-border/60">{children}</div>
+      )}
+    </section>
+  );
+}
+
+function DiagnosticsRow({ title, meta }: { title: string; meta: ReactNode }) {
+  return (
+    <div className="px-4 py-3 text-sm">
+      <div className="font-medium">{title}</div>
+      <div className="mt-0.5 text-muted-foreground">{meta}</div>
+    </div>
+  );
+}
+
 export function UsageDiagnosticsPanel() {
   const { t } = useTranslation();
   const diagnostics = useUnassignedUsageDiagnostics();
   const data = diagnostics.data;
 
   if (diagnostics.isLoading) {
-    return <div>{t("common.loading", { defaultValue: "Loading" })}</div>;
+    return (
+      <div className="py-12 text-center text-sm text-muted-foreground">
+        {t("common.loading", { defaultValue: "Loading" })}
+      </div>
+    );
   }
   if (diagnostics.error) {
     return (
@@ -34,91 +81,122 @@ export function UsageDiagnosticsPanel() {
   const timeRange = (first: number, last: number) =>
     `${formatTime(first)} – ${formatTime(last)}`;
 
+  const unassignedCountText = t("usageDiagnostics.unassignedCount", {
+    count: data.unassignedEventCount,
+    defaultValue: `${data.unassignedEventCount} unassigned events`,
+  });
+
   return (
-    <div className="space-y-4 pb-6">
+    <div className="space-y-5 pb-6">
       <Card>
-        <CardHeader>
-          <CardTitle className="text-base">
-            {t("usageDiagnostics.title", {
-              defaultValue: "Usage ownership diagnostics",
-            })}
-          </CardTitle>
-          <CardDescription>
-            {t("usageDiagnostics.description", {
-              defaultValue:
-                "Read-only aggregate history. The app never guesses or reassigns ownership.",
-            })}
-          </CardDescription>
+        <CardHeader className="flex-row items-start gap-4 space-y-0">
+          <div className="rounded-lg bg-primary/10 p-2.5 text-primary">
+            <ShieldCheck className="h-5 w-5" aria-hidden="true" />
+          </div>
+          <div className="space-y-1.5">
+            <CardTitle className="text-base">
+              {t("usageDiagnostics.title", {
+                defaultValue: "Usage ownership diagnostics",
+              })}
+            </CardTitle>
+            <CardDescription>
+              {t("usageDiagnostics.description", {
+                defaultValue:
+                  "Read-only aggregate history. The app never guesses or reassigns ownership.",
+              })}
+            </CardDescription>
+          </div>
         </CardHeader>
         <CardContent>
-          {t("usageDiagnostics.unassignedCount", {
-            count: data.unassignedEventCount,
-            defaultValue: `${data.unassignedEventCount} unassigned events`,
-          })}
+          <div className="flex items-center gap-2.5 rounded-lg bg-muted/50 px-3.5 py-2.5 text-sm dark:bg-muted/30">
+            <span
+              aria-hidden="true"
+              className={
+                data.unassignedEventCount === 0
+                  ? "h-2 w-2 shrink-0 rounded-full bg-success"
+                  : "h-2 w-2 shrink-0 rounded-full bg-warning"
+              }
+            />
+            <span className="font-medium tabular-nums">
+              {unassignedCountText}
+            </span>
+          </div>
         </CardContent>
       </Card>
 
-      <section className="space-y-2">
-        <h3 className="text-sm font-semibold">
-          {t("usageDiagnostics.unassignedGroups", {
-            defaultValue: "Unassigned groups",
-          })}
-        </h3>
+      <DiagnosticsSection
+        title={t("usageDiagnostics.unassignedGroups", {
+          defaultValue: "Unassigned groups",
+        })}
+        count={data.unassignedGroups.length}
+        emptyText={t("usageDiagnostics.emptyUnassignedGroups", {
+          defaultValue: "No unassigned groups",
+        })}
+      >
         {data.unassignedGroups.map((group) => (
-          <div
+          <DiagnosticsRow
             key={`${group.providerId}-${group.source}`}
-            className="rounded-lg border p-3 text-sm"
-          >
-            <div className="font-medium">{group.providerId}</div>
-            <div className="text-muted-foreground">
-              {group.source} · {group.eventCount} ·{" "}
-              {timeRange(group.firstOccurredAt, group.lastOccurredAt)}
-            </div>
-          </div>
+            title={group.providerId}
+            meta={
+              <>
+                {group.source} · {group.eventCount} ·{" "}
+                {timeRange(group.firstOccurredAt, group.lastOccurredAt)}
+              </>
+            }
+          />
         ))}
-      </section>
+      </DiagnosticsSection>
 
-      <section className="space-y-2">
-        <h3 className="text-sm font-semibold">
-          {t("usageDiagnostics.archivedHistory", {
-            defaultValue: "Archived Agent history",
-          })}
-        </h3>
+      <DiagnosticsSection
+        title={t("usageDiagnostics.archivedHistory", {
+          defaultValue: "Archived Agent history",
+        })}
+        count={data.archivedAgentHistory.length}
+        emptyText={t("usageDiagnostics.emptyArchivedHistory", {
+          defaultValue: "No archived Agent history",
+        })}
+      >
         {data.archivedAgentHistory.map((summary) => (
-          <div
+          <DiagnosticsRow
             key={summary.agentModuleId}
-            className="rounded-lg border p-3 text-sm"
-          >
-            <div className="font-medium">{summary.agentModuleId}</div>
-            <div className="text-muted-foreground">
-              {summary.eventCount} ·{" "}
-              {timeRange(summary.firstOccurredAt, summary.lastOccurredAt)}
-            </div>
-          </div>
+            title={summary.agentModuleId}
+            meta={
+              <>
+                {summary.eventCount} ·{" "}
+                {timeRange(summary.firstOccurredAt, summary.lastOccurredAt)}
+              </>
+            }
+          />
         ))}
-      </section>
+      </DiagnosticsSection>
 
-      <section className="space-y-2">
-        <h3 className="text-sm font-semibold">
-          {t("usageDiagnostics.invalidLinks", {
-            defaultValue: "Invalid link summaries",
-          })}
-        </h3>
+      <DiagnosticsSection
+        title={t("usageDiagnostics.invalidLinks", {
+          defaultValue: "Invalid link summaries",
+        })}
+        count={data.invalidLinkSummaries.length}
+        emptyText={t("usageDiagnostics.emptyInvalidLinks", {
+          defaultValue: "No invalid links",
+        })}
+      >
         {data.invalidLinkSummaries.map((summary) => (
-          <div key={summary.reason} className="rounded-lg border p-3 text-sm">
-            <div className="font-medium">{summary.reason}</div>
-            <div className="text-muted-foreground">
-              <span>
-                {t("usageDiagnostics.invalidLinkCount", {
-                  count: summary.linkCount,
-                  defaultValue: `${summary.linkCount} invalid links`,
-                })}
-              </span>{" "}
-              · {timeRange(summary.firstCreatedAt, summary.lastCreatedAt)}
-            </div>
-          </div>
+          <DiagnosticsRow
+            key={summary.reason}
+            title={summary.reason}
+            meta={
+              <>
+                <span>
+                  {t("usageDiagnostics.invalidLinkCount", {
+                    count: summary.linkCount,
+                    defaultValue: `${summary.linkCount} invalid links`,
+                  })}
+                </span>{" "}
+                · {timeRange(summary.firstCreatedAt, summary.lastCreatedAt)}
+              </>
+            }
+          />
         ))}
-      </section>
+      </DiagnosticsSection>
     </div>
   );
 }

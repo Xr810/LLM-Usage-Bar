@@ -306,7 +306,10 @@
     "archivedHistory": "Archived Agent history",
     "invalidLinks": "Invalid link summaries",
     "invalidLinkCount_one": "{{count}} invalid link",
-    "invalidLinkCount_other": "{{count}} invalid links"
+    "invalidLinkCount_other": "{{count}} invalid links",
+    "emptyUnassignedGroups": "No unassigned groups",
+    "emptyArchivedHistory": "No archived Agent history",
+    "emptyInvalidLinks": "No invalid links"
   },
   "preview": {
     "currentUi": "Current UI preview. Open LLM Usage Bar desktop to read local usage."
