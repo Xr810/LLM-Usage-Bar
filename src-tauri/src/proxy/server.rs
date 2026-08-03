@@ -9,7 +9,6 @@
 //! a direct (non-proxied) CLI request.
 
 use super::{
-    failover_switch::FailoverSwitchManager,
     handlers,
     log_codes::srv as log_srv,
     provider_router::ProviderRouter,
@@ -51,9 +50,6 @@ pub struct ProxyState {
     pub codex_chat_history: Arc<CodexChatHistoryStore>,
     /// AppHandle，用于发射事件和更新托盘菜单
     pub app_handle: Option<tauri::AppHandle>,
-    /// 故障转移切换管理器
-    #[allow(dead_code)] // Retained until milestone-3 physical removal.
-    pub failover_manager: Arc<FailoverSwitchManager>,
 }
 
 /// 代理HTTP服务器
@@ -75,7 +71,6 @@ impl ProxyServer {
         // 创建共享的 ProviderRouter（熔断器状态将跨所有请求保持）
         let provider_router = Arc::new(ProviderRouter::new(db.clone()));
         // 创建故障转移切换管理器
-        let failover_manager = Arc::new(FailoverSwitchManager::new(db.clone()));
 
         let state = ProxyState {
             db,
@@ -88,7 +83,6 @@ impl ProxyServer {
             gemini_shadow: Arc::new(GeminiShadowStore::default()),
             codex_chat_history: Arc::new(CodexChatHistoryStore::default()),
             app_handle,
-            failover_manager,
         };
 
         Self {

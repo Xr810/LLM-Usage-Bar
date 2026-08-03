@@ -18,40 +18,8 @@ import type {
   ModelPriceInput,
   ProviderModelPricingView,
 } from "@/types/usageDashboard";
-import type { UsageResult } from "@/types";
-import type { AppId } from "./types";
-import type { TemplateType } from "@/config/constants";
 
 export const usageApi = {
-  // Provider usage script methods
-  query: async (providerId: string, appId: AppId): Promise<UsageResult> => {
-    return invoke("queryProviderUsage", { providerId, app: appId });
-  },
-
-  testScript: async (
-    providerId: string,
-    appId: AppId,
-    scriptCode: string,
-    timeout?: number,
-    apiKey?: string,
-    baseUrl?: string,
-    accessToken?: string,
-    userId?: string,
-    templateType?: TemplateType,
-  ): Promise<UsageResult> => {
-    return invoke("testUsageScript", {
-      providerId,
-      app: appId,
-      scriptCode,
-      timeout,
-      apiKey,
-      baseUrl,
-      accessToken,
-      userId,
-      templateType,
-    });
-  },
-
   // Proxy usage statistics methods
   getUsageSummary: async (
     startDate?: number,

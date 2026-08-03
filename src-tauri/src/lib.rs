@@ -1277,14 +1277,6 @@ pub fn run() {
                 ))
                 .on_tray_icon_event(|tray, event| {
                     match event {
-                        // 悬停只做后台软刷新，不创建或显示任何窗口。
-                        // refresh_all_usage_in_tray 内部有 10 秒防抖。
-                        TrayIconEvent::Enter { .. } => {
-                            let app = tray.app_handle().clone();
-                            tauri::async_runtime::spawn(async move {
-                                crate::tray::refresh_all_usage_in_tray(&app).await;
-                            });
-                        }
                         TrayIconEvent::Click {
                             rect,
                             button,
@@ -1308,13 +1300,7 @@ pub fn run() {
                             }
 
                             #[cfg(not(target_os = "macos"))]
-                            {
-                                let _ = (rect, button, button_state);
-                                let app = tray.app_handle().clone();
-                                tauri::async_runtime::spawn(async move {
-                                    crate::tray::refresh_all_usage_in_tray(&app).await;
-                                });
-                            }
+                            let _ = (rect, button, button_state);
                         }
                         _ => log::debug!("unhandled event {event:?}"),
                     }
@@ -1742,18 +1728,6 @@ pub fn run() {
             commands::open_main_from_tray,
             commands::take_pending_main_window_destination,
             commands::quit_from_tray,
-            commands::get_providers,
-            commands::get_current_provider,
-            commands::add_provider,
-            commands::update_provider,
-            commands::delete_provider,
-            commands::remove_provider_from_live_config,
-            commands::switch_provider,
-            commands::import_default_config,
-            commands::get_claude_desktop_status,
-            commands::get_claude_desktop_default_routes,
-            commands::import_claude_desktop_providers_from_claude,
-            commands::ensure_claude_desktop_official_provider,
             commands::get_claude_code_config_path,
             commands::get_config_dir,
             commands::open_config_folder,
@@ -1782,8 +1756,6 @@ pub fn run() {
             commands::clear_claude_onboarding_skip,
             // Claude MCP management
             // usage query
-            commands::queryProviderUsage,
-            commands::testUsageScript,
             // subscription quota
             commands::get_subscription_quota,
             commands::get_codex_oauth_quota,
@@ -1805,7 +1777,6 @@ pub fn run() {
             commands::get_app_config_dir_override,
             commands::set_app_config_dir_override,
             // provider sort order management
-            commands::update_providers_sort_order,
             // theirs: config import/export and dialogs
             commands::export_config_to_file,
             commands::import_config_from_file,
@@ -1836,25 +1807,7 @@ pub fn run() {
             commands::set_auto_launch,
             commands::get_auto_launch_status,
             // Proxy server management
-            commands::start_proxy_server,
-            commands::stop_proxy_with_restore,
-            commands::get_proxy_takeover_status,
-            commands::set_proxy_takeover_for_app,
-            commands::get_proxy_status,
-            commands::get_proxy_config,
-            commands::update_proxy_config,
             // Global & Per-App Config
-            commands::get_global_proxy_config,
-            commands::update_global_proxy_config,
-            commands::get_proxy_config_for_app,
-            commands::update_proxy_config_for_app,
-            commands::get_default_cost_multiplier,
-            commands::set_default_cost_multiplier,
-            commands::get_pricing_model_source,
-            commands::set_pricing_model_source,
-            commands::is_proxy_running,
-            commands::is_live_takeover_active,
-            commands::switch_proxy_provider,
             // Proxy failover commands
             // Failover queue management
             // Usage statistics
@@ -1886,20 +1839,9 @@ pub fn run() {
             // Provider terminal
             commands::open_provider_terminal,
             // Universal Provider management
-            commands::get_universal_providers,
-            commands::get_universal_provider,
-            commands::upsert_universal_provider,
-            commands::delete_universal_provider,
-            commands::sync_universal_provider,
             // OpenCode specific
-            commands::import_opencode_providers_from_live,
-            commands::get_opencode_live_provider_ids,
             // OpenClaw specific
-            commands::import_openclaw_providers_from_live,
-            commands::get_openclaw_live_provider_ids,
             // Hermes specific
-            commands::import_hermes_providers_from_live,
-            commands::get_hermes_live_provider_ids,
             // Global upstream proxy
             // Window theme control
             commands::set_window_theme,

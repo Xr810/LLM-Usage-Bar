@@ -216,14 +216,6 @@ pub fn get_config_library_path() -> Result<PathBuf, AppError> {
     Ok(current_platform_paths()?.config_library_path)
 }
 
-pub fn default_proxy_routes() -> Vec<ClaudeDesktopDefaultRoute> {
-    DEFAULT_PROXY_ROUTES.to_vec()
-}
-
-pub fn is_compatible_direct_provider(provider: &Provider) -> bool {
-    validate_direct_provider(provider).is_ok()
-}
-
 pub fn is_official_provider(provider: &Provider) -> bool {
     provider.id == CLAUDE_DESKTOP_OFFICIAL_PROVIDER_ID
 }
@@ -2232,54 +2224,5 @@ mod tests {
         assert_eq!(threep["deploymentMode"], json!("1p"));
         assert!(!paths.profile_path.exists());
         assert!(meta.get("appliedId").is_none());
-    }
-
-    #[test]
-    fn claude_desktop_compatibility_filters_non_direct_providers() {
-        let direct = direct_provider("direct");
-        assert!(is_compatible_direct_provider(&direct));
-
-        let mut claude_official = Provider::with_id(
-            "claude-official".to_string(),
-            "Claude Official".to_string(),
-            json!({"env": {}}),
-            Some("https://www.anthropic.com/claude-code".to_string()),
-        );
-        claude_official.category = Some("official".to_string());
-        assert!(!is_compatible_direct_provider(&claude_official));
-
-        let mut openai_format = direct_provider("openai");
-        openai_format.meta = Some(ProviderMeta {
-            api_format: Some("openai_chat".to_string()),
-            ..Default::default()
-        });
-        assert!(!is_compatible_direct_provider(&openai_format));
-
-        let mut copilot = direct_provider("copilot");
-        copilot.meta = Some(ProviderMeta {
-            provider_type: Some("github_copilot".to_string()),
-            ..Default::default()
-        });
-        assert!(!is_compatible_direct_provider(&copilot));
-
-        let mut full_url = direct_provider("full_url");
-        full_url.meta = Some(ProviderMeta {
-            is_full_url: Some(true),
-            ..Default::default()
-        });
-        assert!(!is_compatible_direct_provider(&full_url));
-
-        let missing_bearer = Provider::with_id(
-            "x-api-key".to_string(),
-            "x-api-key".to_string(),
-            json!({
-                "env": {
-                    "ANTHROPIC_BASE_URL": "https://gateway.example.com",
-                    "ANTHROPIC_API_KEY": "sk-ant"
-                }
-            }),
-            None,
-        );
-        assert!(!is_compatible_direct_provider(&missing_bearer));
     }
 }

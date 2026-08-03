@@ -1,5 +1,4 @@
 export type { AppId } from "./types";
-export { providersApi, universalProvidersApi } from "./providers";
 export { settingsApi } from "./settings";
 export { usageApi } from "./usage";
 export * as authApi from "./auth";

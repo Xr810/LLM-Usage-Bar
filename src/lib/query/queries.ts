@@ -1,9 +1,6 @@
-import { useRef } from "react";
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
-import { settingsApi, usageApi, type AppId } from "@/lib/api";
+import { settingsApi } from "@/lib/api";
 import type { Settings, UsageResult } from "@/types";
-import { usageKeys } from "@/lib/query/usage";
-import { extractErrorMessage } from "@/utils/errorUtils";
 
 export const useSettingsQuery = (): UseQueryResult<Settings> => {
   return useQuery({
@@ -157,65 +154,3 @@ export function resolveDisplayUsage<T extends UsageLikeResult>(
 
   return { data, lastQueriedAt, lastGood };
 }
-
-export const useUsageQuery = (
-  providerId: string,
-  appId: AppId,
-  options?: UseUsageQueryOptions,
-) => {
-  const { enabled = true, autoQueryInterval = 0 } = options || {};
-
-  // 计算 staleTime：如果有自动刷新间隔，使用该间隔；否则默认 5 分钟
-  // 这样可以避免切换 app 页面时重复触发查询
-  const staleTime =
-    autoQueryInterval > 0
-      ? autoQueryInterval * 60 * 1000 // 与刷新间隔保持一致
-      : 5 * 60 * 1000; // 默认 5 分钟
-
-  const query = useQuery<UsageResult>({
-    queryKey: usageKeys.script(providerId, appId),
-    queryFn: async () => usageApi.query(providerId, appId),
-    enabled: enabled && !!providerId,
-    refetchInterval:
-      autoQueryInterval > 0
-        ? Math.max(autoQueryInterval, 1) * 60 * 1000 // 最小1分钟
-        : false,
-    refetchIntervalInBackground: true, // 后台也继续定时查询
-    refetchOnWindowFocus: false,
-    // 用量查询面向跨境/第三方端点，单次网络抖动或瞬时 5xx 不应直接判失败。
-    // 后端已把瞬时传输失败（网络/超时/读体中断）转成 Err → invoke reject，
-    // retry 在此真正生效；reject 保留的旧 data 与 Ok(success:false) 的 5xx/429
-    // 一样，只在 resolveDisplayUsage 的 keep-last-good 窗口内继续展示。
-    retry: 1,
-    retryDelay: 1500,
-    staleTime, // 使用动态计算的缓存时间
-    gcTime: 10 * 60 * 1000, // 缓存保留 10 分钟（组件卸载后）
-  });
-
-  // Keep-last-good：失败时在 10 分钟窗口内继续展示上一次成功值（见 resolveDisplayUsage）。
-  // 每个 hook 实例各持一份 ref（按卡片维度）；ref 写入是幂等的（同份成功重复写无副作用）。
-  const lastGoodRef = useRef<LastGoodUsage | null>(null);
-  const { data, lastQueriedAt, lastGood } = resolveDisplayUsage(
-    query.data,
-    query.dataUpdatedAt,
-    lastGoodRef.current,
-    Date.now(),
-    { rejected: query.isError },
-  );
-  lastGoodRef.current = lastGood;
-
-  return {
-    ...query,
-    // reject 且无可展示值（首次查询即失败，或保留的旧成功已超窗）：合成失败占位，
-    // 让 footer/卡片渲染失败态 + 重试入口，并透出 reject 的错误文案。
-    data:
-      data ??
-      (query.isError
-        ? {
-            success: false,
-            error: extractErrorMessage(query.error) || undefined,
-          }
-        : undefined),
-    lastQueriedAt,
-  };
-};

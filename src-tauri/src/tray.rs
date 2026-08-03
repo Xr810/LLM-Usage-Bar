@@ -896,10 +896,6 @@ pub fn handle_tray_menu_event(app: &tauri::AppHandle, event_id: &str) {
     }
 }
 
-static LAST_TRAY_USAGE_REFRESH: std::sync::Mutex<Option<std::time::Instant>> =
-    std::sync::Mutex::new(None);
-const MIN_TRAY_USAGE_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
-
 /// 合并多次快速触发的"usage 标题软更新"：批量刷新期间多个 usage 命令
 /// 同时成功时，只会产生一次就地 `set_text` 批量调用。走软更新而不是
 /// `refresh_tray_menu` 整建，避免用户打开中的菜单被 macOS 系统关闭。
@@ -919,103 +915,6 @@ pub fn schedule_tray_refresh(app: &tauri::AppHandle) {
         TRAY_REBUILD_SCHEDULED.store(false, Ordering::Release);
         update_tray_usage_labels(&app);
     });
-}
-
-/// 并行刷新每个可见 app "当前 provider" 的用量；成功 / 失败结果都通过各
-/// command 的 write-through 逻辑写入 `UsageCache`，单次重建菜单由
-/// `schedule_tray_refresh` 做合并。内部 10 秒节流防止鼠标悬停反复进出时
-/// 雪崩请求；互斥锁被毒化时以上次状态为准继续推进，不会永久阻塞。
-///
-/// 刷新面与 `format_usage_suffix` 的展示面严格对齐 —— 每次悬停最多发
-/// `TRAY_SECTIONS.len()` 次外部请求；只有显式启用的用量查询（含官方订阅、
-/// coding_plan / balance / Copilot / 自定义脚本）才会发请求。
-pub(crate) async fn refresh_all_usage_in_tray(app: &tauri::AppHandle) {
-    use crate::commands::CopilotAuthState;
-    use futures::future::join_all;
-
-    {
-        let mut guard = LAST_TRAY_USAGE_REFRESH
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let now = std::time::Instant::now();
-        if let Some(last) = *guard {
-            if now.duration_since(last) < MIN_TRAY_USAGE_REFRESH_INTERVAL {
-                return;
-            }
-        }
-        *guard = Some(now);
-    }
-
-    let Some(app_state) = app.try_state::<AppState>() else {
-        return;
-    };
-
-    // 与 `create_tray_menu` 保持一致：用户隐藏的 app 不参与外部 API 查询，
-    // 避免在未使用的 app 上浪费请求、撞 rate limit 或反复触发鉴权失败日志。
-    let visible_apps = crate::settings::get_settings()
-        .visible_apps
-        .unwrap_or_default();
-
-    let mut script_futures = Vec::new();
-
-    for section in TRAY_SECTIONS.iter() {
-        if !visible_apps.is_visible(&section.app_type) {
-            continue;
-        }
-
-        let app_type_str = section.app_type.as_str();
-        let log_name = section.log_name;
-
-        // 解析 effective current provider；未设置 / 出错都静默跳过，
-        // 与 create_tray_menu 的行为保持一致。
-        let current_id =
-            match crate::settings::get_effective_current_provider(&app_state.db, &section.app_type)
-            {
-                Ok(Some(id)) => id,
-                Ok(None) => continue,
-                Err(e) => {
-                    log::warn!("[Tray] 读取{log_name}当前供应商失败: {e}");
-                    continue;
-                }
-            };
-        // 只需当前 provider —— by-id 查询避免把整个 app 的 provider 列表加载
-        // 进内存（每次悬停 × 3 sections 的热路径）。
-        let current = match app_state.db.get_provider_by_id(&current_id, app_type_str) {
-            Ok(Some(p)) => p,
-            Ok(None) => continue,
-            Err(e) => {
-                log::warn!("[Tray] 读取{log_name}当前供应商失败: {e}");
-                continue;
-            }
-        };
-
-        // 与 format_usage_suffix 同一优先级：只有显式启用的用量查询才发请求。
-        let is_official_provider = current.category.as_deref() == Some("official");
-        if current.has_usage_script_enabled()
-            && (!is_official_provider || provider_uses_official_subscription(&current))
-        {
-            let app_clone = app.clone();
-            let state = app.state::<AppState>();
-            let copilot_state = app.state::<CopilotAuthState>();
-            let provider_id = current_id.clone();
-            let app_str = app_type_str.to_string();
-            script_futures.push(async move {
-                if let Err(e) = crate::commands::queryProviderUsage(
-                    app_clone,
-                    state,
-                    copilot_state,
-                    provider_id.clone(),
-                    app_str,
-                )
-                .await
-                {
-                    log::debug!("[Tray] 刷新{log_name}供应商 {provider_id} 用量失败: {e}");
-                }
-            });
-        }
-    }
-
-    join_all(script_futures).await;
 }
 
 #[cfg(test)]

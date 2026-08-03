@@ -154,7 +154,7 @@
   },
   {
     "file": "src-tauri/src/claude_desktop_config.rs",
-    "lineNumber": 1162,
+    "lineNumber": 1154,
     "columnNumber": 13,
     "matchedText": "CC_SWITCH",
     "context": "Some(LEGACY_CC_SWITCH_PROFILE_ID) => true,",
@@ -163,7 +163,7 @@
   },
   {
     "file": "src-tauri/src/claude_desktop_config.rs",
-    "lineNumber": 2165,
+    "lineNumber": 2157,
     "columnNumber": 24,
     "matchedText": "CC_SWITCH",
     "context": ".join(format!(\"{LEGACY_CC_SWITCH_PROFILE_ID}.json\"));",
@@ -172,7 +172,7 @@
   },
   {
     "file": "src-tauri/src/claude_desktop_config.rs",
-    "lineNumber": 2171,
+    "lineNumber": 2163,
     "columnNumber": 21,
     "matchedText": "CC_SWITCH",
     "context": "\"appliedId\": LEGACY_CC_SWITCH_PROFILE_ID,",
@@ -181,7 +181,7 @@
   },
   {
     "file": "src-tauri/src/claude_desktop_config.rs",
-    "lineNumber": 2173,
+    "lineNumber": 2165,
     "columnNumber": 14,
     "matchedText": "CC_SWITCH",
     "context": "\"id\": LEGACY_CC_SWITCH_PROFILE_ID,",
@@ -190,7 +190,7 @@
   },
   {
     "file": "src-tauri/src/claude_desktop_config.rs",
-    "lineNumber": 2174,
+    "lineNumber": 2166,
     "columnNumber": 16,
     "matchedText": "CC_SWITCH",
     "context": "\"name\": LEGACY_CC_SWITCH_PROFILE_NAME",
@@ -199,7 +199,7 @@
   },
   {
     "file": "src-tauri/src/claude_desktop_config.rs",
-    "lineNumber": 2194,
+    "lineNumber": 2186,
     "columnNumber": 42,
     "matchedText": "CC_SWITCH",
     "context": ".any(|entry| entry[\"id\"] == json!(LEGACY_CC_SWITCH_PROFILE_ID)",
@@ -208,7 +208,7 @@
   },
   {
     "file": "src-tauri/src/claude_desktop_config.rs",
-    "lineNumber": 2195,
+    "lineNumber": 2187,
     "columnNumber": 34,
     "matchedText": "CC_SWITCH",
     "context": "&& entry[\"name\"] == json!(LEGACY_CC_SWITCH_PROFILE_NAME)));",
@@ -217,7 +217,7 @@
   },
   {
     "file": "src-tauri/src/claude_desktop_config.rs",
-    "lineNumber": 2210,
+    "lineNumber": 2202,
     "columnNumber": 14,
     "matchedText": "CC_SWITCH",
     "context": "\"id\": LEGACY_CC_SWITCH_PROFILE_ID,",
@@ -226,7 +226,7 @@
   },
   {
     "file": "src-tauri/src/claude_desktop_config.rs",
-    "lineNumber": 2211,
+    "lineNumber": 2203,
     "columnNumber": 16,
     "matchedText": "CC_SWITCH",
     "context": "\"name\": LEGACY_CC_SWITCH_PROFILE_NAME",
