@@ -4,8 +4,16 @@
 //! which is not an OpenAI-compatible `/v1/models` endpoint.
 
 use crate::product_identity::LEGACY_CODEX_OAUTH_ORIGINATOR;
-use crate::services::model_fetch::FetchedModel;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+/// One model reported by a provider's model-list endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FetchedModel {
+    pub id: String,
+    pub owned_by: Option<String>,
+}
 use std::time::Duration;
 
 const CODEX_OAUTH_MODELS_URL: &str = "https://chatgpt.com/backend-api/codex/models";

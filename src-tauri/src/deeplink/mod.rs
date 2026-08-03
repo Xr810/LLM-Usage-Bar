@@ -8,11 +8,8 @@
 //! - Skills
 //!
 
-mod mcp;
 mod parser;
-mod prompt;
 mod provider;
-mod skill;
 mod utils;
 
 #[cfg(test)]
@@ -29,11 +26,8 @@ pub(crate) fn has_legacy_deep_link_scheme(url: &str) -> bool {
 }
 
 // Re-export public API
-pub use mcp::import_mcp_from_deeplink;
 pub use parser::parse_deeplink_url;
-pub use prompt::import_prompt_from_deeplink;
-pub use provider::{import_provider_from_deeplink, parse_and_merge_config};
-pub use skill::import_skill_from_deeplink;
+pub use provider::import_provider_from_deeplink;
 
 /// Deep link import request model
 ///

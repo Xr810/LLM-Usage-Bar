@@ -336,95 +336,6 @@ fn sort_providers(
     sorted
 }
 
-/// 处理项目 Profile 托盘事件，返回是否已处理
-///
-/// 事件 id 形如 `profile_<scope>_<uuid>`（同一项目在各分组子菜单里各有一项，
-/// 应用时只作用于该分组）；`profile_none_<scope>` 表示某分组"不使用项目"
-/// （只清该分组标记，不动配置）。
-pub fn handle_profile_tray_event(app: &tauri::AppHandle, event_id: &str) -> bool {
-    let Some(suffix) = event_id.strip_prefix("profile_") else {
-        return false;
-    };
-
-    if let Some(scope_str) = suffix.strip_prefix("none_") {
-        let Ok(scope) = crate::services::profile::ProfileScope::parse(scope_str) else {
-            log::error!("未知的项目分组托盘事件: {event_id}");
-            return true;
-        };
-        if let Some(app_state) = app.try_state::<AppState>() {
-            if let Err(e) = app_state.db.set_current_profile_id(scope.as_str(), None) {
-                log::error!("清除当前项目失败: {e}");
-            }
-        }
-        // 通知主窗口刷新（profileId=null 表示该分组已清除当前项目）
-        if let Err(e) = app.emit(
-            "profile-applied",
-            serde_json::json!({ "profileId": null, "scope": scope.as_str() }),
-        ) {
-            log::error!("发射 profile-applied 事件失败: {e}");
-        }
-        refresh_tray_menu(app);
-        return true;
-    }
-
-    // scope 是固定枚举字符串（不含下划线），uuid 只含连字符，首个下划线即分界
-    let Some((scope_str, profile_id)) = suffix.split_once('_') else {
-        log::error!("无法解析项目托盘事件: {event_id}");
-        return true;
-    };
-    let Ok(scope) = crate::services::profile::ProfileScope::parse(scope_str) else {
-        log::error!("未知的项目分组托盘事件: {event_id}");
-        return true;
-    };
-
-    log::info!("应用项目: {profile_id}（{scope_str} 组）");
-    let app_handle = app.clone();
-    let profile_id = profile_id.to_string();
-    tauri::async_runtime::spawn_blocking(move || {
-        let Some(app_state) = app_handle.try_state::<AppState>() else {
-            return;
-        };
-        match crate::services::profile::ProfileService::apply(app_state.inner(), &profile_id, scope)
-        {
-            Ok((warnings, should_stop_proxy)) => {
-                for warning in &warnings {
-                    log::warn!("[Profile] 应用项目 {profile_id} 警告: {warning}");
-                }
-
-                if should_stop_proxy {
-                    let app_handle2 = app_handle.clone();
-                    let proxy_service = app_state.proxy_service.clone();
-                    tauri::async_runtime::spawn(async move {
-                        if let Err(e) = proxy_service.stop().await {
-                            log::warn!("托盘切换项目后停止代理服务失败: {e}");
-                        }
-                        if let Some(state) = app_handle2.try_state::<AppState>() {
-                            crate::commands::emit_profile_apply_events(
-                                &app_handle2,
-                                state.inner(),
-                                &profile_id,
-                                scope,
-                            );
-                        }
-                    });
-                } else {
-                    crate::commands::emit_profile_apply_events(
-                        &app_handle,
-                        app_state.inner(),
-                        &profile_id,
-                        scope,
-                    );
-                }
-            }
-            Err(e) => {
-                log::error!("应用项目 {profile_id} 失败: {e}");
-                refresh_tray_menu(&app_handle);
-            }
-        }
-    });
-    true
-}
-
 /// 处理供应商托盘事件
 pub fn handle_provider_tray_event(app: &tauri::AppHandle, event_id: &str) -> bool {
     for section in TRAY_SECTIONS.iter() {
@@ -977,9 +888,6 @@ pub fn handle_tray_menu_event(app: &tauri::AppHandle, event_id: &str) {
             app.exit(0);
         }
         _ => {
-            if handle_profile_tray_event(app, event_id) {
-                return;
-            }
             if handle_provider_tray_event(app, event_id) {
                 return;
             }

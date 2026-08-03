@@ -1162,7 +1162,7 @@
   },
   {
     "file": "src-tauri/src/database/backup.rs",
-    "lineNumber": 2175,
+    "lineNumber": 2167,
     "columnNumber": 38,
     "matchedText": "CC_SWITCH",
     "context": "redact_url_secrets, Database, LEGACY_CC_SWITCH_SQL_EXPORT_HEADER,",
@@ -1171,7 +1171,7 @@
   },
   {
     "file": "src-tauri/src/database/backup.rs",
-    "lineNumber": 3758,
+    "lineNumber": 3750,
     "columnNumber": 44,
     "matchedText": "CC_SWITCH",
     "context": "assert!(!sql.starts_with(&format!(\"{LEGACY_CC_SWITCH_SQL_EXPORT_HEADER}\\n\")));",
@@ -1180,7 +1180,7 @@
   },
   {
     "file": "src-tauri/src/database/backup.rs",
-    "lineNumber": 3964,
+    "lineNumber": 3956,
     "columnNumber": 31,
     "matchedText": "CC_SWITCH",
     "context": "let legacy = format!(\"{LEGACY_CC_SWITCH_SQL_EXPORT_HEADER}\\nBEGIN TRANSACTION;\");",
@@ -1189,7 +1189,7 @@
   },
   {
     "file": "src-tauri/src/database/backup.rs",
-    "lineNumber": 3966,
+    "lineNumber": 3958,
     "columnNumber": 18,
     "matchedText": "CC_SWITCH",
     "context": "format!(\"{LEGACY_CC_SWITCH_SQL_EXPORT_HEADER} with suffix\\nBEGIN TRANSACTION;\");",
@@ -1368,15 +1368,6 @@
     "reason": "exact persisted, transmitted, or upstream compatibility bytes"
   },
   {
-    "file": "src-tauri/src/deeplink/mcp.rs",
-    "lineNumber": 3,
-    "columnNumber": 59,
-    "matchedText": "ccswitch",
-    "context": "//! Handles batch import of MCP server configurations via ccswitch:// URLs.",
-    "kind": "externalWireStable",
-    "reason": "exact persisted, transmitted, or upstream compatibility bytes"
-  },
-  {
     "file": "src-tauri/src/deeplink/mod.rs",
     "lineNumber": 3,
     "columnNumber": 21,
@@ -1387,7 +1378,7 @@
   },
   {
     "file": "src-tauri/src/deeplink/mod.rs",
-    "lineNumber": 24,
+    "lineNumber": 21,
     "columnNumber": 44,
     "matchedText": "ccswitch",
     "context": "pub const LEGACY_DEEP_LINK_SCHEME: &str = \"ccswitch\";",
@@ -1396,7 +1387,7 @@
   },
   {
     "file": "src-tauri/src/deeplink/mod.rs",
-    "lineNumber": 40,
+    "lineNumber": 34,
     "columnNumber": 25,
     "matchedText": "ccswitch",
     "context": "/// Represents a parsed ccswitch:// URL ready for processing.",
@@ -1431,15 +1422,6 @@
     "reason": "exact persisted, transmitted, or upstream compatibility bytes"
   },
   {
-    "file": "src-tauri/src/deeplink/prompt.rs",
-    "lineNumber": 3,
-    "columnNumber": 49,
-    "matchedText": "ccswitch",
-    "context": "//! Handles importing prompt configurations via ccswitch:// URLs.",
-    "kind": "externalWireStable",
-    "reason": "exact persisted, transmitted, or upstream compatibility bytes"
-  },
-  {
     "file": "src-tauri/src/deeplink/provider.rs",
     "lineNumber": 3,
     "columnNumber": 51,
@@ -1449,17 +1431,8 @@
     "reason": "exact persisted, transmitted, or upstream compatibility bytes"
   },
   {
-    "file": "src-tauri/src/deeplink/skill.rs",
-    "lineNumber": 3,
-    "columnNumber": 59,
-    "matchedText": "ccswitch",
-    "context": "//! Handles importing skill repository configurations via ccswitch:// URLs.",
-    "kind": "externalWireStable",
-    "reason": "exact persisted, transmitted, or upstream compatibility bytes"
-  },
-  {
     "file": "src-tauri/src/deeplink/tests.rs",
-    "lineNumber": 64,
+    "lineNumber": 16,
     "columnNumber": 38,
     "matchedText": "ccswitch",
     "context": "assert_eq!(LEGACY_DEEP_LINK_SCHEME, \"ccswitch\");",
@@ -1468,7 +1441,7 @@
   },
   {
     "file": "src-tauri/src/deeplink/tests.rs",
-    "lineNumber": 73,
+    "lineNumber": 25,
     "columnNumber": 12,
     "matchedText": "ccswitch",
     "context": "let url = \"ccswitch://v1/import?resource=provider&app=claude&name=Test%20Provider&homepage=https%3A%2F%2Fexample.com&endpoint=https%3A%2F%2Fapi.example.com&apiKey=sk-test-123&icon=claude\";",
@@ -1477,7 +1450,7 @@
   },
   {
     "file": "src-tauri/src/deeplink/tests.rs",
-    "lineNumber": 92,
+    "lineNumber": 44,
     "columnNumber": 12,
     "matchedText": "ccswitch",
     "context": "let url = \"ccswitch://v1/import?resource=provider&app=codex&name=Codex&homepage=https%3A%2F%2Fcodex.com&endpoint=https%3A%2F%2Fapi.codex.com&apiKey=key123&notes=Test%20notes\";",
@@ -1486,7 +1459,7 @@
   },
   {
     "file": "src-tauri/src/deeplink/tests.rs",
-    "lineNumber": 110,
+    "lineNumber": 62,
     "columnNumber": 12,
     "matchedText": "ccswitch",
     "context": "let url = \"ccswitch://v2/import?resource=provider&app=claude&name=Test\";",
@@ -1495,7 +1468,7 @@
   },
   {
     "file": "src-tauri/src/deeplink/tests.rs",
-    "lineNumber": 123,
+    "lineNumber": 75,
     "columnNumber": 12,
     "matchedText": "ccswitch",
     "context": "let url = \"ccswitch://v1/import?resource=provider&app=claude\";",
@@ -1504,16 +1477,7 @@
   },
   {
     "file": "src-tauri/src/deeplink/tests.rs",
-    "lineNumber": 687,
-    "columnNumber": 12,
-    "matchedText": "ccswitch",
-    "context": "let url = \"ccswitch://v1/import?resource=prompt&app=codex&name=PromptPlus&content=Pj4+\";",
-    "kind": "externalWireStable",
-    "reason": "exact persisted, transmitted, or upstream compatibility bytes"
-  },
-  {
-    "file": "src-tauri/src/deeplink/tests.rs",
-    "lineNumber": 730,
+    "lineNumber": 645,
     "columnNumber": 2,
     "matchedText": "ccswitch",
     "context": "\"ccswitch://v1/import?resource=prompt&app=claude&name=test&content={}&description=desc&enabled=true\",",
@@ -1522,7 +1486,7 @@
   },
   {
     "file": "src-tauri/src/deeplink/tests.rs",
-    "lineNumber": 748,
+    "lineNumber": 663,
     "columnNumber": 2,
     "matchedText": "ccswitch",
     "context": "\"ccswitch://v1/import?resource=mcp&apps=claude,codex&config={}&enabled=true\",",
@@ -1531,7 +1495,7 @@
   },
   {
     "file": "src-tauri/src/deeplink/tests.rs",
-    "lineNumber": 761,
+    "lineNumber": 676,
     "columnNumber": 12,
     "matchedText": "ccswitch",
     "context": "let url = \"ccswitch://v1/import?resource=skill&repo=owner/repo&directory=skills&branch=dev\";",
@@ -1540,7 +1504,7 @@
   },
   {
     "file": "src-tauri/src/deeplink/tests.rs",
-    "lineNumber": 776,
+    "lineNumber": 691,
     "columnNumber": 12,
     "matchedText": "ccswitch",
     "context": "let url = \"ccswitch://v1/import?resource=provider&app=claude&name=Test&endpoint=https%3A%2F%2Fapi1.example.com,https%3A%2F%2Fapi2.example.com,https%3A%2F%2Fapi3.example.com&apiKey=sk-test\";",
@@ -1549,7 +1513,7 @@
   },
   {
     "file": "src-tauri/src/deeplink/tests.rs",
-    "lineNumber": 791,
+    "lineNumber": 706,
     "columnNumber": 12,
     "matchedText": "ccswitch",
     "context": "let url = \"ccswitch://v1/import?resource=provider&app=claude&name=Test&endpoint=https%3A%2F%2Fapi.example.com&apiKey=sk-test\";",
@@ -1558,7 +1522,7 @@
   },
   {
     "file": "src-tauri/src/deeplink/tests.rs",
-    "lineNumber": 803,
+    "lineNumber": 718,
     "columnNumber": 12,
     "matchedText": "ccswitch",
     "context": "let url = \"ccswitch://v1/import?resource=provider&app=claude&name=Test&endpoint=https%3A%2F%2Fapi1.example.com%20,%20https%3A%2F%2Fapi2.example.com&apiKey=sk-test\";",
@@ -1567,7 +1531,7 @@
   },
   {
     "file": "src-tauri/src/lib.rs",
-    "lineNumber": 1216,
+    "lineNumber": 1215,
     "columnNumber": 57,
     "matchedText": "ccswitch",
     "context": "// tauri-plugin-deep-link writes to: ~/.local/share/com.ccswitch.desktop/applications/cc-switch-handler.desktop",
@@ -1576,7 +1540,7 @@
   },
   {
     "file": "src-tauri/src/lib.rs",
-    "lineNumber": 1216,
+    "lineNumber": 1215,
     "columnNumber": 87,
     "matchedText": "cc-switch",
     "context": "// tauri-plugin-deep-link writes to: ~/.local/share/com.ccswitch.desktop/applications/cc-switch-handler.desktop",
@@ -1585,7 +1549,7 @@
   },
   {
     "file": "src-tauri/src/lib.rs",
-    "lineNumber": 1221,
+    "lineNumber": 1220,
     "columnNumber": 32,
     "matchedText": "cc-switch",
     "context": ".map(|d| !d.join(\"applications/cc-switch-handler.desktop\").exists())",
@@ -2260,21 +2224,12 @@
   },
   {
     "file": "src-tauri/src/services/codex_oauth_models.rs",
-    "lineNumber": 137,
+    "lineNumber": 145,
     "columnNumber": 44,
     "matchedText": "cc-switch",
     "context": "assert_eq!(LEGACY_CODEX_OAUTH_ORIGINATOR, \"cc-switch\");",
     "kind": "externalWireStable",
     "reason": "exact persisted, transmitted, or upstream compatibility bytes"
-  },
-  {
-    "file": "src-tauri/src/services/env_manager.rs",
-    "lineNumber": 240,
-    "columnNumber": 51,
-    "matchedText": "cc-switch",
-    "context": "assert!(!backup_dir.to_string_lossy().contains(\"/.cc-switch/\"));",
-    "kind": "legacyReadOnly",
-    "reason": "exact read-only legacy compatibility or coexistence reference"
   },
   {
     "file": "src-tauri/src/services/provider/live.rs",

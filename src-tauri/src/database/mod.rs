@@ -52,7 +52,6 @@ pub(crate) use dao::proxy::{
     PRICING_SOURCE_RESPONSE,
 };
 pub use dao::usage_sync_cursors::UsageSyncCursor;
-pub use dao::FailoverQueueItem;
 pub use dao::Profile;
 pub(crate) use identity_migration::{prepare_database_identity, DatabaseIdentityOutcome};
 
@@ -173,9 +172,6 @@ impl Database {
         db.ensure_model_pricing_seeded()?;
 
         // Startup cleanup: prune old logs and reclaim space
-        if let Err(e) = db.cleanup_old_stream_check_logs(7) {
-            log::warn!("Startup stream_check_logs cleanup failed: {e}");
-        }
         if let Err(e) = db.rollup_and_prune(30) {
             log::warn!("Startup rollup_and_prune failed: {e}");
         }

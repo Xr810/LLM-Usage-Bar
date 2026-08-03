@@ -6,7 +6,7 @@
 //! 此处定义 State wrapper 以及 Codex OAuth 专属的订阅额度和模型列表查询命令。
 
 use crate::credentials::codex_oauth_auth::CodexOAuthManager;
-use crate::services::model_fetch::FetchedModel;
+use crate::services::codex_oauth_models::FetchedModel;
 use crate::services::subscription::{query_managed_codex_oauth_quota, SubscriptionQuota};
 use std::sync::Arc;
 use tauri::State;

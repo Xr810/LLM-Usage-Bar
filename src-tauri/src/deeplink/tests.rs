@@ -1,59 +1,11 @@
 //! Deep link module tests
 
-use super::mcp::parse_mcp_apps;
 use super::parser::parse_deeplink_url;
-use super::prompt::import_prompt_from_deeplink;
 use super::provider::parse_and_merge_config;
 use super::utils::{infer_homepage_from_endpoint, validate_url};
 use super::{DeepLinkImportRequest, LEGACY_DEEP_LINK_SCHEME};
 use crate::AppType;
-use crate::{store::AppState, Database};
 use base64::prelude::*;
-use std::{env, ffi::OsString, sync::Arc};
-
-struct TestHomeGuard {
-    _dir: tempfile::TempDir,
-    original_home: Option<OsString>,
-    original_userprofile: Option<OsString>,
-    original_test_home: Option<OsString>,
-}
-
-impl TestHomeGuard {
-    fn new() -> Self {
-        let dir = tempfile::tempdir().expect("create isolated test home");
-        let original_home = env::var_os("HOME");
-        let original_userprofile = env::var_os("USERPROFILE");
-        let original_test_home = env::var_os("LLM_USAGE_BAR_TEST_HOME");
-
-        env::set_var("HOME", dir.path());
-        env::set_var("USERPROFILE", dir.path());
-        env::set_var("LLM_USAGE_BAR_TEST_HOME", dir.path());
-
-        Self {
-            _dir: dir,
-            original_home,
-            original_userprofile,
-            original_test_home,
-        }
-    }
-}
-
-impl Drop for TestHomeGuard {
-    fn drop(&mut self) {
-        match &self.original_test_home {
-            Some(value) => env::set_var("LLM_USAGE_BAR_TEST_HOME", value),
-            None => env::remove_var("LLM_USAGE_BAR_TEST_HOME"),
-        }
-        match &self.original_userprofile {
-            Some(value) => env::set_var("USERPROFILE", value),
-            None => env::remove_var("USERPROFILE"),
-        }
-        match &self.original_home {
-            Some(value) => env::set_var("HOME", value),
-            None => env::remove_var("HOME"),
-        }
-    }
-}
 
 // =============================================================================
 // Parser Tests
@@ -680,47 +632,10 @@ fn test_build_claude_provider_without_config_unchanged() {
 
 // Integration-style unit test: prompt import reaches PromptService and resolves
 // live config file paths, so HOME must be isolated before it runs.
-#[test]
-#[serial_test::serial]
-fn test_import_prompt_allows_space_in_base64_content() {
-    let _test_home = TestHomeGuard::new();
-    let url = "ccswitch://v1/import?resource=prompt&app=codex&name=PromptPlus&content=Pj4+";
-    let request = parse_deeplink_url(url).unwrap();
-
-    // URL decoded content may have "+" become space
-    assert_eq!(request.content.as_deref(), Some("Pj4 "));
-
-    let db = Arc::new(Database::memory().expect("create memory db"));
-    let state = AppState::new(db.clone());
-
-    let prompt_id = import_prompt_from_deeplink(&state, request.clone()).expect("import prompt");
-
-    let prompts = state.db.get_prompts("codex").expect("get prompts");
-    let prompt = prompts.get(&prompt_id).expect("prompt saved");
-
-    assert_eq!(prompt.content, ">>>");
-    assert_eq!(prompt.name, request.name.unwrap());
-}
 
 // =============================================================================
 // MCP Tests
 // =============================================================================
-
-#[test]
-fn test_parse_mcp_apps() {
-    let apps = parse_mcp_apps("claude,codex").unwrap();
-    assert!(apps.claude);
-    assert!(apps.codex);
-    assert!(!apps.gemini);
-
-    let apps = parse_mcp_apps("gemini").unwrap();
-    assert!(!apps.claude);
-    assert!(!apps.codex);
-    assert!(apps.gemini);
-
-    let err = parse_mcp_apps("invalid").unwrap_err();
-    assert!(err.to_string().contains("Invalid app"));
-}
 
 #[test]
 fn test_parse_prompt_deeplink() {

@@ -3,19 +3,8 @@ use crate::error::AppError;
 use crate::opencode_config::get_opencode_dir;
 use crate::provider::Provider;
 use crate::store::AppState;
-use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::path::{Path, PathBuf};
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct OmoLocalFileData {
-    pub agents: Option<Value>,
-    pub categories: Option<Value>,
-    pub other_fields: Option<Value>,
-    pub file_path: String,
-    pub last_modified: Option<String>,
-}
 
 type OmoProfileData = (Option<Value>, Option<Value>, Option<Value>);
 
@@ -296,52 +285,6 @@ impl OmoService {
         Ok(provider)
     }
 
-    pub fn read_local_file(v: &OmoVariant) -> Result<OmoLocalFileData, AppError> {
-        let actual_path = Self::resolve_local_config_path(v)?;
-        let metadata = std::fs::metadata(&actual_path).ok();
-        let last_modified = metadata
-            .and_then(|m| m.modified().ok())
-            .map(|t| chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339());
-
-        let obj = Self::read_jsonc_object(&actual_path)?;
-
-        Ok(Self::build_local_file_data(
-            v,
-            &obj,
-            actual_path.to_string_lossy().to_string(),
-            last_modified,
-        ))
-    }
-
-    fn build_local_file_data(
-        v: &OmoVariant,
-        obj: &Map<String, Value>,
-        file_path: String,
-        last_modified: Option<String>,
-    ) -> OmoLocalFileData {
-        let agents = obj.get("agents").cloned();
-        let categories = if v.has_categories {
-            obj.get("categories").cloned()
-        } else {
-            None
-        };
-
-        let other = Self::extract_other_fields_with_keys(obj, &["agents", "categories"]);
-        let other_fields = if other.is_empty() {
-            None
-        } else {
-            Some(Value::Object(other))
-        };
-
-        OmoLocalFileData {
-            agents,
-            categories,
-            other_fields,
-            file_path,
-            last_modified,
-        }
-    }
-
     fn strip_jsonc_comments(input: &str) -> String {
         let mut result = String::with_capacity(input.len());
         let mut chars = input.chars().peekable();
@@ -416,77 +359,6 @@ mod tests {
         let parsed: Value = serde_json::from_str(&result).unwrap();
         assert_eq!(parsed["key"], "value");
         assert_eq!(parsed["key2"], "val//ue");
-    }
-
-    #[test]
-    fn test_build_config_empty() {
-        let merged = OmoService::build_config(&STANDARD, None);
-        assert!(merged.is_object());
-        assert!(merged.as_object().unwrap().is_empty());
-    }
-
-    #[test]
-    fn test_build_config_with_profile() {
-        let agents = Some(serde_json::json!({
-            "sisyphus": { "model": "claude-opus-4-5" }
-        }));
-        let categories = None;
-        let other_fields = Some(serde_json::json!({
-            "$schema": "https://example.com/schema.json",
-            "disabled_agents": ["explore"]
-        }));
-        let profile_data = (agents, categories, other_fields);
-        let merged = OmoService::build_config(&STANDARD, Some(&profile_data));
-        let obj = merged.as_object().unwrap();
-
-        assert_eq!(obj["$schema"], "https://example.com/schema.json");
-        assert_eq!(obj["disabled_agents"], serde_json::json!(["explore"]));
-        assert!(obj.contains_key("agents"));
-        assert_eq!(obj["agents"]["sisyphus"]["model"], "claude-opus-4-5");
-    }
-
-    #[test]
-    fn test_build_local_file_data_keeps_all_non_agent_category_fields_in_other() {
-        let obj = serde_json::json!({
-            "$schema": "https://example.com/schema.json",
-            "disabled_agents": ["oracle"],
-            "agents": {
-                "sisyphus": { "model": "claude-opus-4-6" }
-            },
-            "categories": {
-                "code": { "model": "gpt-5.3" }
-            },
-            "custom_top_level": {
-                "enabled": true
-            }
-        });
-        let obj_map = obj.as_object().unwrap().clone();
-
-        let data = OmoService::build_local_file_data(
-            &STANDARD,
-            &obj_map,
-            "/tmp/oh-my-opencode.jsonc".to_string(),
-            None,
-        );
-
-        // All non-agents/categories fields should be in other_fields
-        let other = data.other_fields.unwrap();
-        let other_obj = other.as_object().unwrap();
-        assert_eq!(
-            other_obj.get("$schema").unwrap(),
-            "https://example.com/schema.json"
-        );
-        assert_eq!(
-            other_obj.get("disabled_agents").unwrap(),
-            &serde_json::json!(["oracle"])
-        );
-        assert_eq!(
-            other_obj.get("custom_top_level").unwrap(),
-            &serde_json::json!({"enabled": true})
-        );
-        // agents and categories should NOT be in other_fields
-        assert!(!other_obj.contains_key("agents"));
-        assert!(!other_obj.contains_key("categories"));
     }
 
     #[test]
