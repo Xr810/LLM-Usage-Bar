@@ -83,12 +83,8 @@ const removedTask4OwnedLines: readonly RemovedOwnedIdentityLine[] = [
     context: 'export type SkillStorageLocation = "cc_switch" | "unified";',
     reason: "prior writable frontend storage wire value",
   },
-  {
-    file: "src/lib/api/skills.ts",
-    lineNumber: 209,
-    context: 'target: "cc_switch" | "unified",',
-    reason: "prior writable Tauri command input",
-  },
+  // The src/lib/api/skills.ts entry was dropped with that module: it asserted
+  // the file no longer carries a legacy literal, and the file is now gone.
   {
     file: "src/lib/schemas/settings.ts",
     lineNumber: 38,
