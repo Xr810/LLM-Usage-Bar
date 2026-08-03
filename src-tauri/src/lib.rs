@@ -1764,12 +1764,6 @@ pub fn run() {
             // New MCP via config.json (SSOT)
             // Unified MCP management
             // Prompt management
-            commands::get_prompts,
-            commands::upsert_prompt,
-            commands::delete_prompt,
-            commands::enable_prompt,
-            commands::import_prompt_from_file,
-            commands::get_current_prompt_file_content,
             // Profile management (项目配置方案)
             // model list fetch (OpenAI-compatible /v1/models)
             // ours: endpoint speed test + custom endpoint management
@@ -1846,14 +1840,6 @@ pub fn run() {
             // Window theme control
             commands::set_window_theme,
             // Generic managed auth commands
-            commands::auth_start_login,
-            commands::auth_poll_for_account,
-            commands::auth_list_accounts,
-            commands::auth_get_status,
-            commands::auth_remove_account,
-            commands::auth_set_default_account,
-            commands::auth_logout,
-            // Copilot OAuth commands (multi-account support)
             commands::copilot_start_device_flow,
             commands::copilot_poll_for_auth,
             commands::copilot_poll_for_account,
@@ -1869,6 +1855,14 @@ pub fn run() {
             commands::copilot_get_models_for_account,
             commands::copilot_get_usage,
             commands::copilot_get_usage_for_account,
+            commands::auth_start_login,
+            commands::auth_poll_for_account,
+            commands::auth_list_accounts,
+            commands::auth_get_status,
+            commands::auth_remove_account,
+            commands::auth_set_default_account,
+            commands::auth_logout,
+            // Copilot OAuth commands (multi-account support)
             // OMO commands
             // Workspace files (OpenClaw)
             // Daily memory files (OpenClaw workspace)

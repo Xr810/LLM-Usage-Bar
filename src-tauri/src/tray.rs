@@ -4,7 +4,7 @@
 
 use once_cell::sync::Lazy;
 use tauri::menu::{CheckMenuItem, Menu, MenuBuilder, MenuItem, Submenu, SubmenuBuilder};
-use tauri::{Emitter, Manager};
+use tauri::Manager;
 use tauri_plugin_opener::OpenerExt;
 
 use crate::app_config::AppType;
@@ -114,8 +114,6 @@ pub struct TrayAppSection {
     pub log_name: &'static str,
 }
 
-/// Auto 菜单项后缀
-pub const AUTO_SUFFIX: &str = "auto";
 pub const TRAY_ID: &str = "llm-usage-bar";
 
 pub const TRAY_SECTIONS: [TrayAppSection; 3] = [
@@ -334,172 +332,6 @@ fn sort_providers(
         a.name.cmp(&b.name)
     });
     sorted
-}
-
-/// 处理供应商托盘事件
-pub fn handle_provider_tray_event(app: &tauri::AppHandle, event_id: &str) -> bool {
-    for section in TRAY_SECTIONS.iter() {
-        if let Some(suffix) = event_id.strip_prefix(section.prefix) {
-            // 处理 Auto 点击
-            if suffix == AUTO_SUFFIX {
-                log::info!("切换到{} Auto模式", section.log_name);
-                let app_handle = app.clone();
-                let app_type = section.app_type.clone();
-                tauri::async_runtime::spawn_blocking(move || {
-                    if let Err(e) = handle_auto_click(&app_handle, &app_type) {
-                        log::error!("切换{}Auto模式失败: {e}", section.log_name);
-                    }
-                });
-                return true;
-            }
-
-            // 处理供应商点击
-            log::info!("切换到{}供应商: {suffix}", section.log_name);
-            let app_handle = app.clone();
-            let provider_id = suffix.to_string();
-            let app_type = section.app_type.clone();
-            tauri::async_runtime::spawn_blocking(move || {
-                if let Err(e) = handle_provider_click(&app_handle, &app_type, &provider_id) {
-                    log::error!("切换{}供应商失败: {e}", section.log_name);
-                }
-            });
-            return true;
-        }
-    }
-    false
-}
-
-/// 处理 Auto 点击：启用 proxy 和 auto_failover
-fn handle_auto_click(app: &tauri::AppHandle, app_type: &AppType) -> Result<(), AppError> {
-    if let Some(app_state) = app.try_state::<AppState>() {
-        let app_type_str = app_type.as_str();
-
-        // 强一致语义：Auto 模式开启后立即切到队列 P1（P1→P2→...）
-        // 若队列为空，则尝试把“当前供应商”自动加入队列作为 P1，避免用户陷入无法开启的死锁。
-        let mut queue = app_state.db.get_failover_queue(app_type_str)?;
-        if queue.is_empty() {
-            let current_id =
-                crate::settings::get_effective_current_provider(&app_state.db, app_type)?;
-            let Some(current_id) = current_id else {
-                return Err(AppError::Message(
-                    "故障转移队列为空，且未设置当前供应商，无法启用 Auto 模式".to_string(),
-                ));
-            };
-            app_state
-                .db
-                .add_to_failover_queue(app_type_str, &current_id)?;
-            queue = app_state.db.get_failover_queue(app_type_str)?;
-        }
-
-        let p1_provider_id = queue
-            .first()
-            .map(|item| item.provider_id.clone())
-            .ok_or_else(|| AppError::Message("故障转移队列为空，无法启用 Auto 模式".to_string()))?;
-
-        // 真正启用 failover：启动代理服务 + 执行接管 + 开启 auto_failover
-        let proxy_service = &app_state.proxy_service;
-
-        // 1) 确保代理服务运行（会自动设置 proxy_enabled = true）
-        let is_running = futures::executor::block_on(proxy_service.is_running());
-        if !is_running {
-            log::info!("[Tray] Auto 模式：启动代理服务");
-            if let Err(e) = futures::executor::block_on(proxy_service.start()) {
-                log::error!("[Tray] 启动代理服务失败: {e}");
-                return Err(AppError::Message(format!("启动代理服务失败: {e}")));
-            }
-        }
-
-        // 2) 执行 Live 配置接管（确保该 app 被代理接管）
-        log::info!("[Tray] Auto 模式：对 {app_type_str} 执行接管");
-        if let Err(e) =
-            futures::executor::block_on(proxy_service.set_takeover_for_app(app_type_str, true))
-        {
-            log::error!("[Tray] 执行接管失败: {e}");
-            return Err(AppError::Message(format!("执行接管失败: {e}")));
-        }
-
-        // 3) 设置 auto_failover_enabled = true
-        app_state
-            .db
-            .set_proxy_flags_sync(app_type_str, true, true)?;
-
-        // 3.1) 立即切到队列 P1（热切换：不写 Live，仅更新 DB/settings/备份）
-        if let Err(e) = futures::executor::block_on(
-            proxy_service.switch_proxy_target(app_type_str, &p1_provider_id),
-        ) {
-            log::error!("[Tray] Auto 模式切换到队列 P1 失败: {e}");
-            return Err(AppError::Message(format!(
-                "Auto 模式切换到队列 P1 失败: {e}"
-            )));
-        }
-
-        // 4) 更新托盘菜单
-        if let Ok(new_menu) = create_tray_menu(app, app_state.inner()) {
-            if let Some(tray) = app.tray_by_id(TRAY_ID) {
-                let _ = tray.set_menu(Some(new_menu));
-            }
-        }
-
-        // 5) 发射事件到前端
-        let event_data = serde_json::json!({
-            "appType": app_type_str,
-            "proxyEnabled": true,
-            "autoFailoverEnabled": true,
-            "providerId": p1_provider_id
-        });
-        if let Err(e) = app.emit("proxy-flags-changed", event_data.clone()) {
-            log::error!("发射 proxy-flags-changed 事件失败: {e}");
-        }
-        // 发射 provider-switched 事件（保持向后兼容，Auto 切换也算一种切换）
-        if let Err(e) = app.emit("provider-switched", event_data) {
-            log::error!("发射 provider-switched 事件失败: {e}");
-        }
-    }
-    Ok(())
-}
-
-/// 处理供应商点击：关闭 auto_failover + 切换供应商
-fn handle_provider_click(
-    app: &tauri::AppHandle,
-    app_type: &AppType,
-    provider_id: &str,
-) -> Result<(), AppError> {
-    if let Some(app_state) = app.try_state::<AppState>() {
-        let app_type_str = app_type.as_str();
-
-        // 获取当前 proxy 状态，保持 enabled 不变，只关闭 auto_failover
-        let (proxy_enabled, _) = app_state.db.get_proxy_flags_sync(app_type_str);
-        app_state
-            .db
-            .set_proxy_flags_sync(app_type_str, proxy_enabled, false)?;
-
-        // 切换供应商。需要本地路由的供应商也不在这里自动启动代理，
-        // 由用户在页面/设置中手动开启。
-        crate::services::ProviderService::switch(app_state.inner(), app_type.clone(), provider_id)?;
-
-        // 更新托盘菜单
-        if let Ok(new_menu) = create_tray_menu(app, app_state.inner()) {
-            if let Some(tray) = app.tray_by_id(TRAY_ID) {
-                let _ = tray.set_menu(Some(new_menu));
-            }
-        }
-
-        // 发射事件到前端
-        let event_data = serde_json::json!({
-            "appType": app_type_str,
-            "proxyEnabled": proxy_enabled,
-            "autoFailoverEnabled": false,
-            "providerId": provider_id
-        });
-        if let Err(e) = app.emit("proxy-flags-changed", event_data.clone()) {
-            log::error!("发射 proxy-flags-changed 事件失败: {e}");
-        }
-        // 发射 provider-switched 事件（保持向后兼容）
-        if let Err(e) = app.emit("provider-switched", event_data) {
-            log::error!("发射 provider-switched 事件失败: {e}");
-        }
-    }
-    Ok(())
 }
 
 /// 创建动态托盘菜单
@@ -888,9 +720,6 @@ pub fn handle_tray_menu_event(app: &tauri::AppHandle, event_id: &str) {
             app.exit(0);
         }
         _ => {
-            if handle_provider_tray_event(app, event_id) {
-                return;
-            }
             log::warn!("未处理的菜单事件: {event_id}");
         }
     }
