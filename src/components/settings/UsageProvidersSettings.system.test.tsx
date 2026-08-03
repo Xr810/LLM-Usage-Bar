@@ -124,6 +124,10 @@ vi.mock("./ProviderModelPricingSection", () => ({
   ),
 }));
 
+vi.mock("./OfficialPricingRefreshSection", () => ({
+  OfficialPricingRefreshSection: () => <div>Official prices section</div>,
+}));
+
 vi.mock("@/components/usage-dashboard/UsageProviderDialog", () => ({
   UsageProviderDialog: () => null,
 }));

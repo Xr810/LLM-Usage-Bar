@@ -3,6 +3,9 @@ use crate::database::Database;
 #[cfg(test)]
 use crate::services::claude_cli_auth::ClaudeAuthCommandRunner;
 use crate::services::{
+    official_pricing::{
+        start_scheduler as start_official_pricing_scheduler, OfficialPricingSchedulerHandle,
+    },
     tray_usage::TrayUsageService,
     tray_usage_scheduler::{
         start_local_midnight_scheduler, TraySnapshotPublisher, TrayUsageSchedulerHandle,
@@ -27,6 +30,7 @@ pub struct AppState {
     pub tray_usage_service: Arc<TrayUsageService>,
     quota_scheduler: Mutex<Option<QuotaSchedulerHandle>>,
     midnight_scheduler: Mutex<Option<TrayUsageSchedulerHandle>>,
+    official_pricing_scheduler: Mutex<Option<OfficialPricingSchedulerHandle>>,
 }
 
 impl AppState {
@@ -110,6 +114,7 @@ impl AppState {
             tray_usage_service,
             quota_scheduler: Mutex::new(None),
             midnight_scheduler: Mutex::new(None),
+            official_pricing_scheduler: Mutex::new(None),
         }
     }
 
@@ -167,6 +172,28 @@ impl AppState {
             Ok(mut scheduler) => scheduler.take(),
             Err(_) => {
                 log::error!("tray usage midnight scheduler lock is poisoned");
+                None
+            }
+        }
+    }
+
+    pub fn start_official_pricing_scheduler(&self) -> bool {
+        let Ok(mut scheduler) = self.official_pricing_scheduler.lock() else {
+            log::error!("official pricing scheduler lock is poisoned");
+            return false;
+        };
+        if scheduler.is_some() {
+            return false;
+        }
+        *scheduler = Some(start_official_pricing_scheduler(self.db.clone()));
+        true
+    }
+
+    pub(crate) fn take_official_pricing_scheduler(&self) -> Option<OfficialPricingSchedulerHandle> {
+        match self.official_pricing_scheduler.lock() {
+            Ok(mut scheduler) => scheduler.take(),
+            Err(_) => {
+                log::error!("official pricing scheduler lock is poisoned");
                 None
             }
         }

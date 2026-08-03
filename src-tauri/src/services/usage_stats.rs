@@ -2161,7 +2161,7 @@ fn model_pricing_candidates(model_id: &str) -> Vec<String> {
     candidates
 }
 
-fn clean_model_id_for_pricing(model_id: &str) -> String {
+pub(crate) fn clean_model_id_for_pricing(model_id: &str) -> String {
     let normalized = model_id
         .rsplit_once('/')
         .map_or(model_id, |(_, r)| r)

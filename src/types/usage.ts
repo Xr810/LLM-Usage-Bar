@@ -65,6 +65,13 @@ export interface ModelPricing {
   cacheCreationCostPerMillion: string;
 }
 
+export interface OfficialPricingRefreshOutcome {
+  fetchedAt: number;
+  modelsImported: number;
+  modelsSkipped: number;
+  sourceUrl: string;
+}
+
 export interface UsageSummary {
   totalRequests: number;
   totalCost: string;

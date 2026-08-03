@@ -1482,6 +1482,13 @@ pub fn run() {
                 log::warn!("quota scheduler was already started");
             }
 
+            if !app
+                .state::<AppState>()
+                .start_official_pricing_scheduler()
+            {
+                log::warn!("official pricing scheduler was already started");
+            }
+
             let tray_publisher_app = app.handle().clone();
             let tray_publisher: services::tray_usage_scheduler::TraySnapshotPublisher =
                 Arc::new(move |snapshot| {
@@ -1954,6 +1961,9 @@ pub fn run() {
             commands::get_request_logs,
             commands::get_request_detail,
             commands::get_model_pricing,
+            commands::refresh_official_pricing,
+            commands::get_official_pricing_last_refresh_at,
+            commands::get_official_pricing_last_imported_count,
             commands::update_model_pricing,
             commands::delete_model_pricing,
             commands::get_provider_model_pricing,
@@ -2237,15 +2247,26 @@ pub async fn cleanup_before_exit(app_handle: &tauri::AppHandle) {
         (
             state.take_quota_scheduler(),
             state.take_midnight_scheduler(),
+            state.take_official_pricing_scheduler(),
             state.db.clone(),
             state.proxy_service.clone(),
         )
     });
-    if let Some((quota_scheduler, midnight_scheduler, db, proxy_service)) = cleanup_resources {
+    if let Some((
+        quota_scheduler,
+        midnight_scheduler,
+        official_pricing_scheduler,
+        db,
+        proxy_service,
+    )) = cleanup_resources
+    {
         if let Some(scheduler) = quota_scheduler {
             scheduler.stop().await;
         }
         if let Some(scheduler) = midnight_scheduler {
+            scheduler.stop().await;
+        }
+        if let Some(scheduler) = official_pricing_scheduler {
             scheduler.stop().await;
         }
 

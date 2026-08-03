@@ -144,6 +144,10 @@ export const usageKeys = {
   detail: (requestId: string) =>
     [...usageKeys.all, "detail", requestId] as const,
   pricing: () => [...usageKeys.all, "pricing"] as const,
+  officialPricingFreshness: () =>
+    [...usageKeys.all, "officialPricingFreshness"] as const,
+  officialPricingImportedCount: () =>
+    [...usageKeys.all, "officialPricingImportedCount"] as const,
   providerPricing: (providerId: string) =>
     [...usageKeys.all, "providerPricing", providerId] as const,
   limits: (providerId: string, appType: string) =>
@@ -346,6 +350,39 @@ export function useModelPricing() {
   return useQuery({
     queryKey: usageKeys.pricing(),
     queryFn: usageApi.getModelPricing,
+  });
+}
+
+export function useOfficialPricingLastRefreshAt() {
+  return useQuery({
+    queryKey: usageKeys.officialPricingFreshness(),
+    queryFn: usageApi.getOfficialPricingLastRefreshAt,
+  });
+}
+
+export function useOfficialPricingLastImportedCount() {
+  return useQuery({
+    queryKey: usageKeys.officialPricingImportedCount(),
+    queryFn: usageApi.getOfficialPricingLastImportedCount,
+  });
+}
+
+export function useRefreshOfficialPricing() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: usageApi.refreshOfficialPricing,
+    onSuccess: (outcome) => {
+      queryClient.setQueryData(
+        usageKeys.officialPricingFreshness(),
+        outcome.fetchedAt,
+      );
+      queryClient.setQueryData(
+        usageKeys.officialPricingImportedCount(),
+        outcome.modelsImported,
+      );
+      queryClient.invalidateQueries({ queryKey: usageKeys.pricing() });
+    },
   });
 }
 

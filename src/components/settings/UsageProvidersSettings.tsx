@@ -23,6 +23,7 @@ import type { UsageProviderView } from "@/types/usageDashboard";
 import { ProviderDailyBudgetField } from "./ProviderDailyBudgetField";
 import { ProviderModelPricingSection } from "./ProviderModelPricingSection";
 import { ApiBudgetSettings } from "./ApiBudgetSettings";
+import { OfficialPricingRefreshSection } from "./OfficialPricingRefreshSection";
 import { ProviderIcon } from "@/components/ProviderIcon";
 import { dashboardProviderIcon } from "@/components/usage-dashboard/usagePresentation";
 import { useApiBudgetConfig } from "@/lib/query/trayUsage";
@@ -209,11 +210,12 @@ export function UsageProvidersSettings({
             })}
           </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-4">
           <ApiBudgetSettings
             config={budgetConfig}
             isLoading={budgetConfigQuery.isLoading}
           />
+          <OfficialPricingRefreshSection />
         </CardContent>
       </Card>
 

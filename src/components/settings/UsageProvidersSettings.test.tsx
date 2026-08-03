@@ -131,6 +131,10 @@ vi.mock("./ProviderModelPricingSection", () => ({
   ProviderModelPricingSection: () => <div>Model prices section</div>,
 }));
 
+vi.mock("./OfficialPricingRefreshSection", () => ({
+  OfficialPricingRefreshSection: () => <div>Official prices section</div>,
+}));
+
 describe("UsageProvidersSettings", () => {
   beforeEach(() => {
     mocks.saveProvider.mockReset().mockResolvedValue(undefined);

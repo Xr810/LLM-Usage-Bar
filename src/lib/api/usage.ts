@@ -12,6 +12,7 @@ import type {
   PaginatedLogs,
   SessionSyncResult,
   DataSourceSummary,
+  OfficialPricingRefreshOutcome,
 } from "@/types/usage";
 import type {
   ModelPriceInput,
@@ -148,6 +149,18 @@ export const usageApi = {
 
   getModelPricing: async (): Promise<ModelPricing[]> => {
     return invoke("get_model_pricing");
+  },
+
+  refreshOfficialPricing: async (): Promise<OfficialPricingRefreshOutcome> => {
+    return invoke("refresh_official_pricing");
+  },
+
+  getOfficialPricingLastRefreshAt: async (): Promise<number | null> => {
+    return invoke("get_official_pricing_last_refresh_at");
+  },
+
+  getOfficialPricingLastImportedCount: async (): Promise<number | null> => {
+    return invoke("get_official_pricing_last_imported_count");
   },
 
   updateModelPricing: async (
