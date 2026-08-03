@@ -1567,7 +1567,7 @@
   },
   {
     "file": "src-tauri/src/lib.rs",
-    "lineNumber": 1215,
+    "lineNumber": 1216,
     "columnNumber": 57,
     "matchedText": "ccswitch",
     "context": "// tauri-plugin-deep-link writes to: ~/.local/share/com.ccswitch.desktop/applications/cc-switch-handler.desktop",
@@ -1576,7 +1576,7 @@
   },
   {
     "file": "src-tauri/src/lib.rs",
-    "lineNumber": 1215,
+    "lineNumber": 1216,
     "columnNumber": 87,
     "matchedText": "cc-switch",
     "context": "// tauri-plugin-deep-link writes to: ~/.local/share/com.ccswitch.desktop/applications/cc-switch-handler.desktop",
@@ -1585,7 +1585,7 @@
   },
   {
     "file": "src-tauri/src/lib.rs",
-    "lineNumber": 1220,
+    "lineNumber": 1221,
     "columnNumber": 32,
     "matchedText": "cc-switch",
     "context": ".map(|d| !d.join(\"applications/cc-switch-handler.desktop\").exists())",
@@ -1783,7 +1783,7 @@
   },
   {
     "file": "src-tauri/src/proxy/handlers.rs",
-    "lineNumber": 1729,
+    "lineNumber": 1727,
     "columnNumber": 34,
     "matchedText": "cc_switch",
     "context": "ProxyError::ForwardFailed(_) => \"cc_switch_forward_failed\",",
@@ -1792,7 +1792,7 @@
   },
   {
     "file": "src-tauri/src/proxy/handlers.rs",
-    "lineNumber": 1730,
+    "lineNumber": 1728,
     "columnNumber": 63,
     "matchedText": "cc_switch",
     "context": "ProxyError::Timeout(_) | ProxyError::StreamIdleTimeout(_) => \"cc_switch_timeout\",",
@@ -1801,7 +1801,7 @@
   },
   {
     "file": "src-tauri/src/proxy/handlers.rs",
-    "lineNumber": 1731,
+    "lineNumber": 1729,
     "columnNumber": 37,
     "matchedText": "cc_switch",
     "context": "ProxyError::NoAvailableProvider => \"cc_switch_no_available_provider\",",
@@ -1810,7 +1810,7 @@
   },
   {
     "file": "src-tauri/src/proxy/handlers.rs",
-    "lineNumber": 1732,
+    "lineNumber": 1730,
     "columnNumber": 41,
     "matchedText": "cc_switch",
     "context": "ProxyError::AllProvidersCircuitOpen => \"cc_switch_all_providers_circuit_open\",",
@@ -1819,7 +1819,7 @@
   },
   {
     "file": "src-tauri/src/proxy/handlers.rs",
-    "lineNumber": 1733,
+    "lineNumber": 1731,
     "columnNumber": 39,
     "matchedText": "cc_switch",
     "context": "ProxyError::NoProvidersConfigured => \"cc_switch_no_providers_configured\",",
@@ -1828,7 +1828,7 @@
   },
   {
     "file": "src-tauri/src/proxy/handlers.rs",
-    "lineNumber": 1734,
+    "lineNumber": 1732,
     "columnNumber": 36,
     "matchedText": "cc_switch",
     "context": "ProxyError::MaxRetriesExceeded => \"cc_switch_max_retries_exceeded\",",
@@ -1837,7 +1837,7 @@
   },
   {
     "file": "src-tauri/src/proxy/handlers.rs",
-    "lineNumber": 1735,
+    "lineNumber": 1733,
     "columnNumber": 38,
     "matchedText": "cc_switch",
     "context": "ProxyError::ProviderUnhealthy(_) => \"cc_switch_provider_unhealthy\",",
@@ -1846,7 +1846,7 @@
   },
   {
     "file": "src-tauri/src/proxy/handlers.rs",
-    "lineNumber": 1736,
+    "lineNumber": 1734,
     "columnNumber": 34,
     "matchedText": "cc_switch",
     "context": "ProxyError::RouteNotBound(_) => \"cc_switch_route_not_bound\",",
@@ -1855,7 +1855,7 @@
   },
   {
     "file": "src-tauri/src/proxy/handlers.rs",
-    "lineNumber": 1737,
+    "lineNumber": 1735,
     "columnNumber": 42,
     "matchedText": "cc_switch",
     "context": "ProxyError::RouteProviderDisabled(_) => \"cc_switch_route_provider_disabled\",",
@@ -1864,7 +1864,7 @@
   },
   {
     "file": "src-tauri/src/proxy/handlers.rs",
-    "lineNumber": 1738,
+    "lineNumber": 1736,
     "columnNumber": 44,
     "matchedText": "cc_switch",
     "context": "ProxyError::RouteProviderNotMetered(_) => \"cc_switch_route_provider_not_metered\",",
@@ -1873,7 +1873,7 @@
   },
   {
     "file": "src-tauri/src/proxy/handlers.rs",
-    "lineNumber": 1739,
+    "lineNumber": 1737,
     "columnNumber": 42,
     "matchedText": "cc_switch",
     "context": "ProxyError::RouteConfigIncomplete(_) => \"cc_switch_route_config_incomplete\",",
@@ -1882,7 +1882,7 @@
   },
   {
     "file": "src-tauri/src/proxy/handlers.rs",
-    "lineNumber": 1740,
+    "lineNumber": 1738,
     "columnNumber": 32,
     "matchedText": "cc_switch",
     "context": "ProxyError::ConfigError(_) => \"cc_switch_config_error\",",
@@ -1891,7 +1891,7 @@
   },
   {
     "file": "src-tauri/src/proxy/handlers.rs",
-    "lineNumber": 1741,
+    "lineNumber": 1739,
     "columnNumber": 35,
     "matchedText": "cc_switch",
     "context": "ProxyError::TransformError(_) => \"cc_switch_transform_error\",",
@@ -1900,7 +1900,7 @@
   },
   {
     "file": "src-tauri/src/proxy/handlers.rs",
-    "lineNumber": 1742,
+    "lineNumber": 1740,
     "columnNumber": 35,
     "matchedText": "cc_switch",
     "context": "ProxyError::InvalidRequest(_) => \"cc_switch_invalid_request\",",
@@ -1909,7 +1909,7 @@
   },
   {
     "file": "src-tauri/src/proxy/handlers.rs",
-    "lineNumber": 1743,
+    "lineNumber": 1741,
     "columnNumber": 30,
     "matchedText": "cc_switch",
     "context": "ProxyError::AuthError(_) => \"cc_switch_auth_error\",",
@@ -1918,7 +1918,7 @@
   },
   {
     "file": "src-tauri/src/proxy/handlers.rs",
-    "lineNumber": 1745,
+    "lineNumber": 1743,
     "columnNumber": 38,
     "matchedText": "cc_switch",
     "context": "ProxyError::UpstreamError { .. } => \"cc_switch_upstream_error\",",
@@ -1927,7 +1927,7 @@
   },
   {
     "file": "src-tauri/src/proxy/handlers.rs",
-    "lineNumber": 1746,
+    "lineNumber": 1744,
     "columnNumber": 42,
     "matchedText": "cc_switch",
     "context": "ProxyError::UpstreamResponseRejected => \"cc_switch_upstream_response_rejected\",",
@@ -1936,7 +1936,7 @@
   },
   {
     "file": "src-tauri/src/proxy/handlers.rs",
-    "lineNumber": 1747,
+    "lineNumber": 1745,
     "columnNumber": 34,
     "matchedText": "cc_switch",
     "context": "ProxyError::DatabaseError(_) => \"cc_switch_database_error\",",
@@ -1945,7 +1945,7 @@
   },
   {
     "file": "src-tauri/src/proxy/handlers.rs",
-    "lineNumber": 1748,
+    "lineNumber": 1746,
     "columnNumber": 29,
     "matchedText": "cc_switch",
     "context": "ProxyError::Internal(_) => \"cc_switch_internal_error\",",
@@ -1954,7 +1954,7 @@
   },
   {
     "file": "src-tauri/src/proxy/handlers.rs",
-    "lineNumber": 1753,
+    "lineNumber": 1751,
     "columnNumber": 33,
     "matchedText": "cc_switch",
     "context": "| ProxyError::StopFailed(_) => \"cc_switch_proxy_error\",",
@@ -1963,7 +1963,7 @@
   },
   {
     "file": "src-tauri/src/proxy/handlers.rs",
-    "lineNumber": 3140,
+    "lineNumber": 3138,
     "columnNumber": 36,
     "matchedText": "cc_switch",
     "context": "assert_eq!(body[\"error\"][\"code\"], \"cc_switch_forward_failed\");",
@@ -1972,7 +1972,7 @@
   },
   {
     "file": "src-tauri/src/proxy/handlers.rs",
-    "lineNumber": 3150,
+    "lineNumber": 3148,
     "columnNumber": 2,
     "matchedText": "cc_switch",
     "context": "\"cc_switch_forward_failed\",",
@@ -1981,7 +1981,7 @@
   },
   {
     "file": "src-tauri/src/proxy/handlers.rs",
-    "lineNumber": 3152,
+    "lineNumber": 3150,
     "columnNumber": 41,
     "matchedText": "cc_switch",
     "context": "(ProxyError::Timeout(\"x\".to_string()), \"cc_switch_timeout\"),",
@@ -1990,7 +1990,7 @@
   },
   {
     "file": "src-tauri/src/proxy/handlers.rs",
-    "lineNumber": 3153,
+    "lineNumber": 3151,
     "columnNumber": 37,
     "matchedText": "cc_switch",
     "context": "(ProxyError::StreamIdleTimeout(1), \"cc_switch_timeout\"),",
@@ -1999,7 +1999,7 @@
   },
   {
     "file": "src-tauri/src/proxy/handlers.rs",
-    "lineNumber": 3156,
+    "lineNumber": 3154,
     "columnNumber": 2,
     "matchedText": "cc_switch",
     "context": "\"cc_switch_no_available_provider\",",
@@ -2008,7 +2008,7 @@
   },
   {
     "file": "src-tauri/src/proxy/handlers.rs",
-    "lineNumber": 3160,
+    "lineNumber": 3158,
     "columnNumber": 2,
     "matchedText": "cc_switch",
     "context": "\"cc_switch_all_providers_circuit_open\",",
@@ -2017,7 +2017,7 @@
   },
   {
     "file": "src-tauri/src/proxy/handlers.rs",
-    "lineNumber": 3164,
+    "lineNumber": 3162,
     "columnNumber": 2,
     "matchedText": "cc_switch",
     "context": "\"cc_switch_no_providers_configured\",",
@@ -2026,7 +2026,7 @@
   },
   {
     "file": "src-tauri/src/proxy/handlers.rs",
-    "lineNumber": 3168,
+    "lineNumber": 3166,
     "columnNumber": 2,
     "matchedText": "cc_switch",
     "context": "\"cc_switch_max_retries_exceeded\",",
@@ -2035,7 +2035,7 @@
   },
   {
     "file": "src-tauri/src/proxy/handlers.rs",
-    "lineNumber": 3172,
+    "lineNumber": 3170,
     "columnNumber": 2,
     "matchedText": "cc_switch",
     "context": "\"cc_switch_provider_unhealthy\",",
@@ -2044,7 +2044,7 @@
   },
   {
     "file": "src-tauri/src/proxy/handlers.rs",
-    "lineNumber": 3176,
+    "lineNumber": 3174,
     "columnNumber": 2,
     "matchedText": "cc_switch",
     "context": "\"cc_switch_route_not_bound\",",
@@ -2053,7 +2053,7 @@
   },
   {
     "file": "src-tauri/src/proxy/handlers.rs",
-    "lineNumber": 3180,
+    "lineNumber": 3178,
     "columnNumber": 2,
     "matchedText": "cc_switch",
     "context": "\"cc_switch_route_provider_disabled\",",
@@ -2062,7 +2062,7 @@
   },
   {
     "file": "src-tauri/src/proxy/handlers.rs",
-    "lineNumber": 3184,
+    "lineNumber": 3182,
     "columnNumber": 2,
     "matchedText": "cc_switch",
     "context": "\"cc_switch_route_provider_not_metered\",",
@@ -2071,7 +2071,7 @@
   },
   {
     "file": "src-tauri/src/proxy/handlers.rs",
-    "lineNumber": 3188,
+    "lineNumber": 3186,
     "columnNumber": 2,
     "matchedText": "cc_switch",
     "context": "\"cc_switch_route_config_incomplete\",",
@@ -2080,7 +2080,7 @@
   },
   {
     "file": "src-tauri/src/proxy/handlers.rs",
-    "lineNumber": 3192,
+    "lineNumber": 3190,
     "columnNumber": 2,
     "matchedText": "cc_switch",
     "context": "\"cc_switch_config_error\",",
@@ -2089,7 +2089,7 @@
   },
   {
     "file": "src-tauri/src/proxy/handlers.rs",
-    "lineNumber": 3196,
+    "lineNumber": 3194,
     "columnNumber": 2,
     "matchedText": "cc_switch",
     "context": "\"cc_switch_transform_error\",",
@@ -2098,7 +2098,7 @@
   },
   {
     "file": "src-tauri/src/proxy/handlers.rs",
-    "lineNumber": 3200,
+    "lineNumber": 3198,
     "columnNumber": 2,
     "matchedText": "cc_switch",
     "context": "\"cc_switch_invalid_request\",",
@@ -2107,7 +2107,7 @@
   },
   {
     "file": "src-tauri/src/proxy/handlers.rs",
-    "lineNumber": 3204,
+    "lineNumber": 3202,
     "columnNumber": 2,
     "matchedText": "cc_switch",
     "context": "\"cc_switch_auth_error\",",
@@ -2116,7 +2116,7 @@
   },
   {
     "file": "src-tauri/src/proxy/handlers.rs",
-    "lineNumber": 3211,
+    "lineNumber": 3209,
     "columnNumber": 2,
     "matchedText": "cc_switch",
     "context": "\"cc_switch_upstream_error\",",
@@ -2125,7 +2125,7 @@
   },
   {
     "file": "src-tauri/src/proxy/handlers.rs",
-    "lineNumber": 3215,
+    "lineNumber": 3213,
     "columnNumber": 2,
     "matchedText": "cc_switch",
     "context": "\"cc_switch_database_error\",",
@@ -2134,7 +2134,7 @@
   },
   {
     "file": "src-tauri/src/proxy/handlers.rs",
-    "lineNumber": 3219,
+    "lineNumber": 3217,
     "columnNumber": 2,
     "matchedText": "cc_switch",
     "context": "\"cc_switch_internal_error\",",
@@ -2143,7 +2143,7 @@
   },
   {
     "file": "src-tauri/src/proxy/handlers.rs",
-    "lineNumber": 3221,
+    "lineNumber": 3219,
     "columnNumber": 31,
     "matchedText": "cc_switch",
     "context": "(ProxyError::AlreadyRunning, \"cc_switch_proxy_error\"),",
@@ -2152,7 +2152,7 @@
   },
   {
     "file": "src-tauri/src/proxy/handlers.rs",
-    "lineNumber": 3222,
+    "lineNumber": 3220,
     "columnNumber": 27,
     "matchedText": "cc_switch",
     "context": "(ProxyError::NotRunning, \"cc_switch_proxy_error\"),",
@@ -2161,7 +2161,7 @@
   },
   {
     "file": "src-tauri/src/proxy/handlers.rs",
-    "lineNumber": 3225,
+    "lineNumber": 3223,
     "columnNumber": 2,
     "matchedText": "cc_switch",
     "context": "\"cc_switch_proxy_error\",",
@@ -2170,7 +2170,7 @@
   },
   {
     "file": "src-tauri/src/proxy/handlers.rs",
-    "lineNumber": 3227,
+    "lineNumber": 3225,
     "columnNumber": 28,
     "matchedText": "cc_switch",
     "context": "(ProxyError::StopTimeout, \"cc_switch_proxy_error\"),",
@@ -2179,7 +2179,7 @@
   },
   {
     "file": "src-tauri/src/proxy/handlers.rs",
-    "lineNumber": 3230,
+    "lineNumber": 3228,
     "columnNumber": 2,
     "matchedText": "cc_switch",
     "context": "\"cc_switch_proxy_error\",",
@@ -2196,8 +2196,8 @@
     "reason": "exact persisted, transmitted, or upstream compatibility bytes"
   },
   {
-    "file": "src-tauri/src/proxy/providers/codex_oauth_auth.rs",
-    "lineNumber": 1475,
+    "file": "src-tauri/src/credentials/codex_oauth_auth.rs",
+    "lineNumber": 1502,
     "columnNumber": 31,
     "matchedText": "cc-switch",
     "context": "assert_eq!(CODEX_USER_AGENT, \"cc-switch-codex-oauth\");",

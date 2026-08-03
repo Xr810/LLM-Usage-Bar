@@ -3,7 +3,7 @@
 //! 定义各 API 处理器的配置结构和使用量解析器
 
 use crate::app_config::AppType;
-use crate::proxy::usage::parser::TokenUsage;
+use crate::usage::metering::parser::TokenUsage;
 use serde_json::Value;
 
 /// 使用量解析器类型别名

@@ -721,7 +721,7 @@ async fn get_single_tool_version_impl(
     let (env_type, wsl_distro) = tool_env_type_and_wsl_distro(tool);
 
     // 使用全局 HTTP 客户端（已包含代理配置）
-    let client = crate::proxy::http_client::get();
+    let client = crate::http_client::get();
 
     // 1. 获取本地版本
     let probe = if let Some(distro) = wsl_distro.as_deref() {

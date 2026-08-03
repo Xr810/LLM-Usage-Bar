@@ -11,17 +11,17 @@ use super::{
     provider_router::BindingPricingOverride,
     server::ProxyState,
     sse::{append_utf8_safe, strip_sse_field, take_sse_block},
-    usage::{
-        cost_parser::{extract_upstream_cost, extract_upstream_cost_from_events, UpstreamCost},
-        logger::UsageLogger,
-        parser::TokenUsage,
-    },
+    usage::logger::UsageLogger,
     ProxyError,
 };
 use crate::credentials::CredentialExposureGuardSet as CredentialExposureGuard;
 use crate::database::PRICING_SOURCE_REQUEST;
 use crate::usage::domain::TokenSource;
 use crate::usage::ingestion::{FrozenUsageProviderContext, LegacyLogInput, UsageIngestionInput};
+use crate::usage::metering::cost_parser::{
+    extract_upstream_cost, extract_upstream_cost_from_events, UpstreamCost,
+};
+use crate::usage::metering::parser::TokenUsage;
 use axum::http::{header::HeaderMap, HeaderName};
 use axum::response::{IntoResponse, Response};
 use bytes::{Bytes, BytesMut};

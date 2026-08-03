@@ -101,7 +101,7 @@ fn make_error(msg: String) -> SubscriptionQuota {
 // ── Kimi For Coding ─────────────────────────────────────────
 
 async fn query_kimi(api_key: &str) -> Result<SubscriptionQuota, String> {
-    let client = crate::proxy::http_client::get();
+    let client = crate::http_client::get();
 
     let resp = client
         .get("https://api.kimi.com/coding/v1/usages")
@@ -317,7 +317,7 @@ fn zhipu_quota_base(base_url: &str) -> &'static str {
 }
 
 async fn query_zhipu(base_url: &str, api_key: &str) -> Result<SubscriptionQuota, String> {
-    let client = crate::proxy::http_client::get();
+    let client = crate::http_client::get();
     let url = format!(
         "{}/api/monitor/usage/quota/limit",
         zhipu_quota_base(base_url)
@@ -413,7 +413,7 @@ fn zhipu_quota_from_body(body: &serde_json::Value) -> SubscriptionQuota {
 // ── MiniMax ─────────────────────────────────────────────────
 
 async fn query_minimax(api_key: &str, is_cn: bool) -> Result<SubscriptionQuota, String> {
-    let client = crate::proxy::http_client::get();
+    let client = crate::http_client::get();
 
     let api_domain = if is_cn {
         "api.minimaxi.com"
@@ -500,7 +500,7 @@ async fn query_minimax(api_key: &str, is_cn: bool) -> Result<SubscriptionQuota, 
 // ── ZenMux ──────────────────────────────────────────────────
 
 async fn query_zenmux(base_url: &str, api_key: &str) -> Result<SubscriptionQuota, String> {
-    let client = crate::proxy::http_client::get();
+    let client = crate::http_client::get();
 
     let resp = client
         .get(base_url)
@@ -905,7 +905,7 @@ async fn volcengine_openapi_call(
     secret_access_key: &str,
     action: &str,
 ) -> VolcCall {
-    let client = crate::proxy::http_client::get();
+    let client = crate::http_client::get();
     // canonical query 同时用于签名与实际 URL，确保两者逐字一致（否则签名不匹配）。
     let canonical_query = volcengine_canonical_query(action, region);
     let url = format!("https://{VOLCENGINE_OPENAPI_HOST}/?{canonical_query}");
@@ -1222,7 +1222,7 @@ async fn query_zhipu_team_at(
     organization_id: &str,
     project_id: &str,
 ) -> Result<SubscriptionQuota, String> {
-    let client = crate::proxy::http_client::get();
+    let client = crate::http_client::get();
     let url = format!("{quota_url_base}?type=2");
 
     let resp = client

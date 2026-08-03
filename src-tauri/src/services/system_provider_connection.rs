@@ -42,7 +42,7 @@ struct ReqwestSystemProviderConnectionClient;
 impl SystemProviderConnectionClient for ReqwestSystemProviderConnectionClient {
     fn get(&self, request: SystemProviderConnectionRequest) -> SystemProviderConnectionFuture<'_> {
         Box::pin(async move {
-            let client = crate::proxy::http_client::get();
+            let client = crate::http_client::get();
             let mut builder = client.get(&request.url).timeout(Duration::from_secs(8));
             for (name, value) in &request.headers {
                 let name = reqwest::header::HeaderName::from_bytes(name.as_bytes())

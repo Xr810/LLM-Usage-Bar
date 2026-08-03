@@ -1,11 +1,11 @@
 use crate::credentials::CredentialExposureGuardSet as CredentialExposureGuard;
 use crate::database::{lock_conn, Database, UsageSyncCursor};
 use crate::error::AppError;
-use crate::proxy::usage::calculator::{CostBreakdown, CostCalculator, ModelPricing};
-use crate::proxy::usage::cost_parser::UpstreamCost;
-use crate::proxy::usage::parser::TokenUsage;
 use crate::services::usage_stats::{find_model_pricing_row, find_provider_model_pricing_row};
 use crate::usage::domain::{BillingKind, CostSource, PricingOrigin, TokenSource, UsageEvent};
+use crate::usage::metering::calculator::{CostBreakdown, CostCalculator, ModelPricing};
+use crate::usage::metering::cost_parser::UpstreamCost;
+use crate::usage::metering::parser::TokenUsage;
 use rusqlite::{params, OptionalExtension, Transaction};
 use rust_decimal::Decimal;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -829,12 +829,12 @@ mod tests {
         UsageIngestionService,
     };
     use crate::database::{Database, UsageSyncCursor};
-    use crate::proxy::usage::cost_parser::UpstreamCost;
-    use crate::proxy::usage::parser::TokenUsage;
     use crate::usage::domain::{
         AgentModuleInput, AgentProviderBindingInput, BillingKind, CostSource, ModelPriceInput,
         PricingOrigin, TokenSource, UsageProviderInput,
     };
+    use crate::usage::metering::cost_parser::UpstreamCost;
+    use crate::usage::metering::parser::TokenUsage;
 
     fn price(input: &str, output: &str, cache_read: &str, cache_creation: &str) -> ModelPriceInput {
         ModelPriceInput {

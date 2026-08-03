@@ -40,13 +40,11 @@ use super::{
     server::ProxyState,
     sse::{strip_sse_field, take_sse_block},
     types::*,
-    usage::{
-        cost_parser::{extract_upstream_cost, UpstreamCost},
-        parser::TokenUsage,
-    },
     ProxyError,
 };
 use crate::app_config::AppType;
+use crate::usage::metering::cost_parser::{extract_upstream_cost, UpstreamCost};
+use crate::usage::metering::parser::TokenUsage;
 use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 use bytes::Bytes;
 use http_body_util::BodyExt;

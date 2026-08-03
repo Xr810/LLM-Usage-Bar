@@ -1079,7 +1079,7 @@ mod tests {
         });
 
         let result = openai_to_anthropic(input).unwrap();
-        let usage = crate::proxy::usage::parser::TokenUsage::from_claude_response(&result)
+        let usage = crate::usage::metering::parser::TokenUsage::from_claude_response(&result)
             .expect("converted Anthropic response should parse usage");
 
         assert_eq!(

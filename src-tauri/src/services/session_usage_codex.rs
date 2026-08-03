@@ -16,14 +16,14 @@
 use crate::codex_config::get_codex_config_dir;
 use crate::database::{lock_conn, Database};
 use crate::error::AppError;
-use crate::proxy::usage::calculator::{CostCalculator, ModelPricing};
-use crate::proxy::usage::parser::TokenUsage;
 use crate::services::session_usage::{
     metadata_modified_nanos, update_sync_state_for_resource, SessionSyncResult,
 };
 use crate::services::usage_stats::{find_model_pricing, should_skip_session_insert, DedupKey};
 use crate::usage::domain::{TokenSource, CODEX_AGENT_MODULE_ID};
 use crate::usage::ingestion::{LegacyLogInput, UsageIngestionInput, UsageIngestionService};
+use crate::usage::metering::calculator::{CostCalculator, ModelPricing};
+use crate::usage::metering::parser::TokenUsage;
 use crate::usage::session::{validate_bound_session_agent, ProviderSessionSyncResult};
 use rust_decimal::Decimal;
 use sha2::{Digest, Sha256};

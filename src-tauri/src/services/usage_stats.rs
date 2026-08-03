@@ -4,8 +4,8 @@
 
 use crate::database::{lock_conn, Database};
 use crate::error::AppError;
-use crate::proxy::usage::calculator::ModelPricing;
 use crate::services::sql_helpers::fresh_input_sql;
+use crate::usage::metering::calculator::ModelPricing;
 use chrono::{Local, NaiveDate, TimeZone, Timelike};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};

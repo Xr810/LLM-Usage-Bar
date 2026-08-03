@@ -1,8 +1,8 @@
 use crate::database::Database;
 use crate::error::AppError;
-use crate::proxy::usage::parser::TokenUsage;
 use crate::usage::domain::{session_agent_module_id, TokenSource};
 use crate::usage::ingestion::{LegacyLogInput, UsageIngestionInput, UsageIngestionService};
+use crate::usage::metering::parser::TokenUsage;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -182,13 +182,13 @@ impl SessionUsageService {
 mod tests {
     use super::*;
     use crate::database::Database;
-    use crate::proxy::usage::parser::TokenUsage;
     use crate::usage::domain::{
         AgentProviderBindingInput, BillingKind, TokenSource, UsageProviderInput,
     };
     use crate::usage::ingestion::{
         FrozenUsageProviderContext, UsageIngestionInput, UsageIngestionService,
     };
+    use crate::usage::metering::parser::TokenUsage;
     use std::sync::mpsc;
     use std::sync::Arc;
     use std::time::Duration;

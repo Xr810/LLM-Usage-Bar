@@ -63,7 +63,7 @@ pub async fn fetch_models(
     }
 
     let candidates = build_models_url_candidates(base_url, is_full_url, models_url_override)?;
-    let client = crate::proxy::http_client::get();
+    let client = crate::http_client::get();
     let mut last_err: Option<String> = None;
 
     for url in &candidates {

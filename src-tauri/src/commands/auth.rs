@@ -2,7 +2,9 @@ use tauri::State;
 
 use crate::commands::codex_oauth::CodexOAuthState;
 use crate::commands::copilot::CopilotAuthState;
-use crate::proxy::providers::codex_oauth_auth::CodexOAuthError;
+use crate::credentials::codex_oauth_auth::{
+    CodexAccount, CodexDeviceCodeResponse, CodexOAuthError,
+};
 use crate::proxy::providers::copilot_auth::{
     CopilotAuthError, GitHubAccount, GitHubDeviceCodeResponse,
 };
@@ -78,6 +80,36 @@ fn map_device_code_response(
     }
 }
 
+fn map_codex_account(
+    provider: &str,
+    account: CodexAccount,
+    default_account_id: Option<&str>,
+) -> ManagedAuthAccount {
+    ManagedAuthAccount {
+        is_default: default_account_id == Some(account.id.as_str()),
+        id: account.id,
+        provider: provider.to_string(),
+        login: account.login,
+        avatar_url: account.avatar_url,
+        authenticated_at: account.authenticated_at,
+        github_domain: account.github_domain,
+    }
+}
+
+fn map_codex_device_code_response(
+    provider: &str,
+    response: CodexDeviceCodeResponse,
+) -> ManagedAuthDeviceCodeResponse {
+    ManagedAuthDeviceCodeResponse {
+        provider: provider.to_string(),
+        device_code: response.device_code,
+        user_code: response.user_code,
+        verification_uri: response.verification_uri,
+        expires_in: response.expires_in,
+        interval: response.interval,
+    }
+}
+
 #[tauri::command(rename_all = "camelCase")]
 pub async fn auth_start_login(
     auth_provider: String,
@@ -101,7 +133,7 @@ pub async fn auth_start_login(
                 .start_device_flow()
                 .await
                 .map_err(|e| e.to_string())?;
-            Ok(map_device_code_response(auth_provider, response))
+            Ok(map_codex_device_code_response(auth_provider, response))
         }
         _ => unreachable!(),
     }
@@ -139,7 +171,7 @@ pub async fn auth_poll_for_account(
                 Ok(account) => {
                     let default_account_id = auth_manager.get_status().await.default_account_id;
                     Ok(account.map(|account| {
-                        map_account(auth_provider, account, default_account_id.as_deref())
+                        map_codex_account(auth_provider, account, default_account_id.as_deref())
                     }))
                 }
                 Err(CodexOAuthError::AuthorizationPending) => Ok(None),
@@ -175,7 +207,9 @@ pub async fn auth_list_accounts(
             Ok(status
                 .accounts
                 .into_iter()
-                .map(|account| map_account(auth_provider, account, default_account_id.as_deref()))
+                .map(|account| {
+                    map_codex_account(auth_provider, account, default_account_id.as_deref())
+                })
                 .collect())
         }
         _ => unreachable!(),
@@ -221,7 +255,7 @@ pub async fn auth_get_status(
                     .accounts
                     .into_iter()
                     .map(|account| {
-                        map_account(auth_provider, account, default_account_id.as_deref())
+                        map_codex_account(auth_provider, account, default_account_id.as_deref())
                     })
                     .collect(),
             })
