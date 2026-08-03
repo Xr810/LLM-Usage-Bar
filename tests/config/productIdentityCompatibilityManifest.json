@@ -153,87 +153,6 @@
     "reason": "exact read-only legacy compatibility or coexistence reference"
   },
   {
-    "file": "src-tauri/src/claude_desktop_config.rs",
-    "lineNumber": 1154,
-    "columnNumber": 13,
-    "matchedText": "CC_SWITCH",
-    "context": "Some(LEGACY_CC_SWITCH_PROFILE_ID) => true,",
-    "kind": "legacyReadOnly",
-    "reason": "exact read-only legacy compatibility or coexistence reference"
-  },
-  {
-    "file": "src-tauri/src/claude_desktop_config.rs",
-    "lineNumber": 2157,
-    "columnNumber": 24,
-    "matchedText": "CC_SWITCH",
-    "context": ".join(format!(\"{LEGACY_CC_SWITCH_PROFILE_ID}.json\"));",
-    "kind": "legacyReadOnly",
-    "reason": "exact read-only legacy compatibility or coexistence reference"
-  },
-  {
-    "file": "src-tauri/src/claude_desktop_config.rs",
-    "lineNumber": 2163,
-    "columnNumber": 21,
-    "matchedText": "CC_SWITCH",
-    "context": "\"appliedId\": LEGACY_CC_SWITCH_PROFILE_ID,",
-    "kind": "legacyReadOnly",
-    "reason": "exact read-only legacy compatibility or coexistence reference"
-  },
-  {
-    "file": "src-tauri/src/claude_desktop_config.rs",
-    "lineNumber": 2165,
-    "columnNumber": 14,
-    "matchedText": "CC_SWITCH",
-    "context": "\"id\": LEGACY_CC_SWITCH_PROFILE_ID,",
-    "kind": "legacyReadOnly",
-    "reason": "exact read-only legacy compatibility or coexistence reference"
-  },
-  {
-    "file": "src-tauri/src/claude_desktop_config.rs",
-    "lineNumber": 2166,
-    "columnNumber": 16,
-    "matchedText": "CC_SWITCH",
-    "context": "\"name\": LEGACY_CC_SWITCH_PROFILE_NAME",
-    "kind": "legacyReadOnly",
-    "reason": "exact read-only legacy compatibility or coexistence reference"
-  },
-  {
-    "file": "src-tauri/src/claude_desktop_config.rs",
-    "lineNumber": 2186,
-    "columnNumber": 42,
-    "matchedText": "CC_SWITCH",
-    "context": ".any(|entry| entry[\"id\"] == json!(LEGACY_CC_SWITCH_PROFILE_ID)",
-    "kind": "legacyReadOnly",
-    "reason": "exact read-only legacy compatibility or coexistence reference"
-  },
-  {
-    "file": "src-tauri/src/claude_desktop_config.rs",
-    "lineNumber": 2187,
-    "columnNumber": 34,
-    "matchedText": "CC_SWITCH",
-    "context": "&& entry[\"name\"] == json!(LEGACY_CC_SWITCH_PROFILE_NAME)));",
-    "kind": "legacyReadOnly",
-    "reason": "exact read-only legacy compatibility or coexistence reference"
-  },
-  {
-    "file": "src-tauri/src/claude_desktop_config.rs",
-    "lineNumber": 2202,
-    "columnNumber": 14,
-    "matchedText": "CC_SWITCH",
-    "context": "\"id\": LEGACY_CC_SWITCH_PROFILE_ID,",
-    "kind": "legacyReadOnly",
-    "reason": "exact read-only legacy compatibility or coexistence reference"
-  },
-  {
-    "file": "src-tauri/src/claude_desktop_config.rs",
-    "lineNumber": 2203,
-    "columnNumber": 16,
-    "matchedText": "CC_SWITCH",
-    "context": "\"name\": LEGACY_CC_SWITCH_PROFILE_NAME",
-    "kind": "legacyReadOnly",
-    "reason": "exact read-only legacy compatibility or coexistence reference"
-  },
-  {
     "file": "src-tauri/src/codex_config.rs",
     "lineNumber": 16,
     "columnNumber": 18,
@@ -837,60 +756,6 @@
     "reason": "exact read-only legacy compatibility or coexistence reference"
   },
   {
-    "file": "src-tauri/src/commands/misc.rs",
-    "lineNumber": 229,
-    "columnNumber": 36,
-    "matchedText": "cc_switch",
-    "context": "std::env::temp_dir().join(format!(\"cc_switch_{}_{}.bat\", label, std::process::id()));",
-    "kind": "unsupportedPlatform",
-    "reason": "exact Windows or Linux-only branch excluded from macOS delivery"
-  },
-  {
-    "file": "src-tauri/src/commands/misc.rs",
-    "lineNumber": 3103,
-    "columnNumber": 42,
-    "matchedText": "cc_switch",
-    "context": "let script_file = temp_dir.join(format!(\"cc_switch_launcher_{}.sh\", std::process::id()));",
-    "kind": "unsupportedPlatform",
-    "reason": "exact Windows or Linux-only branch excluded from macOS delivery"
-  },
-  {
-    "file": "src-tauri/src/commands/misc.rs",
-    "lineNumber": 3204,
-    "columnNumber": 39,
-    "matchedText": "cc_switch",
-    "context": "let bat_file = temp_dir.join(format!(\"cc_switch_claude_{}.bat\", std::process::id()));",
-    "kind": "unsupportedPlatform",
-    "reason": "exact Windows or Linux-only branch excluded from macOS delivery"
-  },
-  {
-    "file": "src-tauri/src/commands/misc.rs",
-    "lineNumber": 3455,
-    "columnNumber": 39,
-    "matchedText": "cc_switch",
-    "context": "let bat_file = temp_dir.join(format!(\"cc_switch_{}_{}.bat\", label, pid));",
-    "kind": "unsupportedPlatform",
-    "reason": "exact Windows or Linux-only branch excluded from macOS delivery"
-  },
-  {
-    "file": "src-tauri/src/commands/misc.rs",
-    "lineNumber": 3457,
-    "columnNumber": 21,
-    "matchedText": "cc-switch",
-    "context": "\"@echo off\\r\\necho [cc-switch] Starting: {label}\\r\\necho.\\r\\n{cmd}\\r\\necho.\\r\\necho [cc-switch] Command exited. Press any key to close.\\r\\npause >nul\\r\\ndel \\\"%~f0\\\" >nul 2>&1\\r\\n\",",
-    "kind": "unsupportedPlatform",
-    "reason": "exact Windows or Linux-only branch excluded from macOS delivery"
-  },
-  {
-    "file": "src-tauri/src/commands/misc.rs",
-    "lineNumber": 3457,
-    "columnNumber": 86,
-    "matchedText": "cc-switch",
-    "context": "\"@echo off\\r\\necho [cc-switch] Starting: {label}\\r\\necho.\\r\\n{cmd}\\r\\necho.\\r\\necho [cc-switch] Command exited. Press any key to close.\\r\\npause >nul\\r\\ndel \\\"%~f0\\\" >nul 2>&1\\r\\n\",",
-    "kind": "unsupportedPlatform",
-    "reason": "exact Windows or Linux-only branch excluded from macOS delivery"
-  },
-  {
     "file": "src-tauri/src/commands/s3_sync.rs",
     "lineNumber": 278,
     "columnNumber": 15,
@@ -995,123 +860,6 @@
     "columnNumber": 67,
     "matchedText": "CC Switch",
     "context": "\"Rejected unsafe app_config_dir override pointing at the original CC Switch data: {}\",",
-    "kind": "legacyReadOnly",
-    "reason": "exact read-only legacy compatibility or coexistence reference"
-  },
-  {
-    "file": "src-tauri/src/config.rs",
-    "lineNumber": 393,
-    "columnNumber": 35,
-    "matchedText": "CC_SWITCH",
-    "context": "Some(value) => std::env::set_var(\"CC_SWITCH_TEST_HOME\", value),",
-    "kind": "externalWireStable",
-    "reason": "exact persisted, transmitted, or upstream compatibility bytes"
-  },
-  {
-    "file": "src-tauri/src/config.rs",
-    "lineNumber": 394,
-    "columnNumber": 31,
-    "matchedText": "CC_SWITCH",
-    "context": "None => std::env::remove_var(\"CC_SWITCH_TEST_HOME\"),",
-    "kind": "externalWireStable",
-    "reason": "exact persisted, transmitted, or upstream compatibility bytes"
-  },
-  {
-    "file": "src-tauri/src/config.rs",
-    "lineNumber": 404,
-    "columnNumber": 27,
-    "matchedText": "CC_SWITCH",
-    "context": "legacy: std::env::var_os(\"CC_SWITCH_TEST_HOME\"),",
-    "kind": "externalWireStable",
-    "reason": "exact persisted, transmitted, or upstream compatibility bytes"
-  },
-  {
-    "file": "src-tauri/src/config.rs",
-    "lineNumber": 409,
-    "columnNumber": 20,
-    "matchedText": "CC_SWITCH",
-    "context": "std::env::set_var(\"CC_SWITCH_TEST_HOME\", &legacy);",
-    "kind": "externalWireStable",
-    "reason": "exact persisted, transmitted, or upstream compatibility bytes"
-  },
-  {
-    "file": "src-tauri/src/config.rs",
-    "lineNumber": 418,
-    "columnNumber": 49,
-    "matchedText": "cc_switch",
-    "context": "fn app_data_directory_is_distinct_from_original_cc_switch() {",
-    "kind": "legacyReadOnly",
-    "reason": "exact read-only legacy compatibility or coexistence reference"
-  },
-  {
-    "file": "src-tauri/src/config.rs",
-    "lineNumber": 420,
-    "columnNumber": 26,
-    "matchedText": "cc-switch",
-    "context": "let legacy = home.join(\".cc-switch\");",
-    "kind": "legacyReadOnly",
-    "reason": "exact read-only legacy compatibility or coexistence reference"
-  },
-  {
-    "file": "src-tauri/src/config.rs",
-    "lineNumber": 423,
-    "columnNumber": 19,
-    "matchedText": "cc_switch",
-    "context": "assert!(is_legacy_cc_switch_config_dir_for_home(&legacy, &home));",
-    "kind": "legacyReadOnly",
-    "reason": "exact read-only legacy compatibility or coexistence reference"
-  },
-  {
-    "file": "src-tauri/src/config.rs",
-    "lineNumber": 425,
-    "columnNumber": 20,
-    "matchedText": "cc_switch",
-    "context": "assert!(!is_legacy_cc_switch_config_dir_for_home(&isolated, &home));",
-    "kind": "legacyReadOnly",
-    "reason": "exact read-only legacy compatibility or coexistence reference"
-  },
-  {
-    "file": "src-tauri/src/config.rs",
-    "lineNumber": 435,
-    "columnNumber": 33,
-    "matchedText": "cc-switch",
-    "context": "let legacy = temp.path().join(\".cc-switch\");",
-    "kind": "legacyReadOnly",
-    "reason": "exact read-only legacy compatibility or coexistence reference"
-  },
-  {
-    "file": "src-tauri/src/config.rs",
-    "lineNumber": 440,
-    "columnNumber": 19,
-    "matchedText": "cc_switch",
-    "context": "assert!(is_legacy_cc_switch_config_dir_for_home(&alias, temp.path()));",
-    "kind": "legacyReadOnly",
-    "reason": "exact read-only legacy compatibility or coexistence reference"
-  },
-  {
-    "file": "src-tauri/src/config.rs",
-    "lineNumber": 448,
-    "columnNumber": 33,
-    "matchedText": "cc-switch",
-    "context": "let legacy = temp.path().join(\".cc-switch\");",
-    "kind": "legacyReadOnly",
-    "reason": "exact read-only legacy compatibility or coexistence reference"
-  },
-  {
-    "file": "src-tauri/src/config.rs",
-    "lineNumber": 449,
-    "columnNumber": 37,
-    "matchedText": "CC-SWITCH",
-    "context": "let case_alias = temp.path().join(\".CC-SWITCH\");",
-    "kind": "legacyReadOnly",
-    "reason": "exact read-only legacy compatibility or coexistence reference"
-  },
-  {
-    "file": "src-tauri/src/config.rs",
-    "lineNumber": 455,
-    "columnNumber": 19,
-    "matchedText": "cc_switch",
-    "context": "assert!(is_legacy_cc_switch_config_dir_for_home(",
     "kind": "legacyReadOnly",
     "reason": "exact read-only legacy compatibility or coexistence reference"
   },
@@ -1528,33 +1276,6 @@
     "context": "let url = \"ccswitch://v1/import?resource=provider&app=claude&name=Test&endpoint=https%3A%2F%2Fapi1.example.com%20,%20https%3A%2F%2Fapi2.example.com&apiKey=sk-test\";",
     "kind": "externalWireStable",
     "reason": "exact persisted, transmitted, or upstream compatibility bytes"
-  },
-  {
-    "file": "src-tauri/src/lib.rs",
-    "lineNumber": 1215,
-    "columnNumber": 57,
-    "matchedText": "ccswitch",
-    "context": "// tauri-plugin-deep-link writes to: ~/.local/share/com.ccswitch.desktop/applications/cc-switch-handler.desktop",
-    "kind": "unsupportedPlatform",
-    "reason": "exact Windows or Linux-only branch excluded from macOS delivery"
-  },
-  {
-    "file": "src-tauri/src/lib.rs",
-    "lineNumber": 1215,
-    "columnNumber": 87,
-    "matchedText": "cc-switch",
-    "context": "// tauri-plugin-deep-link writes to: ~/.local/share/com.ccswitch.desktop/applications/cc-switch-handler.desktop",
-    "kind": "unsupportedPlatform",
-    "reason": "exact Windows or Linux-only branch excluded from macOS delivery"
-  },
-  {
-    "file": "src-tauri/src/lib.rs",
-    "lineNumber": 1220,
-    "columnNumber": 32,
-    "matchedText": "cc-switch",
-    "context": ".map(|d| !d.join(\"applications/cc-switch-handler.desktop\").exists())",
-    "kind": "unsupportedPlatform",
-    "reason": "exact Windows or Linux-only branch excluded from macOS delivery"
   },
   {
     "file": "src-tauri/src/main.rs",
@@ -2223,33 +1944,6 @@
     "reason": "exact read-only legacy compatibility or coexistence reference"
   },
   {
-    "file": "src-tauri/src/services/codex_oauth_models.rs",
-    "lineNumber": 145,
-    "columnNumber": 44,
-    "matchedText": "cc-switch",
-    "context": "assert_eq!(LEGACY_CODEX_OAUTH_ORIGINATOR, \"cc-switch\");",
-    "kind": "externalWireStable",
-    "reason": "exact persisted, transmitted, or upstream compatibility bytes"
-  },
-  {
-    "file": "src-tauri/src/services/provider/live.rs",
-    "lineNumber": 1078,
-    "columnNumber": 26,
-    "matchedText": "cc-switch",
-    "context": "// the DB SSOT plus the `cc-switch-model-catalog.json` projection",
-    "kind": "externalWireStable",
-    "reason": "exact persisted, transmitted, or upstream compatibility bytes"
-  },
-  {
-    "file": "src-tauri/src/services/provider/mod.rs",
-    "lineNumber": 837,
-    "columnNumber": 23,
-    "matchedText": "cc-switch",
-    "context": "model_catalog_json = \"cc-switch-model-catalog.json\"",
-    "kind": "externalWireStable",
-    "reason": "exact persisted, transmitted, or upstream compatibility bytes"
-  },
-  {
     "file": "src-tauri/src/services/proxy.rs",
     "lineNumber": 5682,
     "columnNumber": 2,
@@ -2824,5 +2518,302 @@
     "context": "sessionGroupExpansion: [\"cc-switch.sessionManager.groupExpansionState\"],",
     "kind": "legacyReadOnly",
     "reason": "exact read-only legacy compatibility or coexistence reference"
+  },
+  {
+    "file": "src-tauri/src/claude_desktop_config.rs",
+    "lineNumber": 1058,
+    "columnNumber": 13,
+    "matchedText": "CC_SWITCH",
+    "context": "Some(LEGACY_CC_SWITCH_PROFILE_ID) => true,",
+    "kind": "legacyReadOnly",
+    "reason": "exact read-only legacy compatibility or coexistence reference"
+  },
+  {
+    "file": "src-tauri/src/claude_desktop_config.rs",
+    "lineNumber": 2037,
+    "columnNumber": 24,
+    "matchedText": "CC_SWITCH",
+    "context": ".join(format!(\"{LEGACY_CC_SWITCH_PROFILE_ID}.json\"));",
+    "kind": "legacyReadOnly",
+    "reason": "exact read-only legacy compatibility or coexistence reference"
+  },
+  {
+    "file": "src-tauri/src/claude_desktop_config.rs",
+    "lineNumber": 2043,
+    "columnNumber": 21,
+    "matchedText": "CC_SWITCH",
+    "context": "\"appliedId\": LEGACY_CC_SWITCH_PROFILE_ID,",
+    "kind": "legacyReadOnly",
+    "reason": "exact read-only legacy compatibility or coexistence reference"
+  },
+  {
+    "file": "src-tauri/src/claude_desktop_config.rs",
+    "lineNumber": 2082,
+    "columnNumber": 14,
+    "matchedText": "CC_SWITCH",
+    "context": "\"id\": LEGACY_CC_SWITCH_PROFILE_ID,",
+    "kind": "legacyReadOnly",
+    "reason": "exact read-only legacy compatibility or coexistence reference"
+  },
+  {
+    "file": "src-tauri/src/claude_desktop_config.rs",
+    "lineNumber": 2083,
+    "columnNumber": 16,
+    "matchedText": "CC_SWITCH",
+    "context": "\"name\": LEGACY_CC_SWITCH_PROFILE_NAME",
+    "kind": "legacyReadOnly",
+    "reason": "exact read-only legacy compatibility or coexistence reference"
+  },
+  {
+    "file": "src-tauri/src/claude_desktop_config.rs",
+    "lineNumber": 2066,
+    "columnNumber": 42,
+    "matchedText": "CC_SWITCH",
+    "context": ".any(|entry| entry[\"id\"] == json!(LEGACY_CC_SWITCH_PROFILE_ID)",
+    "kind": "legacyReadOnly",
+    "reason": "exact read-only legacy compatibility or coexistence reference"
+  },
+  {
+    "file": "src-tauri/src/claude_desktop_config.rs",
+    "lineNumber": 2067,
+    "columnNumber": 34,
+    "matchedText": "CC_SWITCH",
+    "context": "&& entry[\"name\"] == json!(LEGACY_CC_SWITCH_PROFILE_NAME)));",
+    "kind": "legacyReadOnly",
+    "reason": "exact read-only legacy compatibility or coexistence reference"
+  },
+  {
+    "file": "src-tauri/src/claude_desktop_config.rs",
+    "lineNumber": 2045,
+    "columnNumber": 14,
+    "matchedText": "CC_SWITCH",
+    "context": "\"id\": LEGACY_CC_SWITCH_PROFILE_ID,",
+    "kind": "legacyReadOnly",
+    "reason": "exact read-only legacy compatibility or coexistence reference"
+  },
+  {
+    "file": "src-tauri/src/claude_desktop_config.rs",
+    "lineNumber": 2046,
+    "columnNumber": 16,
+    "matchedText": "CC_SWITCH",
+    "context": "\"name\": LEGACY_CC_SWITCH_PROFILE_NAME",
+    "kind": "legacyReadOnly",
+    "reason": "exact read-only legacy compatibility or coexistence reference"
+  },
+  {
+    "file": "src-tauri/src/commands/misc.rs",
+    "lineNumber": 212,
+    "columnNumber": 36,
+    "matchedText": "cc_switch",
+    "context": "std::env::temp_dir().join(format!(\"cc_switch_{}_{}.bat\", label, std::process::id()));",
+    "kind": "unsupportedPlatform",
+    "reason": "exact Windows or Linux-only branch excluded from macOS delivery"
+  },
+  {
+    "file": "src-tauri/src/commands/misc.rs",
+    "lineNumber": 2734,
+    "columnNumber": 42,
+    "matchedText": "cc_switch",
+    "context": "let script_file = temp_dir.join(format!(\"cc_switch_launcher_{}.sh\", std::process::id()));",
+    "kind": "unsupportedPlatform",
+    "reason": "exact Windows or Linux-only branch excluded from macOS delivery"
+  },
+  {
+    "file": "src-tauri/src/commands/misc.rs",
+    "lineNumber": 2835,
+    "columnNumber": 39,
+    "matchedText": "cc_switch",
+    "context": "let bat_file = temp_dir.join(format!(\"cc_switch_claude_{}.bat\", std::process::id()));",
+    "kind": "unsupportedPlatform",
+    "reason": "exact Windows or Linux-only branch excluded from macOS delivery"
+  },
+  {
+    "file": "src-tauri/src/commands/misc.rs",
+    "lineNumber": 3086,
+    "columnNumber": 39,
+    "matchedText": "cc_switch",
+    "context": "let bat_file = temp_dir.join(format!(\"cc_switch_{}_{}.bat\", label, pid));",
+    "kind": "unsupportedPlatform",
+    "reason": "exact Windows or Linux-only branch excluded from macOS delivery"
+  },
+  {
+    "file": "src-tauri/src/commands/misc.rs",
+    "lineNumber": 3088,
+    "columnNumber": 21,
+    "matchedText": "cc-switch",
+    "context": "\"@echo off\\r\\necho [cc-switch] Starting: {label}\\r\\necho.\\r\\n{cmd}\\r\\necho.\\r\\necho [cc-switch] Command exited. Press any key to close.\\r\\npause >nul\\r\\ndel \\\"%~f0\\\" >nul 2>&1\\r\\n\",",
+    "kind": "unsupportedPlatform",
+    "reason": "exact Windows or Linux-only branch excluded from macOS delivery"
+  },
+  {
+    "file": "src-tauri/src/commands/misc.rs",
+    "lineNumber": 3088,
+    "columnNumber": 86,
+    "matchedText": "cc-switch",
+    "context": "\"@echo off\\r\\necho [cc-switch] Starting: {label}\\r\\necho.\\r\\n{cmd}\\r\\necho.\\r\\necho [cc-switch] Command exited. Press any key to close.\\r\\npause >nul\\r\\ndel \\\"%~f0\\\" >nul 2>&1\\r\\n\",",
+    "kind": "unsupportedPlatform",
+    "reason": "exact Windows or Linux-only branch excluded from macOS delivery"
+  },
+  {
+    "file": "src-tauri/src/config.rs",
+    "lineNumber": 410,
+    "columnNumber": 35,
+    "matchedText": "CC_SWITCH",
+    "context": "Some(value) => std::env::set_var(\"CC_SWITCH_TEST_HOME\", value),",
+    "kind": "externalWireStable",
+    "reason": "exact persisted, transmitted, or upstream compatibility bytes"
+  },
+  {
+    "file": "src-tauri/src/config.rs",
+    "lineNumber": 411,
+    "columnNumber": 31,
+    "matchedText": "CC_SWITCH",
+    "context": "None => std::env::remove_var(\"CC_SWITCH_TEST_HOME\"),",
+    "kind": "externalWireStable",
+    "reason": "exact persisted, transmitted, or upstream compatibility bytes"
+  },
+  {
+    "file": "src-tauri/src/config.rs",
+    "lineNumber": 421,
+    "columnNumber": 27,
+    "matchedText": "CC_SWITCH",
+    "context": "legacy: std::env::var_os(\"CC_SWITCH_TEST_HOME\"),",
+    "kind": "externalWireStable",
+    "reason": "exact persisted, transmitted, or upstream compatibility bytes"
+  },
+  {
+    "file": "src-tauri/src/config.rs",
+    "lineNumber": 426,
+    "columnNumber": 20,
+    "matchedText": "CC_SWITCH",
+    "context": "std::env::set_var(\"CC_SWITCH_TEST_HOME\", &legacy);",
+    "kind": "externalWireStable",
+    "reason": "exact persisted, transmitted, or upstream compatibility bytes"
+  },
+  {
+    "file": "src-tauri/src/config.rs",
+    "lineNumber": 435,
+    "columnNumber": 49,
+    "matchedText": "cc_switch",
+    "context": "fn app_data_directory_is_distinct_from_original_cc_switch() {",
+    "kind": "legacyReadOnly",
+    "reason": "exact read-only legacy compatibility or coexistence reference"
+  },
+  {
+    "file": "src-tauri/src/config.rs",
+    "lineNumber": 437,
+    "columnNumber": 26,
+    "matchedText": "cc-switch",
+    "context": "let legacy = home.join(\".cc-switch\");",
+    "kind": "legacyReadOnly",
+    "reason": "exact read-only legacy compatibility or coexistence reference"
+  },
+  {
+    "file": "src-tauri/src/config.rs",
+    "lineNumber": 440,
+    "columnNumber": 19,
+    "matchedText": "cc_switch",
+    "context": "assert!(is_legacy_cc_switch_config_dir_for_home(&legacy, &home));",
+    "kind": "legacyReadOnly",
+    "reason": "exact read-only legacy compatibility or coexistence reference"
+  },
+  {
+    "file": "src-tauri/src/config.rs",
+    "lineNumber": 442,
+    "columnNumber": 20,
+    "matchedText": "cc_switch",
+    "context": "assert!(!is_legacy_cc_switch_config_dir_for_home(&isolated, &home));",
+    "kind": "legacyReadOnly",
+    "reason": "exact read-only legacy compatibility or coexistence reference"
+  },
+  {
+    "file": "src-tauri/src/config.rs",
+    "lineNumber": 452,
+    "columnNumber": 33,
+    "matchedText": "cc-switch",
+    "context": "let legacy = temp.path().join(\".cc-switch\");",
+    "kind": "legacyReadOnly",
+    "reason": "exact read-only legacy compatibility or coexistence reference"
+  },
+  {
+    "file": "src-tauri/src/config.rs",
+    "lineNumber": 457,
+    "columnNumber": 19,
+    "matchedText": "cc_switch",
+    "context": "assert!(is_legacy_cc_switch_config_dir_for_home(&alias, temp.path()));",
+    "kind": "legacyReadOnly",
+    "reason": "exact read-only legacy compatibility or coexistence reference"
+  },
+  {
+    "file": "src-tauri/src/config.rs",
+    "lineNumber": 465,
+    "columnNumber": 33,
+    "matchedText": "cc-switch",
+    "context": "let legacy = temp.path().join(\".cc-switch\");",
+    "kind": "legacyReadOnly",
+    "reason": "exact read-only legacy compatibility or coexistence reference"
+  },
+  {
+    "file": "src-tauri/src/config.rs",
+    "lineNumber": 466,
+    "columnNumber": 37,
+    "matchedText": "CC-SWITCH",
+    "context": "let case_alias = temp.path().join(\".CC-SWITCH\");",
+    "kind": "legacyReadOnly",
+    "reason": "exact read-only legacy compatibility or coexistence reference"
+  },
+  {
+    "file": "src-tauri/src/config.rs",
+    "lineNumber": 472,
+    "columnNumber": 19,
+    "matchedText": "cc_switch",
+    "context": "assert!(is_legacy_cc_switch_config_dir_for_home(",
+    "kind": "legacyReadOnly",
+    "reason": "exact read-only legacy compatibility or coexistence reference"
+  },
+  {
+    "file": "src-tauri/src/lib.rs",
+    "lineNumber": 1147,
+    "columnNumber": 57,
+    "matchedText": "ccswitch",
+    "context": "// tauri-plugin-deep-link writes to: ~/.local/share/com.ccswitch.desktop/applications/cc-switch-handler.desktop",
+    "kind": "unsupportedPlatform",
+    "reason": "exact Windows or Linux-only branch excluded from macOS delivery"
+  },
+  {
+    "file": "src-tauri/src/lib.rs",
+    "lineNumber": 1147,
+    "columnNumber": 87,
+    "matchedText": "cc-switch",
+    "context": "// tauri-plugin-deep-link writes to: ~/.local/share/com.ccswitch.desktop/applications/cc-switch-handler.desktop",
+    "kind": "unsupportedPlatform",
+    "reason": "exact Windows or Linux-only branch excluded from macOS delivery"
+  },
+  {
+    "file": "src-tauri/src/lib.rs",
+    "lineNumber": 1152,
+    "columnNumber": 32,
+    "matchedText": "cc-switch",
+    "context": ".map(|d| !d.join(\"applications/cc-switch-handler.desktop\").exists())",
+    "kind": "unsupportedPlatform",
+    "reason": "exact Windows or Linux-only branch excluded from macOS delivery"
+  },
+  {
+    "file": "src-tauri/src/services/provider/live.rs",
+    "lineNumber": 1044,
+    "columnNumber": 26,
+    "matchedText": "cc-switch",
+    "context": "// the DB SSOT plus the `cc-switch-model-catalog.json` projection",
+    "kind": "externalWireStable",
+    "reason": "exact persisted, transmitted, or upstream compatibility bytes"
+  },
+  {
+    "file": "src-tauri/src/services/provider/mod.rs",
+    "lineNumber": 809,
+    "columnNumber": 23,
+    "matchedText": "cc-switch",
+    "context": "model_catalog_json = \"cc-switch-model-catalog.json\"",
+    "kind": "externalWireStable",
+    "reason": "exact persisted, transmitted, or upstream compatibility bytes"
   }
 ]

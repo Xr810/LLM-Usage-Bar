@@ -96,23 +96,6 @@ struct FileSnapshot {
     content: Option<Vec<u8>>,
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ClaudeDesktopStatus {
-    pub supported: bool,
-    pub configured: bool,
-    pub applied_id: Option<String>,
-    pub profile_path: Option<String>,
-    pub config_library_path: Option<String>,
-    pub mode: Option<ClaudeDesktopMode>,
-    pub expected_base_url: Option<String>,
-    pub actual_base_url: Option<String>,
-    pub proxy_running: bool,
-    pub stale_raw_models: bool,
-    pub missing_route_mappings: bool,
-    pub gateway_token_configured: bool,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedModelRoute {
     pub route_id: String,
@@ -131,85 +114,6 @@ struct InferenceModelSpec {
 pub fn apply_provider(db: &Database, provider: &Provider) -> Result<(), AppError> {
     let paths = current_platform_paths()?;
     apply_provider_to_paths(db, provider, &paths)
-}
-
-pub fn get_status(db: &Database, proxy_running: bool) -> Result<ClaudeDesktopStatus, AppError> {
-    if !is_supported_platform() {
-        return Ok(ClaudeDesktopStatus {
-            supported: false,
-            configured: false,
-            applied_id: None,
-            profile_path: None,
-            config_library_path: None,
-            mode: None,
-            expected_base_url: None,
-            actual_base_url: None,
-            proxy_running,
-            stale_raw_models: false,
-            missing_route_mappings: false,
-            gateway_token_configured: false,
-        });
-    }
-
-    let paths = current_platform_paths()?;
-    let applied_id = read_applied_id(&paths.meta_path);
-    let configured = paths.profile_path.exists() || meta_has_profile_entry(&paths.meta_path);
-    let profile = read_json_or_empty(&paths.profile_path).unwrap_or_else(|_| json!({}));
-    let actual_base_url = profile
-        .get("inferenceGatewayBaseUrl")
-        .and_then(Value::as_str)
-        .map(str::to_string);
-    let stale_raw_models = profile
-        .get("inferenceModels")
-        .and_then(Value::as_array)
-        .map(|models| {
-            models.iter().any(|item| {
-                item.as_str()
-                    .or_else(|| item.get("name").and_then(Value::as_str))
-                    .is_some_and(|model| !is_claude_safe_model_id(model))
-            })
-        })
-        .unwrap_or(false);
-    let gateway_token_configured = db
-        .get_setting(GATEWAY_TOKEN_SETTING_KEY)
-        .ok()
-        .flatten()
-        .is_some_and(|token| !token.trim().is_empty());
-    let current_provider = crate::settings::get_effective_current_provider(
-        db,
-        &crate::app_config::AppType::ClaudeDesktop,
-    )
-    .ok()
-    .flatten()
-    .and_then(|id| db.get_provider_by_id(&id, "claude-desktop").ok().flatten());
-    let mode = current_provider.as_ref().map(provider_mode);
-    let expected_base_url = match mode {
-        Some(ClaudeDesktopMode::Proxy) => proxy_gateway_base_url_from_db(db).ok(),
-        Some(ClaudeDesktopMode::Direct) => current_provider
-            .as_ref()
-            .and_then(|provider| direct_gateway_credentials(provider).ok())
-            .map(|credentials| credentials.base_url),
-        None => None,
-    };
-    let missing_route_mappings = current_provider.as_ref().is_some_and(|provider| {
-        matches!(provider_mode(provider), ClaudeDesktopMode::Proxy)
-            && proxy_model_routes(provider).is_err()
-    });
-
-    Ok(ClaudeDesktopStatus {
-        supported: true,
-        configured,
-        applied_id,
-        profile_path: Some(paths.profile_path.display().to_string()),
-        config_library_path: Some(paths.config_library_path.display().to_string()),
-        mode,
-        expected_base_url,
-        actual_base_url,
-        proxy_running,
-        stale_raw_models,
-        missing_route_mappings,
-        gateway_token_configured,
-    })
 }
 
 pub fn get_config_library_path() -> Result<PathBuf, AppError> {
@@ -1179,30 +1083,6 @@ fn write_meta(path: &Path, applied_profile_id: Option<&str>) -> Result<(), AppEr
 
     obj.insert("entries".to_string(), Value::Array(entries));
     write_json_file(path, &value)
-}
-
-fn read_applied_id(path: &Path) -> Option<String> {
-    read_json_or_empty(path).ok().and_then(|value| {
-        value
-            .get("appliedId")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-    })
-}
-
-fn meta_has_profile_entry(path: &Path) -> bool {
-    read_json_or_empty(path)
-        .ok()
-        .and_then(|value| value.get("entries").and_then(Value::as_array).cloned())
-        .is_some_and(|entries| {
-            entries
-                .iter()
-                .any(|entry| entry.get("id").and_then(Value::as_str) == Some(PROFILE_ID))
-        })
-}
-
-fn is_supported_platform() -> bool {
-    cfg!(any(target_os = "macos", windows))
 }
 
 #[allow(clippy::needless_return)]

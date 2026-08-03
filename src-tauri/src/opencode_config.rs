@@ -2,7 +2,6 @@ use crate::config::write_json_file;
 use crate::error::AppError;
 use crate::provider::OpenCodeProviderConfig;
 use crate::settings::get_opencode_override_dir;
-use indexmap::IndexMap;
 use serde_json::{json, Map, Value};
 use std::path::PathBuf;
 
@@ -145,24 +144,6 @@ pub fn remove_provider(id: &str) -> Result<(), AppError> {
     }
 
     write_opencode_config(&config)
-}
-
-pub fn get_typed_providers() -> Result<IndexMap<String, OpenCodeProviderConfig>, AppError> {
-    let providers = get_providers()?;
-    let mut result = IndexMap::new();
-
-    for (id, value) in providers {
-        match serde_json::from_value::<OpenCodeProviderConfig>(value.clone()) {
-            Ok(config) => {
-                result.insert(id, config);
-            }
-            Err(e) => {
-                log::warn!("Failed to parse provider '{id}': {e}");
-            }
-        }
-    }
-
-    Ok(result)
 }
 
 pub fn set_typed_provider(id: &str, config: &OpenCodeProviderConfig) -> Result<(), AppError> {

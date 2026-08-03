@@ -272,20 +272,6 @@ pub fn set_usage_provider_enabled(
 }
 
 #[tauri::command]
-pub fn get_route_bindings(state: State<'_, AppState>) -> Result<Vec<RouteBinding>, AppError> {
-    get_route_bindings_test_hook(&state)
-}
-
-#[tauri::command]
-pub fn set_route_binding(
-    state: State<'_, AppState>,
-    protocol: String,
-    provider_id: String,
-) -> Result<RouteBinding, AppError> {
-    set_route_binding_test_hook(&state, &protocol, &provider_id)
-}
-
-#[tauri::command]
 pub async fn get_usage_dashboard(
     state: State<'_, AppState>,
     start_at: i64,

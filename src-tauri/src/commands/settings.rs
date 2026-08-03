@@ -191,20 +191,6 @@ fn install_update_and_restart_result() -> Result<bool, String> {
     Err(crate::product_identity::MANAGED_UPDATES_UNAVAILABLE.to_string())
 }
 
-/// 检查是否有可用的应用更新，返回可用的新版本号（无更新时返回 None）。
-///
-/// 数据库版本过新的恢复界面用它判断：升级应用能否解决问题。若返回 None，说明
-/// 已是最新版本，但数据库仍不兼容（通常由第三方客户端或更高版本创建），应提示用户
-/// 升级无法解决，而不是让其反复尝试。
-#[tauri::command]
-pub async fn check_app_update_available(_app: AppHandle) -> Result<Option<String>, String> {
-    check_app_update_available_result()
-}
-
-fn check_app_update_available_result() -> Result<Option<String>, String> {
-    Err(crate::product_identity::MANAGED_UPDATES_UNAVAILABLE.to_string())
-}
-
 /// 获取 app_config_dir 覆盖配置 (从 Store)
 #[tauri::command]
 pub async fn get_app_config_dir_override(app: AppHandle) -> Result<Option<String>, String> {
@@ -235,27 +221,12 @@ pub async fn set_auto_launch(enabled: bool) -> Result<bool, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        check_app_update_available_result, install_update_and_restart_result,
-        merge_settings_for_save,
-    };
+    use super::merge_settings_for_save;
     use crate::settings::{
         AppSettings, CodexOfficialHistoryUnifyMigration, CodexProviderTemplateMigration,
         CodexThirdPartyHistoryProviderBucketMigration, LocalMigrations, S3SyncSettings,
         WebDavSyncSettings,
     };
-
-    #[test]
-    fn managed_update_commands_fail_closed() {
-        assert_eq!(
-            check_app_update_available_result(),
-            Err("managed_updates_unavailable".to_string())
-        );
-        assert_eq!(
-            install_update_and_restart_result(),
-            Err("managed_updates_unavailable".to_string())
-        );
-    }
 
     #[test]
     fn save_settings_should_preserve_existing_webdav_when_payload_omits_it() {
@@ -609,30 +580,6 @@ pub async fn set_optimizer_config(
     state
         .db
         .set_optimizer_config(&config)
-        .map_err(|e| e.to_string())?;
-    Ok(true)
-}
-
-/// 获取 Copilot 优化器配置
-#[tauri::command]
-pub async fn get_copilot_optimizer_config(
-    state: tauri::State<'_, crate::AppState>,
-) -> Result<crate::proxy::types::CopilotOptimizerConfig, String> {
-    state
-        .db
-        .get_copilot_optimizer_config()
-        .map_err(|e| e.to_string())
-}
-
-/// 设置 Copilot 优化器配置
-#[tauri::command]
-pub async fn set_copilot_optimizer_config(
-    state: tauri::State<'_, crate::AppState>,
-    config: crate::proxy::types::CopilotOptimizerConfig,
-) -> Result<bool, String> {
-    state
-        .db
-        .set_copilot_optimizer_config(&config)
         .map_err(|e| e.to_string())?;
     Ok(true)
 }

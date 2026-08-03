@@ -7,7 +7,6 @@ use crate::config::{atomic_write, get_app_config_dir};
 use crate::error::AppError;
 use crate::settings::{effective_backup_retain_count, get_openclaw_override_dir};
 use chrono::Local;
-use indexmap::IndexMap;
 use json_five::rt::parser::{
     from_str as rt_from_str, JSONKeyValuePair as RtJSONKeyValuePair,
     JSONObjectContext as RtJSONObjectContext, JSONText as RtJSONText, JSONValue as RtJSONValue,
@@ -657,25 +656,6 @@ pub fn remove_provider(id: &str) -> Result<OpenClawWriteOutcome, AppError> {
 // ============================================================================
 // Provider Functions (Typed)
 // ============================================================================
-
-/// 获取所有供应商配置（类型化）
-pub fn get_typed_providers() -> Result<IndexMap<String, OpenClawProviderConfig>, AppError> {
-    let providers = get_providers()?;
-    let mut result = IndexMap::new();
-
-    for (id, value) in providers {
-        match serde_json::from_value::<OpenClawProviderConfig>(value.clone()) {
-            Ok(config) => {
-                result.insert(id, config);
-            }
-            Err(e) => {
-                log::warn!("Failed to parse OpenClaw provider '{id}': {e}");
-            }
-        }
-    }
-
-    Ok(result)
-}
 
 /// 设置供应商配置（类型化）
 pub fn set_typed_provider(

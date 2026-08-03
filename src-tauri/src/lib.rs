@@ -48,7 +48,6 @@ mod usage_script;
 pub use app_config::{AppType, InstalledSkill, McpApps, McpServer, MultiAppConfig, SkillApps};
 pub use claude_quota::run_claude_statusline_bridge;
 pub use codex_config::{get_codex_auth_path, get_codex_config_path, write_codex_live_atomic};
-pub use commands::open_provider_terminal;
 pub use commands::*;
 pub use config::{get_claude_mcp_path, get_claude_settings_path, read_json_file};
 pub use database::{Database, Profile};
@@ -932,41 +931,6 @@ pub fn run() {
             let fresh_install_at_startup =
                 app_state.db.is_providers_empty().unwrap_or(false);
 
-            for app_type in
-                crate::app_config::AppType::all().filter(|t| !t.is_additive_mode())
-            {
-                if !crate::services::provider::should_import_default_config_on_startup(
-                    &app_state,
-                    &app_type,
-                )
-                .unwrap_or(false)
-                {
-                    log::debug!(
-                        "○ {} already has providers; live import skipped",
-                        app_type.as_str()
-                    );
-                    continue;
-                }
-
-                match crate::services::provider::import_default_config(
-                    &app_state,
-                    app_type.clone(),
-                ) {
-                    Ok(true) => log::info!(
-                        "✓ Imported live config for {} as default provider",
-                        app_type.as_str()
-                    ),
-                    Ok(false) => log::debug!(
-                        "○ {} already has providers; live import skipped",
-                        app_type.as_str()
-                    ),
-                    Err(e) => log::debug!(
-                        "○ No live config to import for {}: {e}",
-                        app_type.as_str()
-                    ),
-                }
-            }
-
             match app_state.db.init_default_official_providers() {
                 Ok(count) if count > 0 => {
                     log::info!("✓ Seeded {count} official provider(s)");
@@ -1041,38 +1005,6 @@ pub fn run() {
             // 字段只由前端在用户点击"我知道了"时 save_settings 回写，语义是"用户显式确认过"。
             if !first_run_already_confirmed && fresh_install_at_startup {
                 log::info!("✓ First-run welcome notice pending");
-            }
-
-            // 1.6. 自动同步 OpenCode / OpenClaw 的 live providers 到数据库
-            //
-            // additive 模式（OpenCode / OpenClaw）的 import 函数按 id 幂等——
-            // 新 id 执行导入，已有 id 则更新 settings 和 display name，所以每次
-            // 启动都跑是安全的：既保证新装用户开箱可见 live 中的供应商，也让外部
-            // 修改的 live 文件能在重启后同步到数据库（与之前依赖前端"导入当前配置"
-            // 按钮手动触发不同）。
-            //
-            // 底层 read_*_config 在文件不存在时返回默认空配置，因此新装且无
-            // live 文件的用户走 Ok(0) 路径，不会产生错误日志噪音。
-            match crate::services::provider::import_opencode_providers_from_live(&app_state) {
-                Ok(count) if count > 0 => {
-                    log::info!("✓ Synced {count} OpenCode provider(s) from live config");
-                }
-                Ok(_) => log::debug!("○ No OpenCode provider changes from live config"),
-                Err(e) => log::warn!("✗ Failed to import OpenCode providers: {e}"),
-            }
-            match crate::services::provider::import_openclaw_providers_from_live(&app_state) {
-                Ok(count) if count > 0 => {
-                    log::info!("✓ Synced {count} OpenClaw provider(s) from live config");
-                }
-                Ok(_) => log::debug!("○ No OpenClaw provider changes from live config"),
-                Err(e) => log::warn!("✗ Failed to import OpenClaw providers: {e}"),
-            }
-            match crate::services::provider::import_hermes_providers_from_live(&app_state) {
-                Ok(count) if count > 0 => {
-                    log::info!("✓ Synced {count} Hermes provider(s) from live config");
-                }
-                Ok(_) => log::debug!("○ No Hermes provider changes from live config"),
-                Err(e) => log::warn!("✗ Failed to import Hermes providers: {e}"),
             }
 
             // 2. OMO 配置导入（当数据库中无 OMO provider 时，从本地文件导入）
@@ -1535,7 +1467,6 @@ pub fn run() {
                     }
                 }
 
-                initialize_common_config_snippets(&state);
 
                 // 检查 settings 表中的代理状态，自动恢复代理服务
                 restore_proxy_state_on_startup(&state).await;
@@ -1791,7 +1722,6 @@ pub fn run() {
             commands::restore_db_backup,
             commands::rename_db_backup,
             commands::delete_db_backup,
-            commands::sync_current_providers_live,
             // Deep link import
             update_tray_menu,
             // Environment variable management
@@ -1831,7 +1761,6 @@ pub fn run() {
             commands::run_tool_lifecycle_action,
             commands::probe_tool_installations,
             // Provider terminal
-            commands::open_provider_terminal,
             // Universal Provider management
             // OpenCode specific
             // OpenClaw specific
@@ -1840,21 +1769,6 @@ pub fn run() {
             // Window theme control
             commands::set_window_theme,
             // Generic managed auth commands
-            commands::copilot_start_device_flow,
-            commands::copilot_poll_for_auth,
-            commands::copilot_poll_for_account,
-            commands::copilot_list_accounts,
-            commands::copilot_remove_account,
-            commands::copilot_set_default_account,
-            commands::copilot_get_auth_status,
-            commands::copilot_logout,
-            commands::copilot_is_authenticated,
-            commands::copilot_get_token,
-            commands::copilot_get_token_for_account,
-            commands::copilot_get_models,
-            commands::copilot_get_models_for_account,
-            commands::copilot_get_usage,
-            commands::copilot_get_usage_for_account,
             commands::auth_start_login,
             commands::auth_poll_for_account,
             commands::auth_list_accounts,
@@ -2160,85 +2074,6 @@ async fn restore_proxy_state_on_startup(state: &store::AppState) {
                     log::error!("清除 {app_type} 代理状态失败: {clear_err}");
                 }
             }
-        }
-    }
-}
-
-fn initialize_common_config_snippets(state: &store::AppState) {
-    // Auto-extract common config snippets from clean live files when snippet is missing.
-    // This must run before proxy takeover is restored on startup, otherwise we'd read
-    // proxy-placeholder configs instead of the user's actual live settings.
-    for app_type in crate::app_config::AppType::all() {
-        if !state
-            .db
-            .should_auto_extract_config_snippet(app_type.as_str())
-            .unwrap_or(false)
-        {
-            continue;
-        }
-
-        let settings = match crate::services::provider::ProviderService::read_live_settings(
-            app_type.clone(),
-        ) {
-            Ok(s) => s,
-            Err(_) => continue,
-        };
-
-        match crate::services::provider::ProviderService::extract_common_config_snippet_from_settings(
-            app_type.clone(),
-            &settings,
-        ) {
-            Ok(snippet) if !snippet.is_empty() && snippet != "{}" => {
-                match state.db.set_config_snippet(app_type.as_str(), Some(snippet)) {
-                    Ok(()) => {
-                        let _ = state.db.set_config_snippet_cleared(app_type.as_str(), false);
-                        log::info!(
-                            "✓ Auto-extracted common config snippet for {}",
-                            app_type.as_str()
-                        );
-                    }
-                    Err(e) => log::warn!(
-                        "✗ Failed to save config snippet for {}: {e}",
-                        app_type.as_str()
-                    ),
-                }
-            }
-            Ok(_) => log::debug!(
-                "○ Live config for {} has no extractable common fields",
-                app_type.as_str()
-            ),
-            Err(e) => log::warn!(
-                "✗ Failed to extract config snippet for {}: {e}",
-                app_type.as_str()
-            ),
-        }
-    }
-
-    let should_run_legacy_migration = state
-        .db
-        .is_legacy_common_config_migrated()
-        .map(|done| !done)
-        .unwrap_or(true);
-
-    if should_run_legacy_migration {
-        for app_type in [
-            crate::app_config::AppType::Claude,
-            crate::app_config::AppType::Codex,
-            crate::app_config::AppType::Gemini,
-        ] {
-            if let Err(e) = crate::services::provider::ProviderService::migrate_legacy_common_config_usage_if_needed(
-                state,
-                app_type.clone(),
-            ) {
-                log::warn!(
-                    "✗ Failed to migrate legacy common-config usage for {}: {e}",
-                    app_type.as_str()
-                );
-            }
-        }
-
-        if let Err(e) = state.db.set_legacy_common_config_migrated(true) {
-            log::warn!("✗ Failed to persist legacy common-config migration flag: {e}");
         }
     }
 }
