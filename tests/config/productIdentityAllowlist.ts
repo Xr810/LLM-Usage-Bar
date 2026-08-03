@@ -96,18 +96,10 @@ const removedTask4OwnedLines: readonly RemovedOwnedIdentityLine[] = [
       'skillStorageLocation: z.enum(["cc_switch", "unified"]).optional(),',
     reason: "prior current settings write schema",
   },
-  {
-    file: "src/components/settings/SkillStorageLocationSettings.tsx",
-    lineNumber: 82,
-    context: 'active={value === "cc_switch"}',
-    reason: "prior current storage UI state",
-  },
-  {
-    file: "src/components/settings/SkillStorageLocationSettings.tsx",
-    lineNumber: 84,
-    context: 'onClick={() => handleSelect("cc_switch")}',
-    reason: "prior current storage UI action",
-  },
+  // The two SkillStorageLocationSettings.tsx entries were dropped when that
+  // component was removed. Each asserted the file no longer carries a legacy
+  // literal; with the file itself gone there is nothing left to assert, and
+  // the check cannot read a path that does not exist.
 ];
 
 function removedOwnedOccurrence(

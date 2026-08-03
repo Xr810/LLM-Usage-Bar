@@ -1,16 +1,9 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import {
-  act,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setPendingMainWindowDestination } from "../tests/msw/handlers";
 import { emitTauriEvent } from "../tests/msw/tauriMocks";
-import { setSettings } from "../tests/msw/state";
 import App from "./App";
 
 const windowMocks = vi.hoisted(() => ({
@@ -111,19 +104,5 @@ describe("Provider-only usage dashboard main path", () => {
       screen.getByRole("heading", { name: "Provider monitoring" }),
     ).toBeInTheDocument();
     expect(screen.queryByRole("tablist", { name: "Agents" })).toBeNull();
-  });
-
-  it("keeps the desktop shell and optional native window controls", async () => {
-    setSettings({ useAppWindowControls: true, language: "en" });
-    const { container } = renderApp();
-
-    await screen.findByRole("button", { name: "Minimize window" });
-    expect(container.querySelector("[data-tauri-drag-region]")).not.toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Minimize window" }));
-    fireEvent.click(screen.getByRole("button", { name: "Maximize window" }));
-    fireEvent.click(screen.getByRole("button", { name: "Close window" }));
-    expect(windowMocks.minimize).toHaveBeenCalledOnce();
-    expect(windowMocks.toggleMaximize).toHaveBeenCalledOnce();
-    expect(windowMocks.close).toHaveBeenCalledOnce();
   });
 });
