@@ -44,6 +44,52 @@ pub enum CostSource {
     Unavailable,
 }
 
+/// Which price catalogue produced an estimated cost.
+///
+/// `User` means the account's own `provider_model_pricing` row — what the user
+/// actually pays. `Official` means the built-in `model_pricing` reference,
+/// which is also what subscription equivalents are always valued at. Upstream
+/// and unavailable costs have no pricing origin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PricingOrigin {
+    User,
+    Official,
+}
+
+impl PricingOrigin {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PricingOrigin::User => "user",
+            PricingOrigin::Official => "official",
+        }
+    }
+}
+
+/// The four per-million-token rates that make up one model's price.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelPriceInput {
+    pub input_cost_per_million: String,
+    pub output_cost_per_million: String,
+    pub cache_read_cost_per_million: String,
+    pub cache_creation_cost_per_million: String,
+}
+
+/// One Provider account's own price for one model, in USD per million tokens.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderModelPricingView {
+    pub provider_id: String,
+    pub model_id: String,
+    pub display_name: String,
+    pub input_cost_per_million: String,
+    pub output_cost_per_million: String,
+    pub cache_read_cost_per_million: String,
+    pub cache_creation_cost_per_million: String,
+    pub updated_at: i64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentModuleInput {
@@ -301,6 +347,9 @@ pub struct UsageEvent {
     pub cache_creation_cost_usd: Option<String>,
     pub total_cost_usd: Option<String>,
     pub cost_source: CostSource,
+    /// Which price catalogue produced the estimate, captured at ingestion time.
+    /// Null for upstream-reported costs, unavailable costs, and pre-v20 events.
+    pub pricing_origin: Option<PricingOrigin>,
     pub legacy_request_id: Option<String>,
     pub created_at: i64,
 }

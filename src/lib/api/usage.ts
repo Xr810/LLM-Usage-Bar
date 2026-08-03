@@ -13,6 +13,10 @@ import type {
   SessionSyncResult,
   DataSourceSummary,
 } from "@/types/usage";
+import type {
+  ModelPriceInput,
+  ProviderModelPricingView,
+} from "@/types/usageDashboard";
 import type { UsageResult } from "@/types";
 import type { AppId } from "./types";
 import type { TemplateType } from "@/config/constants";
@@ -166,6 +170,33 @@ export const usageApi = {
 
   deleteModelPricing: async (modelId: string): Promise<void> => {
     return invoke("delete_model_pricing", { modelId });
+  },
+
+  getProviderModelPricing: async (
+    providerId: string,
+  ): Promise<ProviderModelPricingView[]> => {
+    return invoke("get_provider_model_pricing", { providerId });
+  },
+
+  updateProviderModelPricing: async (
+    providerId: string,
+    modelId: string,
+    displayName: string,
+    price: ModelPriceInput,
+  ): Promise<void> => {
+    return invoke("update_provider_model_pricing", {
+      providerId,
+      modelId,
+      displayName,
+      price,
+    });
+  },
+
+  deleteProviderModelPricing: async (
+    providerId: string,
+    modelId: string,
+  ): Promise<void> => {
+    return invoke("delete_provider_model_pricing", { providerId, modelId });
   },
 
   checkProviderLimits: async (

@@ -740,6 +740,7 @@ mod tests {
             cache_creation_cost_usd: None,
             total_cost_usd: total_cost_usd.map(str::to_string),
             cost_source,
+            pricing_origin: None,
             legacy_request_id: None,
             created_at: occurred_at,
         }

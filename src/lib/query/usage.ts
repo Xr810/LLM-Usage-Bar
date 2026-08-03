@@ -6,6 +6,7 @@ import type {
   UsageRangeSelection,
   UsageScopeFilters,
 } from "@/types/usage";
+import type { ModelPriceInput } from "@/types/usageDashboard";
 
 const DEFAULT_REFETCH_INTERVAL_MS = 30000;
 
@@ -143,6 +144,8 @@ export const usageKeys = {
   detail: (requestId: string) =>
     [...usageKeys.all, "detail", requestId] as const,
   pricing: () => [...usageKeys.all, "pricing"] as const,
+  providerPricing: (providerId: string) =>
+    [...usageKeys.all, "providerPricing", providerId] as const,
   limits: (providerId: string, appType: string) =>
     [...usageKeys.all, "limits", providerId, appType] as const,
   script: (providerId: string, appType: string) =>
@@ -385,6 +388,49 @@ export function useDeleteModelPricing() {
 
   return useMutation({
     mutationFn: (modelId: string) => usageApi.deleteModelPricing(modelId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: usageKeys.all });
+    },
+  });
+}
+
+/** One metered Provider account's own model prices — what the user pays. */
+export function useProviderModelPricing(providerId: string) {
+  return useQuery({
+    queryKey: usageKeys.providerPricing(providerId),
+    queryFn: () => usageApi.getProviderModelPricing(providerId),
+    enabled: !!providerId,
+  });
+}
+
+export function useUpdateProviderModelPricing() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (params: {
+      providerId: string;
+      modelId: string;
+      displayName: string;
+      price: ModelPriceInput;
+    }) =>
+      usageApi.updateProviderModelPricing(
+        params.providerId,
+        params.modelId,
+        params.displayName,
+        params.price,
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: usageKeys.all });
+    },
+  });
+}
+
+export function useDeleteProviderModelPricing() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (params: { providerId: string; modelId: string }) =>
+      usageApi.deleteProviderModelPricing(params.providerId, params.modelId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: usageKeys.all });
     },

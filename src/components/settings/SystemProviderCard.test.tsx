@@ -22,6 +22,11 @@ vi.mock("./ProviderDailyBudgetField", () => ({
     </div>
   ),
 }));
+vi.mock("./ProviderModelPricingSection", () => ({
+  ProviderModelPricingSection: ({ providerId }: { providerId: string }) => (
+    <div data-testid={`pricing-${providerId}`}>Model prices</div>
+  ),
+}));
 vi.mock("./ClaudeCliAuthSection", () => ({
   ClaudeCliAuthSection: () => <div>Claude auth</div>,
 }));

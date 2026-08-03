@@ -127,6 +127,10 @@ vi.mock("./ProviderDailyBudgetField", () => ({
   ProviderDailyBudgetField: () => <div>Daily budget field</div>,
 }));
 
+vi.mock("./ProviderModelPricingSection", () => ({
+  ProviderModelPricingSection: () => <div>Model prices section</div>,
+}));
+
 describe("UsageProvidersSettings", () => {
   beforeEach(() => {
     mocks.saveProvider.mockReset().mockResolvedValue(undefined);

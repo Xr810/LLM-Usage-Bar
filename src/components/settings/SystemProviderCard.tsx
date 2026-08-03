@@ -17,6 +17,7 @@ import {
 import type { UsageProviderView } from "@/types/usageDashboard";
 import { ClaudeCliAuthSection } from "./ClaudeCliAuthSection";
 import { ProviderDailyBudgetField } from "./ProviderDailyBudgetField";
+import { ProviderModelPricingSection } from "./ProviderModelPricingSection";
 import { ProviderIcon } from "@/components/ProviderIcon";
 import { dashboardProviderIcon } from "@/components/usage-dashboard/usagePresentation";
 
@@ -195,6 +196,13 @@ export function SystemProviderCard({
             value={provider.dailyBudgetUsd}
             targeted={targetProviderId === provider.id}
             onTargetHandled={onTargetHandled}
+          />
+        ) : null}
+
+        {provider.billingKind === "metered" ? (
+          <ProviderModelPricingSection
+            providerId={provider.id}
+            providerName={provider.name}
           />
         ) : null}
 

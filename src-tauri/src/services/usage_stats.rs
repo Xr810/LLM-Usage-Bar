@@ -2041,6 +2041,89 @@ fn query_model_pricing_prefix(
     .map_err(|e| AppError::Database(format!("查询模型前缀定价失败: {e}")))
 }
 
+/// 查询某个 Provider 账号对某个模型的自定义单价（用户实付价）。
+///
+/// 与 `find_model_pricing_row` 共用同一套模型 ID 归一化和前缀匹配规则，因此
+/// 用户只填 `claude-sonnet-5` 也能覆盖日志里带日期后缀的实际模型名，行为和
+/// 官方价表保持一致。返回 `None` 表示该 Provider 没有为这个模型设过价。
+pub(crate) fn find_provider_model_pricing_row(
+    conn: &Connection,
+    provider_id: &str,
+    model_id: &str,
+) -> Result<Option<(String, String, String, String)>, AppError> {
+    let candidates = model_pricing_candidates(model_id);
+    if candidates.is_empty() {
+        return Ok(None);
+    }
+
+    for candidate in &candidates {
+        if let Some(row) = query_provider_model_pricing_exact(conn, provider_id, candidate)? {
+            return Ok(Some(row));
+        }
+    }
+
+    for candidate in &candidates {
+        if should_try_pricing_prefix_match(candidate) {
+            if let Some(row) = query_provider_model_pricing_prefix(conn, provider_id, candidate)? {
+                return Ok(Some(row));
+            }
+        }
+    }
+
+    Ok(None)
+}
+
+fn query_provider_model_pricing_exact(
+    conn: &Connection,
+    provider_id: &str,
+    model_id: &str,
+) -> Result<Option<(String, String, String, String)>, AppError> {
+    conn.query_row(
+        "SELECT input_cost_per_million, output_cost_per_million,
+                cache_read_cost_per_million, cache_creation_cost_per_million
+         FROM provider_model_pricing
+         WHERE provider_id = ?1 AND model_id = ?2",
+        [provider_id, model_id],
+        |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        },
+    )
+    .optional()
+    .map_err(|e| AppError::Database(format!("查询 Provider 自定义定价失败: {e}")))
+}
+
+fn query_provider_model_pricing_prefix(
+    conn: &Connection,
+    provider_id: &str,
+    model_id: &str,
+) -> Result<Option<(String, String, String, String)>, AppError> {
+    let pattern = format!("{model_id}-%");
+    conn.query_row(
+        "SELECT input_cost_per_million, output_cost_per_million,
+                cache_read_cost_per_million, cache_creation_cost_per_million
+         FROM provider_model_pricing
+         WHERE provider_id = ?1 AND model_id LIKE ?2
+         ORDER BY LENGTH(model_id) ASC
+         LIMIT 1",
+        [provider_id, &pattern],
+        |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        },
+    )
+    .optional()
+    .map_err(|e| AppError::Database(format!("查询 Provider 自定义前缀定价失败: {e}")))
+}
+
 fn model_pricing_candidates(model_id: &str) -> Vec<String> {
     let cleaned = clean_model_id_for_pricing(model_id);
     if is_placeholder_pricing_model(&cleaned) {

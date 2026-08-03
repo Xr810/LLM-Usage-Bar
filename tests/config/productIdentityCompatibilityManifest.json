@@ -1567,7 +1567,7 @@
   },
   {
     "file": "src-tauri/src/lib.rs",
-    "lineNumber": 1212,
+    "lineNumber": 1215,
     "columnNumber": 57,
     "matchedText": "ccswitch",
     "context": "// tauri-plugin-deep-link writes to: ~/.local/share/com.ccswitch.desktop/applications/cc-switch-handler.desktop",
@@ -1576,7 +1576,7 @@
   },
   {
     "file": "src-tauri/src/lib.rs",
-    "lineNumber": 1212,
+    "lineNumber": 1215,
     "columnNumber": 87,
     "matchedText": "cc-switch",
     "context": "// tauri-plugin-deep-link writes to: ~/.local/share/com.ccswitch.desktop/applications/cc-switch-handler.desktop",
@@ -1585,7 +1585,7 @@
   },
   {
     "file": "src-tauri/src/lib.rs",
-    "lineNumber": 1217,
+    "lineNumber": 1220,
     "columnNumber": 32,
     "matchedText": "cc-switch",
     "context": ".map(|d| !d.join(\"applications/cc-switch-handler.desktop\").exists())",
@@ -4186,7 +4186,7 @@
   },
   {
     "file": "src/i18n/locales/en.json",
-    "lineNumber": 765,
+    "lineNumber": 779,
     "columnNumber": 146,
     "matchedText": "CC Switch",
     "context": "\"importExportHint\": \"Import or export database SQL backups for migration or restore (imports accept backups exported by LLM Usage Bar and legacy CC Switch).\",",
@@ -4195,7 +4195,7 @@
   },
   {
     "file": "src/i18n/locales/en.json",
-    "lineNumber": 855,
+    "lineNumber": 869,
     "columnNumber": 32,
     "matchedText": "cc-switch",
     "context": "\"remoteRootDefault\": \"Default: cc-switch-sync\",",
@@ -4204,7 +4204,7 @@
   },
   {
     "file": "src/i18n/locales/en.json",
-    "lineNumber": 929,
+    "lineNumber": 943,
     "columnNumber": 32,
     "matchedText": "cc-switch",
     "context": "\"remoteRootDefault\": \"Default: cc-switch-sync\",",
@@ -4213,7 +4213,7 @@
   },
   {
     "file": "src/i18n/locales/en.json",
-    "lineNumber": 1349,
+    "lineNumber": 1363,
     "columnNumber": 126,
     "matchedText": "CC Switch",
     "context": "\"code0\": \"code0.ai is an AI coding service platform for developers, supporting Claude Code, Codex, and Gemini. Exclusive for CC Switch users: contact support via the official website to claim free trial credits!\",",
@@ -4222,7 +4222,7 @@
   },
   {
     "file": "src/i18n/locales/en.json",
-    "lineNumber": 1350,
+    "lineNumber": 1364,
     "columnNumber": 186,
     "matchedText": "CC Switch",
     "context": "\"nekocode\": \"NekoCode gives developers a stable, efficient, and reliable API relay for Claude, Codex, and other AI models, with transparent pay-as-you-go pricing. Exclusive 10% off for CC Switch users: register via the link above and enter promo code cc-switch at recharge to save 10%!\",",
@@ -4231,7 +4231,7 @@
   },
   {
     "file": "src/i18n/locales/en.json",
-    "lineNumber": 1350,
+    "lineNumber": 1364,
     "columnNumber": 252,
     "matchedText": "cc-switch",
     "context": "\"nekocode\": \"NekoCode gives developers a stable, efficient, and reliable API relay for Claude, Codex, and other AI models, with transparent pay-as-you-go pricing. Exclusive 10% off for CC Switch users: register via the link above and enter promo code cc-switch at recharge to save 10%!\",",
@@ -4240,7 +4240,7 @@
   },
   {
     "file": "src/i18n/locales/en.json",
-    "lineNumber": 1351,
+    "lineNumber": 1365,
     "columnNumber": 51,
     "matchedText": "CC Switch",
     "context": "\"packycode\": \"PackyCode is an official partner of CC Switch. Register using this link and enter \\\"cc-switch\\\" promo code during recharge to get 10% off\",",
@@ -4249,7 +4249,7 @@
   },
   {
     "file": "src/i18n/locales/en.json",
-    "lineNumber": 1351,
+    "lineNumber": 1365,
     "columnNumber": 99,
     "matchedText": "cc-switch",
     "context": "\"packycode\": \"PackyCode is an official partner of CC Switch. Register using this link and enter \\\"cc-switch\\\" promo code during recharge to get 10% off\",",
@@ -4258,7 +4258,7 @@
   },
   {
     "file": "src/i18n/locales/en.json",
-    "lineNumber": 1352,
+    "lineNumber": 1366,
     "columnNumber": 52,
     "matchedText": "CC Switch",
     "context": "\"apikeyfun\": \"APIKEY.FUN offers a special deal for CC Switch users. Register through the exclusive link to enjoy up to permanent 5% off top-ups.\",",
@@ -4267,7 +4267,7 @@
   },
   {
     "file": "src/i18n/locales/en.json",
-    "lineNumber": 1353,
+    "lineNumber": 1367,
     "columnNumber": 32,
     "matchedText": "CC Switch",
     "context": "\"apinebula\": \"APINEBULA offers CC Switch users a special discount: register using the link and enter the \\\"ccswitch\\\" promo code during your first top-up to get 10% off.\",",
@@ -4276,7 +4276,7 @@
   },
   {
     "file": "src/i18n/locales/en.json",
-    "lineNumber": 1353,
+    "lineNumber": 1367,
     "columnNumber": 108,
     "matchedText": "ccswitch",
     "context": "\"apinebula\": \"APINEBULA offers CC Switch users a special discount: register using the link and enter the \\\"ccswitch\\\" promo code during your first top-up to get 10% off.\",",
@@ -4285,7 +4285,7 @@
   },
   {
     "file": "src/i18n/locales/en.json",
-    "lineNumber": 1355,
+    "lineNumber": 1369,
     "columnNumber": 53,
     "matchedText": "CC Switch",
     "context": "\"patewayai\": \"PatewayAI offers special benefits for CC Switch users. Register via this link to receive $3 credit.\",",
@@ -4294,7 +4294,7 @@
   },
   {
     "file": "src/i18n/locales/en.json",
-    "lineNumber": 1356,
+    "lineNumber": 1370,
     "columnNumber": 53,
     "matchedText": "CC Switch",
     "context": "\"claudeapi\": \"ClaudeAPI offers special benefits for CC Switch users. Register via this link to claim test credits.\",",
@@ -4303,7 +4303,7 @@
   },
   {
     "file": "src/i18n/locales/en.json",
-    "lineNumber": 1358,
+    "lineNumber": 1372,
     "columnNumber": 47,
     "matchedText": "CC Switch",
     "context": "\"runapi\": \"RunAPI offers special benefits for CC Switch users. Register via this link and contact customer support to claim ¥14 free credit.\",",
@@ -4312,7 +4312,7 @@
   },
   {
     "file": "src/i18n/locales/en.json",
-    "lineNumber": 1363,
+    "lineNumber": 1377,
     "columnNumber": 47,
     "matchedText": "CC Switch",
     "context": "\"cubence\": \"Cubence is an official partner of CC Switch. Register using this link and enter \\\"CCSWITCH\\\" promo code during recharge to get 10% off every top-up\",",
@@ -4321,7 +4321,7 @@
   },
   {
     "file": "src/i18n/locales/en.json",
-    "lineNumber": 1363,
+    "lineNumber": 1377,
     "columnNumber": 95,
     "matchedText": "CCSWITCH",
     "context": "\"cubence\": \"Cubence is an official partner of CC Switch. Register using this link and enter \\\"CCSWITCH\\\" promo code during recharge to get 10% off every top-up\",",
@@ -4330,7 +4330,7 @@
   },
   {
     "file": "src/i18n/locales/en.json",
-    "lineNumber": 1364,
+    "lineNumber": 1378,
     "columnNumber": 49,
     "matchedText": "CC Switch",
     "context": "\"aigocode\": \"AIGoCode is an official partner of CC Switch. Register using this link and get 10% bonus credit on your first top-up!\",",
@@ -4339,7 +4339,7 @@
   },
   {
     "file": "src/i18n/locales/en.json",
-    "lineNumber": 1365,
+    "lineNumber": 1379,
     "columnNumber": 51,
     "matchedText": "CC Switch",
     "context": "\"rightcode\": \"RightCode is an official partner of CC Switch. Register using this link and get 5% bonus credit on every top-up!\",",
@@ -4348,7 +4348,7 @@
   },
   {
     "file": "src/i18n/locales/en.json",
-    "lineNumber": 1366,
+    "lineNumber": 1380,
     "columnNumber": 57,
     "matchedText": "CC Switch",
     "context": "\"aicodemirror\": \"AICodeMirror is an official partner of CC Switch. Register using this link to get 20% off!\",",
@@ -4357,7 +4357,7 @@
   },
   {
     "file": "src/i18n/locales/en.json",
-    "lineNumber": 1367,
+    "lineNumber": 1381,
     "columnNumber": 59,
     "matchedText": "CC Switch",
     "context": "\"crazyrouter\": \"CrazyRouter offers an exclusive bonus for CC Switch users — 30% extra credit on your first top-up!\",",
@@ -4366,7 +4366,7 @@
   },
   {
     "file": "src/i18n/locales/en.json",
-    "lineNumber": 1368,
+    "lineNumber": 1382,
     "columnNumber": 55,
     "matchedText": "CC Switch",
     "context": "\"sssaicode\": \"SSAI Code offers an exclusive bonus for CC Switch users — $10 extra credit on every top-up!\",",
@@ -4375,7 +4375,7 @@
   },
   {
     "file": "src/i18n/locales/en.json",
-    "lineNumber": 1369,
+    "lineNumber": 1383,
     "columnNumber": 55,
     "matchedText": "CC Switch",
     "context": "\"siliconflow\": \"SiliconFlow is an official partner of CC Switch\",",
@@ -4384,7 +4384,7 @@
   },
   {
     "file": "src/i18n/locales/en.json",
-    "lineNumber": 1370,
+    "lineNumber": 1384,
     "columnNumber": 52,
     "matchedText": "CC Switch",
     "context": "\"ucloud\": \"Compshare offers an exclusive bonus for CC Switch users — register via this link to get ¥5 platform trial credit!\",",
@@ -4393,7 +4393,7 @@
   },
   {
     "file": "src/i18n/locales/en.json",
-    "lineNumber": 1371,
+    "lineNumber": 1385,
     "columnNumber": 41,
     "matchedText": "CC Switch",
     "context": "\"micu\": \"Micu is an official partner of CC Switch\",",
@@ -4402,7 +4402,7 @@
   },
   {
     "file": "src/i18n/locales/en.json",
-    "lineNumber": 1373,
+    "lineNumber": 1387,
     "columnNumber": 61,
     "matchedText": "CC Switch",
     "context": "\"shengsuanyun\": \"Shengsuanyun offers exclusive benefits for CC Switch users. New users who register via this link get ¥10 free credits and 10% bonus on first top-up!\",",
@@ -4411,7 +4411,7 @@
   },
   {
     "file": "src/i18n/locales/en.json",
-    "lineNumber": 1374,
+    "lineNumber": 1388,
     "columnNumber": 53,
     "matchedText": "CC Switch",
     "context": "\"doubaoseed\": \"DouBao offers exclusive benefits for CC Switch users: register via this link to get 500K tokens of inference credits for all DouBao text models and 5M tokens of free Seedance 2.0 credits.\",",
@@ -4420,7 +4420,7 @@
   },
   {
     "file": "src/i18n/locales/en.json",
-    "lineNumber": 1375,
+    "lineNumber": 1389,
     "columnNumber": 83,
     "matchedText": "CC Switch",
     "context": "\"volcengine_agentplan\": \"Volcengine Ark Coding Plan offers exclusive benefits for CC Switch users: subscribe via this link and new customers get 75% off for the first two months, plus an extra 5% off with the exclusive invite code 6J6FV5N2 — as low as ¥9.4/month!\",",
@@ -4429,7 +4429,7 @@
   },
   {
     "file": "src/i18n/locales/en.json",
-    "lineNumber": 1380,
+    "lineNumber": 1394,
     "columnNumber": 119,
     "matchedText": "CC Switch",
     "context": "\"fenno\": \"Fenno.ai is a stable, efficient API relay giving you access to a wide range of mainstream models. Exclusive CC Switch offer: subscribe via this link to the ¥9.9 Coding Plan worth $150 in credits!\",",
@@ -4438,7 +4438,7 @@
   },
   {
     "file": "src/i18n/locales/en.json",
-    "lineNumber": 1381,
+    "lineNumber": 1395,
     "columnNumber": 102,
     "matchedText": "CC Switch",
     "context": "\"zetaapi\": \"ZetaAPI delivers real, undegraded models at as low as 35% of official pricing. Exclusive CC Switch offer: register via this link and use promo code CC-SWITCH for 10% off your first top-up!\",",
@@ -4447,7 +4447,7 @@
   },
   {
     "file": "src/i18n/locales/en.json",
-    "lineNumber": 1381,
+    "lineNumber": 1395,
     "columnNumber": 161,
     "matchedText": "CC-SWITCH",
     "context": "\"zetaapi\": \"ZetaAPI delivers real, undegraded models at as low as 35% of official pricing. Exclusive CC Switch offer: register via this link and use promo code CC-SWITCH for 10% off your first top-up!\",",
@@ -4456,7 +4456,7 @@
   },
   {
     "file": "src/i18n/locales/en.json",
-    "lineNumber": 1382,
+    "lineNumber": 1396,
     "columnNumber": 133,
     "matchedText": "CC Switch",
     "context": "\"teamorouter\": \"TeamoRouter is an enterprise-grade Agentic LLM gateway with pricing up to 90% off. It offers exclusive benefits for CC Switch users: register via this link as a new user for 10% off your first top-up!\",",
@@ -4465,7 +4465,7 @@
   },
   {
     "file": "src/i18n/locales/en.json",
-    "lineNumber": 1383,
+    "lineNumber": 1397,
     "columnNumber": 52,
     "matchedText": "CC Switch",
     "context": "\"unity2\": \"Unity2.ai offers exclusive benefits for CC Switch users: register via this link to get $2 in credits, plus another $10 for joining the official group — up to $12 in free credits!\"",
@@ -4474,7 +4474,7 @@
   },
   {
     "file": "src/i18n/locales/ja.json",
-    "lineNumber": 765,
+    "lineNumber": 779,
     "columnNumber": 84,
     "matchedText": "CC Switch",
     "context": "\"importExportHint\": \"移行や復元用にデータベースの SQL バックアップをインポート/エクスポートします（LLM Usage Bar または旧版 CC Switch がエクスポートしたバックアップをインポートできます）。\",",
@@ -4483,7 +4483,7 @@
   },
   {
     "file": "src/i18n/locales/ja.json",
-    "lineNumber": 855,
+    "lineNumber": 869,
     "columnNumber": 30,
     "matchedText": "cc-switch",
     "context": "\"remoteRootDefault\": \"デフォルト: cc-switch-sync\",",
@@ -4492,7 +4492,7 @@
   },
   {
     "file": "src/i18n/locales/ja.json",
-    "lineNumber": 929,
+    "lineNumber": 943,
     "columnNumber": 30,
     "matchedText": "cc-switch",
     "context": "\"remoteRootDefault\": \"デフォルト: cc-switch-sync\",",
@@ -4501,7 +4501,7 @@
   },
   {
     "file": "src/i18n/locales/ja.json",
-    "lineNumber": 1349,
+    "lineNumber": 1363,
     "columnNumber": 80,
     "matchedText": "CC Switch",
     "context": "\"code0\": \"code0.ai は開発者向けの AI コーディングサービスプラットフォームで、Claude Code、Codex、Gemini に対応。CC Switch ユーザー限定特典：公式サイトからサポートに連絡してテストクレジットを受け取れます！\",",
@@ -4510,7 +4510,7 @@
   },
   {
     "file": "src/i18n/locales/ja.json",
-    "lineNumber": 1350,
+    "lineNumber": 1364,
     "columnNumber": 96,
     "matchedText": "CC Switch",
     "context": "\"nekocode\": \"NekoCode は Claude や Codex などの AI モデルに対応した、安定・高効率で信頼性の高い API 中継サービスを提供します。明瞭な従量課金制。CC Switch ユーザー限定 10%オフ：上のリンクから登録し、チャージ時にクーポンコード cc-switch を入力すると 10%オフ！\",",
@@ -4519,7 +4519,7 @@
   },
   {
     "file": "src/i18n/locales/ja.json",
-    "lineNumber": 1350,
+    "lineNumber": 1364,
     "columnNumber": 144,
     "matchedText": "cc-switch",
     "context": "\"nekocode\": \"NekoCode は Claude や Codex などの AI モデルに対応した、安定・高効率で信頼性の高い API 中継サービスを提供します。明瞭な従量課金制。CC Switch ユーザー限定 10%オフ：上のリンクから登録し、チャージ時にクーポンコード cc-switch を入力すると 10%オフ！\",",
@@ -4528,7 +4528,7 @@
   },
   {
     "file": "src/i18n/locales/ja.json",
-    "lineNumber": 1351,
+    "lineNumber": 1365,
     "columnNumber": 27,
     "matchedText": "CC Switch",
     "context": "\"packycode\": \"PackyCode は CC Switch の公式パートナーです。登録後チャージ時に \\\"cc-switch\\\" を入力すると 10% オフ\",",
@@ -4537,7 +4537,7 @@
   },
   {
     "file": "src/i18n/locales/ja.json",
-    "lineNumber": 1351,
+    "lineNumber": 1365,
     "columnNumber": 60,
     "matchedText": "cc-switch",
     "context": "\"packycode\": \"PackyCode は CC Switch の公式パートナーです。登録後チャージ時に \\\"cc-switch\\\" を入力すると 10% オフ\",",
@@ -4546,7 +4546,7 @@
   },
   {
     "file": "src/i18n/locales/ja.json",
-    "lineNumber": 1352,
+    "lineNumber": 1366,
     "columnNumber": 28,
     "matchedText": "CC Switch",
     "context": "\"apikeyfun\": \"APIKEY.FUN は CC Switch ユーザー向けに特別優待を提供しています。専用リンクから登録すると、最大でチャージ永久 5% オフを受けられます。\",",
@@ -4555,7 +4555,7 @@
   },
   {
     "file": "src/i18n/locales/ja.json",
-    "lineNumber": 1353,
+    "lineNumber": 1367,
     "columnNumber": 27,
     "matchedText": "CC Switch",
     "context": "\"apinebula\": \"APINEBULA は CC Switch ユーザー向けに特別割引を提供しています。専用リンクから登録し、チャージ時にプロモコード「ccswitch」を入力すると、さらに 10% OFF の割引が適用されます。\",",
@@ -4564,7 +4564,7 @@
   },
   {
     "file": "src/i18n/locales/ja.json",
-    "lineNumber": 1353,
+    "lineNumber": 1367,
     "columnNumber": 81,
     "matchedText": "ccswitch",
     "context": "\"apinebula\": \"APINEBULA は CC Switch ユーザー向けに特別割引を提供しています。専用リンクから登録し、チャージ時にプロモコード「ccswitch」を入力すると、さらに 10% OFF の割引が適用されます。\",",
@@ -4573,7 +4573,7 @@
   },
   {
     "file": "src/i18n/locales/ja.json",
-    "lineNumber": 1355,
+    "lineNumber": 1369,
     "columnNumber": 27,
     "matchedText": "CC Switch",
     "context": "\"patewayai\": \"PatewayAI は CC Switch ユーザーに特別な特典を提供しています。このリンクから登録すると $3 のクレジットがもらえます。\",",
@@ -4582,7 +4582,7 @@
   },
   {
     "file": "src/i18n/locales/ja.json",
-    "lineNumber": 1356,
+    "lineNumber": 1370,
     "columnNumber": 27,
     "matchedText": "CC Switch",
     "context": "\"claudeapi\": \"ClaudeAPI は CC Switch ユーザーに特別な特典を提供しています。このリンクから登録するとテストクレジットを受け取ることができます。\",",
@@ -4591,7 +4591,7 @@
   },
   {
     "file": "src/i18n/locales/ja.json",
-    "lineNumber": 1358,
+    "lineNumber": 1372,
     "columnNumber": 21,
     "matchedText": "CC Switch",
     "context": "\"runapi\": \"RunAPI は CC Switch ユーザーに特別な特典を提供しています。このリンクから登録しカスタマーサポートにご連絡いただくと、¥14 の無料クレジットを受け取ることができます。\",",
@@ -4600,7 +4600,7 @@
   },
   {
     "file": "src/i18n/locales/ja.json",
-    "lineNumber": 1363,
+    "lineNumber": 1377,
     "columnNumber": 23,
     "matchedText": "CC Switch",
     "context": "\"cubence\": \"Cubence は CC Switch の公式パートナーです。登録後チャージ時に \\\"CCSWITCH\\\" を入力すると、毎回 10% オフ\",",
@@ -4609,7 +4609,7 @@
   },
   {
     "file": "src/i18n/locales/ja.json",
-    "lineNumber": 1363,
+    "lineNumber": 1377,
     "columnNumber": 56,
     "matchedText": "CCSWITCH",
     "context": "\"cubence\": \"Cubence は CC Switch の公式パートナーです。登録後チャージ時に \\\"CCSWITCH\\\" を入力すると、毎回 10% オフ\",",
@@ -4618,7 +4618,7 @@
   },
   {
     "file": "src/i18n/locales/ja.json",
-    "lineNumber": 1364,
+    "lineNumber": 1378,
     "columnNumber": 25,
     "matchedText": "CC Switch",
     "context": "\"aigocode\": \"AIGoCode は CC Switch の公式パートナーです。このリンクから登録すると、初回チャージ時に 10% のボーナスクレジットがもらえます！\",",
@@ -4627,7 +4627,7 @@
   },
   {
     "file": "src/i18n/locales/ja.json",
-    "lineNumber": 1365,
+    "lineNumber": 1379,
     "columnNumber": 27,
     "matchedText": "CC Switch",
     "context": "\"rightcode\": \"RightCode は CC Switch の公式パートナーです。このリンクから登録すると、毎回のチャージに 5% のボーナスクレジットがもらえます！\",",
@@ -4636,7 +4636,7 @@
   },
   {
     "file": "src/i18n/locales/ja.json",
-    "lineNumber": 1366,
+    "lineNumber": 1380,
     "columnNumber": 33,
     "matchedText": "CC Switch",
     "context": "\"aicodemirror\": \"AICodeMirror は CC Switch の公式パートナーです。このリンクから登録すると20%オフ！\",",
@@ -4645,7 +4645,7 @@
   },
   {
     "file": "src/i18n/locales/ja.json",
-    "lineNumber": 1367,
+    "lineNumber": 1381,
     "columnNumber": 31,
     "matchedText": "CC Switch",
     "context": "\"crazyrouter\": \"CrazyRouter は CC Switch ユーザー向けに特別ボーナスを提供しています。初回チャージで 30% の追加クレジットがもらえます！\",",
@@ -4654,7 +4654,7 @@
   },
   {
     "file": "src/i18n/locales/ja.json",
-    "lineNumber": 1368,
+    "lineNumber": 1382,
     "columnNumber": 27,
     "matchedText": "CC Switch",
     "context": "\"sssaicode\": \"SSAI Code は CC Switch ユーザー向けに特別ボーナスを提供しています。チャージごとに $10 の追加クレジットがもらえます！\",",
@@ -4663,7 +4663,7 @@
   },
   {
     "file": "src/i18n/locales/ja.json",
-    "lineNumber": 1369,
+    "lineNumber": 1383,
     "columnNumber": 31,
     "matchedText": "CC Switch",
     "context": "\"siliconflow\": \"SiliconFlow は CC Switch の公式パートナーです\",",
@@ -4672,7 +4672,7 @@
   },
   {
     "file": "src/i18n/locales/ja.json",
-    "lineNumber": 1370,
+    "lineNumber": 1384,
     "columnNumber": 24,
     "matchedText": "CC Switch",
     "context": "\"ucloud\": \"Compshare は CC Switch ユーザー向けに特別ボーナスを提供しています。このリンクから登録すると、5元のプラットフォーム体験クレジットがもらえます！\",",
@@ -4681,7 +4681,7 @@
   },
   {
     "file": "src/i18n/locales/ja.json",
-    "lineNumber": 1371,
+    "lineNumber": 1385,
     "columnNumber": 17,
     "matchedText": "CC Switch",
     "context": "\"micu\": \"Micu は CC Switch の公式パートナーです\",",
@@ -4690,7 +4690,7 @@
   },
   {
     "file": "src/i18n/locales/ja.json",
-    "lineNumber": 1373,
+    "lineNumber": 1387,
     "columnNumber": 22,
     "matchedText": "CC Switch",
     "context": "\"shengsuanyun\": \"胜算云はCC Switchユーザーに特別特典を提供しています。このリンクから登録すると、10元分の無料クレジットと初回チャージ10%ボーナスがもらえます！\",",
@@ -4699,7 +4699,7 @@
   },
   {
     "file": "src/i18n/locales/ja.json",
-    "lineNumber": 1374,
+    "lineNumber": 1388,
     "columnNumber": 24,
     "matchedText": "CC Switch",
     "context": "\"doubaoseed\": \"豆包大モデルは CC Switch ユーザーに専属特典を提供しています：このリンクから登録すると、豆包全テキストモデル50万トークンの推論クレジットおよびSeedance2.0の500万トークン無料クレジットがもらえます。\",",
@@ -4708,7 +4708,7 @@
   },
   {
     "file": "src/i18n/locales/ja.json",
-    "lineNumber": 1375,
+    "lineNumber": 1389,
     "columnNumber": 45,
     "matchedText": "CC Switch",
     "context": "\"volcengine_agentplan\": \"火山方舟 Coding Plan は CC Switch ユーザーに専属特典を提供しています：このリンクから方舟 Coding Plan を購読すると、新規のお客様は最初の 2 か月が 75% オフ、さらに専用招待コード 6J6FV5N2 で 5% オフが加算され、月額 9.4 元から！\",",
@@ -4717,7 +4717,7 @@
   },
   {
     "file": "src/i18n/locales/ja.json",
-    "lineNumber": 1380,
+    "lineNumber": 1394,
     "columnNumber": 57,
     "matchedText": "CC Switch",
     "context": "\"fenno\": \"Fenno.ai は安定・高効率な API 中継サービスで、幅広い主要モデルを利用できます。CC Switch 利用者限定特典：このリンクから 9.9 元（150 ドル相当）の Coding Plan を購入できます！\",",
@@ -4726,7 +4726,7 @@
   },
   {
     "file": "src/i18n/locales/ja.json",
-    "lineNumber": 1381,
+    "lineNumber": 1395,
     "columnNumber": 55,
     "matchedText": "CC Switch",
     "context": "\"zetaapi\": \"ZetaAPI はモデルを水増し・劣化させず、公式価格の 35% から利用できます。CC Switch 利用者限定特典：このリンクから登録し、初回チャージ時にプロモコード CC-SWITCH を使うと初回チャージ 10% オフ！\",",
@@ -4735,7 +4735,7 @@
   },
   {
     "file": "src/i18n/locales/ja.json",
-    "lineNumber": 1381,
+    "lineNumber": 1395,
     "columnNumber": 99,
     "matchedText": "CC-SWITCH",
     "context": "\"zetaapi\": \"ZetaAPI はモデルを水増し・劣化させず、公式価格の 35% から利用できます。CC Switch 利用者限定特典：このリンクから登録し、初回チャージ時にプロモコード CC-SWITCH を使うと初回チャージ 10% オフ！\",",
@@ -4744,7 +4744,7 @@
   },
   {
     "file": "src/i18n/locales/ja.json",
-    "lineNumber": 1382,
+    "lineNumber": 1396,
     "columnNumber": 77,
     "matchedText": "CC Switch",
     "context": "\"teamorouter\": \"TeamoRouter はエンタープライズグレードの Agentic LLM ゲートウェイで、料金は最大 90% オフ。CC Switch ユーザーに特別特典を提供しています：このリンクから新規登録すると初回チャージが 10% オフ！\",",
@@ -4753,7 +4753,7 @@
   },
   {
     "file": "src/i18n/locales/ja.json",
-    "lineNumber": 1383,
+    "lineNumber": 1397,
     "columnNumber": 24,
     "matchedText": "CC Switch",
     "context": "\"unity2\": \"Unity2.ai は CC Switch ユーザーに専属特典を提供しています：このリンクから登録すると $2 分のクレジット、公式グループ参加でさらに $10、最大 $12 の無料クレジットがもらえます！\"",
@@ -4762,7 +4762,7 @@
   },
   {
     "file": "src/i18n/locales/zh-TW.json",
-    "lineNumber": 765,
+    "lineNumber": 779,
     "columnNumber": 59,
     "matchedText": "CC Switch",
     "context": "\"importExportHint\": \"匯入/匯出資料庫 SQL 備份（支援 LLM Usage Bar 和舊版 CC Switch 匯出的備份），便於備份或遷移。\",",
@@ -4771,7 +4771,7 @@
   },
   {
     "file": "src/i18n/locales/zh-TW.json",
-    "lineNumber": 855,
+    "lineNumber": 869,
     "columnNumber": 27,
     "matchedText": "cc-switch",
     "context": "\"remoteRootDefault\": \"預設: cc-switch-sync\",",
@@ -4780,7 +4780,7 @@
   },
   {
     "file": "src/i18n/locales/zh-TW.json",
-    "lineNumber": 929,
+    "lineNumber": 943,
     "columnNumber": 27,
     "matchedText": "cc-switch",
     "context": "\"remoteRootDefault\": \"預設: cc-switch-sync\",",
@@ -4789,7 +4789,7 @@
   },
   {
     "file": "src/i18n/locales/zh-TW.json",
-    "lineNumber": 1320,
+    "lineNumber": 1334,
     "columnNumber": 68,
     "matchedText": "CC Switch",
     "context": "\"code0\": \"code0.ai 是面向開發者的 AI 程式設計服務平台，支援 Claude Code、Codex、Gemini。CC Switch 使用者專屬福利：透過官網聯繫客服即可領取測試額度！\",",
@@ -4798,7 +4798,7 @@
   },
   {
     "file": "src/i18n/locales/zh-TW.json",
-    "lineNumber": 1321,
+    "lineNumber": 1335,
     "columnNumber": 79,
     "matchedText": "CC Switch",
     "context": "\"nekocode\": \"NekoCode 為開發者提供穩定、高效、可靠的 Claude、Codex 等 AI 模型 API 中轉服務，價格透明、按量計費。CC Switch 使用者專享 9 折：透過上方連結註冊，儲值時輸入優惠碼 cc-switch 即享 9 折優惠！\",",
@@ -4807,7 +4807,7 @@
   },
   {
     "file": "src/i18n/locales/zh-TW.json",
-    "lineNumber": 1321,
+    "lineNumber": 1335,
     "columnNumber": 117,
     "matchedText": "cc-switch",
     "context": "\"nekocode\": \"NekoCode 為開發者提供穩定、高效、可靠的 Claude、Codex 等 AI 模型 API 中轉服務，價格透明、按量計費。CC Switch 使用者專享 9 折：透過上方連結註冊，儲值時輸入優惠碼 cc-switch 即享 9 折優惠！\",",
@@ -4816,7 +4816,7 @@
   },
   {
     "file": "src/i18n/locales/zh-TW.json",
-    "lineNumber": 1322,
+    "lineNumber": 1336,
     "columnNumber": 27,
     "matchedText": "CC Switch",
     "context": "\"packycode\": \"PackyCode 是 CC Switch 的官方合作夥伴，使用此連結註冊並在儲值時填寫「cc-switch」優惠碼，可以享受 9 折優惠\",",
@@ -4825,7 +4825,7 @@
   },
   {
     "file": "src/i18n/locales/zh-TW.json",
-    "lineNumber": 1322,
+    "lineNumber": 1336,
     "columnNumber": 60,
     "matchedText": "cc-switch",
     "context": "\"packycode\": \"PackyCode 是 CC Switch 的官方合作夥伴，使用此連結註冊並在儲值時填寫「cc-switch」優惠碼，可以享受 9 折優惠\",",
@@ -4834,7 +4834,7 @@
   },
   {
     "file": "src/i18n/locales/zh-TW.json",
-    "lineNumber": 1323,
+    "lineNumber": 1337,
     "columnNumber": 28,
     "matchedText": "CC Switch",
     "context": "\"apikeyfun\": \"APIKEY.FUN 為 CC Switch 的使用者提供了特別優惠，透過專屬連結註冊，可享受最高儲值永久 95 折優惠。\",",
@@ -4843,7 +4843,7 @@
   },
   {
     "file": "src/i18n/locales/zh-TW.json",
-    "lineNumber": 1324,
+    "lineNumber": 1338,
     "columnNumber": 27,
     "matchedText": "CC Switch",
     "context": "\"apinebula\": \"APINEBULA 為 CC Switch 使用者提供特別優惠：使用專屬連結註冊並在儲值時填寫「ccswitch」優惠碼，可享 9 折優惠。\",",
@@ -4852,7 +4852,7 @@
   },
   {
     "file": "src/i18n/locales/zh-TW.json",
-    "lineNumber": 1324,
+    "lineNumber": 1338,
     "columnNumber": 63,
     "matchedText": "ccswitch",
     "context": "\"apinebula\": \"APINEBULA 為 CC Switch 使用者提供特別優惠：使用專屬連結註冊並在儲值時填寫「ccswitch」優惠碼，可享 9 折優惠。\",",
@@ -4861,7 +4861,7 @@
   },
   {
     "file": "src/i18n/locales/zh-TW.json",
-    "lineNumber": 1326,
+    "lineNumber": 1340,
     "columnNumber": 27,
     "matchedText": "CC Switch",
     "context": "\"patewayai\": \"PatewayAI 為 CC Switch 的使用者提供了特別福利，透過此連結註冊可以獲得 3 美元額度。\",",
@@ -4870,7 +4870,7 @@
   },
   {
     "file": "src/i18n/locales/zh-TW.json",
-    "lineNumber": 1327,
+    "lineNumber": 1341,
     "columnNumber": 27,
     "matchedText": "CC Switch",
     "context": "\"claudeapi\": \"ClaudeAPI 為 CC Switch 的使用者提供了特別福利，透過此連結註冊可以領取測試額度。\",",
@@ -4879,7 +4879,7 @@
   },
   {
     "file": "src/i18n/locales/zh-TW.json",
-    "lineNumber": 1329,
+    "lineNumber": 1343,
     "columnNumber": 21,
     "matchedText": "CC Switch",
     "context": "\"runapi\": \"RunAPI 為 CC Switch 的使用者提供了特別福利，透過此連結註冊並聯繫客服可領取 ¥14 免費額度。\",",
@@ -4888,7 +4888,7 @@
   },
   {
     "file": "src/i18n/locales/zh-TW.json",
-    "lineNumber": 1334,
+    "lineNumber": 1348,
     "columnNumber": 23,
     "matchedText": "CC Switch",
     "context": "\"cubence\": \"Cubence 是 CC Switch 的官方合作夥伴，使用此連結註冊並在儲值時填寫「CCSWITCH」優惠碼，每次儲值均可享受 9 折優惠\",",
@@ -4897,7 +4897,7 @@
   },
   {
     "file": "src/i18n/locales/zh-TW.json",
-    "lineNumber": 1334,
+    "lineNumber": 1348,
     "columnNumber": 56,
     "matchedText": "CCSWITCH",
     "context": "\"cubence\": \"Cubence 是 CC Switch 的官方合作夥伴，使用此連結註冊並在儲值時填寫「CCSWITCH」優惠碼，每次儲值均可享受 9 折優惠\",",
@@ -4906,7 +4906,7 @@
   },
   {
     "file": "src/i18n/locales/zh-TW.json",
-    "lineNumber": 1335,
+    "lineNumber": 1349,
     "columnNumber": 25,
     "matchedText": "CC Switch",
     "context": "\"aigocode\": \"AIGoCode 是 CC Switch 的官方合作夥伴，使用此連結註冊首次儲值時可以獲得 10% 額度獎勵！\",",
@@ -4915,7 +4915,7 @@
   },
   {
     "file": "src/i18n/locales/zh-TW.json",
-    "lineNumber": 1336,
+    "lineNumber": 1350,
     "columnNumber": 27,
     "matchedText": "CC Switch",
     "context": "\"rightcode\": \"RightCode 是 CC Switch 的官方合作夥伴，使用此連結註冊每次儲值均可贈送 5% 額外額度！\",",
@@ -4924,7 +4924,7 @@
   },
   {
     "file": "src/i18n/locales/zh-TW.json",
-    "lineNumber": 1337,
+    "lineNumber": 1351,
     "columnNumber": 33,
     "matchedText": "CC Switch",
     "context": "\"aicodemirror\": \"AICodeMirror 是 CC Switch 的官方合作夥伴，使用此連結註冊可享受 8 折優惠！\",",
@@ -4933,7 +4933,7 @@
   },
   {
     "file": "src/i18n/locales/zh-TW.json",
-    "lineNumber": 1338,
+    "lineNumber": 1352,
     "columnNumber": 26,
     "matchedText": "CC Switch",
     "context": "\"aicoding\": \"AI Coding 為 CC Switch 的使用者提供了特殊優惠，首次儲值可以享受 9 折優惠！\",",
@@ -4942,7 +4942,7 @@
   },
   {
     "file": "src/i18n/locales/zh-TW.json",
-    "lineNumber": 1339,
+    "lineNumber": 1353,
     "columnNumber": 31,
     "matchedText": "CC Switch",
     "context": "\"crazyrouter\": \"CrazyRouter 為 CC Switch 的使用者提供了特殊優惠，首次儲值贈送 30% 額外額度！\",",
@@ -4951,7 +4951,7 @@
   },
   {
     "file": "src/i18n/locales/zh-TW.json",
-    "lineNumber": 1340,
+    "lineNumber": 1354,
     "columnNumber": 27,
     "matchedText": "CC Switch",
     "context": "\"sssaicode\": \"SSAI Code 為 CC Switch 的使用者提供了特殊優惠，每次儲值贈送額外 $10 額度！\",",
@@ -4960,7 +4960,7 @@
   },
   {
     "file": "src/i18n/locales/zh-TW.json",
-    "lineNumber": 1341,
+    "lineNumber": 1355,
     "columnNumber": 23,
     "matchedText": "CC Switch",
     "context": "\"siliconflow\": \"矽基流動是 CC Switch 的官方合作夥伴\",",
@@ -4969,7 +4969,7 @@
   },
   {
     "file": "src/i18n/locales/zh-TW.json",
-    "lineNumber": 1342,
+    "lineNumber": 1356,
     "columnNumber": 18,
     "matchedText": "CC Switch",
     "context": "\"ucloud\": \"優雲智算為 CC Switch 的使用者提供了特殊優惠，透過此連結註冊，可以獲得 5 元平台體驗金！\",",
@@ -4978,7 +4978,7 @@
   },
   {
     "file": "src/i18n/locales/zh-TW.json",
-    "lineNumber": 1343,
+    "lineNumber": 1357,
     "columnNumber": 17,
     "matchedText": "CC Switch",
     "context": "\"micu\": \"Micu 是 CC Switch 的官方合作夥伴\",",
@@ -4987,7 +4987,7 @@
   },
   {
     "file": "src/i18n/locales/zh-TW.json",
-    "lineNumber": 1345,
+    "lineNumber": 1359,
     "columnNumber": 23,
     "matchedText": "CC Switch",
     "context": "\"shengsuanyun\": \"勝算雲為 CC Switch 的使用者提供了特別福利，使用此連結註冊的新使用者可獲 10 元模力及首儲 10% 贈送！\",",
@@ -4996,7 +4996,7 @@
   },
   {
     "file": "src/i18n/locales/zh-TW.json",
-    "lineNumber": 1346,
+    "lineNumber": 1360,
     "columnNumber": 23,
     "matchedText": "CC Switch",
     "context": "\"doubaoseed\": \"豆包大模型為 CC Switch 的使用者提供了專屬福利：透過此連結註冊即可取得豆包全系列文本模型 50 萬 tokens 推理額度以及 Seedance 2.0 的 500 萬 tokens 免費額度\",",
@@ -5005,7 +5005,7 @@
   },
   {
     "file": "src/i18n/locales/zh-TW.json",
-    "lineNumber": 1347,
+    "lineNumber": 1361,
     "columnNumber": 45,
     "matchedText": "CC Switch",
     "context": "\"volcengine_agentplan\": \"火山方舟 Coding Plan 為 CC Switch 的使用者提供了專屬福利：透過此連結訂閱方舟 Coding Plan，新客戶首兩個月享 2.5 折優惠，再用專屬邀請碼 6J6FV5N2 領取獎勵疊加 9.5 折，低至 9.4 元/月！\",",
@@ -5014,7 +5014,7 @@
   },
   {
     "file": "src/i18n/locales/zh-TW.json",
-    "lineNumber": 1352,
+    "lineNumber": 1366,
     "columnNumber": 47,
     "matchedText": "CC Switch",
     "context": "\"fenno\": \"Fenno.ai 是穩定高效的 API 中轉服務商，可接入多種主流模型。CC Switch 使用者專屬福利：透過此連結訂閱 9.9 元 /150 刀額度的超值 Coding Plan！\",",
@@ -5023,7 +5023,7 @@
   },
   {
     "file": "src/i18n/locales/zh-TW.json",
-    "lineNumber": 1353,
+    "lineNumber": 1367,
     "columnNumber": 46,
     "matchedText": "CC Switch",
     "context": "\"zetaapi\": \"ZetaAPI 主打模型不摻水、不降智，價格低至官方價 35 折。CC Switch 使用者專屬福利：透過此連結註冊，首次充值使用優惠碼 CC-SWITCH 即可享受九折優惠！\",",
@@ -5032,7 +5032,7 @@
   },
   {
     "file": "src/i18n/locales/zh-TW.json",
-    "lineNumber": 1353,
+    "lineNumber": 1367,
     "columnNumber": 82,
     "matchedText": "CC-SWITCH",
     "context": "\"zetaapi\": \"ZetaAPI 主打模型不摻水、不降智，價格低至官方價 35 折。CC Switch 使用者專屬福利：透過此連結註冊，首次充值使用優惠碼 CC-SWITCH 即可享受九折優惠！\",",
@@ -5041,7 +5041,7 @@
   },
   {
     "file": "src/i18n/locales/zh-TW.json",
-    "lineNumber": 1354,
+    "lineNumber": 1368,
     "columnNumber": 65,
     "matchedText": "CC Switch",
     "context": "\"teamorouter\": \"TeamoRouter 是企業級 Agentic LLM 閘道，價格最高可達 90% 折扣。為 CC Switch 的使用者提供了特別福利：新使用者透過此連結註冊，首次充值享 10% 折扣！\",",
@@ -5050,7 +5050,7 @@
   },
   {
     "file": "src/i18n/locales/zh-TW.json",
-    "lineNumber": 1355,
+    "lineNumber": 1369,
     "columnNumber": 24,
     "matchedText": "CC Switch",
     "context": "\"unity2\": \"Unity2.ai 為 CC Switch 使用者提供專屬福利：透過此連結註冊可領取 $2 餘額，加入官方群再送 $10，最高可領 $12 免費額度！\"",
@@ -5059,7 +5059,7 @@
   },
   {
     "file": "src/i18n/locales/zh.json",
-    "lineNumber": 765,
+    "lineNumber": 779,
     "columnNumber": 59,
     "matchedText": "CC Switch",
     "context": "\"importExportHint\": \"导入/导出数据库 SQL 备份（支持 LLM Usage Bar 和旧版 CC Switch 导出的备份），便于备份或迁移。\",",
@@ -5068,7 +5068,7 @@
   },
   {
     "file": "src/i18n/locales/zh.json",
-    "lineNumber": 855,
+    "lineNumber": 869,
     "columnNumber": 27,
     "matchedText": "cc-switch",
     "context": "\"remoteRootDefault\": \"默认: cc-switch-sync\",",
@@ -5077,7 +5077,7 @@
   },
   {
     "file": "src/i18n/locales/zh.json",
-    "lineNumber": 929,
+    "lineNumber": 943,
     "columnNumber": 27,
     "matchedText": "cc-switch",
     "context": "\"remoteRootDefault\": \"默认: cc-switch-sync\",",
@@ -5086,7 +5086,7 @@
   },
   {
     "file": "src/i18n/locales/zh.json",
-    "lineNumber": 1349,
+    "lineNumber": 1363,
     "columnNumber": 66,
     "matchedText": "CC Switch",
     "context": "\"code0\": \"code0.ai 是面向开发者的 AI 编程服务平台，支持 Claude Code、Codex、Gemini。CC Switch 用户专属福利：通过官网联系客服即可领取测试额度！\",",
@@ -5095,7 +5095,7 @@
   },
   {
     "file": "src/i18n/locales/zh.json",
-    "lineNumber": 1350,
+    "lineNumber": 1364,
     "columnNumber": 79,
     "matchedText": "CC Switch",
     "context": "\"nekocode\": \"NekoCode 为开发者提供稳定、高效、可靠的 Claude、Codex 等 AI 模型 API 中转服务，价格透明、按量计费。CC Switch 用户专享 9 折：通过上方链接注册，充值时输入优惠码 cc-switch 即享 9 折优惠！\",",
@@ -5104,7 +5104,7 @@
   },
   {
     "file": "src/i18n/locales/zh.json",
-    "lineNumber": 1350,
+    "lineNumber": 1364,
     "columnNumber": 116,
     "matchedText": "cc-switch",
     "context": "\"nekocode\": \"NekoCode 为开发者提供稳定、高效、可靠的 Claude、Codex 等 AI 模型 API 中转服务，价格透明、按量计费。CC Switch 用户专享 9 折：通过上方链接注册，充值时输入优惠码 cc-switch 即享 9 折优惠！\",",
@@ -5113,7 +5113,7 @@
   },
   {
     "file": "src/i18n/locales/zh.json",
-    "lineNumber": 1351,
+    "lineNumber": 1365,
     "columnNumber": 27,
     "matchedText": "CC Switch",
     "context": "\"packycode\": \"PackyCode 是 CC Switch 的官方合作伙伴，使用此链接注册并在充值时填写 \\\"cc-switch\\\" 优惠码，可以享受9折优惠\",",
@@ -5122,7 +5122,7 @@
   },
   {
     "file": "src/i18n/locales/zh.json",
-    "lineNumber": 1351,
+    "lineNumber": 1365,
     "columnNumber": 62,
     "matchedText": "cc-switch",
     "context": "\"packycode\": \"PackyCode 是 CC Switch 的官方合作伙伴，使用此链接注册并在充值时填写 \\\"cc-switch\\\" 优惠码，可以享受9折优惠\",",
@@ -5131,7 +5131,7 @@
   },
   {
     "file": "src/i18n/locales/zh.json",
-    "lineNumber": 1352,
+    "lineNumber": 1366,
     "columnNumber": 28,
     "matchedText": "CC Switch",
     "context": "\"apikeyfun\": \"APIKEY.FUN 为 CC Switch 的用户提供了特别优惠，通过专属链接注册，可享受最高充值永久 95 折优惠。\",",
@@ -5140,7 +5140,7 @@
   },
   {
     "file": "src/i18n/locales/zh.json",
-    "lineNumber": 1353,
+    "lineNumber": 1367,
     "columnNumber": 27,
     "matchedText": "CC Switch",
     "context": "\"apinebula\": \"APINEBULA 为 CC Switch 用户提供特别优惠：使用专属链接注册并在充值时填写 \\\"ccswitch\\\" 优惠码，可享九折优惠。\",",
@@ -5149,7 +5149,7 @@
   },
   {
     "file": "src/i18n/locales/zh.json",
-    "lineNumber": 1353,
+    "lineNumber": 1367,
     "columnNumber": 64,
     "matchedText": "ccswitch",
     "context": "\"apinebula\": \"APINEBULA 为 CC Switch 用户提供特别优惠：使用专属链接注册并在充值时填写 \\\"ccswitch\\\" 优惠码，可享九折优惠。\",",
@@ -5158,7 +5158,7 @@
   },
   {
     "file": "src/i18n/locales/zh.json",
-    "lineNumber": 1355,
+    "lineNumber": 1369,
     "columnNumber": 27,
     "matchedText": "CC Switch",
     "context": "\"patewayai\": \"PatewayAI 为 CC Switch 的用户提供了特别福利，通过此链接注册可以获得3美元额度。\",",
@@ -5167,7 +5167,7 @@
   },
   {
     "file": "src/i18n/locales/zh.json",
-    "lineNumber": 1356,
+    "lineNumber": 1370,
     "columnNumber": 27,
     "matchedText": "CC Switch",
     "context": "\"claudeapi\": \"ClaudeAPI 为 CC Switch 的用户提供了特别福利，通过此链接注册可以领取测试额度。\",",
@@ -5176,7 +5176,7 @@
   },
   {
     "file": "src/i18n/locales/zh.json",
-    "lineNumber": 1358,
+    "lineNumber": 1372,
     "columnNumber": 21,
     "matchedText": "CC Switch",
     "context": "\"runapi\": \"RunAPI 为 CC Switch 的用户提供了特别福利，通过此链接注册并联系客服可领取 ¥14 免费额度。\",",
@@ -5185,7 +5185,7 @@
   },
   {
     "file": "src/i18n/locales/zh.json",
-    "lineNumber": 1363,
+    "lineNumber": 1377,
     "columnNumber": 23,
     "matchedText": "CC Switch",
     "context": "\"cubence\": \"Cubence 是 CC Switch 的官方合作伙伴，使用此链接注册并在充值时填写 \\\"CCSWITCH\\\" 优惠码，每次充值均可享受9折优惠\",",
@@ -5194,7 +5194,7 @@
   },
   {
     "file": "src/i18n/locales/zh.json",
-    "lineNumber": 1363,
+    "lineNumber": 1377,
     "columnNumber": 58,
     "matchedText": "CCSWITCH",
     "context": "\"cubence\": \"Cubence 是 CC Switch 的官方合作伙伴，使用此链接注册并在充值时填写 \\\"CCSWITCH\\\" 优惠码，每次充值均可享受9折优惠\",",
@@ -5203,7 +5203,7 @@
   },
   {
     "file": "src/i18n/locales/zh.json",
-    "lineNumber": 1364,
+    "lineNumber": 1378,
     "columnNumber": 25,
     "matchedText": "CC Switch",
     "context": "\"aigocode\": \"AIGoCode 是 CC Switch 的官方合作伙伴，使用此链接注册首次充值时可以获得10%额度奖励！\",",
@@ -5212,7 +5212,7 @@
   },
   {
     "file": "src/i18n/locales/zh.json",
-    "lineNumber": 1365,
+    "lineNumber": 1379,
     "columnNumber": 27,
     "matchedText": "CC Switch",
     "context": "\"rightcode\": \"RightCode 是 CC Switch 的官方合作伙伴，使用此链接注册每次充值均可赠送5%额外额度！\",",
@@ -5221,7 +5221,7 @@
   },
   {
     "file": "src/i18n/locales/zh.json",
-    "lineNumber": 1366,
+    "lineNumber": 1380,
     "columnNumber": 33,
     "matchedText": "CC Switch",
     "context": "\"aicodemirror\": \"AICodeMirror 是 CC Switch 的官方合作伙伴，使用此链接注册可享受8折优惠！\",",
@@ -5230,7 +5230,7 @@
   },
   {
     "file": "src/i18n/locales/zh.json",
-    "lineNumber": 1367,
+    "lineNumber": 1381,
     "columnNumber": 31,
     "matchedText": "CC Switch",
     "context": "\"crazyrouter\": \"CrazyRouter 为 CC Switch 的用户提供了特殊优惠，首次充值赠予 30% 额外额度！\",",
@@ -5239,7 +5239,7 @@
   },
   {
     "file": "src/i18n/locales/zh.json",
-    "lineNumber": 1368,
+    "lineNumber": 1382,
     "columnNumber": 27,
     "matchedText": "CC Switch",
     "context": "\"sssaicode\": \"SSAI Code 为 CC Switch 的用户提供了特殊优惠，每次充值赠予额外 $10 额度！\",",
@@ -5248,7 +5248,7 @@
   },
   {
     "file": "src/i18n/locales/zh.json",
-    "lineNumber": 1369,
+    "lineNumber": 1383,
     "columnNumber": 23,
     "matchedText": "CC Switch",
     "context": "\"siliconflow\": \"硅基流动是 CC Switch 的官方合作伙伴\",",
@@ -5257,7 +5257,7 @@
   },
   {
     "file": "src/i18n/locales/zh.json",
-    "lineNumber": 1370,
+    "lineNumber": 1384,
     "columnNumber": 17,
     "matchedText": "CC Switch",
     "context": "\"ucloud\": \"优云智算为CC Switch 的用户提供了特殊优惠，通过此链接注册，可以获得五元平台体验金！\",",
@@ -5266,7 +5266,7 @@
   },
   {
     "file": "src/i18n/locales/zh.json",
-    "lineNumber": 1371,
+    "lineNumber": 1385,
     "columnNumber": 17,
     "matchedText": "CC Switch",
     "context": "\"micu\": \"Micu 是 CC Switch 的官方合作伙伴\",",
@@ -5275,7 +5275,7 @@
   },
   {
     "file": "src/i18n/locales/zh.json",
-    "lineNumber": 1373,
+    "lineNumber": 1387,
     "columnNumber": 23,
     "matchedText": "CC Switch",
     "context": "\"shengsuanyun\": \"胜算云为 CC Switch 的用户提供了特别福利，使用此链接注册的新用户可获 10 元模力及首充 10% 赠送！\",",
@@ -5284,7 +5284,7 @@
   },
   {
     "file": "src/i18n/locales/zh.json",
-    "lineNumber": 1374,
+    "lineNumber": 1388,
     "columnNumber": 23,
     "matchedText": "CC Switch",
     "context": "\"doubaoseed\": \"豆包大模型为 CC Switch 的用户提供了专属福利：通过此链接注册即可获取豆包全系列文本模型 50万tokens推理额度以及Seedance2.0的500万tokens免费额度\",",
@@ -5293,7 +5293,7 @@
   },
   {
     "file": "src/i18n/locales/zh.json",
-    "lineNumber": 1375,
+    "lineNumber": 1389,
     "columnNumber": 45,
     "matchedText": "CC Switch",
     "context": "\"volcengine_agentplan\": \"火山方舟 Coding Plan 为 CC Switch 的用户提供了专属福利：通过此链接订阅方舟 Coding Plan，新客户首两个月享 2.5 折优惠，再用专属邀请码 6J6FV5N2 领取奖励叠加 9.5 折，低至 9.4 元/月！\",",
@@ -5302,7 +5302,7 @@
   },
   {
     "file": "src/i18n/locales/zh.json",
-    "lineNumber": 1380,
+    "lineNumber": 1394,
     "columnNumber": 47,
     "matchedText": "CC Switch",
     "context": "\"fenno\": \"Fenno.ai 是稳定高效的 API 中转服务商，可接入多种主流模型。CC Switch 用户专属福利：通过此链接订阅 9.9 元 /150 刀额度的超值 Coding Plan！\",",
@@ -5311,7 +5311,7 @@
   },
   {
     "file": "src/i18n/locales/zh.json",
-    "lineNumber": 1381,
+    "lineNumber": 1395,
     "columnNumber": 46,
     "matchedText": "CC Switch",
     "context": "\"zetaapi\": \"ZetaAPI 主打模型不掺水、不降智，价格低至官方价 35 折。CC Switch 用户专属福利：通过此链接注册，首次充值使用优惠码 CC-SWITCH 即可享受九折优惠！\",",
@@ -5320,7 +5320,7 @@
   },
   {
     "file": "src/i18n/locales/zh.json",
-    "lineNumber": 1381,
+    "lineNumber": 1395,
     "columnNumber": 81,
     "matchedText": "CC-SWITCH",
     "context": "\"zetaapi\": \"ZetaAPI 主打模型不掺水、不降智，价格低至官方价 35 折。CC Switch 用户专属福利：通过此链接注册，首次充值使用优惠码 CC-SWITCH 即可享受九折优惠！\",",
@@ -5329,7 +5329,7 @@
   },
   {
     "file": "src/i18n/locales/zh.json",
-    "lineNumber": 1382,
+    "lineNumber": 1396,
     "columnNumber": 65,
     "matchedText": "CC Switch",
     "context": "\"teamorouter\": \"TeamoRouter 是企业级 Agentic LLM 网关，价格最高可达 90% 折扣。为 CC Switch 的用户提供了特别福利：新用户通过此链接注册，首次充值享 10% 折扣！\",",
@@ -5338,7 +5338,7 @@
   },
   {
     "file": "src/i18n/locales/zh.json",
-    "lineNumber": 1383,
+    "lineNumber": 1397,
     "columnNumber": 24,
     "matchedText": "CC Switch",
     "context": "\"unity2\": \"Unity2.ai 为 CC Switch 用户提供专属福利：通过此链接注册可领取 $2 余额，加入官方群再送 $10，最高可领 $12 免费额度！\"",

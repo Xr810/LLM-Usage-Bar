@@ -61,6 +61,10 @@ fn usage_event_from_row(row: &Row<'_>) -> rusqlite::Result<UsageEvent> {
         legacy_request_id: row.get(19)?,
         created_at: row.get(20)?,
         agent_module_id: row.get(21)?,
+        pricing_origin: row
+            .get::<_, Option<String>>(22)?
+            .map(|value| enum_from_text(value, 22))
+            .transpose()?,
     })
 }
 
@@ -68,7 +72,7 @@ const EVENT_COLUMNS: &str = "event_id, source, provider_id, product_group_id, oc
     model, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
     request_id, session_id, upstream_correlation_id, input_cost_usd, output_cost_usd,
     cache_read_cost_usd, cache_creation_cost_usd, total_cost_usd, cost_source,
-    legacy_request_id, created_at, agent_module_id";
+    legacy_request_id, created_at, agent_module_id, pricing_origin";
 
 const USAGE_EVENT_OWNERSHIP_CONFLICT: &str = "usage_event_ownership_conflict";
 
@@ -86,10 +90,10 @@ impl Database {
                 request_id, session_id, upstream_correlation_id, input_cost_usd,
                 output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd,
                 total_cost_usd, cost_source, legacy_request_id, created_at,
-                agent_module_id
+                agent_module_id, pricing_origin
              ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-                ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22
+                ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23
              ) ON CONFLICT(event_id) DO NOTHING",
             params![
                 event.event_id,
@@ -114,6 +118,9 @@ impl Database {
                 event.legacy_request_id,
                 event.created_at,
                 event.agent_module_id,
+                event
+                    .pricing_origin
+                    .map(crate::usage::domain::PricingOrigin::as_str),
             ],
         )?;
         if inserted == 0 {
@@ -527,6 +534,7 @@ mod tests {
             cache_creation_cost_usd: None,
             total_cost_usd: Some("0.03".to_string()),
             cost_source: CostSource::Upstream,
+            pricing_origin: None,
             legacy_request_id: None,
             created_at: occurred_at + 1,
         }

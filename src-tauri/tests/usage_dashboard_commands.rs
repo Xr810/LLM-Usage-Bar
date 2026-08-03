@@ -74,6 +74,7 @@ fn event() -> UsageEvent {
         cache_creation_cost_usd: None,
         total_cost_usd: Some("0.3".to_string()),
         cost_source: CostSource::Upstream,
+        pricing_origin: None,
         legacy_request_id: None,
         created_at: 50,
     }

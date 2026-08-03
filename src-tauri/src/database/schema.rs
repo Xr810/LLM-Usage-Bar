@@ -573,6 +573,11 @@ impl Database {
                         crate::usage::budget_migration::validate_schema_v18_complete(conn)?;
                         crate::usage::quota_retry_migration::migrate_v18_to_v19(conn)?;
                     }
+                    19 => {
+                        log::info!("迁移数据库从 v19 到 v20（Provider 维度的自定义模型定价）");
+                        crate::usage::quota_retry_migration::validate_schema_v19_complete(conn)?;
+                        crate::usage::provider_pricing_migration::migrate_v19_to_v20(conn)?;
+                    }
                     _ => {
                         return Err(AppError::Database(format!(
                             "未知的数据库版本 {version}，无法迁移到 {SCHEMA_VERSION}"
@@ -591,8 +596,11 @@ impl Database {
             if version >= 18 {
                 crate::usage::budget_migration::validate_schema_v18_complete(conn)?;
             }
-            if version == 19 {
+            if version >= 19 {
                 crate::usage::quota_retry_migration::validate_schema_v19_complete(conn)?;
+            }
+            if version == 20 {
+                crate::usage::provider_pricing_migration::validate_schema_v20_complete(conn)?;
             }
             Ok(())
         })();

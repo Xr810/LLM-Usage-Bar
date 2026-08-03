@@ -21,6 +21,7 @@ import {
 } from "@/lib/query/usageDashboard";
 import type { UsageProviderView } from "@/types/usageDashboard";
 import { ProviderDailyBudgetField } from "./ProviderDailyBudgetField";
+import { ProviderModelPricingSection } from "./ProviderModelPricingSection";
 import { ApiBudgetSettings } from "./ApiBudgetSettings";
 import { ProviderIcon } from "@/components/ProviderIcon";
 import { dashboardProviderIcon } from "@/components/usage-dashboard/usagePresentation";
@@ -356,6 +357,14 @@ export function UsageProvidersSettings({
                       value={provider.dailyBudgetUsd}
                       targeted={targetProviderId === provider.id}
                       onTargetHandled={onTargetHandled}
+                    />
+                  </div>
+                ) : null}
+                {provider.billingKind === "metered" ? (
+                  <div className="w-full">
+                    <ProviderModelPricingSection
+                      providerId={provider.id}
+                      providerName={provider.name}
                     />
                   </div>
                 ) : null}

@@ -234,7 +234,10 @@ pub fn prepare_database_runtime_test_hook(
 #[cfg(debug_assertions)]
 #[doc(hidden)]
 pub fn create_schema_v13_fixture_test_hook(path: &Path) -> Result<(), AppError> {
-    if database::SCHEMA_VERSION != 19
+    // Reviewed for schema v20: the v19 -> v20 step only adds
+    // `provider_model_pricing` and `usage_events.pricing_origin`, neither of
+    // which the v13 baseline below builds or depends on.
+    if database::SCHEMA_VERSION != 20
         || product_identity::DATABASE_IDENTITY_SOURCE_SCHEMA_VERSION != 13
     {
         return Err(AppError::Database(
@@ -1952,6 +1955,9 @@ pub fn run() {
             commands::get_model_pricing,
             commands::update_model_pricing,
             commands::delete_model_pricing,
+            commands::get_provider_model_pricing,
+            commands::update_provider_model_pricing,
+            commands::delete_provider_model_pricing,
             commands::check_provider_limits,
             // Session usage sync
             commands::sync_session_usage,

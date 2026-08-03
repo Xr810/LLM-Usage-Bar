@@ -115,6 +115,15 @@ vi.mock("./ProviderDailyBudgetField", () => ({
   ),
 }));
 
+vi.mock("./ProviderModelPricingSection", () => ({
+  ProviderModelPricingSection: ({ providerId }: { providerId: string }) => (
+    <div
+      data-testid={`custom-pricing-${providerId}`}
+      className="pricing-section"
+    />
+  ),
+}));
+
 vi.mock("@/components/usage-dashboard/UsageProviderDialog", () => ({
   UsageProviderDialog: () => null,
 }));

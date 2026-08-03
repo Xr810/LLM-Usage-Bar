@@ -2316,6 +2316,7 @@ mod tests {
             cache_creation_cost_usd: None,
             total_cost_usd: None,
             cost_source: CostSource::Unavailable,
+            pricing_origin: None,
             legacy_request_id: None,
             created_at: 50,
         })

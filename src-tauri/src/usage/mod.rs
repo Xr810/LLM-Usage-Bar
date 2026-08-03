@@ -7,6 +7,7 @@ pub mod domain;
 pub mod ingestion;
 pub(crate) mod migration;
 pub(crate) mod module_migration;
+pub(crate) mod provider_pricing_migration;
 pub mod quota;
 pub(crate) mod quota_retry_migration;
 pub mod session;

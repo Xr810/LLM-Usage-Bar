@@ -4,6 +4,29 @@ export type BillingKind = "subscription" | "metered";
 export type TokenSource = "proxy" | "session_log";
 export type SessionSource = "claude" | "codex";
 export type CostSource = "upstream" | "estimated" | "unavailable";
+
+/**
+ * `user` means the account's own price — what you actually pay. `official`
+ * means the built-in reference catalogue, which is also what subscription
+ * equivalent-API costs are always valued at.
+ */
+export type PricingOrigin = "user" | "official";
+
+/** The four per-million-token rates that make up one model's price. */
+export interface ModelPriceInput {
+  inputCostPerMillion: string;
+  outputCostPerMillion: string;
+  cacheReadCostPerMillion: string;
+  cacheCreationCostPerMillion: string;
+}
+
+/** One Provider account's own price for one model, in USD per million tokens. */
+export interface ProviderModelPricingView extends ModelPriceInput {
+  providerId: string;
+  modelId: string;
+  displayName: string;
+  updatedAt: number;
+}
 export type BindingCredentialStatus =
   "not_required" | "missing" | "configured" | "unavailable";
 export type SystemProviderAuthKind =
@@ -238,6 +261,11 @@ export interface UsageEvent {
   cacheCreationCostUsd: string | null;
   totalCostUsd: string | null;
   costSource: CostSource;
+  /**
+   * Which price catalogue produced an estimate. Null for upstream-reported and
+   * unavailable costs, and for events recorded before schema v20.
+   */
+  pricingOrigin: PricingOrigin | null;
   legacyRequestId: string | null;
   createdAt: number;
 }

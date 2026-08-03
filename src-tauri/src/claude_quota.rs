@@ -368,8 +368,11 @@ fn acquire_statusline_cache_lock(cache_path: &Path) -> Result<StatuslineCacheLoc
         source,
     })?;
     let lock_path = cache_path.with_file_name(CACHE_LOCK_FILE_NAME);
+    // The lock file is only an advisory flock target; its contents are never
+    // read or written, so it must not be truncated out from under a holder.
     let file = OpenOptions::new()
         .create(true)
+        .truncate(false)
         .read(true)
         .write(true)
         .open(&lock_path)
