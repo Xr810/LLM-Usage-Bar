@@ -8,7 +8,7 @@ import type {
 } from "@/types/usage";
 import type { ModelPriceInput } from "@/types/usageDashboard";
 
-const DEFAULT_REFETCH_INTERVAL_MS = 30000;
+const DEFAULT_REFETCH_INTERVAL_MS = 60_000;
 
 type UsageQueryOptions = {
   refetchInterval?: number | false;

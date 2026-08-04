@@ -410,7 +410,7 @@
     "setProviderBudget": "为 {{provider}} 设置每日预算",
     "combinedApiSpending": "API 合计费用",
     "enabledApiProviderCount": "{{count}} 个已启用的 API Provider",
-    "combinedDailyLimit": "统一每日限额",
+    "combinedDailyLimit": "每日限额",
     "combinedApiBudgetProgress": "{{count}} 个 API Provider 的统一每日限额",
     "setCombinedApiBudget": "设置 API 统一每日限额",
     "completeData": "完整",

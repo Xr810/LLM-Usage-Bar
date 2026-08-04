@@ -41,13 +41,19 @@ export function TrayProviderRecentUsage({
 
   const tooltip = ({ active, payload }: any) => {
     const point = payload?.[0]?.payload as
-      { label: string; totalTokens: number; eventCount: number } | undefined;
+      | { label: string; totalTokens: number; totalCostUsd: string | null }
+      | undefined;
     if (!active || !point) return null;
+    // Tokens answer "how much did I use", spend answers "what did it cost" —
+    // the request count answered neither.
+    const cost =
+      usage.costQuality === "unavailable" ? null : point.totalCostUsd;
     return (
       <div className="rounded-md border border-border bg-popover px-2 py-1.5 shadow-pop">
         <p className="text-[10px] font-medium text-foreground">{point.label}</p>
         <p className="mt-0.5 text-[10px] tabular-nums text-muted-foreground">
-          {formatTokenCount(point.totalTokens, locale)} · {point.eventCount}
+          {formatTokenCount(point.totalTokens, locale)} ·{" "}
+          {formatUsd(cost, locale)}
         </p>
       </div>
     );

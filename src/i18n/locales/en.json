@@ -410,7 +410,7 @@
     "setProviderBudget": "Set daily budget for {{provider}}",
     "combinedApiSpending": "Combined API spending",
     "enabledApiProviderCount": "{{count}} enabled API Providers",
-    "combinedDailyLimit": "Combined daily limit",
+    "combinedDailyLimit": "Daily limit",
     "combinedApiBudgetProgress": "Combined daily limit across {{count}} API Providers",
     "setCombinedApiBudget": "Set combined API daily limit",
     "completeData": "Complete",

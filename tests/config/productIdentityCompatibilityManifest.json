@@ -667,7 +667,7 @@
   },
   {
     "file": "src-tauri/src/lib.rs",
-    "lineNumber": 820,
+    "lineNumber": 822,
     "columnNumber": 57,
     "matchedText": "ccswitch",
     "context": "// tauri-plugin-deep-link writes to: ~/.local/share/com.ccswitch.desktop/applications/cc-switch-handler.desktop",
@@ -676,7 +676,7 @@
   },
   {
     "file": "src-tauri/src/lib.rs",
-    "lineNumber": 820,
+    "lineNumber": 822,
     "columnNumber": 87,
     "matchedText": "cc-switch",
     "context": "// tauri-plugin-deep-link writes to: ~/.local/share/com.ccswitch.desktop/applications/cc-switch-handler.desktop",
@@ -685,7 +685,7 @@
   },
   {
     "file": "src-tauri/src/lib.rs",
-    "lineNumber": 825,
+    "lineNumber": 827,
     "columnNumber": 32,
     "matchedText": "cc-switch",
     "context": ".map(|d| !d.join(\"applications/cc-switch-handler.desktop\").exists())",

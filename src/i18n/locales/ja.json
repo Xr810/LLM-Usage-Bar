@@ -410,7 +410,7 @@
     "setProviderBudget": "{{provider}} の 1 日の予算を設定",
     "combinedApiSpending": "API 支出合計",
     "enabledApiProviderCount": "有効な API Provider：{{count}} 件",
-    "combinedDailyLimit": "共通1日上限",
+    "combinedDailyLimit": "1日の上限",
     "combinedApiBudgetProgress": "{{count}} 件の API Provider に対する共通1日上限",
     "setCombinedApiBudget": "API 共通1日上限を設定",
     "completeData": "完全",
