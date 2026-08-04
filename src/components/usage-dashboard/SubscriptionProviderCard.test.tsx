@@ -151,6 +151,40 @@ describe("SubscriptionProviderCard localized reset countdown", () => {
     ).toBeInTheDocument();
   });
 
+  it("keeps the window label readable when that window is unavailable", () => {
+    // The unavailable copy is a sentence, not a figure. Putting it in the
+    // right-aligned value slot starved the label down to "5 …" in the real app.
+    // ChatGPT Plus/Pro in the real app: no 5-hour window, a healthy weekly one.
+    const usage = subscriptionUsage();
+    usage.quota!.fiveHourUtilizationPercent = null;
+    usage.quota!.fiveHourResetsAt = null;
+    usage.quota!.sevenDayUtilizationPercent = "14";
+    usage.quota!.sevenDayResetsAt = "2026-07-17T01:00:00.000Z";
+
+    render(
+      <SubscriptionProviderCard
+        usage={usage}
+        layout="compact"
+        onRefreshQuota={vi.fn()}
+        onSyncSessions={vi.fn()}
+      />,
+    );
+
+    // Label and explanation are separate elements, so neither can squeeze the other.
+    const label = screen.getByText("5-hour window");
+    const explanation = screen.getByText(
+      "This subscription does not provide this quota window",
+    );
+    expect(label).toBeInTheDocument();
+    expect(explanation).toBeInTheDocument();
+    expect(label).not.toBe(explanation);
+    expect(label.contains(explanation)).toBe(false);
+    // The window with real data still shows its figure alongside its label.
+    expect(screen.getByText("Weekly allowance")).toBeInTheDocument();
+    // Only the window with data draws a bar; the unavailable one draws none.
+    expect(screen.getAllByRole("progressbar")).toHaveLength(1);
+  });
+
   it("keeps Provider actions wired in the default layout", () => {
     const usage = subscriptionUsage();
     const onRefreshQuota = vi.fn().mockResolvedValue({});

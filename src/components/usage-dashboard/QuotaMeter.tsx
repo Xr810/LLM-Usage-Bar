@@ -47,12 +47,28 @@ export function QuotaMeter({
           : "rounded-lg border border-border/50 bg-muted/25 px-3 dark:bg-muted/15",
       )}
     >
-      <div className="flex items-baseline justify-between gap-2">
-        <span className="truncate text-xs text-muted-foreground">{label}</span>
-        <span className="shrink-0 text-sm font-semibold tracking-tight metric">
-          {valueText}
-        </span>
-      </div>
+      {/* With no bar there is no figure either — `valueText` is a sentence
+          explaining why. Kept out of the right-aligned figure slot, which is
+          `shrink-0` and would otherwise starve the label down to "5 …". */}
+      {fillPercent == null ? (
+        <div className="space-y-1">
+          <span className="block truncate text-xs text-muted-foreground">
+            {label}
+          </span>
+          <span className="block text-xs leading-4 text-muted-foreground/80">
+            {valueText}
+          </span>
+        </div>
+      ) : (
+        <div className="flex items-baseline justify-between gap-2">
+          <span className="truncate text-xs text-muted-foreground">
+            {label}
+          </span>
+          <span className="shrink-0 text-sm font-semibold tracking-tight metric">
+            {valueText}
+          </span>
+        </div>
+      )}
       {fillPercent != null ? (
         <div
           role="progressbar"

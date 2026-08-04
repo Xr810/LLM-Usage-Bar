@@ -496,7 +496,7 @@
   },
   {
     "file": "src-tauri/src/database/identity_migration.rs",
-    "lineNumber": 488,
+    "lineNumber": 505,
     "columnNumber": 47,
     "matchedText": "cc-switch",
     "context": "\"cannot resolve home directory for protected .cc-switch guard\".to_string(),",
@@ -505,7 +505,7 @@
   },
   {
     "file": "src-tauri/src/database/identity_migration.rs",
-    "lineNumber": 2013,
+    "lineNumber": 2073,
     "columnNumber": 29,
     "matchedText": "cc-switch",
     "context": "const ARCHIVE_FILE: &str = \"cc-switch.db.pre-llm-usage-bar-v14\";",
@@ -514,7 +514,7 @@
   },
   {
     "file": "src-tauri/src/database/identity_migration.rs",
-    "lineNumber": 2169,
+    "lineNumber": 2229,
     "columnNumber": 2,
     "matchedText": "cc-switch",
     "context": "\"cc-switch.db-wal\",",
@@ -523,7 +523,7 @@
   },
   {
     "file": "src-tauri/src/database/identity_migration.rs",
-    "lineNumber": 2170,
+    "lineNumber": 2230,
     "columnNumber": 2,
     "matchedText": "cc-switch",
     "context": "\"cc-switch.db-shm\",",
@@ -532,7 +532,7 @@
   },
   {
     "file": "src-tauri/src/database/identity_migration.rs",
-    "lineNumber": 2260,
+    "lineNumber": 2320,
     "columnNumber": 42,
     "matchedText": "cc-switch",
     "context": "let candidate = dirs::home_dir()?.join(\".cc-switch\");",
@@ -541,7 +541,7 @@
   },
   {
     "file": "src-tauri/src/database/identity_migration.rs",
-    "lineNumber": 2277,
+    "lineNumber": 2337,
     "columnNumber": 34,
     "matchedText": "cc-switch",
     "context": "\"guard call changed protected ~/.cc-switch entries or file bytes\"",
@@ -550,7 +550,7 @@
   },
   {
     "file": "src-tauri/src/database/identity_migration.rs",
-    "lineNumber": 2282,
+    "lineNumber": 2342,
     "columnNumber": 30,
     "matchedText": "cc-switch",
     "context": "error.to_string().contains(\".cc-switch\"),",
@@ -559,7 +559,7 @@
   },
   {
     "file": "src-tauri/src/database/identity_migration.rs",
-    "lineNumber": 2906,
+    "lineNumber": 2966,
     "columnNumber": 46,
     "matchedText": "cc-switch",
     "context": "eprintln!(\"skipping real-directory guard: ~/.cc-switch does not exist\");",
@@ -568,7 +568,7 @@
   },
   {
     "file": "src-tauri/src/database/identity_migration.rs",
-    "lineNumber": 2923,
+    "lineNumber": 2983,
     "columnNumber": 46,
     "matchedText": "cc-switch",
     "context": "eprintln!(\"skipping real-directory guard: ~/.cc-switch does not exist\");",
@@ -577,7 +577,7 @@
   },
   {
     "file": "src-tauri/src/database/identity_migration.rs",
-    "lineNumber": 2942,
+    "lineNumber": 3002,
     "columnNumber": 40,
     "matchedText": "cc-switch",
     "context": "eprintln!(\"skipping hardlink guard: ~/.cc-switch does not exist\");",
@@ -586,7 +586,7 @@
   },
   {
     "file": "src-tauri/src/database/identity_migration.rs",
-    "lineNumber": 2969,
+    "lineNumber": 3029,
     "columnNumber": 43,
     "matchedText": "cc-switch",
     "context": "\"hardlink guard call changed protected ~/.cc-switch entries or file bytes\"",
