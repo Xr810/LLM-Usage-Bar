@@ -7,7 +7,24 @@ use tempfile::NamedTempFile;
 
 use crate::app_config::AppType;
 use crate::error::AppError;
-use crate::services::skill::{SkillStorageLocation, SyncMethod};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum SyncMethod {
+    #[default]
+    Auto,
+    Symlink,
+    Copy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillStorageLocation {
+    #[default]
+    #[serde(alias = "cc_switch")]
+    LlmUsageBar,
+    Unified,
+}
 
 /// 自定义端点配置（历史兼容，实际存储在 provider.meta.custom_endpoints）
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -998,19 +1015,6 @@ pub fn get_effective_current_provider(
     db.get_current_provider(app_type.as_str())
 }
 
-// ===== Skill 同步方式管理函数 =====
-
-/// 获取 Skill 同步方式配置
-pub fn get_skill_sync_method() -> SyncMethod {
-    settings_store()
-        .read()
-        .unwrap_or_else(|e| {
-            log::warn!("设置锁已毒化，使用恢复值: {e}");
-            e.into_inner()
-        })
-        .skill_sync_method
-}
-
 // ===== Skill 存储位置管理函数 =====
 
 /// 获取 Skill 存储位置配置
@@ -1022,13 +1026,6 @@ pub fn get_skill_storage_location() -> SkillStorageLocation {
             e.into_inner()
         })
         .skill_storage_location
-}
-
-/// 设置 Skill 存储位置
-pub fn set_skill_storage_location(location: SkillStorageLocation) -> Result<(), AppError> {
-    mutate_settings(|s| {
-        s.skill_storage_location = location;
-    })
 }
 
 // ===== 备份策略管理函数 =====

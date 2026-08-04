@@ -119,28 +119,3 @@ impl serde::Serialize for AppError {
         serializer.serialize_str(&self.to_string())
     }
 }
-
-/// 格式化为 JSON 错误字符串，前端可解析为结构化错误
-pub fn format_skill_error(
-    code: &str,
-    context: &[(&str, &str)],
-    suggestion: Option<&str>,
-) -> String {
-    use serde_json::json;
-
-    let mut ctx_map = serde_json::Map::new();
-    for (key, value) in context {
-        ctx_map.insert(key.to_string(), json!(value));
-    }
-
-    let error_obj = json!({
-        "code": code,
-        "context": ctx_map,
-        "suggestion": suggestion,
-    });
-
-    serde_json::to_string(&error_obj).unwrap_or_else(|_| {
-        // 如果 JSON 序列化失败，返回简单格式
-        format!("ERROR:{code}")
-    })
-}

@@ -44,14 +44,7 @@ pub fn should_trigger_for_table(table: &str) -> bool {
     let normalized = table.trim().to_ascii_lowercase();
     matches!(
         normalized.as_str(),
-        "providers"
-            | "provider_endpoints"
-            | "mcp_servers"
-            | "prompts"
-            | "skills"
-            | "skill_repos"
-            | "settings"
-            | "proxy_config"
+        "providers" | "provider_endpoints" | "settings"
     )
 }
 

@@ -2,8 +2,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::str::FromStr;
 
-use crate::services::skill::SkillStore;
-
 /// MCP 服务器应用状态（标记应用到哪些客户端）
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct McpApps {
@@ -71,150 +69,6 @@ impl McpApps {
     pub fn is_empty(&self) -> bool {
         !self.claude && !self.codex && !self.gemini && !self.opencode && !self.hermes
     }
-}
-
-/// Skill 应用启用状态（标记 Skill 应用到哪些客户端）
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
-pub struct SkillApps {
-    #[serde(default)]
-    pub claude: bool,
-    #[serde(default)]
-    pub codex: bool,
-    #[serde(default)]
-    pub gemini: bool,
-    #[serde(default)]
-    pub opencode: bool,
-    #[serde(default)]
-    pub hermes: bool,
-}
-
-impl SkillApps {
-    /// 检查指定应用是否启用
-    pub fn is_enabled_for(&self, app: &AppType) -> bool {
-        match app {
-            AppType::Claude => self.claude,
-            AppType::Codex => self.codex,
-            AppType::Gemini => self.gemini,
-            AppType::OpenCode => self.opencode,
-            AppType::Hermes => self.hermes,
-            AppType::OpenClaw => false, // OpenClaw doesn't support Skills
-            AppType::ClaudeDesktop => false,
-        }
-    }
-
-    /// 设置指定应用的启用状态
-    pub fn set_enabled_for(&mut self, app: &AppType, enabled: bool) {
-        match app {
-            AppType::Claude => self.claude = enabled,
-            AppType::Codex => self.codex = enabled,
-            AppType::Gemini => self.gemini = enabled,
-            AppType::OpenCode => self.opencode = enabled,
-            AppType::Hermes => self.hermes = enabled,
-            AppType::OpenClaw => {} // OpenClaw doesn't support Skills, ignore
-            AppType::ClaudeDesktop => {} // Claude Desktop 3P profiles don't use LLM Usage Bar skill sync
-        }
-    }
-
-    /// 获取所有启用的应用列表
-    pub fn enabled_apps(&self) -> Vec<AppType> {
-        let mut apps = Vec::new();
-        if self.claude {
-            apps.push(AppType::Claude);
-        }
-        if self.codex {
-            apps.push(AppType::Codex);
-        }
-        if self.gemini {
-            apps.push(AppType::Gemini);
-        }
-        if self.opencode {
-            apps.push(AppType::OpenCode);
-        }
-        if self.hermes {
-            apps.push(AppType::Hermes);
-        }
-        apps
-    }
-
-    /// 检查是否所有应用都未启用
-    pub fn is_empty(&self) -> bool {
-        !self.claude && !self.codex && !self.gemini && !self.opencode && !self.hermes
-    }
-
-    /// 仅启用指定应用（其他应用设为禁用）
-    pub fn only(app: &AppType) -> Self {
-        let mut apps = Self::default();
-        apps.set_enabled_for(app, true);
-        apps
-    }
-
-    /// 从来源标签列表构建启用状态
-    ///
-    /// 标签与 AppType::as_str() 一致时启用对应应用，
-    /// 其他标签（如 "agents", "llm-usage-bar"）忽略。
-    pub fn from_labels(labels: &[String]) -> Self {
-        let mut apps = Self::default();
-        for label in labels {
-            if let Ok(app) = label.parse::<AppType>() {
-                apps.set_enabled_for(&app, true);
-            }
-        }
-        apps
-    }
-}
-
-/// 已安装的 Skill（v3.10.0+ 统一结构）
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct InstalledSkill {
-    /// 唯一标识符（格式："owner/repo:directory" 或 "local:directory"）
-    pub id: String,
-    /// 显示名称
-    pub name: String,
-    /// 描述
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// 安装目录名（在 SSOT 目录中的子目录名）
-    pub directory: String,
-    /// 仓库所有者（GitHub 用户/组织）
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub repo_owner: Option<String>,
-    /// 仓库名称
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub repo_name: Option<String>,
-    /// 仓库分支
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub repo_branch: Option<String>,
-    /// README URL
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub readme_url: Option<String>,
-    /// 应用启用状态
-    pub apps: SkillApps,
-    /// 安装时间（Unix 时间戳）
-    pub installed_at: i64,
-    /// 内容哈希（SHA-256，用于更新检测）
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub content_hash: Option<String>,
-    /// 最近更新时间（Unix 时间戳，0 = 从未更新）
-    #[serde(default)]
-    pub updated_at: i64,
-}
-
-/// 未管理的 Skill（在应用目录中发现但未被 LLM Usage Bar 管理）
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UnmanagedSkill {
-    /// 目录名
-    pub directory: String,
-    /// 显示名称（从 SKILL.md 解析）
-    pub name: String,
-    /// 描述
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// 在哪些应用目录中发现（如 ["claude", "codex"]）
-    pub found_in: Vec<String>,
-    /// 发现路径（首个匹配的完整路径）
-    pub path: String,
 }
 
 /// MCP 服务器定义（v3.7.0 统一结构）
@@ -471,15 +325,10 @@ pub struct MultiAppConfig {
     /// 应用管理器（claude/codex）
     #[serde(flatten)]
     pub apps: HashMap<String, ProviderManager>,
-    /// MCP 配置（按客户端分治）
     #[serde(default)]
     pub mcp: McpRoot,
-    /// Prompt 配置（按客户端分治）
     #[serde(default)]
     pub prompts: PromptRoot,
-    /// Claude Skills 配置
-    #[serde(default)]
-    pub skills: SkillStore,
     /// 通用配置片段（按应用分治）
     #[serde(default)]
     pub common_config_snippets: CommonConfigSnippets,
@@ -508,7 +357,6 @@ impl Default for MultiAppConfig {
             apps,
             mcp: McpRoot::default(),
             prompts: PromptRoot::default(),
-            skills: SkillStore::default(),
             common_config_snippets: CommonConfigSnippets::default(),
             claude_common_config_snippet: None,
         }
@@ -552,48 +400,16 @@ impl MultiAppConfig {
             ));
         }
 
-        let has_skills_in_config = value
-            .as_object()
-            .is_some_and(|map| map.contains_key("skills"));
-
         // 解析 v2 结构
         let mut config: Self =
             serde_json::from_value(value).map_err(|e| AppError::json(&config_path, e))?;
         let mut updated = false;
-
-        if !has_skills_in_config {
-            let skills_path = get_app_config_dir().join("skills.json");
-            if skills_path.exists() {
-                match std::fs::read_to_string(&skills_path) {
-                    Ok(content) => match serde_json::from_str::<SkillStore>(&content) {
-                        Ok(store) => {
-                            config.skills = store;
-                            updated = true;
-                            log::info!("已从旧版 skills.json 导入 Claude Skills 配置");
-                        }
-                        Err(e) => {
-                            log::warn!("解析旧版 skills.json 失败: {e}");
-                        }
-                    },
-                    Err(e) => {
-                        log::warn!("读取旧版 skills.json 失败: {e}");
-                    }
-                }
-            }
-        }
 
         // 确保 gemini 应用存在（兼容旧配置文件）
         if !config.apps.contains_key("gemini") {
             config
                 .apps
                 .insert("gemini".to_string(), ProviderManager::default());
-            updated = true;
-        }
-
-        // 执行 MCP 迁移（v3.6.x → v3.7.0）
-        let migrated = config.migrate_mcp_to_unified()?;
-        if migrated {
-            log::info!("MCP 配置已迁移到 v3.7.0 统一结构，保存配置...");
             updated = true;
         }
 
@@ -607,7 +423,7 @@ impl MultiAppConfig {
         }
 
         if updated {
-            log::info!("配置结构已更新（包括 MCP 迁移或 Prompt 自动导入），保存配置...");
+            log::info!("配置结构已更新，保存配置...");
             config.save()?;
         }
 

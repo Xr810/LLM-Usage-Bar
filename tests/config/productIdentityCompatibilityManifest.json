@@ -433,7 +433,7 @@
   },
   {
     "file": "src-tauri/src/database/backup.rs",
-    "lineNumber": 1605,
+    "lineNumber": 1521,
     "columnNumber": 42,
     "matchedText": "CC_SWITCH",
     "context": "LLM_USAGE_BAR_SQL_EXPORT_HEADER | LEGACY_CC_SWITCH_SQL_EXPORT_HEADER",
@@ -442,7 +442,7 @@
   },
   {
     "file": "src-tauri/src/database/backup.rs",
-    "lineNumber": 1612,
+    "lineNumber": 1528,
     "columnNumber": 27,
     "matchedText": "CC Switch",
     "context": "\"仅支持导入由 LLM Usage Bar 或旧版 CC Switch 导出的 SQL 备份文件。\",",
@@ -451,7 +451,7 @@
   },
   {
     "file": "src-tauri/src/database/backup.rs",
-    "lineNumber": 1613,
+    "lineNumber": 1529,
     "columnNumber": 55,
     "matchedText": "CC Switch",
     "context": "\"Only SQL backups exported by LLM Usage Bar or legacy CC Switch are supported.\",",
@@ -460,7 +460,7 @@
   },
   {
     "file": "src-tauri/src/database/backup.rs",
-    "lineNumber": 2167,
+    "lineNumber": 2080,
     "columnNumber": 38,
     "matchedText": "CC_SWITCH",
     "context": "redact_url_secrets, Database, LEGACY_CC_SWITCH_SQL_EXPORT_HEADER,",
@@ -469,7 +469,7 @@
   },
   {
     "file": "src-tauri/src/database/backup.rs",
-    "lineNumber": 3750,
+    "lineNumber": 3594,
     "columnNumber": 44,
     "matchedText": "CC_SWITCH",
     "context": "assert!(!sql.starts_with(&format!(\"{LEGACY_CC_SWITCH_SQL_EXPORT_HEADER}\\n\")));",
@@ -478,7 +478,7 @@
   },
   {
     "file": "src-tauri/src/database/backup.rs",
-    "lineNumber": 3956,
+    "lineNumber": 3800,
     "columnNumber": 31,
     "matchedText": "CC_SWITCH",
     "context": "let legacy = format!(\"{LEGACY_CC_SWITCH_SQL_EXPORT_HEADER}\\nBEGIN TRANSACTION;\");",
@@ -487,7 +487,7 @@
   },
   {
     "file": "src-tauri/src/database/backup.rs",
-    "lineNumber": 3958,
+    "lineNumber": 3802,
     "columnNumber": 18,
     "matchedText": "CC_SWITCH",
     "context": "format!(\"{LEGACY_CC_SWITCH_SQL_EXPORT_HEADER} with suffix\\nBEGIN TRANSACTION;\");",
@@ -667,7 +667,7 @@
   },
   {
     "file": "src-tauri/src/lib.rs",
-    "lineNumber": 867,
+    "lineNumber": 820,
     "columnNumber": 57,
     "matchedText": "ccswitch",
     "context": "// tauri-plugin-deep-link writes to: ~/.local/share/com.ccswitch.desktop/applications/cc-switch-handler.desktop",
@@ -676,7 +676,7 @@
   },
   {
     "file": "src-tauri/src/lib.rs",
-    "lineNumber": 867,
+    "lineNumber": 820,
     "columnNumber": 87,
     "matchedText": "cc-switch",
     "context": "// tauri-plugin-deep-link writes to: ~/.local/share/com.ccswitch.desktop/applications/cc-switch-handler.desktop",
@@ -685,7 +685,7 @@
   },
   {
     "file": "src-tauri/src/lib.rs",
-    "lineNumber": 872,
+    "lineNumber": 825,
     "columnNumber": 32,
     "matchedText": "cc-switch",
     "context": ".map(|d| !d.join(\"applications/cc-switch-handler.desktop\").exists())",
@@ -936,51 +936,6 @@
     "reason": "exact persisted, transmitted, or upstream compatibility bytes"
   },
   {
-    "file": "src-tauri/src/services/skill.rs",
-    "lineNumber": 45,
-    "columnNumber": 18,
-    "matchedText": "cc_switch",
-    "context": "#[serde(alias = \"cc_switch\")]",
-    "kind": "legacyReadOnly",
-    "reason": "exact read-only legacy compatibility or coexistence reference"
-  },
-  {
-    "file": "src-tauri/src/services/skill.rs",
-    "lineNumber": 3086,
-    "columnNumber": 49,
-    "matchedText": "cc_switch",
-    "context": "serde_json::from_str::<SkillStorageLocation>(\"\\\"cc_switch\\\"\").unwrap(),",
-    "kind": "legacyReadOnly",
-    "reason": "exact read-only legacy compatibility or coexistence reference"
-  },
-  {
-    "file": "src-tauri/src/services/skill.rs",
-    "lineNumber": 3089,
-    "columnNumber": 64,
-    "matchedText": "cc_switch",
-    "context": "assert!(serde_json::from_str::<SkillStorageLocation>(\"\\\"legacy_cc_switch\\\"\").is_err());",
-    "kind": "legacyReadOnly",
-    "reason": "exact read-only legacy compatibility or coexistence reference"
-  },
-  {
-    "file": "src-tauri/src/services/skill.rs",
-    "lineNumber": 3096,
-    "columnNumber": 60,
-    "matchedText": "cc_switch",
-    "context": "let legacy: SkillStorageLocation = serde_json::from_str(\"\\\"cc_switch\\\"\").unwrap();",
-    "kind": "legacyReadOnly",
-    "reason": "exact read-only legacy compatibility or coexistence reference"
-  },
-  {
-    "file": "src-tauri/src/services/skill.rs",
-    "lineNumber": 3113,
-    "columnNumber": 13,
-    "matchedText": "cc-switch",
-    "context": "home.join(\".cc-switch\").join(\"skills\")",
-    "kind": "legacyReadOnly",
-    "reason": "exact read-only legacy compatibility or coexistence reference"
-  },
-  {
     "file": "src-tauri/src/services/sync_protocol.rs",
     "lineNumber": 354,
     "columnNumber": 2,
@@ -1063,7 +1018,16 @@
   },
   {
     "file": "src-tauri/src/settings.rs",
-    "lineNumber": 680,
+    "lineNumber": 24,
+    "columnNumber": 18,
+    "matchedText": "cc_switch",
+    "context": "#[serde(alias = \"cc_switch\")]",
+    "kind": "legacyReadOnly",
+    "reason": "exact read-only legacy compatibility or coexistence reference"
+  },
+  {
+    "file": "src-tauri/src/settings.rs",
+    "lineNumber": 697,
     "columnNumber": 10,
     "matchedText": "cc_switch",
     "context": "== Some(\"cc_switch\");",
@@ -1072,7 +1036,7 @@
   },
   {
     "file": "src-tauri/src/settings.rs",
-    "lineNumber": 1178,
+    "lineNumber": 1175,
     "columnNumber": 2,
     "matchedText": "cc-switch",
     "context": "\"cc-switch-sync\"",
@@ -1081,7 +1045,7 @@
   },
   {
     "file": "src-tauri/src/settings.rs",
-    "lineNumber": 1191,
+    "lineNumber": 1188,
     "columnNumber": 26,
     "matchedText": "cc_switch",
     "context": "\"skillStorageLocation\": \"cc_switch\",",
@@ -1090,7 +1054,7 @@
   },
   {
     "file": "src-tauri/src/settings.rs",
-    "lineNumber": 1195,
+    "lineNumber": 1192,
     "columnNumber": 16,
     "matchedText": "cc-switch",
     "context": "\"remoteRoot\": \"cc-switch-sync\"",
@@ -1099,7 +1063,7 @@
   },
   {
     "file": "src-tauri/src/settings.rs",
-    "lineNumber": 1198,
+    "lineNumber": 1195,
     "columnNumber": 14,
     "matchedText": "cc-switch",
     "context": "\"identity\": \"cc-switch-plugin-wire\",",
@@ -1108,7 +1072,7 @@
   },
   {
     "file": "src-tauri/src/settings.rs",
-    "lineNumber": 1215,
+    "lineNumber": 1212,
     "columnNumber": 52,
     "matchedText": "cc-switch",
     "context": "assert_eq!(rewritten[\"webdavSync\"][\"remoteRoot\"], \"cc-switch-sync\");",
@@ -1117,7 +1081,7 @@
   },
   {
     "file": "src-tauri/src/settings.rs",
-    "lineNumber": 1219,
+    "lineNumber": 1216,
     "columnNumber": 14,
     "matchedText": "cc-switch",
     "context": "\"identity\": \"cc-switch-plugin-wire\",",
@@ -1126,7 +1090,7 @@
   },
   {
     "file": "src-tauri/src/settings.rs",
-    "lineNumber": 1231,
+    "lineNumber": 1228,
     "columnNumber": 29,
     "matchedText": "cc_switch",
     "context": "r#\"{\"skillStorageLocation\":\"cc_switch\",\"language\":\"zh\"}\"#,",
@@ -1135,7 +1099,7 @@
   },
   {
     "file": "src-tauri/src/settings.rs",
-    "lineNumber": 1250,
+    "lineNumber": 1247,
     "columnNumber": 12,
     "matchedText": "cc_switch",
     "context": ".contains(\"cc_switch\"));",
@@ -1144,7 +1108,7 @@
   },
   {
     "file": "src-tauri/src/settings.rs",
-    "lineNumber": 1262,
+    "lineNumber": 1259,
     "columnNumber": 14,
     "matchedText": "cc-switch",
     "context": ".contains(\"/.cc-switch/\"));",

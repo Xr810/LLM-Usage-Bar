@@ -38,39 +38,6 @@ export function findOldIdentityMatches(line: string): OldIdentityMatch[] {
 
 const removedTask4OwnedLines: readonly RemovedOwnedIdentityLine[] = [
   {
-    file: "src-tauri/src/services/skill.rs",
-    lineNumber: 44,
-    context: "CcSwitch,",
-    reason: "prior writable current-product storage variant",
-  },
-  {
-    file: "src-tauri/src/services/skill.rs",
-    lineNumber: 483,
-    context:
-      'SkillStorageLocation::CcSwitch => get_app_config_dir().join("skills"),',
-    reason: "prior writable current-product storage path arm",
-  },
-  {
-    file: "src-tauri/src/services/skill.rs",
-    lineNumber: 1168,
-    context:
-      'SkillStorageLocation::CcSwitch => get_app_config_dir().join("skills"),',
-    reason: "prior storage migration target arm",
-  },
-  {
-    file: "src-tauri/src/services/skill.rs",
-    lineNumber: 1402,
-    context: 'scan_sources.push((ssot_dir, "cc-switch".to_string()));',
-    reason: "prior transient current-product scan label",
-  },
-  {
-    file: "src-tauri/src/services/skill.rs",
-    lineNumber: 1472,
-    context:
-      'search_sources.push((ssot_dir.clone(), "cc-switch".to_string()));',
-    reason: "prior transient current-product import label",
-  },
-  {
     file: "src-tauri/src/settings.rs",
     lineNumber: 448,
     context:
@@ -83,8 +50,6 @@ const removedTask4OwnedLines: readonly RemovedOwnedIdentityLine[] = [
     context: 'export type SkillStorageLocation = "cc_switch" | "unified";',
     reason: "prior writable frontend storage wire value",
   },
-  // The src/lib/api/skills.ts entry was dropped with that module: it asserted
-  // the file no longer carries a legacy literal, and the file is now gone.
   {
     file: "src/lib/schemas/settings.ts",
     lineNumber: 38,
@@ -92,10 +57,6 @@ const removedTask4OwnedLines: readonly RemovedOwnedIdentityLine[] = [
       'skillStorageLocation: z.enum(["cc_switch", "unified"]).optional(),',
     reason: "prior current settings write schema",
   },
-  // The two SkillStorageLocationSettings.tsx entries were dropped when that
-  // component was removed. Each asserted the file no longer carries a legacy
-  // literal; with the file itself gone there is nothing left to assert, and
-  // the check cannot read a path that does not exist.
 ];
 
 function removedOwnedOccurrence(

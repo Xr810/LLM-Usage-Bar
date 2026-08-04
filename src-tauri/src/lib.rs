@@ -32,18 +32,14 @@ pub mod tray_status;
 pub mod usage;
 mod usage_events;
 
-pub use app_config::{AppType, InstalledSkill, McpApps, McpServer, MultiAppConfig, SkillApps};
+pub use app_config::{AppType, MultiAppConfig};
 pub use claude_quota::run_claude_statusline_bridge;
 pub use commands::*;
 pub use config::{get_claude_mcp_path, get_claude_settings_path, read_json_file};
-pub use database::{Database, Profile};
+pub use database::Database;
 pub use error::AppError;
 pub use prompt::Prompt;
 pub use provider::{Provider, ProviderMeta};
-pub use services::{
-    skill::{migrate_skills_to_ssot, ImportSkillSelection},
-    SkillService, SpeedtestService,
-};
 pub use settings::{update_settings, AppSettings};
 pub use store::AppState;
 use tauri_plugin_deep_link::DeepLinkExt;
@@ -209,10 +205,9 @@ pub fn prepare_database_runtime_test_hook(
 #[cfg(debug_assertions)]
 #[doc(hidden)]
 pub fn create_schema_v13_fixture_test_hook(path: &Path) -> Result<(), AppError> {
-    // Reviewed for schema v20: the v19 -> v20 step only adds
-    // `provider_model_pricing` and `usage_events.pricing_origin`, neither of
-    // which the v13 baseline below builds or depends on.
-    if database::SCHEMA_VERSION != 20
+    // Reviewed for schema v21: the v20 -> v21 step only drops retired tables,
+    // none of which the v13 baseline below builds or depends on.
+    if database::SCHEMA_VERSION != 21
         || product_identity::DATABASE_IDENTITY_SOURCE_SCHEMA_VERSION != 13
     {
         return Err(AppError::Database(
@@ -225,6 +220,18 @@ pub fn create_schema_v13_fixture_test_hook(path: &Path) -> Result<(), AppError> 
     conn.execute_batch("PRAGMA foreign_keys = ON;")
         .map_err(|error| AppError::Database(format!("configure fixed v13 fixture: {error}")))?;
     Database::create_tables_on_conn(&conn)?;
+    conn.execute_batch(
+        "CREATE TABLE mcp_servers (id TEXT);
+         CREATE TABLE prompts (id TEXT);
+         CREATE TABLE profiles (id TEXT);
+         CREATE TABLE provider_health (id TEXT);
+         CREATE TABLE skills (id TEXT);
+         CREATE TABLE skill_repos (id TEXT);
+         CREATE TABLE proxy_config (id TEXT);
+         CREATE TABLE proxy_live_backup (id TEXT);
+         CREATE TABLE stream_check_logs (id TEXT);",
+    )
+    .map_err(|error| AppError::Database(format!("create fixed v13 retired tables: {error}")))?;
     usage::migration::migrate_v12_to_v13(&conn)?;
     Database::set_user_version(
         &conn,
@@ -763,60 +770,6 @@ pub fn run() {
                 credential_store,
                 quota_service,
             );
-
-            // ============================================================
-            // 按表独立判断的导入逻辑（各类数据独立检查，互不影响）
-            // ============================================================
-
-            // 1. 初始化默认 Skills 仓库（已有内置检查：表非空则跳过）
-            match app_state.db.init_default_skill_repos() {
-                Ok(count) if count > 0 => {
-                    log::info!("✓ Initialized {count} default skill repositories");
-                }
-                Ok(_) => {} // 表非空，静默跳过
-                Err(e) => log::warn!("✗ Failed to initialize default skill repos: {e}"),
-            }
-
-            // 1.1. Skills 统一管理迁移：当数据库迁移到 v3 结构后，自动从各应用目录导入到 SSOT
-            // 触发条件由 schema 迁移设置 settings.skills_ssot_migration_pending = true 控制。
-            match app_state.db.get_setting("skills_ssot_migration_pending") {
-                Ok(Some(flag)) if flag == "true" || flag == "1" => {
-                    // 安全保护：如果用户已经有 v3 结构的 Skills 数据，就不要自动清空重建。
-                    let has_existing = app_state
-                        .db
-                        .get_all_installed_skills()
-                        .map(|skills| !skills.is_empty())
-                        .unwrap_or(false);
-
-                    if has_existing {
-                        log::info!(
-                            "Detected skills_ssot_migration_pending but skills table not empty; skipping auto import."
-                        );
-                        let _ = app_state
-                            .db
-                            .set_setting("skills_ssot_migration_pending", "false");
-                    } else {
-                        match crate::services::skill::migrate_skills_to_ssot(&app_state.db) {
-                            Ok(count) => {
-                                log::info!("✓ Auto imported {count} skill(s) into SSOT");
-                                if count > 0 {
-                                    crate::init_status::set_skills_migration_result(count);
-                                }
-                                let _ = app_state
-                                    .db
-                                    .set_setting("skills_ssot_migration_pending", "false");
-                            }
-                            Err(e) => {
-                                log::warn!("✗ Failed to auto import legacy skills to SSOT: {e}");
-                                crate::init_status::set_skills_migration_error(e.to_string());
-                                // 保留 pending 标志，方便下次启动重试
-                            }
-                        }
-                    }
-                }
-                Ok(_) => {} // 未开启迁移标志，静默跳过
-                Err(e) => log::warn!("✗ Failed to read skills migration flag: {e}"),
-            }
 
             // 1.5. 自动导入 live 配置 + seed 官方预设供应商（Claude / Codex / Gemini）
             //

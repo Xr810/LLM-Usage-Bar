@@ -51,38 +51,6 @@ pub fn set_migration_success() {
     }
 }
 
-// ============================================================
-// Skills SSOT 迁移结果状态
-// ============================================================
-
-#[derive(Debug, Clone, Serialize)]
-pub struct SkillsMigrationPayload {
-    pub count: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
-static SKILLS_MIGRATION_RESULT: OnceLock<RwLock<Option<SkillsMigrationPayload>>> = OnceLock::new();
-
-fn skills_migration_cell() -> &'static RwLock<Option<SkillsMigrationPayload>> {
-    SKILLS_MIGRATION_RESULT.get_or_init(|| RwLock::new(None))
-}
-
-pub fn set_skills_migration_result(count: usize) {
-    if let Ok(mut guard) = skills_migration_cell().write() {
-        *guard = Some(SkillsMigrationPayload { count, error: None });
-    }
-}
-
-pub fn set_skills_migration_error(error: String) {
-    if let Ok(mut guard) = skills_migration_cell().write() {
-        *guard = Some(SkillsMigrationPayload {
-            count: 0,
-            error: Some(error),
-        });
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -10,8 +10,6 @@ pub mod session_usage;
 pub mod session_usage_codex;
 pub mod session_usage_gemini;
 pub mod session_usage_opencode;
-pub mod skill;
-pub mod speedtest;
 pub mod sql_helpers;
 pub mod subscription;
 pub mod sync_protocol;
@@ -25,9 +23,6 @@ pub mod webdav_auto_sync;
 pub mod webdav_sync;
 
 pub use claude_cli_auth::{ClaudeCliAuthService, ClaudeCliAuthStatus};
-#[allow(unused_imports)]
-pub use skill::{DiscoverableSkill, Skill, SkillRepo, SkillService};
-pub use speedtest::SpeedtestService;
 pub use system_provider_connection::{
     SystemProviderConnectionService, SystemProviderConnectionTestResult,
 };

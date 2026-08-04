@@ -49,16 +49,7 @@ impl Database {
         // 1. 迁移 Providers
         Self::migrate_providers(tx, config)?;
 
-        // 2. 迁移 MCP Servers
-        Self::migrate_mcp_servers(tx, config)?;
-
-        // 3. 迁移 Prompts
-        Self::migrate_prompts(tx, config)?;
-
-        // 4. 迁移 Skills
-        Self::migrate_skills(tx, config)?;
-
-        // 5. 迁移 Common Config
+        // 2. 迁移 Common Config
         Self::migrate_common_config(tx, config)?;
 
         Ok(())
@@ -114,102 +105,6 @@ impl Database {
                 }
             }
         }
-        Ok(())
-    }
-
-    /// 迁移 MCP 服务器数据
-    fn migrate_mcp_servers(
-        tx: &rusqlite::Transaction<'_>,
-        config: &MultiAppConfig,
-    ) -> Result<(), AppError> {
-        if let Some(servers) = &config.mcp.servers {
-            for (id, server) in servers {
-                tx.execute(
-                    "INSERT OR REPLACE INTO mcp_servers (
-                        id, name, server_config, description, homepage, docs, tags,
-                        enabled_claude, enabled_codex, enabled_gemini
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-                    params![
-                        id,
-                        server.name,
-                        to_json_string(&server.server)?,
-                        server.description,
-                        server.homepage,
-                        server.docs,
-                        to_json_string(&server.tags)?,
-                        server.apps.claude,
-                        server.apps.codex,
-                        server.apps.gemini,
-                    ],
-                )
-                .map_err(|e| AppError::Database(format!("Migrate mcp server failed: {e}")))?;
-            }
-        }
-        Ok(())
-    }
-
-    /// 迁移提示词数据
-    fn migrate_prompts(
-        tx: &rusqlite::Transaction<'_>,
-        config: &MultiAppConfig,
-    ) -> Result<(), AppError> {
-        let migrate_app_prompts = |prompts_map: &std::collections::HashMap<
-            String,
-            crate::prompt::Prompt,
-        >,
-                                   app_type: &str|
-         -> Result<(), AppError> {
-            for (id, prompt) in prompts_map {
-                tx.execute(
-                        "INSERT OR REPLACE INTO prompts (
-                            id, app_type, name, content, description, enabled, created_at, updated_at
-                        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                        params![
-                            id,
-                            app_type,
-                            prompt.name,
-                            prompt.content,
-                            prompt.description,
-                            prompt.enabled,
-                            prompt.created_at,
-                            prompt.updated_at,
-                        ],
-                    )
-                    .map_err(|e| AppError::Database(format!("Migrate prompt failed: {e}")))?;
-            }
-            Ok(())
-        };
-
-        migrate_app_prompts(&config.prompts.claude.prompts, "claude")?;
-        migrate_app_prompts(&config.prompts.codex.prompts, "codex")?;
-        migrate_app_prompts(&config.prompts.gemini.prompts, "gemini")?;
-
-        Ok(())
-    }
-
-    /// 迁移 Skills 数据
-    fn migrate_skills(
-        tx: &rusqlite::Transaction<'_>,
-        config: &MultiAppConfig,
-    ) -> Result<(), AppError> {
-        // v3.10.0+：Skills 的 SSOT 已迁移到文件系统（~/.llm-usage-bar/skills/）+ 数据库统一结构。
-        //
-        // 旧版 config.json 里的 `skills.skills` 仅记录“安装状态”，但不包含完整元数据，
-        // 且无法保证 SSOT 目录中一定存在对应的 skill 文件。
-        //
-        // 因此这里不再直接把旧的安装状态写入新 skills 表，避免产生“数据库显示已安装但文件缺失”的不一致。
-        // 迁移后可通过：
-        // - 前端「导入已有」(扫描各应用的 skills 目录并复制到 SSOT)
-        // - 或后续启动时的自动扫描逻辑
-        // 来重建已安装技能记录。
-
-        for repo in &config.skills.repos {
-            tx.execute(
-                "INSERT OR REPLACE INTO skill_repos (owner, name, branch, enabled) VALUES (?1, ?2, ?3, ?4)",
-                params![repo.owner, repo.name, repo.branch, repo.enabled],
-            ).map_err(|e| AppError::Database(format!("Migrate skill repo failed: {e}")))?;
-        }
-
         Ok(())
     }
 
