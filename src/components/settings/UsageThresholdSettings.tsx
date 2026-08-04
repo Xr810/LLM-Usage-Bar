@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { useSettings } from "@/hooks/useSettings";
+import { SettingsSection } from "./SettingsSection";
 
 const DEFAULT_WARNING = 50;
 const DEFAULT_CRITICAL = 20;
@@ -41,26 +42,27 @@ export function UsageThresholdSettings() {
   };
 
   return (
-    <section className="space-y-4 border-t border-border py-4">
-      <div className="flex items-start gap-3">
-        <div className="mt-0.5 rounded-md bg-muted p-2 text-muted-foreground">
-          <Gauge className="h-4 w-4" aria-hidden="true" />
-        </div>
-        <div>
-          <h3 className="text-sm font-medium">
-            {t("settings.usageThresholds", {
-              defaultValue: "Usage color thresholds",
-            })}
-          </h3>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {t("settings.usageThresholdsDescription", {
-              defaultValue:
-                "Choose when remaining subscription quota changes from green to yellow or red.",
-            })}
-          </p>
-        </div>
-      </div>
-
+    <SettingsSection
+      icon={Gauge}
+      title={t("settings.usageThresholds", {
+        defaultValue: "Usage color thresholds",
+      })}
+      description={t("settings.usageThresholdsDescription", {
+        defaultValue:
+          "Choose when remaining subscription quota changes from green to yellow or red.",
+      })}
+      action={
+        <Button
+          size="sm"
+          onClick={() => void save()}
+          disabled={!settings || isLoading || isSaving}
+        >
+          {t("settings.saveUsageThresholds", {
+            defaultValue: "Save thresholds",
+          })}
+        </Button>
+      }
+    >
       <div className="space-y-4 rounded-lg border border-border/60 bg-muted/20 p-4">
         <div className="space-y-2">
           <div className="flex items-center justify-between gap-3">
@@ -141,16 +143,6 @@ export function UsageThresholdSettings() {
           })}
         </p>
       ) : null}
-
-      <Button
-        size="sm"
-        onClick={() => void save()}
-        disabled={!settings || isLoading || isSaving}
-      >
-        {t("settings.saveUsageThresholds", {
-          defaultValue: "Save thresholds",
-        })}
-      </Button>
-    </section>
+    </SettingsSection>
   );
 }

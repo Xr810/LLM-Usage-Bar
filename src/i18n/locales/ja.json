@@ -169,7 +169,9 @@
     "invalidLinks": "無効なリンクの集計",
     "emptyUnassignedGroups": "未割り当てグループはありません",
     "emptyArchivedHistory": "アーカイブ済み Agent の履歴はありません",
-    "emptyInvalidLinks": "無効なリンクはありません"
+    "emptyInvalidLinks": "無効なリンクはありません",
+    "unassignedCount": "未割り当てレコード {{count}} 件",
+    "invalidLinkCount": "無効なリンク {{count}} 件"
   },
   "preview": {
     "currentUi": "現在は UI プレビューです。ローカル使用量を確認するには、LLM Usage Bar デスクトップアプリを開いてください。"
@@ -257,7 +259,9 @@
     "minimizeToTray": "閉じるときトレイへ最小化",
     "enableClaudePluginIntegration": "Claude Code 拡張に適用",
     "claudeConfigDir": "Claude Code 設定ディレクトリ",
-    "codexConfigDir": "Codex 設定ディレクトリ"
+    "codexConfigDir": "Codex 設定ディレクトリ",
+    "startup": "起動",
+    "startupDescription": "ログイン後の LLM Usage Bar の起動方法を設定します。"
   },
   "sessionManager": {
     "delete": "セッションを削除",

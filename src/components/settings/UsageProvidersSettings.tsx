@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Search } from "lucide-react";
+import { Blocks, Search, Wallet } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/card";
 import { UsageProviderDialog } from "@/components/usage-dashboard/UsageProviderDialog";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { SettingsSection } from "./SettingsSection";
 import { SystemProviderCard } from "./SystemProviderCard";
 import {
   useDeleteUsageProvider,
@@ -154,70 +155,58 @@ export function UsageProvidersSettings({
 
   return (
     <div className="space-y-4 pb-6">
-      <Card>
-        <CardHeader className="space-y-4">
-          <div className="space-y-1.5">
-            <CardTitle className="text-base">
-              {t("usageDashboard.providers", { defaultValue: "Providers" })}
-            </CardTitle>
-            <CardDescription>
-              {t("usageDashboard.providersSettingsDescription", {
-                defaultValue:
-                  "Manage Provider accounts, monitoring sources, refresh settings, and budgets.",
+      <SettingsSection
+        icon={Blocks}
+        title={t("usageDashboard.providers", { defaultValue: "Providers" })}
+        description={t("usageDashboard.providersSettingsDescription", {
+          defaultValue:
+            "Manage Provider accounts, monitoring sources, refresh settings, and budgets.",
+        })}
+      >
+        <div className="space-y-2">
+          <div className="relative">
+            <Search
+              aria-hidden="true"
+              className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+            />
+            <Input
+              type="search"
+              value={providerSearch}
+              onChange={(event) => setProviderSearch(event.target.value)}
+              aria-label={t("usageDashboard.searchProviders", {
+                defaultValue: "Search Providers",
               })}
-            </CardDescription>
-          </div>
-          <div className="space-y-2">
-            <div className="relative">
-              <Search
-                aria-hidden="true"
-                className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
-              />
-              <Input
-                type="search"
-                value={providerSearch}
-                onChange={(event) => setProviderSearch(event.target.value)}
-                aria-label={t("usageDashboard.searchProviders", {
-                  defaultValue: "Search Providers",
-                })}
-                placeholder={t("usageDashboard.searchProvidersPlaceholder", {
-                  defaultValue: "Search by Provider name or endpoint...",
-                })}
-                className="pl-9"
-              />
-            </div>
-            <p className="text-xs text-muted-foreground">
-              {t("usageDashboard.providerCatalogHint", {
-                defaultValue:
-                  "Search the built-in catalog, then sign in or save an API key. Usage, balance, and quota still depend on the monitoring sources each Provider exposes.",
+              placeholder={t("usageDashboard.searchProvidersPlaceholder", {
+                defaultValue: "Search by Provider name or endpoint...",
               })}
-            </p>
+              className="pl-9"
+            />
           </div>
-        </CardHeader>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">
-            {t("usageDashboard.apiSpendingLimits", {
-              defaultValue: "API spending limits",
-            })}
-          </CardTitle>
-          <CardDescription>
-            {t("usageDashboard.apiSpendingLimitsDescription", {
+          <p className="text-xs text-muted-foreground">
+            {t("usageDashboard.providerCatalogHint", {
               defaultValue:
-                "Use one combined limit for all enabled API Providers, or opt into separate Provider limits.",
+                "Search the built-in catalog, then sign in or save an API key. Usage, balance, and quota still depend on the monitoring sources each Provider exposes.",
             })}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <ApiBudgetSettings
-            config={budgetConfig}
-            isLoading={budgetConfigQuery.isLoading}
-          />
-          <OfficialPricingRefreshSection />
-        </CardContent>
-      </Card>
+          </p>
+        </div>
+      </SettingsSection>
+
+      <SettingsSection
+        icon={Wallet}
+        title={t("usageDashboard.apiSpendingLimits", {
+          defaultValue: "API spending limits",
+        })}
+        description={t("usageDashboard.apiSpendingLimitsDescription", {
+          defaultValue:
+            "Use one combined limit for all enabled API Providers, or opt into separate Provider limits.",
+        })}
+      >
+        <ApiBudgetSettings
+          config={budgetConfig}
+          isLoading={budgetConfigQuery.isLoading}
+        />
+        <OfficialPricingRefreshSection />
+      </SettingsSection>
 
       {providersQuery.isLoading ? (
         <div>{t("common.loading", { defaultValue: "Loading" })}</div>

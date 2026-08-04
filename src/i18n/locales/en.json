@@ -169,7 +169,9 @@
     "invalidLinks": "Invalid link summaries",
     "emptyUnassignedGroups": "No unassigned groups",
     "emptyArchivedHistory": "No archived Agent history",
-    "emptyInvalidLinks": "No invalid links"
+    "emptyInvalidLinks": "No invalid links",
+    "unassignedCount": "{{count}} unassigned events",
+    "invalidLinkCount": "{{count}} invalid links"
   },
   "preview": {
     "currentUi": "Current UI preview. Open LLM Usage Bar desktop to read local usage."
@@ -257,7 +259,9 @@
     "minimizeToTray": "Minimize to tray on close",
     "enableClaudePluginIntegration": "Apply to Claude Code extension",
     "claudeConfigDir": "Claude Code Configuration Directory",
-    "codexConfigDir": "Codex Configuration Directory"
+    "codexConfigDir": "Codex Configuration Directory",
+    "startup": "Startup",
+    "startupDescription": "Control how LLM Usage Bar starts after you log in."
   },
   "sessionManager": {
     "delete": "Delete session",

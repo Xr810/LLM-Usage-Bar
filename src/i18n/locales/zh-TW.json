@@ -169,7 +169,9 @@
     "invalidLinks": "無效連結摘要",
     "emptyUnassignedGroups": "暫無未歸屬群組",
     "emptyArchivedHistory": "暫無已封存 Agent 歷史",
-    "emptyInvalidLinks": "暫無無效連結"
+    "emptyInvalidLinks": "暫無無效連結",
+    "unassignedCount": "{{count}} 筆未歸屬記錄",
+    "invalidLinkCount": "{{count}} 筆無效連結"
   },
   "preview": {
     "currentUi": "目前是介面預覽。請開啟 LLM Usage Bar 桌面應用程式以讀取本機用量。"
@@ -257,7 +259,9 @@
     "minimizeToTray": "關閉時最小化至系統匣",
     "enableClaudePluginIntegration": "套用至 Claude Code 外掛程式",
     "claudeConfigDir": "Claude Code 設定目錄",
-    "codexConfigDir": "Codex 設定目錄"
+    "codexConfigDir": "Codex 設定目錄",
+    "startup": "啟動",
+    "startupDescription": "設定 LLM Usage Bar 在你登入後如何啟動。"
   },
   "sessionManager": {
     "delete": "刪除工作階段",
