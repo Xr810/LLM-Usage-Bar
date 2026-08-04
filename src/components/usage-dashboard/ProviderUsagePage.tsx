@@ -109,96 +109,79 @@ export function ProviderUsagePage({
 
   return (
     <div className="space-y-7">
-      <div className="grid items-start gap-4 min-[900px]:grid-cols-[300px_minmax(0,1fr)] min-[1180px]:grid-cols-[330px_minmax(0,1fr)]">
-        <section
-          className="overflow-hidden rounded-xl border bg-card px-4 shadow-card"
-          aria-labelledby="subscription-heading"
-        >
-          <div className="flex items-start justify-between gap-3 py-4">
-            <div>
-              <h2 id="subscription-heading" className="text-sm font-semibold">
-                {t("usageDashboard.remainingQuota", {
-                  defaultValue: "Remaining quota",
-                })}
-              </h2>
-              <p className="mt-1 text-[11px] text-muted-foreground">
-                {t("usageDashboard.subscriptionAccounts", {
-                  defaultValue: "Subscription accounts",
-                })}
-              </p>
-            </div>
-            <span className="shrink-0 text-xs text-muted-foreground metric">
-              {t("usageDashboard.accountCount", {
-                count: projection.subscriptionProviders.length,
-                defaultValue: "{{count}} accounts",
-              })}
-            </span>
-          </div>
-
-          {projection.subscriptionProviders.length ? (
-            <div>
-              {projection.subscriptionProviders.map((usage) => (
-                <SubscriptionProviderCard
-                  key={usage.provider.id}
-                  usage={usage}
-                  layout="sidebar"
-                  onRefreshQuota={onRefreshQuota}
-                  onSyncSessions={onSyncSessions}
-                  isRefreshingQuota={isRefreshingQuota}
-                  isSyncingSessions={isSyncingSessions}
-                  remainingThresholds={remainingThresholds}
-                />
-              ))}
-            </div>
-          ) : (
-            <div className="border-t border-dashed border-border py-8 text-center text-sm text-muted-foreground">
-              {t("usageDashboard.noSubscriptionProviders", {
-                defaultValue: "No subscription Provider accounts.",
-              })}
-            </div>
+      <section className="space-y-3" aria-labelledby="subscription-heading">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+          {sectionHeading(
+            "subscription-heading",
+            t("usageDashboard.remainingQuota", {
+              defaultValue: "Remaining quota",
+            }),
+            projection.subscriptionProviders.length,
           )}
-
-          <dl className="grid grid-cols-2 gap-2 border-t border-border/60 py-4">
-            <div className="rounded-lg bg-muted/20 px-3 py-2.5">
-              <dt className="text-[10px] text-muted-foreground">
+          <dl className="flex items-baseline gap-5 text-xs text-muted-foreground">
+            <div className="flex items-baseline gap-1.5">
+              <dt>
                 {t("usageDashboard.selectedRangeTokens", {
                   defaultValue: "Selected range",
                 })}
               </dt>
               <dd
-                className="mt-1 text-base font-semibold metric"
+                className="font-semibold text-foreground metric"
                 title={projection.overallTotalTokens.toLocaleString()}
               >
                 {formatTokensCompact(projection.overallTotalTokens)}
               </dd>
             </div>
-            <div className="rounded-lg bg-muted/20 px-3 py-2.5">
-              <dt className="text-[10px] text-muted-foreground">
+            <div className="flex items-baseline gap-1.5">
+              <dt>
                 {t("usageDashboard.records", { defaultValue: "Records" })}
               </dt>
-              <dd className="mt-1 text-base font-semibold metric">
+              <dd className="font-semibold text-foreground metric">
                 {projection.overallRequestCount.toLocaleString()}
               </dd>
             </div>
           </dl>
-        </section>
-
-        <div className="min-w-0 space-y-4">
-          <ProviderActivityHeatmap
-            buckets={activityBuckets}
-            startAt={activityStartAt}
-            endAt={activityEndAt}
-            isLoading={isActivityLoading}
-          />
-          <ProviderUsageTrendChart
-            granularity={projection.trendGranularity}
-            buckets={projection.trendBuckets}
-            totalTokens={projection.overallTotalTokens}
-            recordCount={projection.overallRequestCount}
-            rangeLabel={rangeLabel}
-            rangeControls={rangeControls}
-          />
         </div>
+
+        {projection.subscriptionProviders.length ? (
+          <div className="grid gap-4 min-[880px]:grid-cols-2 min-[1240px]:grid-cols-3">
+            {projection.subscriptionProviders.map((usage) => (
+              <SubscriptionProviderCard
+                key={usage.provider.id}
+                usage={usage}
+                layout="compact"
+                onRefreshQuota={onRefreshQuota}
+                onSyncSessions={onSyncSessions}
+                isRefreshingQuota={isRefreshingQuota}
+                isSyncingSessions={isSyncingSessions}
+                remainingThresholds={remainingThresholds}
+              />
+            ))}
+          </div>
+        ) : (
+          <div className="rounded-xl border border-dashed border-border bg-muted/20 px-4 py-6 text-center text-sm text-muted-foreground dark:bg-muted/10">
+            {t("usageDashboard.noSubscriptionProviders", {
+              defaultValue: "No subscription Provider accounts.",
+            })}
+          </div>
+        )}
+      </section>
+
+      <div className="space-y-4">
+        <ProviderActivityHeatmap
+          buckets={activityBuckets}
+          startAt={activityStartAt}
+          endAt={activityEndAt}
+          isLoading={isActivityLoading}
+        />
+        <ProviderUsageTrendChart
+          granularity={projection.trendGranularity}
+          buckets={projection.trendBuckets}
+          totalTokens={projection.overallTotalTokens}
+          recordCount={projection.overallRequestCount}
+          rangeLabel={rangeLabel}
+          rangeControls={rangeControls}
+        />
       </div>
 
       <section className="space-y-3" aria-labelledby="metered-heading">

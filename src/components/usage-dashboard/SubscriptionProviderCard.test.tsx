@@ -203,12 +203,17 @@ describe("SubscriptionProviderCard localized reset countdown", () => {
     ).toHaveTextContent(
       "Quota: latest local sample per window (Desktop / Pro Code; account match unverified) · Tokens: Claude Code log (Provider unverified)",
     );
-    expect(
-      screen.getByTestId("subscription-provider-system-claude-subscription"),
-    ).toHaveTextContent(new Date(1_234 * 1_000).toLocaleString());
-    expect(
-      screen.getByTestId("subscription-provider-system-claude-subscription"),
-    ).not.toHaveTextContent(new Date(9_999 * 1_000).toLocaleString());
+    // The line shows a relative age; the exact timestamp is the tooltip, and it
+    // must come from the local sample (1_234) rather than the fetch attempt (9_999).
+    const provenance = screen.getByTestId("provider-provenance");
+    expect(provenance).toHaveAttribute(
+      "title",
+      new Date(1_234 * 1_000).toLocaleString(),
+    );
+    expect(provenance).not.toHaveAttribute(
+      "title",
+      new Date(9_999 * 1_000).toLocaleString(),
+    );
   });
 
   it.each([
@@ -322,11 +327,11 @@ describe("SubscriptionProviderCard localized reset countdown", () => {
     ).toBeNull();
   });
 
-  it("keeps quota details but hides Provider actions in the sidebar layout", () => {
+  it("keeps quota details but hides Provider actions in the compact layout", () => {
     render(
       <SubscriptionProviderCard
         usage={subscriptionUsage()}
-        layout="sidebar"
+        layout="compact"
         onRefreshQuota={vi.fn()}
         onSyncSessions={vi.fn()}
       />,
@@ -334,7 +339,7 @@ describe("SubscriptionProviderCard localized reset countdown", () => {
 
     expect(
       screen.getByTestId("subscription-provider-system-chatgpt-subscription"),
-    ).toHaveAttribute("data-layout", "sidebar");
+    ).toHaveAttribute("data-layout", "compact");
     expect(screen.getByText("5-hour window")).toBeInTheDocument();
     expect(screen.getByText("Weekly allowance")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Refresh quota" })).toBeNull();

@@ -313,7 +313,11 @@ export function ProviderActivityHeatmap({
           <div
             ref={scrollViewportRef}
             data-activity-scroll
-            className="mt-5 overflow-x-auto overscroll-x-contain pb-1 [--activity-cell:10px] [--activity-slot:12px] min-[1180px]:[--activity-cell:13px] min-[1180px]:[--activity-slot:17px]"
+            // The year grid is 53 columns wide. Sizing the slot in `cqw` lets it
+            // grow to fill the card instead of stranding empty space beside a
+            // fixed-width grid; the clamp keeps cells legible and still scrolls
+            // horizontally once the card is too narrow for the minimum size.
+            className="mt-5 overflow-x-auto overscroll-x-contain pb-1 [container-type:inline-size] [--activity-slot:clamp(12px,1.82cqw,20px)] [--activity-cell:calc(var(--activity-slot)-4px)]"
             aria-label={t("usageDashboard.activityChartLabel", {
               defaultValue: "Daily token activity for the last 12 months",
             })}

@@ -24,13 +24,32 @@ interface Props {
   isRefreshingQuota?: boolean;
   isSyncingSessions?: boolean;
   remainingThresholds?: RemainingThresholds;
-  layout?: "default" | "sidebar";
+  /**
+   * `compact` is the monitoring dashboard's grid tile: same quota detail, no
+   * manual actions, and a tighter footprint so several accounts fit side by side.
+   */
+  layout?: "default" | "compact";
 }
 
 type RelativeReset = {
   count: number;
   unit: "days" | "hours" | "minutes";
 };
+
+/** Locale-aware "5 minutes ago" for a past millisecond timestamp. */
+function relativeTimeAgo(timestampMs: number, locale: string): string {
+  const seconds = Math.max(0, Math.round((Date.now() - timestampMs) / 1000));
+  const format = new Intl.RelativeTimeFormat(locale, { numeric: "auto" });
+  const [amount, unit]: [number, Intl.RelativeTimeFormatUnit] =
+    seconds < 60
+      ? [seconds, "second"]
+      : seconds < 3_600
+        ? [Math.floor(seconds / 60), "minute"]
+        : seconds < 86_400
+          ? [Math.floor(seconds / 3_600), "hour"]
+          : [Math.floor(seconds / 86_400), "day"];
+  return format.format(-amount, unit);
+}
 
 function relativeReset(reset: string): RelativeReset | null {
   const timestamp = Date.parse(reset);
@@ -55,7 +74,7 @@ export function SubscriptionProviderCard({
   layout = "default",
 }: Props) {
   const { t, i18n } = useTranslation();
-  const sidebar = layout === "sidebar";
+  const compact = layout === "compact";
   const canRefreshQuota = Boolean(usage.provider.quotaSource);
   const quota = canRefreshQuota ? usage.quota : null;
   const fetchState = canRefreshQuota ? usage.quotaFetchState : null;
@@ -127,7 +146,7 @@ export function SubscriptionProviderCard({
     return (
       <QuotaMeter
         key={label}
-        flat={sidebar}
+        flat={compact}
         label={label}
         meterLabel={label}
         fillPercent={remaining}
@@ -142,17 +161,18 @@ export function SubscriptionProviderCard({
         }
         footer={
           absoluteReset ? (
+            // The exact timestamp is long and rarely what you want at a glance;
+            // lead with "in 2h" and keep the absolute time on hover.
             <span title={absoluteReset}>
-              {t("usageDashboard.resetsAt", {
-                value: absoluteReset,
-                defaultValue: `Resets ${absoluteReset}`,
-              })}
               {relativeLabel
-                ? ` · ${t("usageDashboard.resetsIn", {
+                ? t("usageDashboard.resetsIn", {
                     value: relativeLabel,
                     defaultValue: `in ${relativeLabel}`,
-                  })}`
-                : ""}
+                  })
+                : t("usageDashboard.resetsAt", {
+                    value: absoluteReset,
+                    defaultValue: `Resets ${absoluteReset}`,
+                  })}
             </span>
           ) : undefined
         }
@@ -160,7 +180,7 @@ export function SubscriptionProviderCard({
     );
   };
 
-  const tokenItems = sidebar
+  const tokenItems = compact
     ? [
         {
           label: t("usageDashboard.totalTokens", { defaultValue: "Total" }),
@@ -211,29 +231,31 @@ export function SubscriptionProviderCard({
     usage.provider.quotaSource === "claude_local"
       ? (quota?.sourceObservedAt ?? quota?.fetchedAt)
       : (fetchState?.lastSuccessAt ?? quota?.fetchedAt);
+  // "3 minutes ago" answers "is this current?" at a glance; the exact
+  // timestamp stays available as the line's tooltip.
+  const freshnessLabel = lastSuccessAt
+    ? relativeTimeAgo(
+        lastSuccessAt * 1000,
+        i18n.resolvedLanguage ?? i18n.language,
+      )
+    : "";
+  const hasManualResets =
+    quota?.manualResetsRemaining != null ||
+    (quota?.manualResetCredits?.length ?? 0) > 0;
 
   return (
     <Card
       data-testid={`subscription-provider-${usage.provider.id}`}
       data-layout={layout}
-      className={cn(
-        "overflow-hidden",
-        sidebar &&
-          "rounded-none border-x-0 border-b-0 bg-transparent shadow-none",
-      )}
+      className={cn("flex flex-col overflow-hidden", compact && "h-full")}
     >
-      <div
-        className={cn(
-          "flex items-center justify-between gap-3 pt-4",
-          sidebar ? "px-0" : "px-5",
-        )}
-      >
+      <div className="flex items-center justify-between gap-3 px-5 pt-4">
         <div className="flex min-w-0 items-center gap-3">
           <ProviderIcon
             icon={icon}
             color={iconColor}
             name={usage.provider.name}
-            size={sidebar ? 30 : 34}
+            size={compact ? 30 : 34}
             className="shrink-0 rounded-[10px] border border-border/50"
           />
           <div className="min-w-0">
@@ -247,16 +269,22 @@ export function SubscriptionProviderCard({
                 })}
               </Badge>
             </div>
-            <p className="mt-0.5 truncate text-xs text-muted-foreground">
+            <p
+              data-testid="provider-provenance"
+              className="mt-0.5 truncate text-xs text-muted-foreground"
+              title={
+                lastSuccessAt
+                  ? new Date(lastSuccessAt * 1000).toLocaleString()
+                  : undefined
+              }
+            >
               {sourceText}
               {lastSuccessAt ? (
                 <>
                   {" · "}
                   {t("usageDashboard.lastUpdated", {
-                    value: new Date(lastSuccessAt * 1000).toLocaleString(),
-                    defaultValue: `Last updated ${new Date(
-                      lastSuccessAt * 1000,
-                    ).toLocaleString()}`,
+                    value: freshnessLabel,
+                    defaultValue: `Last updated ${freshnessLabel}`,
                   })}
                 </>
               ) : null}
@@ -271,12 +299,7 @@ export function SubscriptionProviderCard({
         ) : null}
       </div>
 
-      <div
-        className={cn(
-          "grid gap-2.5 pt-4",
-          sidebar ? "grid-cols-1 px-0" : "px-5 sm:grid-cols-2",
-        )}
-      >
+      <div className={cn("grid gap-2.5 px-5 pt-4 sm:grid-cols-2")}>
         {quotaWindow(
           t("usageDashboard.fiveHourWindow", { defaultValue: "5-hour window" }),
           quota?.fiveHourUtilizationPercent,
@@ -291,19 +314,23 @@ export function SubscriptionProviderCard({
         )}
       </div>
 
-      <div className={cn("pt-2", sidebar ? "px-0" : "px-5")}>
-        <ManualResetCredits
-          availableCount={quota?.manualResetsRemaining ?? null}
-          credits={quota?.manualResetCredits ?? []}
-          compact={sidebar}
-        />
-      </div>
+      {/* ManualResetCredits renders nothing for plans without manual resets —
+          skip the wrapper too, or its padding leaves a gap in the card. */}
+      {hasManualResets ? (
+        <div className="px-5 pt-2">
+          <ManualResetCredits
+            availableCount={quota?.manualResetsRemaining ?? null}
+            credits={quota?.manualResetCredits ?? []}
+            compact={compact}
+          />
+        </div>
+      ) : null}
 
-      <div className={cn("pt-4", sidebar ? "px-0" : "px-5")}>
+      <div className="mt-auto px-5 pt-4">
         <dl
           className={cn(
             "grid gap-2 rounded-lg bg-muted/25 px-3 py-2.5 dark:bg-muted/15",
-            sidebar ? "grid-cols-2" : "grid-cols-5",
+            compact ? "grid-cols-2" : "grid-cols-5",
           )}
         >
           {tokenItems.map(({ label, value, text }) => (
@@ -323,14 +350,12 @@ export function SubscriptionProviderCard({
       </div>
 
       {fetchState?.stale && fetchState.lastError ? (
-        <p
-          className={cn("pt-2 text-xs text-warning", sidebar ? "px-0" : "px-5")}
-        >
+        <p className="px-5 pt-2 text-xs text-warning">
           {t("usageDashboard.stale", { defaultValue: "Stale" })}:{" "}
           {fetchState.lastError}
         </p>
       ) : null}
-      {!sidebar ? (
+      {!compact ? (
         <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-border/60 px-5 py-3">
           {canRefreshQuota ? (
             <Button

@@ -112,7 +112,7 @@ describe("UsageDashboardPage Provider-only contract", () => {
     ).toBeGreaterThan(300 * 24 * 60 * 60);
   });
 
-  it("does not expose manual Provider actions in the monitoring sidebar", async () => {
+  it("does not expose manual Provider actions in the monitoring dashboard", async () => {
     renderPage();
     await screen.findByText("ChatGPT Plus/Pro");
 
