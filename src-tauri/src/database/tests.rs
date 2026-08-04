@@ -2659,7 +2659,7 @@ fn schema_migration_v20_to_v21_drops_retired_tables_and_preserves_live_data() {
     for table in retired_tables {
         assert!(
             !Database::table_exists(&conn, table).unwrap(),
-            "fresh schema v21 should not create retired table {table}"
+            "fresh current schema should not create retired table {table}"
         );
         conn.execute(&format!("CREATE TABLE {table} (id TEXT)"), [])
             .unwrap_or_else(|error| panic!("create retired table {table}: {error}"));
@@ -2681,9 +2681,9 @@ fn schema_migration_v20_to_v21_drops_retired_tables_and_preserves_live_data() {
     .expect("seed surviving usage log");
     Database::set_user_version(&conn, 20).expect("mark fixture as schema v20");
 
-    Database::apply_schema_migrations_on_conn(&conn).expect("migrate v20 to v21");
+    Database::apply_schema_migrations_on_conn(&conn).expect("migrate v20 through current schema");
 
-    assert_eq!(Database::get_user_version(&conn).unwrap(), 21);
+    assert_eq!(Database::get_user_version(&conn).unwrap(), SCHEMA_VERSION);
     for table in retired_tables {
         assert!(
             !Database::table_exists(&conn, table).unwrap(),
@@ -2709,6 +2709,173 @@ fn schema_migration_v20_to_v21_drops_retired_tables_and_preserves_live_data() {
         )
         .unwrap(),
         "gpt-test"
+    );
+}
+
+#[test]
+fn schema_migration_v21_to_v22_backfills_eligible_costs_and_restores_immutability() {
+    use crate::usage::metering::calculator::{CostCalculator, ModelPricing};
+    use crate::usage::metering::parser::TokenUsage;
+    use crate::usage::system_providers::CHATGPT_SUBSCRIPTION_ID;
+    use rust_decimal::Decimal;
+
+    let db = Database::memory().expect("create current in-memory database");
+    let conn = db.conn.lock().expect("lock in-memory database");
+
+    let pricing =
+        ModelPricing::from_strings("3.25", "7.5", "0.55", "4.75").expect("create expected pricing");
+    conn.execute(
+        "INSERT INTO model_pricing (
+            model_id, display_name, input_cost_per_million, output_cost_per_million,
+            cache_read_cost_per_million, cache_creation_cost_per_million
+         ) VALUES ('v22-priced-model', 'v22-priced-model', ?1, ?2, ?3, ?4)",
+        params!["3.25", "7.5", "0.55", "4.75"],
+    )
+    .expect("seed v22 model pricing");
+    conn.execute(
+        "INSERT INTO usage_events (
+            event_id, source, provider_id, product_group_id, occurred_at, model,
+            input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
+            input_cost_usd, output_cost_usd, cache_read_cost_usd,
+            cache_creation_cost_usd, total_cost_usd, cost_source, created_at,
+            agent_module_id, pricing_origin
+         ) VALUES
+            ('v22-priced', 'session_log', ?1, 'codex', 1, 'v22-priced-model',
+             1500, 200, 400, 50, NULL, NULL, NULL, NULL, NULL,
+             'unavailable', 1, 'codex', NULL),
+            ('v22-unpriced', 'session_log', ?1, 'codex', 2, 'v22-unknown-model',
+             100, 20, 0, 0, NULL, NULL, NULL, NULL, NULL,
+             'unavailable', 2, 'codex', NULL),
+            ('v22-existing-cost', 'session_log', ?1, 'codex', 3, 'v22-priced-model',
+             100, 20, 0, 0, '0.11', '0.22', '0.33', '0.44', '9.99',
+             'upstream', 3, 'codex', NULL),
+            ('v22-zero-token', 'session_log', ?1, 'codex', 4, 'v22-priced-model',
+             0, 0, 0, 0, NULL, NULL, NULL, NULL, NULL,
+             'unavailable', 4, 'codex', NULL)",
+        [CHATGPT_SUBSCRIPTION_ID],
+    )
+    .expect("seed v21 usage events");
+    Database::set_user_version(&conn, 21).expect("mark fixture as schema v21");
+
+    Database::apply_schema_migrations_on_conn(&conn).expect("migrate v21 to v22");
+
+    assert_eq!(Database::get_user_version(&conn).unwrap(), SCHEMA_VERSION);
+
+    let usage = TokenUsage {
+        input_tokens: 1500,
+        output_tokens: 200,
+        cache_read_tokens: 400,
+        cache_creation_tokens: 50,
+        ..TokenUsage::default()
+    };
+    let expected = CostCalculator::calculate_for_app("codex", &usage, &pricing, Decimal::ONE);
+    #[derive(Debug, PartialEq)]
+    struct StoredCost {
+        input: Option<String>,
+        output: Option<String>,
+        cache_read: Option<String>,
+        cache_creation: Option<String>,
+        total: Option<String>,
+        source: String,
+        origin: Option<String>,
+    }
+    let priced = conn
+        .query_row(
+            "SELECT input_cost_usd, output_cost_usd, cache_read_cost_usd,
+                    cache_creation_cost_usd, total_cost_usd, cost_source, pricing_origin
+             FROM usage_events WHERE event_id = 'v22-priced'",
+            [],
+            |row| {
+                Ok(StoredCost {
+                    input: row.get(0)?,
+                    output: row.get(1)?,
+                    cache_read: row.get(2)?,
+                    cache_creation: row.get(3)?,
+                    total: row.get(4)?,
+                    source: row.get(5)?,
+                    origin: row.get(6)?,
+                })
+            },
+        )
+        .expect("read backfilled event");
+    assert_eq!(
+        priced,
+        StoredCost {
+            input: Some(expected.input_cost.to_string()),
+            output: Some(expected.output_cost.to_string()),
+            cache_read: Some(expected.cache_read_cost.to_string()),
+            cache_creation: Some(expected.cache_creation_cost.to_string()),
+            total: Some(expected.total_cost.to_string()),
+            source: "estimated".to_string(),
+            origin: Some("official".to_string()),
+        }
+    );
+
+    let unpriced: (Option<String>, String, Option<String>) = conn
+        .query_row(
+            "SELECT total_cost_usd, cost_source, pricing_origin
+             FROM usage_events WHERE event_id = 'v22-unpriced'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("read still-unpriced event");
+    assert_eq!(unpriced, (None, "unavailable".to_string(), None));
+
+    let existing_cost: (
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        String,
+    ) = conn
+        .query_row(
+            "SELECT input_cost_usd, output_cost_usd, cache_read_cost_usd,
+                    cache_creation_cost_usd, total_cost_usd
+             FROM usage_events WHERE event_id = 'v22-existing-cost'",
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .expect("read pre-costed event");
+    assert_eq!(
+        existing_cost,
+        (
+            Some("0.11".to_string()),
+            Some("0.22".to_string()),
+            Some("0.33".to_string()),
+            Some("0.44".to_string()),
+            "9.99".to_string(),
+        )
+    );
+
+    let zero_token: (Option<String>, String) = conn
+        .query_row(
+            "SELECT total_cost_usd, cost_source
+             FROM usage_events WHERE event_id = 'v22-zero-token'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("read zero-token event");
+    assert_eq!(zero_token, (None, "unavailable".to_string()));
+
+    let update_error = conn
+        .execute(
+            "UPDATE usage_events SET model = model WHERE event_id = 'v22-priced'",
+            [],
+        )
+        .expect_err("usage_events update trigger must be restored");
+    assert!(
+        update_error
+            .to_string()
+            .contains("usage_events are immutable"),
+        "unexpected immutable update error: {update_error}"
     );
 }
 

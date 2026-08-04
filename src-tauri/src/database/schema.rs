@@ -371,6 +371,12 @@ impl Database {
                         Self::migrate_v20_to_v21(conn)?;
                         Self::set_user_version(conn, 21)?;
                     }
+                    21 => {
+                        log::info!("迁移数据库从 v21 到 v22（补算缺失的历史用量成本）");
+                        Self::validate_schema_v21_complete(conn)?;
+                        crate::usage::cost_backfill_migration::migrate_v21_to_v22(conn)?;
+                        Self::set_user_version(conn, 22)?;
+                    }
                     _ => {
                         return Err(AppError::Database(format!(
                             "未知的数据库版本 {version}，无法迁移到 {SCHEMA_VERSION}"
@@ -395,8 +401,11 @@ impl Database {
             if version >= 20 {
                 crate::usage::provider_pricing_migration::validate_schema_v20_complete(conn)?;
             }
-            if version == 21 {
+            if version >= 21 {
                 Self::validate_schema_v21_complete(conn)?;
+            }
+            if version == 22 {
+                crate::usage::cost_backfill_migration::validate_schema_v22_complete(conn)?;
             }
             Ok(())
         })();

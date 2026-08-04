@@ -205,9 +205,11 @@ pub fn prepare_database_runtime_test_hook(
 #[cfg(debug_assertions)]
 #[doc(hidden)]
 pub fn create_schema_v13_fixture_test_hook(path: &Path) -> Result<(), AppError> {
-    // Reviewed for schema v21: the v20 -> v21 step only drops retired tables,
-    // none of which the v13 baseline below builds or depends on.
-    if database::SCHEMA_VERSION != 21
+    // Reviewed for schema v22: the v21 -> v22 step only rewrites cost columns on
+    // existing usage_events rows and drops/recreates the immutability trigger. It
+    // adds and removes no tables and changes no table shape, so the v13 baseline
+    // below is unaffected.
+    if database::SCHEMA_VERSION != 22
         || product_identity::DATABASE_IDENTITY_SOURCE_SCHEMA_VERSION != 13
     {
         return Err(AppError::Database(

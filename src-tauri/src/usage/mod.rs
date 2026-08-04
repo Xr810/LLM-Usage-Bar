@@ -1,6 +1,7 @@
 pub(crate) mod agent_module_migration;
 pub mod aggregation;
 pub mod budget_migration;
+pub(crate) mod cost_backfill_migration;
 pub(crate) mod cursor_migration;
 pub mod dashboard;
 pub mod domain;
