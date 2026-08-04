@@ -81,6 +81,7 @@ fn try_update_tray_tooltip(app: &AppHandle, tooltip: &'static str) -> Result<(),
 }
 
 pub fn publish_tray_usage(app: &AppHandle, snapshot: &TrayUsageSnapshot) {
+    crate::services::budget_alert::notify_for_snapshot(app, snapshot);
     publish_tray_usage_with_sinks(
         snapshot,
         |status| {

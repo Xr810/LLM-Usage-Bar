@@ -1,4 +1,5 @@
 pub mod balance;
+pub mod budget_alert;
 pub mod claude_cli_auth;
 pub mod coding_plan;
 pub mod official_pricing;
