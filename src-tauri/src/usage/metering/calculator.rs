@@ -28,6 +28,27 @@ pub struct ModelPricing {
 /// 成本计算器
 pub struct CostCalculator;
 
+/// Whether a source counts cache reads inside `input_tokens`.
+///
+/// OpenAI and Gemini report `input_tokens` inclusive of the cached prefix, so
+/// the cached part has to come off before the input rate applies. Anthropic
+/// reports it already net of cache.
+///
+/// The caller does not always know the agent: session-log events from a
+/// subscription account carry only the product group, because there is no proxy
+/// route to name an app type. Those product groups therefore have to be listed
+/// here as well — treating `chatgpt-subscription` as Anthropic-style charged a
+/// typical Codex turn of 149k input, 147k of it cache, as 149k of fresh input.
+fn input_includes_cache_read(app_type: &str) -> bool {
+    matches!(
+        app_type,
+        // Agent identifiers, used when a proxy route named the app.
+        "codex" | "gemini"
+        // Product groups, used when only the account is known.
+        | "chatgpt-subscription" | "openai-api"
+    )
+}
+
 impl CostCalculator {
     /// 计算请求成本
     ///
@@ -59,12 +80,11 @@ impl CostCalculator {
         pricing: &ModelPricing,
         cost_multiplier: Decimal,
     ) -> CostBreakdown {
-        let input_includes_cache_read = matches!(app_type, "codex" | "gemini");
         Self::calculate_with_cache_semantics(
             usage,
             pricing,
             cost_multiplier,
-            input_includes_cache_read,
+            input_includes_cache_read(app_type),
         )
     }
 
@@ -180,6 +200,45 @@ mod tests {
         );
         // total: 0.003 + 0.0075 + 0.00006 + 0.000375 = 0.010935
         assert_eq!(cost.total_cost, Decimal::from_str("0.010935").unwrap());
+    }
+
+    /// A subscription account's session-log events carry only their product
+    /// group, never an agent name. Reading Codex usage as Anthropic-style
+    /// billed the cached prefix at the full input rate.
+    #[test]
+    fn chatgpt_subscription_deducts_its_cached_prefix_like_codex() {
+        // The shape of a real Codex turn: nearly all of the input is cache.
+        let usage = TokenUsage {
+            input_tokens: 149_510,
+            output_tokens: 2_782,
+            cache_read_tokens: 147_200,
+            cache_creation_tokens: 0,
+            model: None,
+            message_id: None,
+        };
+        let pricing = ModelPricing::from_strings("5.0", "30.0", "0.5", "0.0").unwrap();
+        let multiplier = Decimal::from_str("1.0").unwrap();
+
+        let by_product_group =
+            CostCalculator::calculate_for_app("chatgpt-subscription", &usage, &pricing, multiplier);
+        let by_agent = CostCalculator::calculate_for_app("codex", &usage, &pricing, multiplier);
+        assert_eq!(
+            by_product_group.total_cost, by_agent.total_cost,
+            "the account and the agent describe the same vendor"
+        );
+
+        // Only the 2_310 uncached tokens are charged at the input rate.
+        assert_eq!(
+            by_product_group.input_cost,
+            Decimal::from_str("0.01155").unwrap()
+        );
+        // Reading it as Anthropic-style would have charged all 149_510.
+        let anthropic_style =
+            CostCalculator::calculate_for_app("claude-subscription", &usage, &pricing, multiplier);
+        assert!(
+            anthropic_style.input_cost > by_product_group.input_cost * Decimal::from(60),
+            "the mistake this guards against was a ~65x overcharge on input"
+        );
     }
 
     #[test]

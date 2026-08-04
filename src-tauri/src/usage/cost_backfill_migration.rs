@@ -11,11 +11,18 @@
 //! spans them reads low. The existing backfill does not help — it rewrites
 //! `proxy_request_logs`, which the dashboard does not read.
 //!
-//! This migration recomputes those rows once, using the same lookup and the same
-//! calculator the ingest path uses, so a backfilled cost is identical to the one
-//! the event would have been given had the price existed at the time. Rows whose
-//! model is still unknown are left alone and will be picked up by a later
-//! migration if the catalogue ever learns them.
+//! A second defect compounded it. Cache semantics were selected from the app
+//! type, and session-log events from a subscription account carry only their
+//! product group — so Codex usage was charged Anthropic-style, with the cached
+//! prefix billed at the full input rate. A typical Codex turn is 149k input of
+//! which 147k is cache, so the events that *were* priced were priced far too
+//! high.
+//!
+//! This migration recomputes both populations once, using the same lookup and
+//! the same calculator the ingest path uses, so a rewritten cost is identical to
+//! the one the event would have been given had both defects never existed. Rows
+//! whose model is still unknown are left alone and reported. Costs reported by
+//! an upstream API are never touched: those are billed amounts, not estimates.
 
 use crate::error::AppError;
 use crate::services::usage_stats::find_model_pricing_row;
@@ -27,7 +34,7 @@ use rust_decimal::Decimal;
 
 const SAVEPOINT: &str = "cost_backfill_v22";
 
-/// One event that carries tokens but no cost.
+/// One event that carries tokens and an estimate we have to redo.
 struct UncostedEvent {
     event_id: String,
     /// Stands in for the ingest-time app type. `decide_cost` falls back to
@@ -86,7 +93,7 @@ fn load_uncosted_events(conn: &Connection) -> Result<Vec<UncostedEvent>, AppErro
             "SELECT event_id, product_group_id, model,
                     input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens
              FROM usage_events
-             WHERE total_cost_usd IS NULL
+             WHERE cost_source <> 'upstream'
                AND (input_tokens > 0 OR output_tokens > 0
                     OR cache_read_tokens > 0 OR cache_creation_tokens > 0)",
         )
