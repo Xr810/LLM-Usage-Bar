@@ -171,14 +171,15 @@ describe("TrayUsagePopover Provider-only UI", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("ChatGPT Plus/Pro")).toBeInTheDocument();
     expect(screen.getByText("OpenAI API")).toBeInTheDocument();
+    // Spend stays on the collapsed summary row; the chart and model line are
+    // behind the per-account disclosure so the popover stays glanceable.
+    expect(screen.getAllByText("$1.25")).not.toHaveLength(0);
+    expect(screen.queryByText("Most used model: gpt-5.6-sol")).toBeNull();
     expect(
-      screen.getByText("Most used model: gpt-5.6-sol"),
-    ).toBeInTheDocument();
-    expect(
-      screen.getAllByRole("img", {
+      screen.queryAllByRole("img", {
         name: "Token usage for the last 30 days",
       }),
-    ).toHaveLength(2);
+    ).toHaveLength(0);
     expect(
       screen.queryByText(/Estimated from this Provider/),
     ).not.toBeInTheDocument();
@@ -190,6 +191,25 @@ describe("TrayUsagePopover Provider-only UI", () => {
         name: "Daily budget for OpenAI API",
       }),
     ).toHaveAttribute("aria-valuenow", "80");
+  });
+
+  it("reveals the chart and most-used model once an account is expanded", async () => {
+    const user = userEvent.setup();
+    render(<TrayUsagePopoverView {...props()} />);
+
+    const [firstDisclosure] = screen.getAllByRole("button", {
+      name: "Usage details",
+    });
+    await user.click(firstDisclosure);
+
+    expect(
+      screen.getByText("Most used model: gpt-5.6-sol"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getAllByRole("img", {
+        name: "Token usage for the last 30 days",
+      }),
+    ).toHaveLength(1);
   });
 
   it("uses the weekly label and expands GPT manual reset credits", async () => {

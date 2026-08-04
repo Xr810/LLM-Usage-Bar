@@ -393,6 +393,7 @@
     "remaining": "剩余 {{percent}}",
     "resets": "{{time}} 重置",
     "pendingRefresh": "等待刷新",
+    "toggleUsageDetails": "用量详情",
     "today": "今天",
     "rolling30DayCost": "近 30 天费用",
     "rolling30DayTokens": "近 30 天 Token 用量",

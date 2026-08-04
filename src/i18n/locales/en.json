@@ -393,6 +393,7 @@
     "remaining": "{{percent}} remaining",
     "resets": "Resets {{time}}",
     "pendingRefresh": "Pending refresh",
+    "toggleUsageDetails": "Usage details",
     "today": "Today",
     "rolling30DayCost": "Last 30 days cost",
     "rolling30DayTokens": "Last 30 days tokens",

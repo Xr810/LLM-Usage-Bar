@@ -393,6 +393,7 @@
     "remaining": "残り {{percent}}",
     "resets": "{{time}}にリセット",
     "pendingRefresh": "更新待ち",
+    "toggleUsageDetails": "使用状況の詳細",
     "today": "今日",
     "rolling30DayCost": "過去 30 日の費用",
     "rolling30DayTokens": "過去 30 日の Token 使用量",
