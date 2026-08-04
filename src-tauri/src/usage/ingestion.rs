@@ -1,4 +1,3 @@
-use crate::credentials::CredentialExposureGuardSet as CredentialExposureGuard;
 use crate::database::{lock_conn, Database, UsageSyncCursor};
 use crate::error::AppError;
 use crate::services::usage_stats::{find_model_pricing_row, find_provider_model_pricing_row};
@@ -143,28 +142,11 @@ impl<'a> UsageIngestionService<'a> {
     }
 
     pub fn ingest(&self, input: &UsageIngestionInput) -> Result<UsageIngestionOutcome, AppError> {
-        self.ingest_internal(input, None)
-    }
-
-    pub(crate) fn ingest_with_credential_guard(
-        &self,
-        input: &UsageIngestionInput,
-        credential_guard: &CredentialExposureGuard,
-    ) -> Result<UsageIngestionOutcome, AppError> {
-        self.ingest_internal(input, Some(credential_guard))
-    }
-
-    fn ingest_internal(
-        &self,
-        input: &UsageIngestionInput,
-        credential_guard: Option<&CredentialExposureGuard>,
-    ) -> Result<UsageIngestionOutcome, AppError> {
         validate_input(input)?;
         let mut conn = lock_conn!(self.db.conn);
         let transaction = conn.transaction()?;
         let created_at = now_timestamp()?;
-        let outcome =
-            ingest_on_transaction_with_guard(&transaction, input, created_at, credential_guard)?;
+        let outcome = ingest_on_transaction(&transaction, input, created_at)?;
 
         transaction.commit()?;
         if outcome.inserted {
@@ -210,36 +192,10 @@ fn ingest_on_transaction(
     input: &UsageIngestionInput,
     created_at: i64,
 ) -> Result<UsageIngestionOutcome, AppError> {
-    ingest_on_transaction_with_guard(transaction, input, created_at, None)
-}
-
-fn ingest_on_transaction_with_guard(
-    transaction: &Transaction<'_>,
-    input: &UsageIngestionInput,
-    created_at: i64,
-    credential_guard: Option<&CredentialExposureGuard>,
-) -> Result<UsageIngestionOutcome, AppError> {
     let provider = load_and_validate_provider(transaction, input)?;
     let trusted_cost = decide_cost(transaction, input, &provider)?;
     let stable_match = find_stable_cross_source_match(transaction, input)?;
     let event = build_event(input, &provider, &trusted_cost, created_at);
-    if credential_guard.is_some_and(|credential_guard| {
-        persisted_values_contain_credential(
-            credential_guard,
-            input,
-            &event,
-            &trusted_cost,
-            stable_match.as_ref(),
-        )
-    }) {
-        log::warn!(
-            "Usage event omitted because persistence would repeat protected credential material"
-        );
-        return Ok(UsageIngestionOutcome {
-            inserted: false,
-            link_created: false,
-        });
-    }
     let inserted = insert_event(transaction, &event)?;
 
     if !inserted {
@@ -562,119 +518,6 @@ fn build_event(
             .map(|legacy| legacy.request_id.clone()),
         created_at,
     }
-}
-
-fn persisted_values_contain_credential(
-    credential_guard: &CredentialExposureGuard,
-    input: &UsageIngestionInput,
-    event: &UsageEvent,
-    cost: &TrustedCost,
-    stable_match: Option<&StableCrossSourceMatch>,
-) -> bool {
-    let text_values = [
-        event.event_id.as_str(),
-        token_source_value(event.source),
-        event.provider_id.as_str(),
-        event.product_group_id.as_str(),
-        event.model.as_str(),
-        cost_source_value(event.cost_source),
-    ];
-    if text_values
-        .into_iter()
-        .any(|value| credential_guard.contains(value))
-    {
-        return true;
-    }
-
-    let optional_text_values = [
-        event.agent_module_id.as_deref(),
-        event.request_id.as_deref(),
-        event.session_id.as_deref(),
-        event.upstream_correlation_id.as_deref(),
-        event.input_cost_usd.as_deref(),
-        event.output_cost_usd.as_deref(),
-        event.cache_read_cost_usd.as_deref(),
-        event.cache_creation_cost_usd.as_deref(),
-        event.total_cost_usd.as_deref(),
-        event.legacy_request_id.as_deref(),
-    ];
-    if optional_text_values
-        .into_iter()
-        .flatten()
-        .any(|value| credential_guard.contains(value))
-    {
-        return true;
-    }
-
-    let numeric_values = [
-        event.occurred_at.to_string(),
-        event.input_tokens.to_string(),
-        event.output_tokens.to_string(),
-        event.cache_read_tokens.to_string(),
-        event.cache_creation_tokens.to_string(),
-        event.created_at.to_string(),
-    ];
-    if numeric_values
-        .into_iter()
-        .any(|value| credential_guard.contains(&value))
-    {
-        return true;
-    }
-
-    if stable_match.is_some_and(|stable_match| {
-        [
-            stable_match.event_id.as_str(),
-            token_source_value(stable_match.source),
-            stable_match.link_kind,
-            stable_match.link_value.as_str(),
-        ]
-        .into_iter()
-        .any(|value| credential_guard.contains(value))
-    }) {
-        return true;
-    }
-
-    input.legacy.as_ref().is_some_and(|legacy| {
-        let text_values = [
-            legacy.request_id.as_str(),
-            legacy.provider_id.as_str(),
-            legacy.app_type.as_str(),
-            input.model.as_str(),
-            legacy.request_model.as_str(),
-            legacy.pricing_model.as_str(),
-            cost.input.as_deref().unwrap_or("0"),
-            cost.output.as_deref().unwrap_or("0"),
-            cost.cache_read.as_deref().unwrap_or("0"),
-            cost.cache_creation.as_deref().unwrap_or("0"),
-            cost.total.as_deref().unwrap_or("0"),
-            token_source_value(input.source),
-        ];
-        text_values
-            .into_iter()
-            .any(|value| credential_guard.contains(value))
-            || [
-                legacy.error_message.as_deref(),
-                legacy.session_id.as_deref(),
-                legacy.provider_type.as_deref(),
-            ]
-            .into_iter()
-            .flatten()
-            .any(|value| credential_guard.contains(value))
-            || [
-                legacy.latency_ms.to_string(),
-                legacy
-                    .first_token_ms
-                    .map(|value| value.to_string())
-                    .unwrap_or_default(),
-                legacy.status_code.to_string(),
-                i64::from(legacy.is_streaming).to_string(),
-                legacy.cost_multiplier.to_string(),
-                event.created_at.to_string(),
-            ]
-            .into_iter()
-            .filter(|value| !value.is_empty())
-            .any(|value| credential_guard.contains(&value))
-    })
 }
 
 fn insert_event(transaction: &Transaction<'_>, event: &UsageEvent) -> Result<bool, AppError> {

@@ -710,7 +710,8 @@ impl Database {
 #[cfg(test)]
 mod ensure_official_seed_tests {
     use crate::app_config::AppType;
-    use crate::database::{Database, CLAUDE_DESKTOP_OFFICIAL_PROVIDER_ID};
+    use crate::database::dao::providers_seed::CLAUDE_DESKTOP_OFFICIAL_PROVIDER_ID;
+    use crate::database::Database;
 
     #[test]
     fn ensure_inserts_when_missing() {

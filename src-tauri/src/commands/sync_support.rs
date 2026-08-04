@@ -3,13 +3,11 @@ use std::sync::Arc;
 
 use crate::database::Database;
 use crate::error::AppError;
-use crate::services::provider::ProviderService;
 use crate::settings;
-use crate::store::AppState;
 
-pub(crate) fn run_post_import_sync(db: Arc<Database>) -> Result<(), AppError> {
-    let app_state = AppState::new(db);
-    ProviderService::sync_current_to_live(&app_state)?;
+/// Reload settings after a backup import. Provider live-config sync went with
+/// provider switching; this app only reads those files now.
+pub(crate) fn run_post_import_sync(_db: Arc<Database>) -> Result<(), AppError> {
     settings::reload_settings()?;
     Ok(())
 }

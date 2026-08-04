@@ -5,7 +5,6 @@ use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 
 use crate::app_config::AppType;
-use crate::codex_config;
 use crate::config::{self, get_claude_settings_path};
 
 use std::str::FromStr;
@@ -22,11 +21,11 @@ pub async fn get_config_dir(app: String) -> Result<String, String> {
         AppType::ClaudeDesktop => {
             crate::claude_desktop_config::get_config_library_path().map_err(|e| e.to_string())?
         }
-        AppType::Codex => codex_config::get_codex_config_dir(),
-        AppType::Gemini => crate::gemini_config::get_gemini_dir(),
-        AppType::OpenCode => crate::opencode_config::get_opencode_dir(),
-        AppType::OpenClaw => crate::openclaw_config::get_openclaw_dir(),
-        AppType::Hermes => crate::hermes_config::get_hermes_dir(),
+        AppType::Codex => crate::agent_paths::get_codex_config_dir(),
+        AppType::Gemini => crate::agent_paths::get_gemini_dir(),
+        AppType::OpenCode => crate::agent_paths::get_opencode_dir(),
+        AppType::OpenClaw => crate::agent_paths::get_openclaw_dir(),
+        AppType::Hermes => crate::agent_paths::get_hermes_dir(),
     };
 
     Ok(dir.to_string_lossy().to_string())
@@ -39,11 +38,11 @@ pub async fn open_config_folder(handle: AppHandle, app: String) -> Result<bool, 
         AppType::ClaudeDesktop => {
             crate::claude_desktop_config::get_config_library_path().map_err(|e| e.to_string())?
         }
-        AppType::Codex => codex_config::get_codex_config_dir(),
-        AppType::Gemini => crate::gemini_config::get_gemini_dir(),
-        AppType::OpenCode => crate::opencode_config::get_opencode_dir(),
-        AppType::OpenClaw => crate::openclaw_config::get_openclaw_dir(),
-        AppType::Hermes => crate::hermes_config::get_hermes_dir(),
+        AppType::Codex => crate::agent_paths::get_codex_config_dir(),
+        AppType::Gemini => crate::agent_paths::get_gemini_dir(),
+        AppType::OpenCode => crate::agent_paths::get_opencode_dir(),
+        AppType::OpenClaw => crate::agent_paths::get_openclaw_dir(),
+        AppType::Hermes => crate::agent_paths::get_hermes_dir(),
     };
 
     if !config_dir.exists() {

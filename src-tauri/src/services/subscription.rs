@@ -211,7 +211,7 @@ fn read_codex_credentials_from_keychain() -> Option<CodexCredentials> {
 
 /// 从文件读取 Codex 凭据
 fn read_codex_credentials_from_file() -> CodexCredentials {
-    let auth_path = crate::codex_config::get_codex_auth_path();
+    let auth_path = crate::agent_paths::get_codex_auth_path();
 
     if !auth_path.exists() {
         return (None, None, CredentialStatus::NotFound, None);
@@ -811,7 +811,7 @@ fn parse_gemini_keychain_json(content: &str) -> GeminiCredentials {
 
 /// 从文件读取 Gemini 凭据
 fn read_gemini_credentials_from_file() -> GeminiCredentials {
-    let cred_path = crate::gemini_config::get_gemini_dir().join("oauth_creds.json");
+    let cred_path = crate::agent_paths::get_gemini_dir().join("oauth_creds.json");
     if !cred_path.exists() {
         return (None, None, CredentialStatus::NotFound, None);
     }

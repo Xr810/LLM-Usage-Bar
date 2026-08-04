@@ -323,7 +323,6 @@ fn all_task_six_agent_commands_and_legacy_routes_are_registered_once() {
         "set_agent_provider_binding_api_key",
         "replace_agent_provider_binding_api_key",
         "clear_agent_provider_binding_api_key",
-        "get_agent_proxy_setup_info",
         "get_unassigned_usage_diagnostics",
         "get_usage_dashboard",
         "get_usage_events",

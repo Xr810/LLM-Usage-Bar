@@ -13,9 +13,9 @@
 //! - 无需状态恢复：不依赖前一条消息的累计值
 //! - 天然去重：每条消息有唯一 id 字段
 
+use crate::agent_paths::get_gemini_dir;
 use crate::database::{lock_conn, Database};
 use crate::error::AppError;
-use crate::gemini_config::get_gemini_dir;
 use crate::services::session_usage::{
     get_sync_state, metadata_modified_nanos, update_sync_state, SessionSyncResult,
 };

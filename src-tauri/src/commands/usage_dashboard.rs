@@ -2,14 +2,12 @@ use crate::commands::CodexOAuthState;
 use crate::credentials::SecretString;
 use crate::database::AgentModuleDeleteOutcome;
 use crate::error::AppError;
-use crate::proxy::{ProxyConfig, ProxyStatus};
 use crate::services::SystemProviderConnectionTestResult;
 use crate::store::AppState;
 use crate::usage::dashboard::UsageDashboardService;
 use crate::usage::domain::{
     AgentModuleInput, AgentModuleView, AgentProviderBindingInput, AgentProviderBindingView,
-    AgentProxyRouteSetup, AgentProxySetupInfo, LocalBindingKeyReveal,
-    ProviderMonitoringDashboardView, RouteBinding, SystemProviderAuthKind,
+    LocalBindingKeyReveal, ProviderMonitoringDashboardView, RouteBinding, SystemProviderAuthKind,
     UnassignedUsageDiagnostics, UsageDashboardView, UsageEventPage, UsageProviderInput,
     UsageProviderView,
 };
@@ -214,14 +212,6 @@ pub async fn rotate_agent_provider_local_key(
     expected_version: u64,
 ) -> Result<LocalBindingKeyReveal, AppError> {
     rotate_agent_provider_local_key_test_hook(&state, &binding_id, expected_version).await
-}
-
-#[tauri::command]
-pub async fn get_agent_proxy_setup_info(
-    state: State<'_, AppState>,
-    agent_module_id: String,
-) -> Result<AgentProxySetupInfo, AppError> {
-    get_agent_proxy_setup_info_test_hook(&state, &agent_module_id).await
 }
 
 #[tauri::command]
@@ -759,64 +749,6 @@ pub async fn rotate_agent_provider_local_key_test_hook(
     Ok(reveal)
 }
 
-pub async fn get_agent_proxy_setup_info_test_hook(
-    state: &AppState,
-    agent_module_id: &str,
-) -> Result<AgentProxySetupInfo, AppError> {
-    require_active_agent(state, agent_module_id)?;
-    let bindings = state
-        .binding_credential_service
-        .list_agent_provider_bindings(Some(agent_module_id))
-        .await?;
-    let status = state
-        .proxy_service
-        .get_status()
-        .await
-        .map_err(|_| AppError::Message("proxy_status_unavailable".to_string()))?;
-    let config = state
-        .proxy_service
-        .get_config()
-        .await
-        .map_err(|_| AppError::Message("proxy_status_unavailable".to_string()))?;
-    let proxy_origin = reachable_proxy_origin(&status, &config)?;
-    let routes = bindings
-        .into_iter()
-        .map(|binding| -> Result<AgentProxyRouteSetup, AppError> {
-            let protocol = binding.route_protocol.clone();
-            let publishes_direct_setup = state
-                .db
-                .agent_provider_binding_supports_direct_api_key(&binding.id)?;
-            let (local_base_url, credential_placements) = if publishes_direct_setup {
-                (
-                    protocol
-                        .as_deref()
-                        .and_then(|protocol| local_proxy_base_url(&proxy_origin, protocol)),
-                    protocol
-                        .as_deref()
-                        .map(allowed_credential_placements)
-                        .unwrap_or_default(),
-                )
-            } else {
-                (None, Vec::new())
-            };
-            Ok(AgentProxyRouteSetup {
-                binding_id: binding.id,
-                provider_id: binding.provider_id,
-                protocol,
-                local_base_url,
-                credential_placements,
-                credential_status: binding.credential_status,
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(AgentProxySetupInfo {
-        agent_module_id: agent_module_id.to_string(),
-        proxy_running: status.running,
-        proxy_origin,
-        routes,
-    })
-}
-
 pub fn get_unassigned_usage_diagnostics_test_hook(
     state: &AppState,
 ) -> Result<UnassignedUsageDiagnostics, AppError> {
@@ -1116,61 +1048,6 @@ fn require_active_agent(state: &AppState, agent_module_id: &str) -> Result<(), A
         .filter(|agent| agent.archived_at.is_none())
         .map(|_| ())
         .ok_or_else(|| AppError::Message("invalid_agent_module".to_string()))
-}
-
-fn reachable_proxy_origin(status: &ProxyStatus, config: &ProxyConfig) -> Result<String, AppError> {
-    let (address, port) = if status.running {
-        let address = if !status.address.trim().is_empty() {
-            status.address.as_str()
-        } else {
-            config.listen_address.as_str()
-        };
-        (address, status.port)
-    } else {
-        (config.listen_address.as_str(), config.listen_port)
-    };
-    if port == 0 {
-        return Err(AppError::Message("proxy_status_unavailable".to_string()));
-    }
-    let connect_host = match address {
-        "0.0.0.0" => "127.0.0.1",
-        "::" => "::1",
-        address => address,
-    };
-    let connect_host = if connect_host.contains(':') && !connect_host.starts_with('[') {
-        format!("[{connect_host}]")
-    } else {
-        connect_host.to_string()
-    };
-    Ok(format!("http://{connect_host}:{port}"))
-}
-
-fn local_proxy_base_url(proxy_origin: &str, protocol: &str) -> Option<String> {
-    let path = match protocol {
-        "claude" => "/claude",
-        "codex" => "/codex/v1",
-        "opencode" => "/opencode/v1",
-        "openclaw" => "/openclaw/v1",
-        "hermes" => "/hermes/v1",
-        "gemini" => "/gemini",
-        "claude-desktop" => "/claude-desktop",
-        _ => return None,
-    };
-    Some(format!("{}{path}", proxy_origin.trim_end_matches('/')))
-}
-
-fn allowed_credential_placements(protocol: &str) -> Vec<String> {
-    let placements: &[&str] = match protocol {
-        "claude" => &["authorization", "x-api-key", "query:key"],
-        "codex" | "opencode" | "openclaw" | "hermes" => &["authorization", "query:key"],
-        "gemini" => &["authorization", "x-goog-api-key", "query:key"],
-        "claude-desktop" => &["x-api-key"],
-        _ => &[],
-    };
-    placements
-        .iter()
-        .map(|placement| (*placement).to_string())
-        .collect()
 }
 
 #[cfg(test)]
@@ -1495,26 +1372,6 @@ mod tests {
         }
     }
 
-    fn managed_provider(id: &str) -> UsageProviderInput {
-        UsageProviderInput {
-            id: id.to_string(),
-            name: id.to_string(),
-            billing_kind: BillingKind::Subscription,
-            product_group_id: "product".to_string(),
-            token_sources: vec![TokenSource::SessionLog, TokenSource::Proxy],
-            session_source_bindings: Some(vec!["codex".to_string()]),
-            quota_source: None,
-            quota_interval_seconds: None,
-            route_app_type: Some("codex".to_string()),
-            route_config: Some(json!({
-                "baseUrl": "https://chatgpt.com/backend-api",
-                "authMode": "oauth"
-            })),
-            quota_config: None,
-            enabled: true,
-        }
-    }
-
     const COMMAND_QUOTA_CONFIG_SENTINEL: &str =
         "renderer-command-secret-sentinel /Users/example/private/provider.json";
 
@@ -1665,104 +1522,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn binding_command_hooks_cover_secret_free_key_lifecycle_and_proxy_setup() {
-        let db = Arc::new(Database::memory().unwrap());
-        db.save_usage_provider(&direct_provider("direct")).unwrap();
-        let store = Arc::new(MemoryCredentialStore::default());
-        let state = AppState::new_with_credential_store(db, store);
-
-        let binding = save_agent_provider_binding_test_hook(
-            &state,
-            AgentProviderBindingInput {
-                id: None,
-                agent_module_id: "codex".to_string(),
-                provider_id: "direct".to_string(),
-                enabled: false,
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(binding.credential_version, 0);
-        assert_eq!(binding.credential_status, BindingCredentialStatus::Missing);
-        assert_eq!(
-            list_agent_provider_bindings_test_hook(&state, Some("codex"))
-                .await
-                .unwrap()
-                .iter()
-                .filter(|candidate| candidate.provider_id == "direct")
-                .count(),
-            1
-        );
-
-        let first_secret = "task-six-first-secret-value";
-        let configured = set_agent_provider_binding_api_key_test_hook(
-            &state,
-            &binding.id,
-            0,
-            SecretString::new(first_secret.to_string()),
-        )
-        .await
-        .unwrap();
-        assert_eq!(configured.credential_version, 1);
-        assert_eq!(
-            configured.credential_status,
-            BindingCredentialStatus::Configured
-        );
-
-        let setup = get_agent_proxy_setup_info_test_hook(&state, "codex")
-            .await
-            .unwrap();
-        assert_eq!(setup.agent_module_id, "codex");
-        let direct_route = setup
-            .routes
-            .iter()
-            .find(|route| route.provider_id == "direct")
-            .expect("direct route");
-        assert!(direct_route
-            .credential_placements
-            .contains(&"authorization".to_string()));
-        let setup_json = serde_json::to_string(&setup).unwrap();
-        assert!(!setup_json.contains(first_secret));
-        assert!(!setup_json.contains("upstream.example"));
-        assert!(!setup_json.contains("secret-path"));
-
-        let second_secret = "task-six-second-secret-value";
-        let replaced = replace_agent_provider_binding_api_key_test_hook(
-            &state,
-            &binding.id,
-            1,
-            SecretString::new(second_secret.to_string()),
-        )
-        .await
-        .unwrap();
-        assert_eq!(replaced.credential_version, 2);
-        let cleared = clear_agent_provider_binding_api_key_test_hook(&state, &binding.id, 2)
-            .await
-            .unwrap();
-        assert_eq!(cleared.credential_version, 3);
-        assert_eq!(cleared.credential_status, BindingCredentialStatus::Missing);
-
-        delete_agent_provider_binding_test_hook(&state, &binding.id, 3)
-            .await
-            .unwrap();
-        assert!(
-            !list_agent_provider_bindings_test_hook(&state, Some("codex"))
-                .await
-                .unwrap()
-                .iter()
-                .any(|candidate| candidate.provider_id == "direct")
-        );
-        for public in [
-            serde_json::to_string(&configured).unwrap(),
-            serde_json::to_string(&replaced).unwrap(),
-            serde_json::to_string(&cleared).unwrap(),
-        ] {
-            assert!(!public.contains(first_secret));
-            assert!(!public.contains(second_secret));
-        }
-    }
-
-    #[tokio::test]
     async fn system_provider_commands_separate_shared_and_local_key_lifecycles() {
         let db = Arc::new(Database::memory().unwrap());
         let state =
@@ -1842,161 +1601,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn proxy_setup_omits_local_credentials_for_managed_bindings() {
-        let db = Arc::new(Database::memory().unwrap());
-        db.save_usage_provider(&managed_provider("managed-codex"))
-            .unwrap();
-        let state =
-            AppState::new_with_credential_store(db, Arc::new(MemoryCredentialStore::default()));
-        let binding = save_agent_provider_binding_test_hook(
-            &state,
-            AgentProviderBindingInput {
-                id: None,
-                agent_module_id: "codex".to_string(),
-                provider_id: "managed-codex".to_string(),
-                enabled: true,
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            binding.credential_status,
-            BindingCredentialStatus::NotRequired
-        );
-
-        let setup = get_agent_proxy_setup_info_test_hook(&state, "codex")
-            .await
-            .unwrap();
-        let managed_route = setup
-            .routes
-            .iter()
-            .find(|route| route.provider_id == "managed-codex")
-            .expect("managed route");
-        assert_eq!(managed_route.protocol.as_deref(), Some("codex"));
-        assert_eq!(managed_route.local_base_url, None);
-        assert!(managed_route.credential_placements.is_empty());
-    }
-
-    #[tokio::test]
-    async fn fixed_openrouter_agents_publish_binding_owned_namespaced_base_urls() {
-        let db = Arc::new(Database::memory().unwrap());
-        let state =
-            AppState::new_with_credential_store(db, Arc::new(MemoryCredentialStore::default()));
-
-        for (agent_module_id, protocol, path) in [
-            ("opencode", "opencode", "/opencode/v1"),
-            ("openclaw", "openclaw", "/openclaw/v1"),
-            ("hermes", "hermes", "/hermes/v1"),
-        ] {
-            let setup = get_agent_proxy_setup_info_test_hook(&state, agent_module_id)
-                .await
-                .unwrap();
-            let route = setup
-                .routes
-                .iter()
-                .find(|route| route.provider_id == "system-openrouter-api")
-                .unwrap();
-            assert_eq!(route.protocol.as_deref(), Some(protocol));
-            assert_eq!(
-                route.local_base_url.as_deref(),
-                Some(format!("{}{path}", setup.proxy_origin).as_str())
-            );
-            assert_eq!(
-                route.credential_placements,
-                vec!["authorization".to_string(), "query:key".to_string()]
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn proxy_setup_publishes_only_direct_api_key_capabilities() {
-        let db = Arc::new(Database::memory().unwrap());
-        let mut direct = direct_provider("managed-with-leftover");
-        direct.route_app_type = Some("codex".to_string());
-        direct.route_config = Some(json!({
-            "baseUrl": "https://api.example/v1",
-            "authMode": "direct_api_key"
-        }));
-        db.save_usage_provider(&direct).unwrap();
-        let state =
-            AppState::new_with_credential_store(db, Arc::new(MemoryCredentialStore::default()));
-        let leftover = save_agent_provider_binding_test_hook(
-            &state,
-            AgentProviderBindingInput {
-                id: None,
-                agent_module_id: "codex".to_string(),
-                provider_id: direct.id.clone(),
-                enabled: false,
-            },
-        )
-        .await
-        .unwrap();
-        set_agent_provider_binding_api_key_test_hook(
-            &state,
-            &leftover.id,
-            leftover.credential_version,
-            SecretString::new("managed-leftover-key".to_string()),
-        )
-        .await
-        .unwrap();
-        state
-            .db
-            .save_usage_provider(&managed_provider(&direct.id))
-            .unwrap();
-
-        let mut unsupported = direct_provider("unsupported-route");
-        unsupported.route_app_type = Some("codex".to_string());
-        unsupported.route_config = Some(json!({
-            "baseUrl": "https://unsupported.example/v1",
-            "authMode": "basic"
-        }));
-        state.db.save_usage_provider(&unsupported).unwrap();
-        let unsupported_binding = save_agent_provider_binding_test_hook(
-            &state,
-            AgentProviderBindingInput {
-                id: None,
-                agent_module_id: "codex".to_string(),
-                provider_id: unsupported.id.clone(),
-                enabled: false,
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            unsupported_binding.credential_status,
-            BindingCredentialStatus::Unavailable
-        );
-
-        let verified = list_agent_provider_bindings_test_hook(&state, Some("codex"))
-            .await
-            .unwrap();
-        let unavailable_custom_bindings = verified
-            .iter()
-            .filter(|binding| {
-                binding.provider_id == direct.id || binding.provider_id == unsupported.id
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(unavailable_custom_bindings.len(), 2);
-        assert!(unavailable_custom_bindings
-            .iter()
-            .all(|binding| { binding.credential_status == BindingCredentialStatus::Unavailable }));
-
-        let setup = get_agent_proxy_setup_info_test_hook(&state, "codex")
-            .await
-            .unwrap();
-        for provider_id in [&direct.id, &unsupported.id] {
-            let route = setup
-                .routes
-                .iter()
-                .find(|route| &route.provider_id == provider_id)
-                .expect("setup route");
-            assert_eq!(route.protocol.as_deref(), Some("codex"));
-            assert_eq!(route.local_base_url, None);
-            assert!(route.credential_placements.is_empty());
-        }
-    }
-
-    #[tokio::test]
     async fn provider_commands_embed_verified_binding_views() {
         let db = Arc::new(Database::memory().unwrap());
         db.save_usage_provider(&direct_provider("provider-view"))
@@ -2064,43 +1668,6 @@ mod tests {
                 .bindings,
             vec![verified]
         );
-    }
-
-    #[tokio::test]
-    async fn proxy_setup_brackets_the_configured_ipv6_origin() {
-        let state = AppState::new(Arc::new(Database::memory().unwrap()));
-        let mut config = state.proxy_service.get_config().await.unwrap();
-        config.listen_address = "::1".to_string();
-        config.listen_port = 43_123;
-        state.proxy_service.update_config(&config).await.unwrap();
-
-        let setup = get_agent_proxy_setup_info_test_hook(&state, "codex")
-            .await
-            .unwrap();
-
-        assert_eq!(setup.proxy_origin, "http://[::1]:43123");
-    }
-
-    #[test]
-    fn claude_desktop_binding_key_uses_only_x_api_key() {
-        assert_eq!(
-            allowed_credential_placements("claude-desktop"),
-            vec!["x-api-key".to_string()]
-        );
-    }
-
-    #[tokio::test]
-    async fn proxy_setup_rejects_an_unresolved_ephemeral_port() {
-        let state = AppState::new(Arc::new(Database::memory().unwrap()));
-        let mut config = state.proxy_service.get_config().await.unwrap();
-        config.listen_port = 0;
-        state.proxy_service.update_config(&config).await.unwrap();
-
-        let error = get_agent_proxy_setup_info_test_hook(&state, "codex")
-            .await
-            .unwrap_err();
-
-        assert_eq!(error.to_string(), "proxy_status_unavailable");
     }
 
     #[tokio::test]

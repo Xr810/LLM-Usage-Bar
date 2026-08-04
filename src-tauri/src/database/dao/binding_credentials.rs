@@ -4,11 +4,9 @@ use super::agent_provider_bindings::{
 };
 use crate::database::{lock_conn, Database};
 use crate::error::AppError;
-use crate::provider::Provider;
 use crate::usage::domain::{AgentProviderBindingView, BindingCredentialStatus};
 use crate::usage::system_providers::is_fixed_api_preset;
 use rusqlite::{params, OptionalExtension, TransactionBehavior};
-use serde_json::Value;
 use std::time::{SystemTime, UNIX_EPOCH};
 use subtle::ConstantTimeEq;
 
@@ -61,16 +59,8 @@ pub(crate) struct CredentialBindingSnapshot {
     pub(crate) created_at: i64,
     pub(crate) updated_at: i64,
     pub(crate) provider_enabled: bool,
-    pub(crate) route_app_type: Option<String>,
-    pub(crate) route_config: Option<Value>,
-    pub(crate) quota_config: Option<Value>,
     pub(crate) agent_archived_at: Option<i64>,
     pub(crate) auth_mode: BindingAuthMode,
-    pub(crate) provider_name: String,
-    pub(crate) product_group_id: String,
-    pub(crate) legacy_migration_linked: bool,
-    pub(crate) legacy_provider_id: Option<String>,
-    pub(crate) legacy_provider: Option<Provider>,
     pub(crate) route_protocol: Option<String>,
     pub(crate) system_preset_key: Option<String>,
     pub(crate) provider_fingerprint: Option<Vec<u8>>,
@@ -188,16 +178,8 @@ impl Database {
             created_at: record.created_at,
             updated_at: record.updated_at,
             provider_enabled: record.provider_enabled,
-            route_app_type: record.route_app_type,
-            route_config: record.route_config,
-            quota_config: record.quota_config,
             agent_archived_at: record.agent_archived_at,
             auth_mode,
-            provider_name: record.provider_name,
-            product_group_id: record.product_group_id,
-            legacy_migration_linked: record.legacy_migration_linked,
-            legacy_provider_id: record.legacy_provider_id,
-            legacy_provider: record.legacy_provider,
             route_protocol: record.route_protocol,
             system_preset_key: record.system_preset_key,
             provider_fingerprint: record.provider_fingerprint,
@@ -317,26 +299,6 @@ impl Database {
         .optional()
         .map_err(AppError::from)?
         .ok_or_else(|| public_error("binding_not_found"))
-    }
-
-    pub(crate) fn credential_binding_by_fingerprint(
-        &self,
-        fingerprint: &[u8; 32],
-    ) -> Result<Option<CredentialBindingSnapshot>, AppError> {
-        let conn = lock_conn!(self.conn);
-        let sql = format!(
-            "{BINDING_RECORD_QUERY}
-             WHERE binding.api_key_fingerprint = ?1
-               AND binding.enabled = 1
-               AND provider.enabled = 1
-               AND agent.archived_at IS NULL"
-        );
-        let record = conn
-            .query_row(&sql, [fingerprint.as_slice()], binding_record_from_row)
-            .optional()?;
-        record
-            .map(Self::credential_binding_snapshot_from_record)
-            .transpose()
     }
 
     pub(crate) fn credential_slot_is_active(&self, slot: &str) -> Result<bool, AppError> {
@@ -882,10 +844,9 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use super::{CredentialMutationKind, Database};
-    use crate::provider::Provider;
+
     use crate::usage::domain::AgentProviderBindingInput;
     use rusqlite::params;
-    use serde_json::json;
 
     fn insert_direct_provider(db: &Database, id: &str) {
         let conn = db.conn.lock().unwrap();
@@ -946,66 +907,6 @@ mod tests {
     }
 
     #[test]
-    fn fingerprint_lookup_atomically_filters_disabled_provider_and_archived_agent() {
-        let db = Database::memory().unwrap();
-        insert_direct_provider(&db, "direct");
-        insert_custom_agent(&db, "custom-agent");
-        let binding_id = direct_binding_for_agent(&db, "custom-agent", "direct");
-        let fingerprint = [7_u8; 32];
-        install_credential_metadata(&db, &binding_id, &fingerprint, "slot", 1, false);
-
-        assert!(db
-            .credential_binding_by_fingerprint(&fingerprint)
-            .unwrap()
-            .is_none());
-
-        {
-            let conn = db.conn.lock().unwrap();
-            conn.execute(
-                "UPDATE agent_provider_bindings SET enabled = 1 WHERE id = ?1",
-                [&binding_id],
-            )
-            .unwrap();
-        }
-        assert!(db
-            .credential_binding_by_fingerprint(&fingerprint)
-            .unwrap()
-            .is_some());
-
-        {
-            let conn = db.conn.lock().unwrap();
-            conn.execute(
-                "UPDATE usage_providers SET enabled = 0 WHERE id = 'direct'",
-                [],
-            )
-            .unwrap();
-        }
-        assert!(db
-            .credential_binding_by_fingerprint(&fingerprint)
-            .unwrap()
-            .is_none());
-
-        {
-            let conn = db.conn.lock().unwrap();
-            conn.execute(
-                "UPDATE usage_providers SET enabled = 1 WHERE id = 'direct'",
-                [],
-            )
-            .unwrap();
-            conn.execute(
-                "UPDATE agent_modules
-                 SET archived_at = 20, visible = 0 WHERE id = 'custom-agent'",
-                [],
-            )
-            .unwrap();
-        }
-        assert!(db
-            .credential_binding_by_fingerprint(&fingerprint)
-            .unwrap()
-            .is_none());
-    }
-
-    #[test]
     fn fail_closed_view_preserves_cleanup_capability_until_metadata_is_cleared() {
         let db = Database::memory().unwrap();
         insert_direct_provider(&db, "direct");
@@ -1023,89 +924,6 @@ mod tests {
 
         let cleared = db.credential_binding_fail_closed_view(&binding_id).unwrap();
         assert!(!cleared.can_clear_credential);
-    }
-
-    #[test]
-    fn fingerprint_lookup_freezes_provider_name_and_legacy_runtime_envelope() {
-        let db = Database::memory().unwrap();
-        let mut legacy = Provider::with_id(
-            "legacy-route".to_string(),
-            "Legacy route".to_string(),
-            json!({"env": {"ANTHROPIC_AUTH_TOKEN": "old-secret"}}),
-            Some("https://provider.example".to_string()),
-        );
-        legacy.category = Some("relay".to_string());
-        legacy.icon = Some("anthropic".to_string());
-        legacy.meta = Some(
-            serde_json::from_value(json!({
-                "apiFormat": "openai_chat",
-                "costMultiplier": "1.5"
-            }))
-            .unwrap(),
-        );
-        db.save_provider("claude", &legacy).unwrap();
-        insert_direct_provider(&db, "direct");
-        insert_custom_agent(&db, "custom-agent");
-        let binding_id = direct_binding_for_agent(&db, "custom-agent", "direct");
-        let fingerprint = [17_u8; 32];
-        install_credential_metadata(&db, &binding_id, &fingerprint, "slot", 1, true);
-        db.conn
-            .lock()
-            .unwrap()
-            .execute(
-                "UPDATE usage_providers
-                 SET name = 'Frozen usage name',
-                     product_group_id = 'frozen-group',
-                     route_config = '{\"baseUrl\":\"https://upstream.example\"}',
-                     quota_config = '{\"apiFormat\":\"openai_chat\"}',
-                     legacy_app_type = 'claude', legacy_provider_id = 'legacy-route'
-                 WHERE id = 'direct'",
-                [],
-            )
-            .unwrap();
-
-        let snapshot = db
-            .credential_binding_by_fingerprint(&fingerprint)
-            .unwrap()
-            .unwrap();
-        assert_eq!(snapshot.provider_name, "Frozen usage name");
-        assert_eq!(snapshot.product_group_id, "frozen-group");
-        assert!(snapshot.legacy_migration_linked);
-        assert_eq!(
-            snapshot
-                .quota_config
-                .as_ref()
-                .and_then(|value| value.get("apiFormat"))
-                .and_then(|value| value.as_str()),
-            Some("openai_chat")
-        );
-        let frozen_legacy = snapshot.legacy_provider.unwrap();
-        assert_eq!(frozen_legacy.id, "legacy-route");
-        assert_eq!(frozen_legacy.name, "Legacy route");
-        assert_eq!(frozen_legacy.category.as_deref(), Some("relay"));
-        assert_eq!(frozen_legacy.icon.as_deref(), Some("anthropic"));
-        assert_eq!(
-            frozen_legacy
-                .meta
-                .as_ref()
-                .and_then(|meta| meta.api_format.as_deref()),
-            Some("openai_chat")
-        );
-
-        db.conn
-            .lock()
-            .unwrap()
-            .execute(
-                "UPDATE usage_providers
-                 SET name = 'Mutated later', product_group_id = 'mutated-group',
-                     route_app_type = 'codex'
-                 WHERE id = 'direct'",
-                [],
-            )
-            .unwrap();
-        assert_eq!(snapshot.provider_name, "Frozen usage name");
-        assert_eq!(snapshot.product_group_id, "frozen-group");
-        assert_eq!(snapshot.route_app_type.as_deref(), Some("claude"));
     }
 
     #[test]

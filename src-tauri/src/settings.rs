@@ -867,98 +867,6 @@ where
     Ok(())
 }
 
-pub fn is_codex_third_party_history_provider_bucket_migrated() -> bool {
-    get_settings()
-        .local_migrations
-        .as_ref()
-        .and_then(|migrations| {
-            migrations
-                .codex_third_party_history_provider_bucket_v1
-                .as_ref()
-        })
-        .is_some_and(|m| m.scanned_history_files)
-}
-
-pub fn mark_codex_third_party_history_provider_bucket_migrated(
-    migration: CodexThirdPartyHistoryProviderBucketMigration,
-) -> Result<(), AppError> {
-    mutate_settings(|settings| {
-        let migrations = settings
-            .local_migrations
-            .get_or_insert_with(Default::default);
-        migrations.codex_third_party_history_provider_bucket_v1 = Some(migration);
-    })
-}
-
-pub fn is_codex_provider_template_migrated() -> bool {
-    get_settings()
-        .local_migrations
-        .as_ref()
-        .and_then(|migrations| migrations.codex_provider_template_v1.as_ref())
-        .is_some()
-}
-
-pub fn mark_codex_provider_template_migrated(
-    migration: CodexProviderTemplateMigration,
-) -> Result<(), AppError> {
-    mutate_settings(|settings| {
-        let migrations = settings
-            .local_migrations
-            .get_or_insert_with(Default::default);
-        migrations.codex_provider_template_v1 = Some(migration);
-    })
-}
-
-/// 统一会话迁移标记是否覆盖指定目录。标记里没记目录（不应出现的旧格式）
-/// 视为不匹配——重跑迁移是幂等的，宁可重迁也不漏迁。
-pub fn is_codex_official_history_unify_migrated_for_dir(codex_dir: &str) -> bool {
-    get_settings()
-        .local_migrations
-        .as_ref()
-        .and_then(|migrations| migrations.codex_official_history_unify_v1.as_ref())
-        .is_some_and(|migration| migration.codex_config_dir.as_deref() == Some(codex_dir))
-}
-
-/// 条件写入迁移完成标记：仅当此刻开关仍开启且迁移意愿仍在时才写。
-/// 检查与写入在 settings 写锁内原子完成，与关闭开关路径
-/// （`update_settings` / 清标记）串行，消除"迁移线程复查开关后、写标记前
-/// 用户恰好关闭开关"的竞态窗口。返回是否实际写入。
-pub fn mark_codex_official_history_unify_migrated_if_enabled(
-    migration: CodexOfficialHistoryUnifyMigration,
-) -> Result<bool, AppError> {
-    let mut written = false;
-    mutate_settings(|settings| {
-        if settings.unify_codex_session_history
-            && settings.unify_codex_migrate_existing.unwrap_or(false)
-        {
-            settings
-                .local_migrations
-                .get_or_insert_with(Default::default)
-                .codex_official_history_unify_v1 = Some(migration);
-            written = true;
-        }
-    })?;
-    Ok(written)
-}
-
-pub fn clear_codex_official_history_unify_migration() -> Result<(), AppError> {
-    mutate_settings(|settings| {
-        if let Some(migrations) = settings.local_migrations.as_mut() {
-            migrations.codex_official_history_unify_v1 = None;
-        }
-    })
-}
-
-pub fn unify_codex_migrate_existing_requested() -> bool {
-    get_settings().unify_codex_migrate_existing.unwrap_or(false)
-}
-
-pub fn clear_codex_unify_migrate_existing() -> Result<(), AppError> {
-    mutate_settings(|settings| {
-        settings.unify_codex_migrate_existing = None;
-    })
-}
-
 /// 从文件重新加载设置到内存缓存
 /// 用于导入配置等场景，确保内存缓存与文件同步
 pub fn reload_settings() -> Result<(), AppError> {
@@ -1017,26 +925,6 @@ pub fn get_hermes_override_dir() -> Option<PathBuf> {
         .hermes_config_dir
         .as_ref()
         .map(|p| resolve_override_path(p))
-}
-
-pub fn preserve_codex_official_auth_on_switch() -> bool {
-    settings_store()
-        .read()
-        .unwrap_or_else(|e| {
-            log::warn!("设置锁已毒化，使用恢复值: {e}");
-            e.into_inner()
-        })
-        .preserve_codex_official_auth_on_switch
-}
-
-pub fn unify_codex_session_history() -> bool {
-    settings_store()
-        .read()
-        .unwrap_or_else(|e| {
-            log::warn!("设置锁已毒化，使用恢复值: {e}");
-            e.into_inner()
-        })
-        .unify_codex_session_history
 }
 
 // ===== 当前供应商管理函数 =====

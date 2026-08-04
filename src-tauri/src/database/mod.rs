@@ -34,10 +34,7 @@ mod tests;
 
 // DAO 类型导出供外部使用
 pub(crate) use dao::agent_modules::AgentModuleDeleteOutcome;
-pub(crate) use dao::agent_provider_bindings::{
-    resolve_direct_api_format, resolve_direct_credential_placement, BindingAuthMode,
-    DirectCredentialPlacement,
-};
+pub(crate) use dao::agent_provider_bindings::BindingAuthMode;
 pub(crate) use dao::binding_credentials::{
     CredentialBindingSnapshot, CredentialJournalEntry, CredentialMutationKind,
     CredentialOperationReservation,
@@ -45,11 +42,6 @@ pub(crate) use dao::binding_credentials::{
 pub(crate) use dao::provider_credentials::{
     ProviderCredentialJournalEntry, ProviderCredentialOperationReservation,
     ProviderCredentialSnapshot,
-};
-pub(crate) use dao::providers_seed::{is_official_seed_id, CLAUDE_DESKTOP_OFFICIAL_PROVIDER_ID};
-pub(crate) use dao::proxy::{
-    validate_cost_multiplier, validate_pricing_source, PRICING_SOURCE_REQUEST,
-    PRICING_SOURCE_RESPONSE,
 };
 pub use dao::usage_sync_cursors::UsageSyncCursor;
 pub use dao::Profile;

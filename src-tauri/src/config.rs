@@ -306,14 +306,6 @@ pub fn write_json_file<T: Serialize>(path: &Path, data: &T) -> Result<(), AppErr
     atomic_write(path, json.as_bytes())
 }
 
-/// 原子写入文本文件（用于 TOML/纯文本）
-pub fn write_text_file(path: &Path, data: &str) -> Result<(), AppError> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
-    }
-    atomic_write(path, data.as_bytes())
-}
-
 /// 原子写入：写入临时文件后 rename 替换，避免半写状态
 pub fn atomic_write(path: &Path, data: &[u8]) -> Result<(), AppError> {
     if let Some(parent) = path.parent() {
@@ -378,14 +370,6 @@ pub fn copy_file(from: &Path, to: &Path) -> Result<(), AppError> {
         context: format!("复制文件失败 ({} -> {})", from.display(), to.display()),
         source: e,
     })?;
-    Ok(())
-}
-
-/// 删除文件
-pub fn delete_file(path: &Path) -> Result<(), AppError> {
-    if path.exists() {
-        fs::remove_file(path).map_err(|e| AppError::io(path, e))?;
-    }
     Ok(())
 }
 

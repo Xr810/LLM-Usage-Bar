@@ -16,20 +16,9 @@ use std::time::Duration;
 
 use tauri::{AppHandle, Emitter, Manager};
 
-use serde::Serialize;
-
 /// 前端监听的事件名
 pub const EVENT_USAGE_LOG_RECORDED: &str = "usage-log-recorded";
-pub const EVENT_USAGE_INGESTION_ERROR: &str = "usage-ingestion-error";
 pub const EVENT_USAGE_DASHBOARD_INVALIDATED: &str = "usage-dashboard-invalidated";
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct UsageIngestionErrorPayload {
-    provider_id: String,
-    request_id: String,
-    message: &'static str,
-}
 
 /// 防抖窗口：合并 200ms 内的多次通知。
 const DEBOUNCE_WINDOW: Duration = Duration::from_millis(200);
@@ -292,53 +281,18 @@ where
     schedule();
 }
 
-/// Emit a diagnostic-only ingestion failure event without exposing credentials,
-/// upstream payloads, or raw database errors to the renderer.
-pub fn notify_ingestion_error(provider_id: &str, request_id: &str) {
-    let Some(handle) = APP_HANDLE.get() else {
-        return;
-    };
-    let payload = ingestion_error_payload(provider_id, request_id);
-    if let Err(error) = handle.emit(EVENT_USAGE_INGESTION_ERROR, payload) {
-        log::warn!("emit {EVENT_USAGE_INGESTION_ERROR} 失败: {error}");
-    }
-}
-
-fn ingestion_error_payload(provider_id: &str, request_id: &str) -> UsageIngestionErrorPayload {
-    let _ = (provider_id, request_id);
-    UsageIngestionErrorPayload {
-        provider_id: "redacted".to_string(),
-        request_id: "redacted".to_string(),
-        message: "usage ingestion failed",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        emit_dashboard_invalidated_only_with, ingestion_error_payload,
-        notify_dashboard_invalidated_with, notify_log_recorded_with, run_debounced_action,
-        schedule_debounced_action, DebounceGate, EVENT_USAGE_DASHBOARD_INVALIDATED,
+        emit_dashboard_invalidated_only_with, notify_dashboard_invalidated_with,
+        notify_log_recorded_with, run_debounced_action, schedule_debounced_action, DebounceGate,
+        EVENT_USAGE_DASHBOARD_INVALIDATED,
     };
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::sync::Notify;
     use tokio::time::timeout;
-
-    #[test]
-    fn ingestion_error_payload_redacts_identifiers_and_raw_message() {
-        let payload =
-            ingestion_error_payload("global-provider-secret", "request-with-api-key-sk-secret");
-        assert_eq!(payload.provider_id, "redacted");
-        assert_eq!(payload.request_id, "redacted");
-        assert_eq!(payload.message, "usage ingestion failed");
-
-        let serialized = serde_json::to_string(&payload).unwrap();
-        assert!(!serialized.contains("global-provider-secret"));
-        assert!(!serialized.contains("api-key"));
-        assert!(!serialized.contains("cret"));
-    }
 
     #[test]
     fn dashboard_invalidation_event_uses_the_global_name_and_unit_payload() {

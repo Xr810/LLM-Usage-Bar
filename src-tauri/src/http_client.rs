@@ -217,16 +217,6 @@ pub fn get() -> Client {
         })
 }
 
-/// Client used for binding-owned upstream requests. Redirects are surfaced to
-/// the proxy instead of being followed with protected authentication headers.
-pub(crate) fn get_no_redirect() -> Client {
-    GLOBAL_NO_REDIRECT_CLIENT
-        .get()
-        .and_then(|lock| lock.read().ok())
-        .map(|client| client.clone())
-        .unwrap_or_else(|| build_client_with_redirects(None, false).unwrap_or_default())
-}
-
 /// 获取当前代理 URL
 ///
 /// 返回当前配置的代理 URL，None 表示直连。

@@ -10,7 +10,7 @@ use crate::services::{
     tray_usage_scheduler::{
         start_local_midnight_scheduler, TraySnapshotPublisher, TrayUsageSchedulerHandle,
     },
-    ClaudeCliAuthService, ProxyService, SystemProviderConnectionService, UsageCache,
+    ClaudeCliAuthService, SystemProviderConnectionService, UsageCache,
 };
 use crate::usage::quota::{QuotaCycleCallback, QuotaSchedulerHandle, QuotaService};
 use crate::usage::session::SessionUsageService;
@@ -19,7 +19,6 @@ use std::sync::{Arc, Mutex};
 /// 全局应用状态
 pub struct AppState {
     pub db: Arc<Database>,
-    pub proxy_service: ProxyService,
     pub credential_store: Arc<dyn CredentialStore>,
     pub binding_credential_service: Arc<BindingCredentialService>,
     pub claude_cli_auth_service: Arc<ClaudeCliAuthService>,
@@ -86,9 +85,10 @@ impl AppState {
         claude_cli_auth_service: Arc<ClaudeCliAuthService>,
         quota_service: Arc<QuotaService>,
     ) -> Self {
-        let proxy_service =
-            ProxyService::new_with_credential_store(db.clone(), credential_store.clone());
-        let binding_credential_service = proxy_service.binding_credential_service();
+        let binding_credential_service = Arc::new(BindingCredentialService::new(
+            db.clone(),
+            credential_store.clone(),
+        ));
         let system_provider_connection_service =
             Arc::new(SystemProviderConnectionService::production(
                 db.clone(),
@@ -103,7 +103,6 @@ impl AppState {
 
         Self {
             db,
-            proxy_service,
             credential_store,
             binding_credential_service,
             claude_cli_auth_service,

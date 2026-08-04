@@ -1,22 +1,15 @@
+mod agent_paths;
 mod app_config;
 mod app_store;
 mod auto_launch;
 mod claude_desktop_config;
-mod claude_mcp;
 mod claude_plugin;
 mod claude_quota;
-mod codex_config;
-mod codex_history_migration;
-mod codex_state_db;
 mod commands;
 mod config;
 pub mod credentials;
 mod database;
-mod deeplink;
 mod error;
-mod gemini_config;
-mod gemini_mcp;
-pub mod hermes_config;
 pub mod http_client;
 mod init_status;
 mod lightweight;
@@ -24,16 +17,11 @@ mod lightweight;
 mod linux_fix;
 #[cfg(any(target_os = "macos", test))]
 mod macos_material;
-mod mcp;
-mod openclaw_config;
-mod opencode_config;
 mod panic_hook;
 pub mod product_identity;
 mod prompt;
-mod prompt_files;
 mod provider;
 mod provider_defaults;
-mod proxy;
 mod services;
 mod settings;
 mod store;
@@ -43,29 +31,17 @@ mod tray_popover;
 pub mod tray_status;
 pub mod usage;
 mod usage_events;
-mod usage_script;
 
 pub use app_config::{AppType, InstalledSkill, McpApps, McpServer, MultiAppConfig, SkillApps};
 pub use claude_quota::run_claude_statusline_bridge;
-pub use codex_config::{get_codex_auth_path, get_codex_config_path, write_codex_live_atomic};
 pub use commands::*;
 pub use config::{get_claude_mcp_path, get_claude_settings_path, read_json_file};
 pub use database::{Database, Profile};
-pub use deeplink::{import_provider_from_deeplink, parse_deeplink_url, DeepLinkImportRequest};
 pub use error::AppError;
-pub use mcp::{
-    import_from_claude, import_from_codex, import_from_gemini, remove_server_from_claude,
-    remove_server_from_codex, remove_server_from_gemini, sync_enabled_to_claude,
-    sync_enabled_to_codex, sync_enabled_to_gemini, sync_single_server_to_claude,
-    sync_single_server_to_codex, sync_single_server_to_gemini,
-};
 pub use prompt::Prompt;
 pub use provider::{Provider, ProviderMeta};
 pub use services::{
-    profile::{ProfilePayload, ProfileScope, ProfileService},
-    provider::reapply_current_codex_official_live,
     skill::{migrate_skills_to_ssot, ImportSkillSelection},
-    ConfigService, EndpointLatency, McpService, PromptService, ProviderService, ProxyService,
     SkillService, SpeedtestService,
 };
 pub use settings::{update_settings, AppSettings};
@@ -89,8 +65,8 @@ use std::sync::Arc;
 #[cfg(target_os = "macos")]
 use tauri::image::Image;
 use tauri::tray::{TrayIconBuilder, TrayIconEvent};
+use tauri::Manager;
 use tauri::RunEvent;
-use tauri::{Emitter, Manager};
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
 #[derive(Debug)]
@@ -346,66 +322,6 @@ fn redact_url_for_log(url_str: &str) -> String {
     }
 }
 
-/// 统一处理旧版兼容深链接 URL
-///
-/// - 解析 URL
-/// - 向前端发射 `deeplink-import` / `deeplink-error` 事件
-/// - 可选：在成功时聚焦主窗口
-fn handle_deeplink_url(
-    app: &tauri::AppHandle,
-    url_str: &str,
-    focus_main_window: bool,
-    source: &str,
-) -> bool {
-    if !crate::deeplink::has_legacy_deep_link_scheme(url_str) {
-        return false;
-    }
-
-    let redacted_url = redact_url_for_log(url_str);
-    log::info!("✓ Deep link URL detected from {source}: {redacted_url}");
-    log::debug!("Deep link URL (raw) from {source}: {url_str}");
-
-    match crate::deeplink::parse_deeplink_url(url_str) {
-        Ok(request) => {
-            log::info!(
-                "✓ Successfully parsed deep link: resource={}, app={:?}, name={:?}",
-                request.resource,
-                request.app,
-                request.name
-            );
-
-            if let Err(e) = app.emit("deeplink-import", &request) {
-                log::error!("✗ Failed to emit deeplink-import event: {e}");
-            } else {
-                log::info!("✓ Emitted deeplink-import event to frontend");
-            }
-
-            if focus_main_window {
-                if let Err(error) = crate::tray_popover::reveal_main_window(app) {
-                    log::error!("✗ Failed to reveal main window: {error}");
-                } else {
-                    log::info!("✓ Window shown and focused");
-                }
-            }
-        }
-        Err(e) => {
-            log::error!("✗ Failed to parse deep link URL: {e}");
-
-            if let Err(emit_err) = app.emit(
-                "deeplink-error",
-                serde_json::json!({
-                    "url": url_str,
-                    "error": e.to_string()
-                }),
-            ) {
-                log::error!("✗ Failed to emit deeplink-error event: {emit_err}");
-            }
-        }
-    }
-
-    true
-}
-
 /// 更新托盘菜单的Tauri命令
 #[tauri::command]
 async fn update_tray_menu(
@@ -534,19 +450,6 @@ pub fn run() {
                 if let Err(e) = crate::lightweight::exit_lightweight_mode(app) {
                     log::error!("退出轻量模式重建窗口失败: {e}");
                 }
-            }
-
-            // Check for deep link URL in args (mainly for Windows/Linux command line)
-            let mut found_deeplink = false;
-            for arg in &args {
-                if handle_deeplink_url(app, arg, false, "single_instance args") {
-                    found_deeplink = true;
-                    break;
-                }
-            }
-
-            if !found_deeplink {
-                log::info!("ℹ No deep link URL found in args (this is expected on macOS when launched via system)");
             }
 
             // Show and focus window regardless.
@@ -860,9 +763,6 @@ pub fn run() {
                 quota_service,
             );
 
-            // 设置 AppHandle 用于代理故障转移时的 UI 更新
-            app_state.proxy_service.set_app_handle(app.handle().clone());
-
             // ============================================================
             // 按表独立判断的导入逻辑（各类数据独立检查，互不影响）
             // ============================================================
@@ -939,193 +839,10 @@ pub fn run() {
                 Err(e) => log::warn!("✗ Failed to seed official providers: {e}"),
             }
 
-            {
-                let db_for_codex_history_migration = app_state.db.clone();
-                tauri::async_runtime::spawn_blocking(move || {
-                    match crate::codex_history_migration::maybe_migrate_codex_third_party_history_provider_bucket(
-                        &db_for_codex_history_migration,
-                    ) {
-                        Ok(outcome) => {
-                            if let Some(reason) = outcome.skipped_reason {
-                                log::debug!("○ Codex history provider bucket migration skipped: {reason}");
-                            } else {
-                                log::info!(
-                                    "✓ Codex history provider bucket migration completed: sources={}, jsonl_files={}, state_rows={}",
-                                    outcome.source_provider_ids.len(),
-                                    outcome.migrated_jsonl_files,
-                                    outcome.migrated_state_rows
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            log::warn!("✗ Codex history provider bucket migration failed: {e}");
-                        }
-                    }
-
-                    match crate::codex_history_migration::maybe_migrate_codex_provider_template_bucket(
-                        &db_for_codex_history_migration,
-                    ) {
-                        Ok(outcome) => {
-                            if let Some(reason) = outcome.skipped_reason {
-                                log::debug!("○ Codex provider template bucket migration skipped: {reason}");
-                            } else if !outcome.migrated_provider_ids.is_empty() {
-                                log::info!(
-                                    "✓ Codex provider template bucket migration completed: providers={}",
-                                    outcome.migrated_provider_ids.len()
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            log::warn!("✗ Codex provider template bucket migration failed: {e}");
-                        }
-                    }
-
-                    // 统一会话开关的官方历史迁移：开关开启但上次未完成（如文件被占用
-                    // 中途失败）时在启动期重试；函数内部自门控，开关关闭时直接跳过。
-                    match crate::codex_history_migration::maybe_migrate_codex_official_history_to_unified_bucket() {
-                        Ok(outcome) => {
-                            if let Some(reason) = outcome.skipped_reason {
-                                log::debug!("○ Codex official history unify migration skipped: {reason}");
-                            } else {
-                                log::info!(
-                                    "✓ Codex official history unify migration completed: jsonl_files={}, state_rows={}",
-                                    outcome.migrated_jsonl_files,
-                                    outcome.migrated_state_rows
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            log::warn!("✗ Codex official history unify migration failed: {e}");
-                        }
-                    }
-                });
-            }
-
             // 老用户 / 已确认的路径由 `fresh_install_at_startup` 自行拦截，这里不做写入。
             // 字段只由前端在用户点击"我知道了"时 save_settings 回写，语义是"用户显式确认过"。
             if !first_run_already_confirmed && fresh_install_at_startup {
                 log::info!("✓ First-run welcome notice pending");
-            }
-
-            // 2. OMO 配置导入（当数据库中无 OMO provider 时，从本地文件导入）
-            {
-                let has_omo = app_state
-                    .db
-                    .get_all_providers("opencode")
-                    .map(|providers| providers.values().any(|p| p.category.as_deref() == Some("omo")))
-                    .unwrap_or(false);
-                if !has_omo {
-                    match crate::services::OmoService::import_from_local(&app_state, &crate::services::omo::STANDARD) {
-                        Ok(provider) => {
-                            log::info!("✓ Imported OMO config from local as provider '{}'", provider.name);
-                        }
-                        Err(AppError::OmoConfigNotFound) => {
-                            log::debug!("○ No OMO config to import");
-                        }
-                        Err(e) => {
-                            log::warn!("✗ Failed to import OMO config from local: {e}");
-                        }
-                    }
-                }
-            }
-
-            // 2.3 OMO Slim config import (when no omo-slim provider in DB, import from local)
-            {
-                let has_omo_slim = app_state
-                    .db
-                    .get_all_providers("opencode")
-                    .map(|providers| {
-                        providers
-                            .values()
-                            .any(|p| p.category.as_deref() == Some("omo-slim"))
-                    })
-                    .unwrap_or(false);
-                if !has_omo_slim {
-                    match crate::services::OmoService::import_from_local(&app_state, &crate::services::omo::SLIM) {
-                        Ok(provider) => {
-                            log::info!(
-                                "✓ Imported OMO Slim config from local as provider '{}'",
-                                provider.name
-                            );
-                        }
-                        Err(AppError::OmoConfigNotFound) => {
-                            log::debug!("○ No OMO Slim config to import");
-                        }
-                        Err(e) => {
-                            log::warn!("✗ Failed to import OMO Slim config from local: {e}");
-                        }
-                    }
-                }
-            }
-
-            // 3. 导入 MCP 服务器配置（表空时触发）
-            if app_state.db.is_mcp_table_empty().unwrap_or(false) {
-                log::info!("MCP table empty, importing from live configurations...");
-
-                match crate::services::mcp::McpService::import_from_claude(&app_state) {
-                    Ok(count) if count > 0 => {
-                        log::info!("✓ Imported {count} MCP server(s) from Claude");
-                    }
-                    Ok(_) => log::debug!("○ No Claude MCP servers found to import"),
-                    Err(e) => log::warn!("✗ Failed to import Claude MCP: {e}"),
-                }
-
-                match crate::services::mcp::McpService::import_from_codex(&app_state) {
-                    Ok(count) if count > 0 => {
-                        log::info!("✓ Imported {count} MCP server(s) from Codex");
-                    }
-                    Ok(_) => log::debug!("○ No Codex MCP servers found to import"),
-                    Err(e) => log::warn!("✗ Failed to import Codex MCP: {e}"),
-                }
-
-                match crate::services::mcp::McpService::import_from_gemini(&app_state) {
-                    Ok(count) if count > 0 => {
-                        log::info!("✓ Imported {count} MCP server(s) from Gemini");
-                    }
-                    Ok(_) => log::debug!("○ No Gemini MCP servers found to import"),
-                    Err(e) => log::warn!("✗ Failed to import Gemini MCP: {e}"),
-                }
-
-                match crate::services::mcp::McpService::import_from_opencode(&app_state) {
-                    Ok(count) if count > 0 => {
-                        log::info!("✓ Imported {count} MCP server(s) from OpenCode");
-                    }
-                    Ok(_) => log::debug!("○ No OpenCode MCP servers found to import"),
-                    Err(e) => log::warn!("✗ Failed to import OpenCode MCP: {e}"),
-                }
-
-                match crate::services::mcp::McpService::import_from_hermes(&app_state) {
-                    Ok(count) if count > 0 => {
-                        log::info!("✓ Imported {count} MCP server(s) from Hermes");
-                    }
-                    Ok(_) => log::debug!("○ No Hermes MCP servers found to import"),
-                    Err(e) => log::warn!("✗ Failed to import Hermes MCP: {e}"),
-                }
-            }
-
-            // 4. 导入提示词文件（表空时触发）
-            if app_state.db.is_prompts_table_empty().unwrap_or(false) {
-                log::info!("Prompts table empty, importing from live configurations...");
-
-                for app in [
-                    crate::app_config::AppType::Claude,
-                    crate::app_config::AppType::Codex,
-                    crate::app_config::AppType::Gemini,
-                    crate::app_config::AppType::OpenCode,
-                    crate::app_config::AppType::OpenClaw,
-                    crate::app_config::AppType::Hermes,
-                ] {
-                    match crate::services::prompt::PromptService::import_from_file_on_first_launch(
-                        &app_state,
-                        app.clone(),
-                    ) {
-                        Ok(count) if count > 0 => {
-                            log::info!("✓ Imported {count} prompt(s) for {}", app.as_str());
-                        }
-                        Ok(_) => log::debug!("○ No prompt file found for {}", app.as_str()),
-                        Err(e) => log::warn!("✗ Failed to import prompt for {}: {e}", app.as_str()),
-                    }
-                }
             }
 
             // 迁移旧的 app_config_dir 配置到 Store
@@ -1176,10 +893,7 @@ pub fn run() {
             // 注册 URL 处理回调（所有平台通用）
             app.deep_link().on_open_url({
                 let app_handle = app.handle().clone();
-                move |event| {
-                    log::info!("=== Deep Link Event Received (on_open_url) ===");
-                    let urls = event.urls();
-                    log::info!("Received {} URL(s)", urls.len());
+                move |_event| {
 
                     if crate::lightweight::is_lightweight_mode() {
                         if let Err(e) = crate::lightweight::exit_lightweight_mode(&app_handle) {
@@ -1187,14 +901,6 @@ pub fn run() {
                         }
                     }
 
-                    for (i, url) in urls.iter().enumerate() {
-                        let url_str = url.as_str();
-                        log::debug!("  URL[{i}]: {}", redact_url_for_log(url_str));
-
-                        if handle_deeplink_url(&app_handle, url_str, true, "on_open_url") {
-                            break; // Process only the first compatible deep-link URL
-                        }
-                    }
                 }
             });
             log::info!("✓ Deep-link URL handler registered");
@@ -1296,31 +1002,6 @@ pub fn run() {
             app.manage(app_state);
             app.manage(commands::CodexOAuthState(codex_oauth_manager));
             log::info!("✓ CodexOAuthManager initialized");
-
-            // 从数据库加载日志配置并应用
-            {
-                let db = &app.state::<AppState>().db;
-                if let Ok(log_config) = db.get_log_config() {
-                    log::set_max_level(log_config.to_level_filter());
-                    log::info!(
-                        "已加载日志配置: enabled={}, level={}",
-                        log_config.enabled,
-                        log_config.level
-                    );
-                }
-            }
-
-            // 初始化 CopilotAuthManager
-            {
-                use crate::proxy::providers::copilot_auth::CopilotAuthManager;
-                use commands::CopilotAuthState;
-                use tokio::sync::RwLock;
-
-                let app_config_dir = crate::config::get_app_config_dir();
-                let copilot_auth_manager = CopilotAuthManager::new(app_config_dir);
-                app.manage(CopilotAuthState(Arc::new(RwLock::new(copilot_auth_manager))));
-                log::info!("✓ CopilotAuthManager initialized");
-            }
 
             // 初始化全局出站代理 HTTP 客户端
             {
@@ -1446,30 +1127,6 @@ pub fn run() {
                 {
                     log::error!("fixed API binding local credential initialization failed");
                 }
-
-                // 检查是否有 Live 备份（表示上次异常退出时可能处于接管状态）
-                let has_backups = match state.db.has_any_live_backup().await {
-                    Ok(v) => v,
-                    Err(e) => {
-                        log::error!("检查 Live 备份失败: {e}");
-                        false
-                    }
-                };
-                // 检查 Live 配置是否仍处于被接管状态（包含占位符）
-                let live_taken_over = state.proxy_service.detect_takeover_in_live_configs();
-
-                if has_backups || live_taken_over {
-                    log::warn!("检测到上次异常退出（存在接管残留），正在恢复 Live 配置...");
-                    if let Err(e) = state.proxy_service.recover_from_crash().await {
-                        log::error!("恢复 Live 配置失败: {e}");
-                    } else {
-                        log::info!("Live 配置已恢复");
-                    }
-                }
-
-
-                // 检查 settings 表中的代理状态，自动恢复代理服务
-                restore_proxy_state_on_startup(&state).await;
 
                 // Periodic backup check (on startup)
                 if let Err(e) = state.db.periodic_backup_if_needed() {
@@ -1634,7 +1291,6 @@ pub fn run() {
             commands::test_system_provider_connection,
             commands::reveal_agent_provider_local_key,
             commands::rotate_agent_provider_local_key,
-            commands::get_agent_proxy_setup_info,
             commands::get_unassigned_usage_diagnostics,
             commands::list_usage_providers,
             commands::get_claude_cli_auth_status,
@@ -1669,22 +1325,12 @@ pub fn run() {
             commands::open_app_config_folder,
             commands::get_settings,
             commands::save_settings,
-            commands::has_codex_unify_history_backup,
-            commands::restore_codex_unified_history,
-            commands::get_rectifier_config,
-            commands::set_rectifier_config,
-            commands::get_optimizer_config,
-            commands::set_optimizer_config,
-            commands::get_log_config,
-            commands::set_log_config,
             commands::restart_app,
             commands::install_update_and_restart,
             commands::check_for_updates,
             commands::is_portable_mode,
             commands::copy_text_to_clipboard,
             commands::apply_claude_plugin_config,
-            commands::apply_claude_onboarding_skip,
-            commands::clear_claude_onboarding_skip,
             // Claude MCP management
             // usage query
             // subscription quota
@@ -1863,65 +1509,6 @@ pub fn run() {
                         log::error!("macOS reopen failed to reveal main window: {error}");
                     }
                 }
-                // 处理通过旧版兼容 URL 协议触发的打开事件
-                RunEvent::Opened { urls } => {
-                    if let Some(url) = urls.first() {
-                        let url_str = url.to_string();
-                        log::info!("RunEvent::Opened with URL: {url_str}");
-
-                        if crate::deeplink::has_legacy_deep_link_scheme(&url_str) {
-                            if crate::lightweight::is_lightweight_mode() {
-                                if let Err(e) = crate::lightweight::exit_lightweight_mode(app_handle)
-                                {
-                                    log::error!("退出轻量模式重建窗口失败: {e}");
-                                }
-                            }
-
-                            // 解析并广播深链接事件，复用与 single_instance 相同的逻辑
-                            match crate::deeplink::parse_deeplink_url(&url_str) {
-                                Ok(request) => {
-                                    log::info!(
-                                        "Successfully parsed deep link from RunEvent::Opened: resource={}, app={:?}",
-                                        request.resource,
-                                        request.app
-                                    );
-
-                                    if let Err(e) =
-                                        app_handle.emit("deeplink-import", &request)
-                                    {
-                                        log::error!(
-                                            "Failed to emit deep link event from RunEvent::Opened: {e}"
-                                        );
-                                    }
-                                }
-                                Err(e) => {
-                                    log::error!(
-                                        "Failed to parse deep link URL from RunEvent::Opened: {e}"
-                                    );
-
-                                    if let Err(emit_err) = app_handle.emit(
-                                        "deeplink-error",
-                                        serde_json::json!({
-                                            "url": url_str,
-                                            "error": e.to_string()
-                                        }),
-                                    ) {
-                                        log::error!(
-                                            "Failed to emit deep link error event from RunEvent::Opened: {emit_err}"
-                                        );
-                                    }
-                                }
-                            }
-
-                            // 确保主窗口与 Dock 策略一起恢复。
-                            if let Err(error) =
-                                tray_popover::reveal_main_window(app_handle)
-                            {
-                                log::error!("Failed to reveal main window: {error}");
-                            }
-                        }
-                    }
-                }
                 RunEvent::Exit => {
                     #[cfg(all(target_os = "macos", not(test)))]
                     stop_main_window_visibility_monitor();
@@ -1952,17 +1539,10 @@ pub async fn cleanup_before_exit(app_handle: &tauri::AppHandle) {
             state.take_quota_scheduler(),
             state.take_midnight_scheduler(),
             state.take_official_pricing_scheduler(),
-            state.db.clone(),
-            state.proxy_service.clone(),
         )
     });
-    if let Some((
-        quota_scheduler,
-        midnight_scheduler,
-        official_pricing_scheduler,
-        db,
-        proxy_service,
-    )) = cleanup_resources
+    if let Some((quota_scheduler, midnight_scheduler, official_pricing_scheduler)) =
+        cleanup_resources
     {
         if let Some(scheduler) = quota_scheduler {
             scheduler.stop().await;
@@ -1972,37 +1552,6 @@ pub async fn cleanup_before_exit(app_handle: &tauri::AppHandle) {
         }
         if let Some(scheduler) = official_pricing_scheduler {
             scheduler.stop().await;
-        }
-
-        // 退出时也需要兜底：代理可能已崩溃/未运行，但 Live 接管残留仍在（占位符/备份）。
-        let has_backups = match db.has_any_live_backup().await {
-            Ok(v) => v,
-            Err(e) => {
-                log::error!("退出时检查 Live 备份失败: {e}");
-                false
-            }
-        };
-        let live_taken_over = proxy_service.detect_takeover_in_live_configs();
-        let needs_restore = has_backups || live_taken_over;
-
-        if needs_restore {
-            log::info!("检测到接管残留，开始恢复 Live 配置（保留代理状态）...");
-            // 使用 keep_state 版本，保留 settings 表中的代理状态
-            if let Err(e) = proxy_service.stop_with_restore_keep_state().await {
-                log::error!("退出时恢复 Live 配置失败: {e}");
-            } else {
-                log::info!("已恢复 Live 配置（代理状态已保留，下次启动将自动恢复）");
-            }
-            return;
-        }
-
-        // 非接管模式：代理在运行则仅停止代理
-        if proxy_service.is_running().await {
-            log::info!("检测到代理服务器正在运行，开始停止...");
-            if let Err(e) = proxy_service.stop().await {
-                log::error!("退出时停止代理失败: {e}");
-            }
-            log::info!("代理服务器清理完成");
         }
     }
 }
@@ -2030,53 +1579,6 @@ pub(crate) fn remove_tray_icon_before_exit(app_handle: &tauri::AppHandle) {
 // ============================================================
 // 启动时恢复代理状态
 // ============================================================
-
-/// 启动时根据 proxy_config 表中的代理状态自动恢复代理服务
-///
-/// 检查 `proxy_config.enabled` 字段，如果有任一应用的状态为 `true`，
-/// 则自动启动代理服务并接管对应应用的 Live 配置。
-async fn restore_proxy_state_on_startup(state: &store::AppState) {
-    // 收集需要恢复接管的应用列表（从 proxy_config.enabled 读取）
-    let mut apps_to_restore = Vec::new();
-    for app_type in ["claude", "codex", "gemini"] {
-        if let Ok(config) = state.db.get_proxy_config_for_app(app_type).await {
-            if config.enabled {
-                apps_to_restore.push(app_type);
-            }
-        }
-    }
-
-    if apps_to_restore.is_empty() {
-        log::debug!("启动时无需恢复代理状态");
-        return;
-    }
-
-    log::info!("检测到上次代理状态需要恢复，应用列表: {apps_to_restore:?}");
-
-    // 逐个恢复接管状态
-    for app_type in apps_to_restore {
-        match state
-            .proxy_service
-            .set_takeover_for_app(app_type, true)
-            .await
-        {
-            Ok(()) => {
-                log::info!("✓ 已恢复 {app_type} 的代理接管状态");
-            }
-            Err(e) => {
-                log::error!("✗ 恢复 {app_type} 的代理接管状态失败: {e}");
-                // 失败时清除该应用的状态，避免下次启动再次尝试
-                if let Err(clear_err) = state
-                    .proxy_service
-                    .set_takeover_for_app(app_type, false)
-                    .await
-                {
-                    log::error!("清除 {app_type} 代理状态失败: {clear_err}");
-                }
-            }
-        }
-    }
-}
 
 // ============================================================
 // 迁移错误对话框辅助函数

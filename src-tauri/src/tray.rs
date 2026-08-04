@@ -54,8 +54,6 @@ pub struct TrayTexts {
     pub lightweight_mode: &'static str,
     pub quit: &'static str,
     pub _auto_label: &'static str,
-    pub projects_label: &'static str,
-    pub no_project_label: &'static str,
 }
 
 impl TrayTexts {
@@ -68,8 +66,6 @@ impl TrayTexts {
                 lightweight_mode: "Lightweight Mode",
                 quit: "Quit",
                 _auto_label: "Auto (Failover)",
-                projects_label: "Projects",
-                no_project_label: "No project",
             },
             "ja" => Self {
                 show_main: "メインウィンドウを開く",
@@ -78,8 +74,6 @@ impl TrayTexts {
                 lightweight_mode: "軽量モード",
                 quit: "終了",
                 _auto_label: "自動 (フェイルオーバー)",
-                projects_label: "プロジェクト",
-                no_project_label: "プロジェクトを使用しない",
             },
             "zh-TW" => Self {
                 show_main: "開啟主介面",
@@ -88,8 +82,6 @@ impl TrayTexts {
                 lightweight_mode: "輕量模式",
                 quit: "退出",
                 _auto_label: "自動 (故障轉移)",
-                projects_label: "專案",
-                no_project_label: "不使用專案",
             },
             _ => Self {
                 show_main: "打开主界面",
@@ -98,8 +90,6 @@ impl TrayTexts {
                 lightweight_mode: "轻量模式",
                 quit: "退出",
                 _auto_label: "自动 (故障转移)",
-                projects_label: "项目",
-                no_project_label: "不使用项目",
             },
         }
     }
@@ -366,9 +356,6 @@ pub fn create_tray_menu(
         .item(&open_website_item)
         .separator();
 
-    // Pre-compute proxy running state (used to disable official providers in tray menu)
-    let is_proxy_running = futures::executor::block_on(app_state.proxy_service.is_running());
-
     // 每个应用类型折叠为子菜单，避免供应商过多时菜单过长
     for section in TRAY_SECTIONS.iter() {
         if !visible_apps.is_visible(&section.app_type) {
@@ -402,15 +389,8 @@ pub fn create_tray_menu(
             };
             let submenu_id = format!("submenu_{}", app_type_str);
 
-            // Check if this app is under proxy takeover (for disabling official providers)
-            let is_app_taken_over = is_proxy_running
-                && (futures::executor::block_on(app_state.db.get_live_backup(app_type_str))
-                    .ok()
-                    .flatten()
-                    .is_some()
-                    || app_state
-                        .proxy_service
-                        .detect_takeover_in_live_config_for_app(&section.app_type));
+            // Proxy takeover is gone, so no provider is ever blocked here.
+            let is_app_taken_over = false;
 
             let mut submenu_builder = SubmenuBuilder::with_id(app, &submenu_id, &submenu_label);
 
@@ -445,90 +425,6 @@ pub fn create_tray_menu(
         }
 
         menu_builder = menu_builder.separator();
-    }
-
-    // 项目 Profile 子菜单：项目列表全应用共享，按分组嵌套子菜单各自勾选/应用
-    // （组内应用可见且存在项目时才显示该组）
-    {
-        use crate::services::profile::ProfileScope;
-
-        let any_scope_visible = ProfileScope::ALL.iter().any(|scope| {
-            scope
-                .apps()
-                .iter()
-                .any(|app_type| visible_apps.is_visible(app_type))
-        });
-        let profiles = if any_scope_visible {
-            app_state.db.get_all_profiles()?
-        } else {
-            Vec::new()
-        };
-
-        let mut scope_submenus = Vec::new();
-        for scope in ProfileScope::ALL {
-            if profiles.is_empty()
-                || !scope
-                    .apps()
-                    .iter()
-                    .any(|app_type| visible_apps.is_visible(app_type))
-            {
-                continue;
-            }
-            let current_profile_id = app_state
-                .db
-                .get_current_profile_id(scope.as_str())?
-                .unwrap_or_default();
-            // 分组标签用产品名，不进 i18n
-            let scope_label = match scope {
-                ProfileScope::Claude => "Claude Code",
-                ProfileScope::ClaudeDesktop => "Claude Desktop",
-                ProfileScope::Codex => "Codex",
-            };
-            let mut scope_builder = SubmenuBuilder::with_id(
-                app,
-                format!("submenu_profiles_{}", scope.as_str()),
-                scope_label,
-            );
-            for profile in &profiles {
-                let item = CheckMenuItem::with_id(
-                    app,
-                    format!("profile_{}_{}", scope.as_str(), profile.id),
-                    &profile.name,
-                    true,
-                    current_profile_id == profile.id,
-                    None::<&str>,
-                )
-                .map_err(|e| AppError::Message(format!("创建项目菜单项失败: {e}")))?;
-                scope_builder = scope_builder.item(&item);
-            }
-            let none_item = CheckMenuItem::with_id(
-                app,
-                format!("profile_none_{}", scope.as_str()),
-                tray_texts.no_project_label,
-                true,
-                current_profile_id.is_empty(),
-                None::<&str>,
-            )
-            .map_err(|e| AppError::Message(format!("创建不使用项目菜单项失败: {e}")))?;
-            let scope_submenu = scope_builder
-                .separator()
-                .item(&none_item)
-                .build()
-                .map_err(|e| AppError::Message(format!("构建项目分组子菜单失败: {e}")))?;
-            scope_submenus.push(scope_submenu);
-        }
-
-        if !scope_submenus.is_empty() {
-            let mut profiles_builder =
-                SubmenuBuilder::with_id(app, "submenu_profiles", tray_texts.projects_label);
-            for scope_submenu in &scope_submenus {
-                profiles_builder = profiles_builder.item(scope_submenu);
-            }
-            let profiles_submenu = profiles_builder
-                .build()
-                .map_err(|e| AppError::Message(format!("构建项目子菜单失败: {e}")))?;
-            menu_builder = menu_builder.item(&profiles_submenu).separator();
-        }
     }
 
     let lightweight_item = CheckMenuItem::with_id(

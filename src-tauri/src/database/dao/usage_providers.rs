@@ -177,7 +177,7 @@ fn provider_view(
                 config
                     .get("config")
                     .and_then(Value::as_str)
-                    .and_then(crate::codex_config::extract_codex_base_url)
+                    .and_then(crate::agent_paths::extract_codex_base_url)
             })
             .and_then(public_route_base_url)
     });
@@ -208,7 +208,7 @@ fn provider_view(
                 .is_some_and(has_non_empty_value)
         });
         let config_text = config.get("config").and_then(Value::as_str);
-        let has_codex = crate::codex_config::extract_codex_api_key(config.get("auth"), config_text)
+        let has_codex = crate::agent_paths::extract_codex_api_key(config.get("auth"), config_text)
             .is_some()
             || config.get("config").is_some_and(|nested| {
                 ["api_key", "apiKey", "token"]

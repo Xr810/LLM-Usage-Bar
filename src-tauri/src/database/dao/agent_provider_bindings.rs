@@ -1,6 +1,5 @@
 use crate::database::{lock_conn, Database};
 use crate::error::AppError;
-use crate::provider::{Provider, ProviderMeta};
 use crate::usage::domain::{
     AgentProviderBindingInput, AgentProviderBindingView, BillingKind, BindingCredentialStatus,
     TokenSource,
@@ -37,11 +36,6 @@ pub(crate) struct BindingRecord {
     legacy_settings_config: Option<Value>,
     legacy_meta: Option<Value>,
     pub(crate) agent_archived_at: Option<i64>,
-    pub(crate) provider_name: String,
-    pub(crate) product_group_id: String,
-    pub(crate) legacy_migration_linked: bool,
-    pub(crate) legacy_provider_id: Option<String>,
-    pub(crate) legacy_provider: Option<Provider>,
     pub(crate) route_protocol: Option<String>,
     pub(crate) system_preset_key: Option<String>,
     pub(crate) provider_fingerprint: Option<Vec<u8>>,
@@ -94,43 +88,6 @@ pub(crate) fn binding_record_from_row(row: &Row<'_>) -> rusqlite::Result<Binding
     })?;
     let legacy_settings_config: Option<Value> = parse_json(row.get(15)?, 15)?;
     let legacy_meta: Option<Value> = parse_json(row.get(16)?, 16)?;
-    let legacy_provider_id: Option<String> = row.get(19)?;
-    let legacy_provider = legacy_provider_id
-        .map(|id| {
-            let settings_config = legacy_settings_config.clone().ok_or_else(|| {
-                rusqlite::Error::FromSqlConversionFailure(
-                    15,
-                    rusqlite::types::Type::Null,
-                    "legacy provider settings missing".into(),
-                )
-            })?;
-            let meta = legacy_meta
-                .clone()
-                .map(serde_json::from_value::<ProviderMeta>)
-                .transpose()
-                .map_err(|error| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        16,
-                        rusqlite::types::Type::Text,
-                        Box::new(error),
-                    )
-                })?;
-            Ok::<Provider, rusqlite::Error>(Provider {
-                id,
-                name: row.get(20)?,
-                settings_config,
-                website_url: row.get(21)?,
-                category: row.get(22)?,
-                created_at: row.get(23)?,
-                sort_index: row.get(24)?,
-                notes: row.get(25)?,
-                icon: row.get(26)?,
-                icon_color: row.get(27)?,
-                meta,
-                in_failover_queue: row.get(28)?,
-            })
-        })
-        .transpose()?;
     Ok(BindingRecord {
         id: row.get(0)?,
         agent_module_id: row.get(1)?,
@@ -150,11 +107,6 @@ pub(crate) fn binding_record_from_row(row: &Row<'_>) -> rusqlite::Result<Binding
         legacy_settings_config,
         legacy_meta,
         agent_archived_at: row.get(17)?,
-        provider_name: row.get(18)?,
-        legacy_migration_linked: row.get(29)?,
-        legacy_provider_id: row.get(30)?,
-        product_group_id: row.get(31)?,
-        legacy_provider,
         route_protocol: row.get(32)?,
         system_preset_key: row.get(33)?,
         provider_fingerprint: row.get(34)?,
@@ -790,11 +742,6 @@ fn provider_context_for_new_binding(
                     legacy_settings_config: parse_json(row.get(6)?, 6)?,
                     legacy_meta: parse_json(row.get(7)?, 7)?,
                     agent_archived_at: row.get(8)?,
-                    provider_name: String::new(),
-                    product_group_id: row.get(11)?,
-                    legacy_migration_linked: row.get(9)?,
-                    legacy_provider_id: row.get(10)?,
-                    legacy_provider: None,
                     route_protocol: row.get(3)?,
                     system_preset_key: row.get(12)?,
                     provider_fingerprint: row.get(13)?,
@@ -838,17 +785,6 @@ fn validate_requested_enabled(record: &BindingRecord, enabled: bool) -> Result<(
 }
 
 impl Database {
-    pub(crate) fn agent_provider_binding_supports_direct_api_key(
-        &self,
-        binding_id: &str,
-    ) -> Result<bool, AppError> {
-        let conn = lock_conn!(self.conn);
-        Ok(matches!(
-            binding_auth_mode_for_id_on_conn(&conn, binding_id)?,
-            Some(BindingAuthMode::DirectApiKey)
-        ))
-    }
-
     pub fn list_agent_provider_bindings(
         &self,
         agent_module_id: Option<&str>,

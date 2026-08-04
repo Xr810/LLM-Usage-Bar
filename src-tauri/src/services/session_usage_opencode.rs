@@ -11,9 +11,9 @@
 //!   → proxy_request_logs 表
 //! ```
 
+use crate::agent_paths::get_opencode_db_path;
 use crate::database::{lock_conn, Database};
 use crate::error::AppError;
-use crate::opencode_config::get_opencode_db_path;
 use crate::services::session_usage::{
     get_sync_state, metadata_modified_nanos, update_sync_state, SessionSyncResult,
 };
