@@ -58,8 +58,13 @@ PAD_U = 6.5
 
 # The tray icon carries colour, so it is not a template image and macOS will
 # not invert it for the bar's appearance. Everything structural is therefore a
-# mid grey — the one value that holds up on both a white and a black bar.
-STRUCTURE = (142, 142, 147)
+# single grey, chosen so its distance from both bar colours is about equal:
+# 128 sits 118 from a light bar's 246 and 98 from a dark bar's 30. Lighter
+# than this and the housing washes out on a light bar; darker and it sinks
+# into a dark one.
+STRUCTURE = (128, 128, 134)
+HOUSING_ALPHA = 255
+RING_ALPHA = 215
 
 
 def tray_icon(lit: str | None = None, mono: bool = False, height: int = TRAY_HEIGHT):
@@ -72,12 +77,12 @@ def tray_icon(lit: str | None = None, mono: bool = False, height: int = TRAY_HEI
     img = Image.new("RGBA", canvas, (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
     u = canvas[0] / long_u
-    stroke = max(1, round(2.0 * u))
+    stroke = max(1, round(2.1 * u))
 
     # A rounded rectangle with visible margin, not a shrink-wrapped capsule:
     # lamps crammed against the housing read as a pill of dots rather than as
     # a signal head.
-    housing = (0, 0, 0, 235) if mono else STRUCTURE + (215,)
+    housing = (0, 0, 0, 255) if mono else STRUCTURE + (HOUSING_ALPHA,)
     draw.rounded_rectangle(
         [stroke / 2, stroke / 2, canvas[0] - stroke / 2, canvas[1] - stroke / 2],
         radius=10.5 * u,
@@ -98,7 +103,7 @@ def tray_icon(lit: str | None = None, mono: bool = False, height: int = TRAY_HEI
         else:
             # An unlit lamp is an outline. Filled, two of them dominate the
             # icon with information that is not there.
-            outline = (0, 0, 0, 110) if mono else STRUCTURE + (150,)
+            outline = (0, 0, 0, 150) if mono else STRUCTURE + (RING_ALPHA,)
             draw.ellipse(
                 [
                     cx - r + stroke / 2,
