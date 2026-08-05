@@ -109,6 +109,25 @@ export function ProviderUsagePage({
 
   return (
     <div className="space-y-7">
+      {/* Activity first: it carries the range control, and every figure below
+          it — both section totals and every card — is scoped by that range. */}
+      <div className="space-y-4">
+        <ProviderActivityHeatmap
+          buckets={activityBuckets}
+          startAt={activityStartAt}
+          endAt={activityEndAt}
+          isLoading={isActivityLoading}
+        />
+        <ProviderUsageTrendChart
+          granularity={projection.trendGranularity}
+          buckets={projection.trendBuckets}
+          totalTokens={projection.overallTotalTokens}
+          totalCostUsd={projection.overallTotalCostUsd}
+          rangeLabel={rangeLabel}
+          rangeControls={rangeControls}
+        />
+      </div>
+
       <section className="space-y-3" aria-labelledby="subscription-heading">
         <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
           {sectionHeading(
@@ -176,23 +195,6 @@ export function ProviderUsagePage({
           </div>
         )}
       </section>
-
-      <div className="space-y-4">
-        <ProviderActivityHeatmap
-          buckets={activityBuckets}
-          startAt={activityStartAt}
-          endAt={activityEndAt}
-          isLoading={isActivityLoading}
-        />
-        <ProviderUsageTrendChart
-          granularity={projection.trendGranularity}
-          buckets={projection.trendBuckets}
-          totalTokens={projection.overallTotalTokens}
-          totalCostUsd={projection.overallTotalCostUsd}
-          rangeLabel={rangeLabel}
-          rangeControls={rangeControls}
-        />
-      </div>
 
       <section className="space-y-3" aria-labelledby="metered-heading">
         {sectionHeading(
