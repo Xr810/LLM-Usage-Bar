@@ -15,6 +15,8 @@ mod init_status;
 mod lightweight;
 #[cfg(target_os = "linux")]
 mod linux_fix;
+#[cfg(target_os = "macos")]
+mod macos_fix;
 #[cfg(any(target_os = "macos", test))]
 mod macos_material;
 mod panic_hook;

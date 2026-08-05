@@ -319,6 +319,8 @@ pub fn reveal_main_window(app: &AppHandle) -> Result<(), AppError> {
 
         #[cfg(target_os = "linux")]
         crate::linux_fix::nudge_main_window(main);
+        #[cfg(target_os = "macos")]
+        crate::macos_fix::renegotiate_webview_viewport(main);
 
         Ok(())
     })();
