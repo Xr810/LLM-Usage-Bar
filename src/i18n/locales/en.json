@@ -31,8 +31,6 @@
     "metered": "Metered",
     "sourceSession": "Session log",
     "sourceProxy": "Proxy",
-    "sourceClaudeLocalQuota": "Quota: latest local sample per window (Desktop / Pro Code; account match unverified)",
-    "sourceClaudeCodeUnattributed": "Tokens: Claude Code log (Provider unverified)",
     "tokens": "Tokens",
     "requests": "Requests",
     "recentRequests": "Recent requests",

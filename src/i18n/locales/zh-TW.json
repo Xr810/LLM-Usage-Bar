@@ -31,8 +31,6 @@
     "metered": "按量",
     "sourceSession": "工作階段記錄",
     "sourceProxy": "本機代理",
-    "sourceClaudeLocalQuota": "額度：各視窗採用最新本機樣本（Desktop / 使用 Pro 的 Code；帳號一致性未核驗）",
-    "sourceClaudeCodeUnattributed": "Token：Claude Code 記錄（Provider 未核驗）",
     "tokens": "權杖",
     "requests": "請求",
     "recentRequests": "近期請求",

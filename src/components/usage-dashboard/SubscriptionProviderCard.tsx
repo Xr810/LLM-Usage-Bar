@@ -69,29 +69,6 @@ export function SubscriptionProviderCard({
     usage.outputTokens +
     usage.cacheReadTokens +
     usage.cacheCreationTokens;
-  const tokenSourceText = usage.provider.tokenSources
-    .map((source) =>
-      source === "proxy"
-        ? t("usageDashboard.sourceProxy", { defaultValue: "Proxy" })
-        : t("usageDashboard.sourceSession", { defaultValue: "Session log" }),
-    )
-    .join(" + ");
-  const sourceText =
-    usage.provider.quotaSource === "claude_local"
-      ? [
-          t("usageDashboard.sourceClaudeLocalQuota", {
-            defaultValue:
-              "Quota: latest local sample per window (Desktop / Pro Code; account match unverified)",
-          }),
-          tokenSourceText
-            ? t("usageDashboard.sourceClaudeCodeUnattributed", {
-                defaultValue: "Tokens: Claude Code log (Provider unverified)",
-              })
-            : null,
-        ]
-          .filter(Boolean)
-          .join(" · ")
-      : tokenSourceText;
   const { icon, iconColor } = dashboardProviderIcon(usage.provider);
 
   const quotaWindow = (
@@ -259,26 +236,22 @@ export function SubscriptionProviderCard({
                 })}
               </Badge>
             </div>
-            <p
-              data-testid="provider-provenance"
-              className="mt-0.5 truncate text-xs text-muted-foreground"
-              title={
-                lastSuccessAt
-                  ? new Date(lastSuccessAt * 1000).toLocaleString()
-                  : undefined
-              }
-            >
-              {sourceText}
-              {lastSuccessAt ? (
-                <>
-                  {" · "}
-                  {t("usageDashboard.lastUpdated", {
-                    value: freshnessLabel,
-                    defaultValue: `Last updated ${freshnessLabel}`,
-                  })}
-                </>
-              ) : null}
-            </p>
+            {/* Where the numbers came from used to lead this line. It named
+                every source and caveat on every card, on every render, to
+                answer a question asked once — the freshness is what actually
+                changes and is what the line is for now. */}
+            {lastSuccessAt ? (
+              <p
+                data-testid="provider-provenance"
+                className="mt-0.5 truncate text-xs text-muted-foreground"
+                title={new Date(lastSuccessAt * 1000).toLocaleString()}
+              >
+                {t("usageDashboard.lastUpdated", {
+                  value: freshnessLabel,
+                  defaultValue: `Last updated ${freshnessLabel}`,
+                })}
+              </p>
+            ) : null}
           </div>
         </div>
         {fetchState?.stale ? (

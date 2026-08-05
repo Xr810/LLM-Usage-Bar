@@ -232,14 +232,12 @@ describe("SubscriptionProviderCard localized reset countdown", () => {
       />,
     );
 
-    expect(
-      screen.getByTestId("subscription-provider-system-claude-subscription"),
-    ).toHaveTextContent(
-      "Quota: latest local sample per window (Desktop / Pro Code; account match unverified) · Tokens: Claude Code log (Provider unverified)",
-    );
-    // The line shows a relative age; the exact timestamp is the tooltip, and it
-    // must come from the local sample (1_234) rather than the fetch attempt (9_999).
+    // The line carries the freshness alone now; naming the sources and their
+    // caveats on every render answered a question asked once.
     const provenance = screen.getByTestId("provider-provenance");
+    expect(provenance).not.toHaveTextContent(/local sample|Claude Code log/);
+    // It shows a relative age; the exact timestamp is the tooltip, and it must
+    // come from the local sample (1_234) rather than the fetch attempt (9_999).
     expect(provenance).toHaveAttribute(
       "title",
       new Date(1_234 * 1_000).toLocaleString(),
