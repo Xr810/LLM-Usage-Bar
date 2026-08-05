@@ -11,6 +11,11 @@ Both marks are the same traffic light. The menu bar lights one lamp to report
 status, and the app icon lights all three, so the thing in the Dock and the
 thing in the menu bar are recognisably the same object.
 
+They differ in orientation because their frames do. A menu bar icon is capped
+at 18pt tall, so stacking the lamps makes each one 4.6pt; laid out along the
+free axis they are ~14pt. An app icon is square, where the upright signal head
+is the shape that fills it.
+
 Android and iOS icons are left alone: this app builds for macOS only, and
 regenerating assets no build consumes would only invite them to drift.
 """
@@ -40,8 +45,16 @@ GREEN = (48, 209, 88)
 # Menu bar
 # --------------------------------------------------------------------------
 
-TRAY_GRID = 36.0  # 18pt at 2x, which is the menu bar's device resolution
+# The menu bar hard-caps an icon at 18pt tall and derives its width from the
+# source aspect ratio (tray-icon, macos/mod.rs: `icon_height: f64 = 18.0`).
+# Stacked vertically, three lamps in 18pt are 4.6pt each — legible but timid.
+# Laid out horizontally the lamp diameter is set by the *height* instead, so
+# each one is ~14pt, three times the area, at the cost of a ~48pt-wide item.
 TRAY_SS = 8
+TRAY_HEIGHT = 36  # 18pt at 2x, the device resolution of the slot
+LAMP_U = 30.0
+GAP_U = 2.0
+PAD_U = 4.0
 
 # The tray icon carries colour, so it is not a template image and macOS will
 # not invert it for the bar's appearance. Everything structural is therefore a
@@ -49,42 +62,41 @@ TRAY_SS = 8
 STRUCTURE = (142, 142, 147)
 
 
-def tray_icon(size: int = 36, lit: str | None = None, mono: bool = False):
-    canvas = int(size * TRAY_SS)
-    img = Image.new("RGBA", (canvas, canvas), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-    u = canvas / TRAY_GRID
+def tray_icon(lit: str | None = None, mono: bool = False, height: int = TRAY_HEIGHT):
+    short_u = LAMP_U + 2 * PAD_U
+    long_u = 3 * LAMP_U + 2 * GAP_U + 2 * PAD_U
+    scale = height / short_u
+    width = round(long_u * scale)
 
-    housing = (0, 0, 0, 255) if mono else STRUCTURE + (235,)
-    width, height = 15.0 * u, 34.0 * u
-    x, y = (canvas - width) / 2, (canvas - height) / 2
+    canvas = (width * TRAY_SS, height * TRAY_SS)
+    img = Image.new("RGBA", canvas, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    u = canvas[0] / long_u
+
     # Stroked, not filled: the bar shows through, so the lit lamp is the only
     # solid mass on screen and the eye goes straight to it.
+    stroke = max(1, round(2.0 * u))
+    housing = (0, 0, 0, 255) if mono else STRUCTURE + (235,)
     draw.rounded_rectangle(
-        [x, y, x + width, y + height],
-        radius=6.0 * u,
+        [stroke / 2, stroke / 2, canvas[0] - stroke / 2, canvas[1] - stroke / 2],
+        radius=(short_u / 2 - 0.5) * u,
         outline=housing,
-        width=max(1, round(2.0 * u)),
+        width=stroke,
     )
 
-    # Three lamps as large as a 34-unit housing can hold: 2 units of padding,
-    # then lamps of 9.3 separated by 1.05. Any larger and they touch, which at
-    # menu-bar size smears into a single vertical blob.
-    lamp = 9.3 * u
     for index, (name, colour) in enumerate(
         (("red", RED), ("yellow", AMBER), ("green", GREEN))
     ):
-        cy = y + (6.65 + index * 10.35) * u
-        cx = canvas / 2
+        cx = (PAD_U + LAMP_U / 2 + index * (LAMP_U + GAP_U)) * u
+        cy = canvas[1] / 2
         if mono:
             fill = (0, 0, 0, 255) if name == lit else (0, 0, 0, 90)
         else:
             fill = colour + (255,) if name == lit else STRUCTURE + (78,)
-        draw.ellipse(
-            [cx - lamp / 2, cy - lamp / 2, cx + lamp / 2, cy + lamp / 2], fill=fill
-        )
+        r = LAMP_U * u / 2
+        draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=fill)
 
-    return img.resize((size, size), Image.LANCZOS)
+    return img.resize((width, height), Image.LANCZOS)
 
 
 def write_tray_icons() -> None:
@@ -94,13 +106,13 @@ def write_tray_icons() -> None:
         ("status_green", "green"),
         ("status_unknown", None),
     ):
-        tray_icon(36, lit).save(TRAY / f"{name}.png")
+        tray_icon(lit).save(TRAY / f"{name}.png")
 
     # Monochrome fallback, used only if a colour icon fails to decode. As a
     # template image macOS tints it, so it must be black-on-alpha.
-    tray_icon(54, None, mono=True).save(TRAY / "statusbar_template_3x.png")
-    tray_icon(18, None, mono=True).save(TRAY / "statusTemplate.png")
-    tray_icon(36, None, mono=True).save(TRAY / "statusTemplate@2x.png")
+    tray_icon(None, mono=True, height=54).save(TRAY / "statusbar_template_3x.png")
+    tray_icon(None, mono=True, height=18).save(TRAY / "statusTemplate.png")
+    tray_icon(None, mono=True, height=36).save(TRAY / "statusTemplate@2x.png")
 
 
 # --------------------------------------------------------------------------
