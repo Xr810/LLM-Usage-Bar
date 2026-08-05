@@ -118,24 +118,34 @@ export function ProviderUsagePage({
             }),
             projection.subscriptionProviders.length,
           )}
+          {/* Both figures cover every Provider over the selected time range,
+              which the labels alone cannot say without crowding the row — the
+              tooltips carry it. */}
           <dl className="flex items-baseline gap-5 text-xs text-muted-foreground">
-            <div className="flex items-baseline gap-1.5">
+            <div
+              className="flex items-baseline gap-1.5"
+              title={t("usageDashboard.selectedRangeTokensHint", {
+                value: projection.overallTotalTokens.toLocaleString(),
+                defaultValue: `${projection.overallTotalTokens.toLocaleString()} tokens across every Provider in the selected time range`,
+              })}
+            >
               <dt>
                 {t("usageDashboard.selectedRangeTokens", {
-                  defaultValue: "Selected range",
+                  defaultValue: "Tokens",
                 })}
               </dt>
-              <dd
-                className="font-semibold text-foreground metric"
-                title={projection.overallTotalTokens.toLocaleString()}
-              >
+              <dd className="font-semibold text-foreground metric">
                 {formatTokensCompact(projection.overallTotalTokens)}
               </dd>
             </div>
-            <div className="flex items-baseline gap-1.5">
-              <dt>
-                {t("usageDashboard.records", { defaultValue: "Records" })}
-              </dt>
+            <div
+              className="flex items-baseline gap-1.5"
+              title={t("usageDashboard.recordsHint", {
+                defaultValue:
+                  "Recorded calls across every Provider in the selected time range",
+              })}
+            >
+              <dt>{t("usageDashboard.records", { defaultValue: "Calls" })}</dt>
               <dd className="font-semibold text-foreground metric">
                 {projection.overallRequestCount.toLocaleString()}
               </dd>

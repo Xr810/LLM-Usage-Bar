@@ -169,12 +169,16 @@ export function SubscriptionProviderCard({
   const tokenItems = compact
     ? [
         {
-          label: t("usageDashboard.totalTokens", { defaultValue: "Total" }),
+          // Named rather than "Total": on a compact card it stands beside the
+          // call count, where a bare "Total" reads as totalling those.
+          label: t("usageDashboard.totalTokensNamed", {
+            defaultValue: "Tokens",
+          }),
           value: totalTokens,
           text: formatTokensCompact(totalTokens),
         },
         {
-          label: t("usageDashboard.records", { defaultValue: "Records" }),
+          label: t("usageDashboard.records", { defaultValue: "Calls" }),
           value: usage.eventCount,
           text: usage.eventCount.toLocaleString(
             i18n.resolvedLanguage ?? i18n.language,
@@ -312,7 +316,9 @@ export function SubscriptionProviderCard({
         </div>
       ) : null}
 
-      <div className="mt-auto px-5 pt-4">
+      {/* pb-5 matches the card's horizontal padding. A compact card ends here,
+          so without it the block sits on the bottom border. */}
+      <div className="mt-auto px-5 pb-5 pt-4">
         <dl
           className={cn(
             "grid gap-2 rounded-lg bg-muted/25 px-3 py-2.5 dark:bg-muted/15",
@@ -342,7 +348,7 @@ export function SubscriptionProviderCard({
         </p>
       ) : null}
       {!compact ? (
-        <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-border/60 px-5 py-3">
+        <div className="flex flex-wrap items-center gap-2 border-t border-border/60 px-5 py-3">
           {canRefreshQuota ? (
             <Button
               size="sm"
