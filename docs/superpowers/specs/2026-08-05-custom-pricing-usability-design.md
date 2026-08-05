@@ -1,6 +1,6 @@
 # Custom per-Provider pricing: partial prices and model discovery
 
-Status: agreed, not yet implemented.
+Status: implemented — backend in `317911b33`, form in `08dcb9dea`.
 
 Two changes to the custom price editor on a metered Provider card
 (`ProviderModelPricingSection`). Both come from the same complaint: the form
