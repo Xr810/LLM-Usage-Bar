@@ -1,6 +1,8 @@
 use crate::database::{lock_conn, Database, UsageSyncCursor};
 use crate::error::AppError;
-use crate::services::usage_stats::{find_model_pricing_row, find_provider_model_pricing_row};
+use crate::services::usage_stats::{
+    find_model_pricing_row, find_provider_model_pricing_row, ProviderModelPricingRow,
+};
 use crate::usage::domain::{BillingKind, CostSource, PricingOrigin, TokenSource, UsageEvent};
 use crate::usage::metering::calculator::{CostBreakdown, CostCalculator, ModelPricing};
 use crate::usage::metering::cost_parser::UpstreamCost;
@@ -354,6 +356,7 @@ fn load_and_validate_provider(
 /// Decide what one event cost, in this order:
 ///
 /// 1. A metered account's own price for the model, when the user has set one.
+///    Blank components inherit the corresponding official catalogue rate.
 ///    The user's real purchase price outranks whatever the upstream reported,
 ///    because a relay's self-reported cost is its list price, not the rate the
 ///    user actually pays.
@@ -378,14 +381,27 @@ fn decide_cost(
         .unwrap_or(&input.model);
     let is_metered = provider.billing_kind == BillingKind::Metered;
 
-    let user_pricing = if is_metered {
-        parse_pricing_row(find_provider_model_pricing_row(
-            transaction,
-            &input.provider_id,
-            pricing_model,
-        )?)?
+    let user_pricing_row = if is_metered {
+        find_provider_model_pricing_row(transaction, &input.provider_id, pricing_model)?
     } else {
         None
+    };
+
+    // A user row only wins once it resolves to four complete rates. If a blank
+    // component has no official rate to inherit, the row cannot price anything
+    // and the later steps still apply — discarding a real upstream charge
+    // because a custom price was half-filled would manufacture exactly the
+    // uncosted events v22 had to repair.
+    let user_pricing = match user_pricing_row {
+        Some(user_row) => {
+            let official_row = if user_row.has_blank_rate() {
+                find_model_pricing_row(transaction, pricing_model)?
+            } else {
+                None
+            };
+            merge_pricing_rows(user_row, official_row)?
+        }
+        None => None,
     };
 
     let (pricing, pricing_origin) = match user_pricing {
@@ -432,6 +448,35 @@ fn parse_pricing_row(
             .map_err(|error| AppError::Database(format!("invalid model pricing: {error}")))
     })
     .transpose()
+}
+
+fn merge_pricing_rows(
+    user: ProviderModelPricingRow,
+    official: Option<(String, String, String, String)>,
+) -> Result<Option<ModelPricing>, AppError> {
+    let (official_input, official_output, official_cache_read, official_cache_creation) = official
+        .map(|(input, output, cache_read, cache_creation)| {
+            (
+                Some(input),
+                Some(output),
+                Some(cache_read),
+                Some(cache_creation),
+            )
+        })
+        .unwrap_or((None, None, None, None));
+    let input = user.input.or(official_input);
+    let output = user.output.or(official_output);
+    let cache_read = user.cache_read.or(official_cache_read);
+    let cache_creation = user.cache_creation.or(official_cache_creation);
+    let (Some(input), Some(output), Some(cache_read), Some(cache_creation)) =
+        (input, output, cache_read, cache_creation)
+    else {
+        return Ok(None);
+    };
+
+    ModelPricing::from_strings(&input, &output, &cache_read, &cache_creation)
+        .map(Some)
+        .map_err(|error| AppError::Database(format!("invalid model pricing: {error}")))
 }
 
 fn find_stable_cross_source_match(
@@ -1074,6 +1119,99 @@ mod tests {
         assert_eq!(event.input_cost_usd.as_deref(), Some("0.5"));
         assert_eq!(event.output_cost_usd.as_deref(), Some("1"));
         assert_eq!(event.total_cost_usd.as_deref(), Some("1.5"));
+    }
+
+    #[test]
+    fn partial_provider_pricing_inherits_each_blank_rate_from_official_pricing() {
+        let db = Database::memory().unwrap();
+        save_provider(&db, "global-provider", None);
+        seed_pricing(&db, "priced-model");
+        db.upsert_provider_model_pricing(
+            "global-provider",
+            "priced-model",
+            "Priced Model",
+            &price("0.5", "", " ", "\t"),
+        )
+        .unwrap();
+
+        let mut value = input("partially-priced", TokenSource::Proxy);
+        value.usage.cache_read_tokens = 1_000_000;
+        value.usage.cache_creation_tokens = 1_000_000;
+        UsageIngestionService::new(&db).ingest(&value).unwrap();
+
+        let page = db
+            .list_usage_events("global-provider", 0, 200, 1, 10)
+            .unwrap();
+        let event = &page.items[0];
+        assert_eq!(event.cost_source, CostSource::Estimated);
+        assert_eq!(event.pricing_origin, Some(PricingOrigin::User));
+        assert_eq!(event.input_cost_usd.as_deref(), Some("0.5"));
+        assert_eq!(event.output_cost_usd.as_deref(), Some("2"));
+        assert_eq!(event.cache_read_cost_usd.as_deref(), Some("0.5"));
+        assert_eq!(event.cache_creation_cost_usd.as_deref(), Some("3"));
+        assert_eq!(event.total_cost_usd.as_deref(), Some("6.0"));
+    }
+
+    /// A half-filled custom price that cannot resolve is not a reason to throw
+    /// away what the relay actually billed. Falling through to the upstream
+    /// charge is the whole difference between an event with a cost and one of
+    /// the uncosted events v22 had to repair.
+    #[test]
+    fn partial_provider_pricing_falls_through_to_the_upstream_charge() {
+        let db = Database::memory().unwrap();
+        save_provider(&db, "global-provider", None);
+        db.upsert_provider_model_pricing(
+            "global-provider",
+            "unknown-model",
+            "Unknown Model",
+            &price("0.5", "", "", ""),
+        )
+        .unwrap();
+
+        let mut value = input("partially-unpriced", TokenSource::Proxy);
+        value.model = "unknown-model".to_string();
+        value.upstream_cost = Some(UpstreamCost {
+            input_cost: None,
+            output_cost: None,
+            cache_read_cost: None,
+            cache_creation_cost: None,
+            total_cost: Some(Decimal::from_str("99").unwrap()),
+        });
+        UsageIngestionService::new(&db).ingest(&value).unwrap();
+
+        let page = db
+            .list_usage_events("global-provider", 0, 200, 1, 10)
+            .unwrap();
+        let event = &page.items[0];
+        assert_eq!(event.cost_source, CostSource::Upstream);
+        assert_eq!(event.total_cost_usd.as_deref(), Some("99"));
+    }
+
+    /// With nothing left to fall through to, the event stays unpriced rather
+    /// than being valued at zero.
+    #[test]
+    fn partial_provider_pricing_without_official_or_upstream_is_unavailable() {
+        let db = Database::memory().unwrap();
+        save_provider(&db, "global-provider", None);
+        db.upsert_provider_model_pricing(
+            "global-provider",
+            "unknown-model",
+            "Unknown Model",
+            &price("0.5", "", "", ""),
+        )
+        .unwrap();
+
+        let mut value = input("partially-unpriced", TokenSource::Proxy);
+        value.model = "unknown-model".to_string();
+        UsageIngestionService::new(&db).ingest(&value).unwrap();
+
+        let page = db
+            .list_usage_events("global-provider", 0, 200, 1, 10)
+            .unwrap();
+        let event = &page.items[0];
+        assert_eq!(event.cost_source, CostSource::Unavailable);
+        assert_eq!(event.pricing_origin, None);
+        assert_eq!(event.total_cost_usd, None);
     }
 
     #[test]

@@ -2880,6 +2880,100 @@ fn schema_migration_v21_to_v22_backfills_eligible_costs_and_restores_immutabilit
 }
 
 #[test]
+fn schema_migration_v22_to_v23_preserves_rates_and_makes_them_nullable() {
+    let db = Database::memory().expect("create current in-memory database");
+    let conn = db.conn.lock().expect("lock in-memory database");
+    conn.execute_batch(
+        "DROP TABLE provider_model_pricing;
+         CREATE TABLE provider_model_pricing (
+            provider_id TEXT NOT NULL,
+            model_id TEXT NOT NULL,
+            display_name TEXT NOT NULL DEFAULT '',
+            input_cost_per_million TEXT NOT NULL,
+            output_cost_per_million TEXT NOT NULL,
+            cache_read_cost_per_million TEXT NOT NULL DEFAULT '0',
+            cache_creation_cost_per_million TEXT NOT NULL DEFAULT '0',
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            PRIMARY KEY (provider_id, model_id),
+            FOREIGN KEY (provider_id) REFERENCES usage_providers(id) ON DELETE CASCADE
+         );
+         INSERT INTO provider_model_pricing (
+            provider_id, model_id, display_name,
+            input_cost_per_million, output_cost_per_million,
+            cache_read_cost_per_million, cache_creation_cost_per_million,
+            created_at, updated_at
+         ) VALUES (
+            'system-openai-api', 'preserved-model', 'Preserved Model',
+            '1.25', '10', '0.125', '2.5', 123, 456
+         );
+         PRAGMA user_version = 22;",
+    )
+    .expect("build v22 provider pricing fixture");
+
+    Database::apply_schema_migrations_on_conn(&conn).expect("migrate v22 to v23");
+
+    assert_eq!(Database::get_user_version(&conn).unwrap(), SCHEMA_VERSION);
+    let preserved: (
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        i64,
+        i64,
+    ) = conn
+        .query_row(
+            "SELECT provider_id, model_id, display_name,
+                    input_cost_per_million, output_cost_per_million,
+                    cache_read_cost_per_million, cache_creation_cost_per_million,
+                    created_at, updated_at
+             FROM provider_model_pricing WHERE model_id = 'preserved-model'",
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                    row.get(8)?,
+                ))
+            },
+        )
+        .expect("read migrated custom price");
+    assert_eq!(
+        preserved,
+        (
+            "system-openai-api".to_string(),
+            "preserved-model".to_string(),
+            "Preserved Model".to_string(),
+            "1.25".to_string(),
+            "10".to_string(),
+            "0.125".to_string(),
+            "2.5".to_string(),
+            123,
+            456,
+        )
+    );
+    for column in [
+        "input_cost_per_million",
+        "output_cost_per_million",
+        "cache_read_cost_per_million",
+        "cache_creation_cost_per_million",
+    ] {
+        let info = get_column_info(&conn, "provider_model_pricing", column);
+        assert_eq!(info.notnull, 0, "{column} should be nullable");
+        assert_eq!(info.default, None, "{column} should not default to zero");
+    }
+}
+
+#[test]
 fn schema_migration_rejects_future_version() {
     let conn = Connection::open_in_memory().expect("open memory db");
     Database::create_tables_on_conn(&conn).expect("create tables");

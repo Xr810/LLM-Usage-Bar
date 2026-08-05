@@ -46,10 +46,12 @@ pub enum CostSource {
 
 /// Which price catalogue produced an estimated cost.
 ///
-/// `User` means the account's own `provider_model_pricing` row — what the user
-/// actually pays. `Official` means the built-in `model_pricing` reference,
-/// which is also what subscription equivalents are always valued at. Upstream
-/// and unavailable costs have no pricing origin.
+/// `User` means a Provider-specific `provider_model_pricing` row selected the
+/// estimate. Individual blank rates may still be inherited from the official
+/// catalogue; keeping the origin as `User` makes the custom configuration that
+/// governed the estimate auditable. `Official` means no Provider-specific row
+/// participated and the built-in `model_pricing` reference supplied the whole
+/// estimate. Upstream and unavailable costs have no pricing origin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PricingOrigin {
@@ -83,10 +85,10 @@ pub struct ProviderModelPricingView {
     pub provider_id: String,
     pub model_id: String,
     pub display_name: String,
-    pub input_cost_per_million: String,
-    pub output_cost_per_million: String,
-    pub cache_read_cost_per_million: String,
-    pub cache_creation_cost_per_million: String,
+    pub input_cost_per_million: Option<String>,
+    pub output_cost_per_million: Option<String>,
+    pub cache_read_cost_per_million: Option<String>,
+    pub cache_creation_cost_per_million: Option<String>,
     pub updated_at: i64,
 }
 

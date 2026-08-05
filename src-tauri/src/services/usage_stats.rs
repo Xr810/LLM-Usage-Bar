@@ -2041,6 +2041,23 @@ fn query_model_pricing_prefix(
     .map_err(|e| AppError::Database(format!("查询模型前缀定价失败: {e}")))
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ProviderModelPricingRow {
+    pub input: Option<String>,
+    pub output: Option<String>,
+    pub cache_read: Option<String>,
+    pub cache_creation: Option<String>,
+}
+
+impl ProviderModelPricingRow {
+    pub(crate) fn has_blank_rate(&self) -> bool {
+        self.input.is_none()
+            || self.output.is_none()
+            || self.cache_read.is_none()
+            || self.cache_creation.is_none()
+    }
+}
+
 /// 查询某个 Provider 账号对某个模型的自定义单价（用户实付价）。
 ///
 /// 与 `find_model_pricing_row` 共用同一套模型 ID 归一化和前缀匹配规则，因此
@@ -2050,7 +2067,7 @@ pub(crate) fn find_provider_model_pricing_row(
     conn: &Connection,
     provider_id: &str,
     model_id: &str,
-) -> Result<Option<(String, String, String, String)>, AppError> {
+) -> Result<Option<ProviderModelPricingRow>, AppError> {
     let candidates = model_pricing_candidates(model_id);
     if candidates.is_empty() {
         return Ok(None);
@@ -2077,7 +2094,7 @@ fn query_provider_model_pricing_exact(
     conn: &Connection,
     provider_id: &str,
     model_id: &str,
-) -> Result<Option<(String, String, String, String)>, AppError> {
+) -> Result<Option<ProviderModelPricingRow>, AppError> {
     conn.query_row(
         "SELECT input_cost_per_million, output_cost_per_million,
                 cache_read_cost_per_million, cache_creation_cost_per_million
@@ -2085,12 +2102,12 @@ fn query_provider_model_pricing_exact(
          WHERE provider_id = ?1 AND model_id = ?2",
         [provider_id, model_id],
         |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-            ))
+            Ok(ProviderModelPricingRow {
+                input: row.get(0)?,
+                output: row.get(1)?,
+                cache_read: row.get(2)?,
+                cache_creation: row.get(3)?,
+            })
         },
     )
     .optional()
@@ -2101,7 +2118,7 @@ fn query_provider_model_pricing_prefix(
     conn: &Connection,
     provider_id: &str,
     model_id: &str,
-) -> Result<Option<(String, String, String, String)>, AppError> {
+) -> Result<Option<ProviderModelPricingRow>, AppError> {
     let pattern = format!("{model_id}-%");
     conn.query_row(
         "SELECT input_cost_per_million, output_cost_per_million,
@@ -2112,12 +2129,12 @@ fn query_provider_model_pricing_prefix(
          LIMIT 1",
         [provider_id, &pattern],
         |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-            ))
+            Ok(ProviderModelPricingRow {
+                input: row.get(0)?,
+                output: row.get(1)?,
+                cache_read: row.get(2)?,
+                cache_creation: row.get(3)?,
+            })
         },
     )
     .optional()

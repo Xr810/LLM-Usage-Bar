@@ -197,6 +197,15 @@ pub async fn test_system_provider_connection(
 }
 
 #[tauri::command]
+pub async fn list_system_provider_models(
+    state: State<'_, AppState>,
+    provider_id: String,
+    expected_version: u64,
+) -> Result<Vec<String>, AppError> {
+    list_system_provider_models_test_hook(&state, &provider_id, expected_version).await
+}
+
+#[tauri::command]
 pub async fn reveal_agent_provider_local_key(
     state: State<'_, AppState>,
     binding_id: String,
@@ -723,6 +732,17 @@ pub async fn test_system_provider_connection_test_hook(
         .await?;
     crate::usage_events::notify_dashboard_invalidated();
     Ok(result)
+}
+
+pub async fn list_system_provider_models_test_hook(
+    state: &AppState,
+    provider_id: &str,
+    expected_version: u64,
+) -> Result<Vec<String>, AppError> {
+    state
+        .system_provider_connection_service
+        .list_models(provider_id, expected_version)
+        .await
 }
 
 pub async fn reveal_agent_provider_local_key_test_hook(

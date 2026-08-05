@@ -20,10 +20,15 @@ fn now_timestamp() -> Result<i64, AppError> {
         .map_err(|error| AppError::Database(format!("system clock before unix epoch: {error}")))
 }
 
-/// Normalize one price component. Zero is a legitimate price (a free cache
-/// tier), so only negatives and unparseable text are rejected.
-fn canonicalize_price(label: &str, raw: &str) -> Result<String, AppError> {
-    let value = Decimal::from_str(raw.trim()).map_err(|_| {
+/// Normalize one price component. A blank means "inherit the official rate".
+/// Zero remains a legitimate explicit price (a free tier), so present values
+/// reject only negatives and unparseable text.
+fn canonicalize_price(label: &str, raw: &str) -> Result<Option<String>, AppError> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    let value = Decimal::from_str(raw).map_err(|_| {
         AppError::localized(
             "usage.invalidPrice",
             format!("{label} 价格无效: {raw}"),
@@ -37,7 +42,7 @@ fn canonicalize_price(label: &str, raw: &str) -> Result<String, AppError> {
             format!("{label} price must be non-negative: {raw}"),
         ));
     }
-    Ok(value.normalize().to_string())
+    Ok(Some(value.normalize().to_string()))
 }
 
 fn row_to_view(row: &Row<'_>) -> rusqlite::Result<ProviderModelPricingView> {
@@ -231,9 +236,9 @@ mod tests {
 
         let a = db.list_provider_model_pricing("relay-a").unwrap();
         assert_eq!(a.len(), 1);
-        assert_eq!(a[0].input_cost_per_million, "1.5");
+        assert_eq!(a[0].input_cost_per_million.as_deref(), Some("1.5"));
         let b = db.list_provider_model_pricing("relay-b").unwrap();
-        assert_eq!(b[0].input_cost_per_million, "2.1");
+        assert_eq!(b[0].input_cost_per_million.as_deref(), Some("2.1"));
     }
 
     #[test]
@@ -257,8 +262,11 @@ mod tests {
 
         let rows = db.list_provider_model_pricing("relay-a").unwrap();
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].input_cost_per_million, "1.5");
-        assert_eq!(rows[0].cache_creation_cost_per_million, "1.875");
+        assert_eq!(rows[0].input_cost_per_million.as_deref(), Some("1.5"));
+        assert_eq!(
+            rows[0].cache_creation_cost_per_million.as_deref(),
+            Some("1.875")
+        );
     }
 
     #[test]
@@ -315,6 +323,21 @@ mod tests {
                 .is_ok(),
             "zero is a real price"
         );
+    }
+
+    #[test]
+    fn blank_prices_are_stored_as_null_for_official_fallback() {
+        let db = db_with(&[("relay-a", BillingKind::Metered)]);
+
+        db.upsert_provider_model_pricing("relay-a", "model-a", "", &price("1.500", " ", "\t", ""))
+            .unwrap();
+
+        let rows = db.list_provider_model_pricing("relay-a").unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].input_cost_per_million.as_deref(), Some("1.5"));
+        assert_eq!(rows[0].output_cost_per_million, None);
+        assert_eq!(rows[0].cache_read_cost_per_million, None);
+        assert_eq!(rows[0].cache_creation_cost_per_million, None);
     }
 
     #[test]

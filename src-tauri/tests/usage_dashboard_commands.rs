@@ -277,6 +277,7 @@ fn all_public_usage_commands_are_registered_once() {
         "set_usage_provider_enabled",
         "get_usage_dashboard",
         "get_usage_events",
+        "list_system_provider_models",
         "refresh_provider_quota",
         "sync_provider_session_usage",
     ] {

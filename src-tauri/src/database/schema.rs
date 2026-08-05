@@ -377,6 +377,14 @@ impl Database {
                         crate::usage::cost_backfill_migration::migrate_v21_to_v22(conn)?;
                         Self::set_user_version(conn, 22)?;
                     }
+                    22 => {
+                        log::info!(
+                            "迁移数据库从 v22 到 v23（Provider 自定义价格支持逐项回落官方价）"
+                        );
+                        crate::usage::cost_backfill_migration::validate_schema_v22_complete(conn)?;
+                        Self::migrate_v22_to_v23(conn)?;
+                        Self::set_user_version(conn, 23)?;
+                    }
                     _ => {
                         return Err(AppError::Database(format!(
                             "未知的数据库版本 {version}，无法迁移到 {SCHEMA_VERSION}"
@@ -404,8 +412,11 @@ impl Database {
             if version >= 21 {
                 Self::validate_schema_v21_complete(conn)?;
             }
-            if version == 22 {
+            if version >= 22 {
                 crate::usage::cost_backfill_migration::validate_schema_v22_complete(conn)?;
+            }
+            if version == 23 {
+                Self::validate_schema_v23_complete(conn)?;
             }
             Ok(())
         })();
@@ -1393,6 +1404,63 @@ impl Database {
                     "incomplete schema v21: retired table still exists: {table}"
                 )));
             }
+        }
+        Ok(())
+    }
+
+    /// SQLite cannot remove a NOT NULL constraint in place. Rebuild only the
+    /// custom-pricing table; the outer `schema_migration` savepoint makes the
+    /// copy/drop/rename sequence atomic.
+    fn migrate_v22_to_v23(conn: &Connection) -> Result<(), AppError> {
+        conn.execute_batch(
+            "CREATE TABLE provider_model_pricing_v23 (
+                provider_id TEXT NOT NULL,
+                model_id TEXT NOT NULL,
+                display_name TEXT NOT NULL DEFAULT '',
+                input_cost_per_million TEXT,
+                output_cost_per_million TEXT,
+                cache_read_cost_per_million TEXT,
+                cache_creation_cost_per_million TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY (provider_id, model_id),
+                FOREIGN KEY (provider_id) REFERENCES usage_providers(id) ON DELETE CASCADE
+             );
+             INSERT INTO provider_model_pricing_v23 (
+                provider_id, model_id, display_name,
+                input_cost_per_million, output_cost_per_million,
+                cache_read_cost_per_million, cache_creation_cost_per_million,
+                created_at, updated_at
+             )
+             SELECT provider_id, model_id, display_name,
+                    input_cost_per_million, output_cost_per_million,
+                    cache_read_cost_per_million, cache_creation_cost_per_million,
+                    created_at, updated_at
+             FROM provider_model_pricing;
+             DROP TABLE provider_model_pricing;
+             ALTER TABLE provider_model_pricing_v23 RENAME TO provider_model_pricing;",
+        )
+        .map_err(|e| {
+            AppError::Database(format!("v22 -> v23 重建 provider_model_pricing 失败: {e}"))
+        })?;
+        Ok(())
+    }
+
+    fn validate_schema_v23_complete(conn: &Connection) -> Result<(), AppError> {
+        let nullable_rate_columns: i64 = conn.query_row(
+            "SELECT COUNT(*)
+             FROM pragma_table_info('provider_model_pricing')
+             WHERE name IN (
+                'input_cost_per_million', 'output_cost_per_million',
+                'cache_read_cost_per_million', 'cache_creation_cost_per_million'
+             ) AND \"notnull\" = 0",
+            [],
+            |row| row.get(0),
+        )?;
+        if nullable_rate_columns != 4 {
+            return Err(AppError::Database(
+                "incomplete schema v23: provider_model_pricing rates must be nullable".to_string(),
+            ));
         }
         Ok(())
     }

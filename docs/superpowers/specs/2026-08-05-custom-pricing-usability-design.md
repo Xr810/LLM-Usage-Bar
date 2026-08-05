@@ -38,11 +38,20 @@ output through at list price; that should be expressible by filling one box.
 - The form shows the official rate as each field's placeholder, so a blank box
   states what it will use.
 
-**When neither exists.** If a field is blank and the official catalogue has no
-entry for that model, that rate has no value and the event is priced
-`unavailable`. It must not fall back to zero — an event that reads as free is
-worse than one that reads as unpriced, because only the second is visible as a
-gap.
+**When neither exists.** A user row only wins once it resolves to four complete
+rates. If a blank component has no official rate to inherit, the row cannot price
+anything and the *remaining* steps still apply: an upstream-reported charge is
+real billing evidence and is used, and only with nothing left to fall through to
+does the event become `unavailable`.
+
+It must never fall back to zero. An event that reads as free is worse than one
+that reads as unpriced, because only the second is visible as a gap — that is the
+whole reason v22 exists.
+
+(The first draft of this section said a blank field with no official entry meant
+`unavailable`, full stop. That was written thinking only about the official
+fallback chain and would have discarded real upstream charges for any relay model
+outside the catalogue — manufacturing exactly the uncosted events v22 repaired.)
 
 ## 2. The model ID comes from the endpoint, not from the user's memory
 

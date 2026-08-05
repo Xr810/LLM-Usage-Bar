@@ -207,11 +207,11 @@ pub fn prepare_database_runtime_test_hook(
 #[cfg(debug_assertions)]
 #[doc(hidden)]
 pub fn create_schema_v13_fixture_test_hook(path: &Path) -> Result<(), AppError> {
-    // Reviewed for schema v22: the v21 -> v22 step only rewrites cost columns on
-    // existing usage_events rows and drops/recreates the immutability trigger. It
-    // adds and removes no tables and changes no table shape, so the v13 baseline
-    // below is unaffected.
-    if database::SCHEMA_VERSION != 22
+    // Reviewed for schema v23: the v21 -> v22 step only rewrites cost columns on
+    // existing usage_events rows and drops/recreates the immutability trigger;
+    // v22 -> v23 only rebuilds provider_model_pricing with nullable rates. Neither
+    // changes the v13 baseline below.
+    if database::SCHEMA_VERSION != 23
         || product_identity::DATABASE_IDENTITY_SOURCE_SCHEMA_VERSION != 13
     {
         return Err(AppError::Database(
@@ -1249,6 +1249,7 @@ pub fn run() {
             commands::replace_system_provider_api_key,
             commands::clear_system_provider_api_key,
             commands::test_system_provider_connection,
+            commands::list_system_provider_models,
             commands::reveal_agent_provider_local_key,
             commands::rotate_agent_provider_local_key,
             commands::get_unassigned_usage_diagnostics,
