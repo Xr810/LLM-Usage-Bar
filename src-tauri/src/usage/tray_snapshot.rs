@@ -106,6 +106,9 @@ pub struct TrayProviderUsageView {
 pub struct TrayProviderRecentUsageView {
     pub start_at: i64,
     pub end_at: i64,
+    /// Tokens for the local day, from the same aggregate as `today_cost_usd` so
+    /// the two "today" figures can never describe different windows.
+    pub today_tokens: u64,
     pub total_tokens: u64,
     pub today_cost_usd: Option<String>,
     pub total_cost_usd: Option<String>,
@@ -319,6 +322,7 @@ impl TrayUsageProjector {
                 let recent_usage = TrayProviderRecentUsageView {
                     start_at: windows.rolling_30_start_at,
                     end_at: windows.end_at,
+                    today_tokens: checked_total_tokens(&today)?,
                     total_tokens: checked_total_tokens(&rolling_30_day)?,
                     today_cost_usd: display_cost(&today),
                     total_cost_usd: display_cost(&rolling_30_day),
@@ -1539,6 +1543,7 @@ mod tests {
                     recent_usage: TrayProviderRecentUsageView {
                         start_at: 1,
                         end_at: 200,
+                        today_tokens: 7,
                         total_tokens: 42,
                         today_cost_usd: Some("5".to_string()),
                         total_cost_usd: Some("80".to_string()),
@@ -1590,6 +1595,7 @@ mod tests {
         let recent_usage_json = json!({
             "startAt": 1,
             "endAt": 200,
+            "todayTokens": 7,
             "totalTokens": 42,
             "todayCostUsd": "5",
             "totalCostUsd": "80",

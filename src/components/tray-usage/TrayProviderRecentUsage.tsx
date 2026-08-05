@@ -32,9 +32,6 @@ export function TrayProviderRecentUsage({
     [locale, usage.trendBuckets],
   );
   const hasUsage = data.some((bucket) => bucket.totalTokens > 0);
-  const recentTokens =
-    [...data].reverse().find((bucket) => bucket.totalTokens > 0)?.totalTokens ??
-    0;
   const cost = usage.costQuality === "unavailable" ? null : usage.totalCostUsd;
   const todayCost =
     usage.costQuality === "unavailable" ? null : usage.todayCostUsd;
@@ -104,7 +101,18 @@ export function TrayProviderRecentUsage({
       </CollapsibleTrigger>
 
       <CollapsibleContent className="space-y-2 pt-2">
+        {/* Today then 30 days, matching the spend row above. "Recent" used to
+            mean the last day with any activity, so two cards side by side could
+            show different days under the same label with nothing saying so. */}
         <dl className="grid grid-cols-2 gap-x-5 gap-y-2 px-0.5">
+          <div className="min-w-0">
+            <dt className="truncate text-[10px] font-medium text-muted-foreground">
+              {t("trayUsage.todayTokens", { defaultValue: "Today's tokens" })}
+            </dt>
+            <dd className="mt-0.5 truncate text-[15px] font-semibold tabular-nums">
+              {formatTokenCount(usage.todayTokens, locale)}
+            </dd>
+          </div>
           <div className="min-w-0">
             <dt className="truncate text-[10px] font-medium text-muted-foreground">
               {t("trayUsage.rolling30DayTokens", {
@@ -113,16 +121,6 @@ export function TrayProviderRecentUsage({
             </dt>
             <dd className="mt-0.5 truncate text-[15px] font-semibold tabular-nums">
               {formatTokenCount(usage.totalTokens, locale)}
-            </dd>
-          </div>
-          <div className="min-w-0">
-            <dt className="truncate text-[10px] font-medium text-muted-foreground">
-              {t("trayUsage.recentTokens", {
-                defaultValue: "Recent token usage",
-              })}
-            </dt>
-            <dd className="mt-0.5 truncate text-[15px] font-semibold tabular-nums">
-              {formatTokenCount(recentTokens, locale)}
             </dd>
           </div>
         </dl>

@@ -49,6 +49,7 @@ export const trayUsageSnapshotFixture: TrayUsageSnapshot = {
           recentUsage: {
             startAt: 1,
             endAt: 1_000,
+            todayTokens: 0,
             totalTokens: 87_000_000,
             todayCostUsd: "1.25",
             totalCostUsd: "48.5",
@@ -106,6 +107,7 @@ export const trayUsageSnapshotFixture: TrayUsageSnapshot = {
           recentUsage: {
             startAt: 1,
             endAt: 1_000,
+            todayTokens: 0,
             totalTokens: 12_345,
             todayCostUsd: "2.5",
             totalCostUsd: "40.25",

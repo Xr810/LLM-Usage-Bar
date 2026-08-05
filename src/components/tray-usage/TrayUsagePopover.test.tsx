@@ -49,6 +49,7 @@ const snapshot: TrayUsageSnapshot = {
           recentUsage: {
             startAt: 1_781_611_200,
             endAt: 1_784_203_200,
+            todayTokens: 4_200_000,
             totalTokens: 87_000_000,
             todayCostUsd: "1.25",
             totalCostUsd: "48.5",
@@ -98,6 +99,7 @@ const snapshot: TrayUsageSnapshot = {
           recentUsage: {
             startAt: 1_781_611_200,
             endAt: 1_784_203_200,
+            todayTokens: 0,
             totalTokens: 2_300_000,
             todayCostUsd: "8",
             totalCostUsd: "20",
@@ -210,6 +212,14 @@ describe("TrayUsagePopover Provider-only UI", () => {
         name: "Token usage for the last 30 days",
       }),
     ).toHaveLength(1);
+    // Today first, then 30 days — the same order as the spend row, and a fixed
+    // window rather than "whichever day this account was last used".
+    const labels = screen.getAllByRole("term").map((node) => node.textContent);
+    expect(labels.slice(0, 2)).toEqual([
+      "Today's tokens",
+      "Last 30 days tokens",
+    ]);
+    expect(screen.getByText("4.2M")).toBeInTheDocument();
   });
 
   it("uses the weekly label and expands GPT manual reset credits", async () => {

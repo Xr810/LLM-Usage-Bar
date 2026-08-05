@@ -288,6 +288,7 @@ mod tests {
             recent_usage: TrayProviderRecentUsageView {
                 start_at: 0,
                 end_at: 0,
+                today_tokens: 0,
                 total_tokens: 0,
                 today_cost_usd: None,
                 total_cost_usd: None,
