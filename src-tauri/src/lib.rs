@@ -1275,6 +1275,7 @@ pub fn run() {
             commands::hide_tray_popover,
             commands::open_main_from_tray,
             commands::take_pending_main_window_destination,
+            commands::acknowledge_main_window_ready,
             commands::quit_from_tray,
             commands::get_claude_code_config_path,
             commands::get_config_dir,

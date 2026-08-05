@@ -6,10 +6,12 @@ import { useMainWindowNavigation } from "./useMainWindowNavigation";
 
 const navigationMocks = vi.hoisted(() => ({
   takePending: vi.fn<() => Promise<MainWindowDestination | null>>(),
+  acknowledge: vi.fn<() => Promise<void>>(),
 }));
 
 vi.mock("@/lib/api/trayUsage", () => ({
   takePendingMainWindowDestination: navigationMocks.takePending,
+  acknowledgeMainWindowReady: navigationMocks.acknowledge,
 }));
 
 function deferred<T>() {
@@ -23,6 +25,7 @@ function deferred<T>() {
 describe("useMainWindowNavigation", () => {
   beforeEach(() => {
     navigationMocks.takePending.mockReset().mockResolvedValue(null);
+    navigationMocks.acknowledge.mockReset().mockResolvedValue(undefined);
   });
 
   it("treats legacy Agent-targeted usage destinations as Provider dashboard navigation", async () => {
@@ -72,6 +75,55 @@ describe("useMainWindowNavigation", () => {
       expect(openProviderSettings).toHaveBeenLastCalledWith(null),
     );
     expect(openProviderSettings).toHaveBeenCalledTimes(2);
+  });
+
+  it("releases the waiting reveal only once the destination is painted", async () => {
+    // The window is held back until this lands, so it has to survive the
+    // re-render that removing the destination triggers.
+    const openProviderSettings = vi.fn();
+    navigationMocks.takePending.mockResolvedValueOnce({
+      kind: "providerBudget",
+      providerId: "system-openai-api",
+    });
+
+    renderHook(() =>
+      useMainWindowNavigation({ openUsage: vi.fn(), openProviderSettings }),
+    );
+
+    await waitFor(() =>
+      expect(navigationMocks.acknowledge).toHaveBeenCalledOnce(),
+    );
+    expect(openProviderSettings).toHaveBeenCalledWith("system-openai-api");
+    expect(openProviderSettings.mock.invocationCallOrder[0]).toBeLessThan(
+      navigationMocks.acknowledge.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("does not release the reveal while another destination is still queued", async () => {
+    const openProviderSettings = vi.fn();
+    navigationMocks.takePending
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ kind: "providerBudget", providerId: "a" })
+      .mockResolvedValueOnce({ kind: "providerBudget", providerId: "b" });
+
+    renderHook(() =>
+      useMainWindowNavigation({ openUsage: vi.fn(), openProviderSettings }),
+    );
+    await waitFor(() =>
+      expect(navigationMocks.takePending).toHaveBeenCalledTimes(1),
+    );
+
+    act(() => {
+      emitTauriEvent("main-window-navigate");
+      emitTauriEvent("main-window-navigate");
+    });
+
+    await waitFor(() =>
+      expect(openProviderSettings).toHaveBeenLastCalledWith("b"),
+    );
+    await waitFor(() =>
+      expect(navigationMocks.acknowledge).toHaveBeenCalledOnce(),
+    );
   });
 
   it("serializes overlapping destination drains", async () => {

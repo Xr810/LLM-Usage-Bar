@@ -31,6 +31,10 @@ export const openMainFromTray = (destination: MainWindowDestination) =>
 export const takePendingMainWindowDestination = () =>
   invoke<MainWindowDestination | null>("take_pending_main_window_destination");
 
+/** Releases the reveal that is waiting for this destination to be painted. */
+export const acknowledgeMainWindowReady = () =>
+  invoke<void>("acknowledge_main_window_ready");
+
 export const getApiBudgetConfig = () =>
   invoke<ApiBudgetConfig>("get_api_budget_config");
 
