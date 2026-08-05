@@ -188,7 +188,7 @@ export function ProviderUsagePage({
           granularity={projection.trendGranularity}
           buckets={projection.trendBuckets}
           totalTokens={projection.overallTotalTokens}
-          recordCount={projection.overallRequestCount}
+          totalCostUsd={projection.overallTotalCostUsd}
           rangeLabel={rangeLabel}
           rangeControls={rangeControls}
         />

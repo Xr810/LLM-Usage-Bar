@@ -10,6 +10,8 @@ import { useTranslation } from "react-i18next";
 import { Card } from "@/components/ui/card";
 import type { UsageTrendBucketView } from "@/types/usageDashboard";
 import { cn } from "@/lib/utils";
+import { formatUsd } from "../tray-usage/trayUsagePresentation";
+import { addDecimalStrings } from "./usageDashboardProjection";
 import { formatTokensCompact } from "./usagePresentation";
 
 export interface ProviderActivityDay {
@@ -17,6 +19,8 @@ export interface ProviderActivityDay {
   date: Date;
   eventCount: number;
   totalTokens: number;
+  /** Null when any bucket of the day was never priced. */
+  totalCostUsd: string | null;
   level: 0 | 1 | 2 | 3 | 4;
 }
 
@@ -63,17 +67,24 @@ export function buildProviderActivityDays(
 
   const aggregateByDay = new Map<
     string,
-    { eventCount: number; totalTokens: number }
+    { eventCount: number; totalTokens: number; costs: string[] | null }
   >();
   for (const bucket of buckets) {
     const key = localDateKey(new Date(bucket.startAt * 1_000));
     const current = aggregateByDay.get(key) ?? {
       eventCount: 0,
       totalTokens: 0,
+      costs: [] as string[] | null,
     };
     aggregateByDay.set(key, {
       eventCount: current.eventCount + bucket.eventCount,
       totalTokens: current.totalTokens + bucket.totalTokens,
+      // One unpriced bucket makes the whole day unpriced: a partial sum
+      // presented as the day's spend understates it silently.
+      costs:
+        current.costs == null || bucket.totalCostUsd == null
+          ? null
+          : [...current.costs, bucket.totalCostUsd],
     });
   }
 
@@ -92,12 +103,19 @@ export function buildProviderActivityDays(
     const aggregate = aggregateByDay.get(key) ?? {
       eventCount: 0,
       totalTokens: 0,
+      costs: [] as string[] | null,
     };
     days.push({
       key,
       date: cursor,
       eventCount: aggregate.eventCount,
       totalTokens: aggregate.totalTokens,
+      // A day with no buckets at all cost nothing — that is known, not
+      // missing, so it must not fall through to "unpriced".
+      totalCostUsd:
+        aggregate.costs == null
+          ? null
+          : (addDecimalStrings(aggregate.costs) ?? "0"),
       level: 0,
     });
   }
@@ -287,10 +305,11 @@ export function ProviderActivityHeatmap({
                   </strong>
                   <span className="mt-0.5 block text-muted-foreground metric">
                     {formatTokensCompact(detailDay.totalTokens)} Token ·{" "}
-                    {t("usageDashboard.recordCount", {
-                      count: detailDay.eventCount,
-                      defaultValue: "{{count}} records",
-                    })}
+                    {detailDay.totalCostUsd == null
+                      ? t("usageDashboard.costUnavailableSummary", {
+                          defaultValue: "Cost unavailable",
+                        })
+                      : formatUsd(detailDay.totalCostUsd, locale)}
                   </span>
                 </>
               ) : (
@@ -332,13 +351,13 @@ export function ProviderActivityHeatmap({
                     year: "numeric",
                     month: "short",
                     day: "numeric",
-                  })}: ${day.totalTokens.toLocaleString(locale)} Token · ${t(
-                    "usageDashboard.recordCount",
-                    {
-                      count: day.eventCount,
-                      defaultValue: "{{count}} records",
-                    },
-                  )}`;
+                  })}: ${day.totalTokens.toLocaleString(locale)} Token · ${
+                    day.totalCostUsd == null
+                      ? t("usageDashboard.costUnavailableSummary", {
+                          defaultValue: "Cost unavailable",
+                        })
+                      : formatUsd(day.totalCostUsd, locale)
+                  }`;
                   return (
                     <button
                       key={day.key}

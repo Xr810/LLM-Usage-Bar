@@ -14,13 +14,15 @@ import type {
   UsageTrendBucketView,
   UsageTrendGranularity,
 } from "@/types/usageDashboard";
+import { formatUsd } from "../tray-usage/trayUsagePresentation";
 import { formatTokensCompact } from "./usagePresentation";
 
 interface ProviderUsageTrendChartProps {
   granularity: UsageTrendGranularity;
   buckets: UsageTrendBucketView[];
   totalTokens: number;
-  recordCount: number;
+  /** Spend over the same range; subscription usage counts at list price. */
+  totalCostUsd: string | null;
   rangeLabel: string;
   rangeControls?: ReactNode;
 }
@@ -39,7 +41,8 @@ export function ProviderUsageTrendTooltip({
   active,
   payload,
 }: ProviderUsageTrendTooltipProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const locale = i18n.resolvedLanguage || i18n.language || "en";
   const point = payload?.[0]?.payload;
   if (!active || !point) return null;
 
@@ -50,10 +53,13 @@ export function ProviderUsageTrendTooltip({
       </p>
       <p className="mt-1 text-xs text-muted-foreground metric">
         {formatTokensCompact(point.totalTokens)} Token ·{" "}
-        {t("usageDashboard.recordCount", {
-          count: point.eventCount,
-          defaultValue: "{{count}} records",
-        })}
+        {/* A bucket whose events were never priced says so rather than
+            reading as a day that cost nothing. */}
+        {point.totalCostUsd == null
+          ? t("usageDashboard.costUnavailableSummary", {
+              defaultValue: "Cost unavailable",
+            })
+          : formatUsd(point.totalCostUsd, locale)}
       </p>
     </div>
   );
@@ -63,7 +69,7 @@ export function ProviderUsageTrendChart({
   granularity,
   buckets,
   totalTokens,
-  recordCount,
+  totalCostUsd,
   rangeLabel,
   rangeControls,
 }: ProviderUsageTrendChartProps) {
@@ -145,12 +151,9 @@ export function ProviderUsageTrendChart({
                 value: formatTokensCompact(peakTokens),
                 defaultValue: "Peak {{value}}",
               })}
-              {recordCount > 0
-                ? ` · ${t("usageDashboard.recordCount", {
-                    count: recordCount,
-                    defaultValue: "{{count}} records",
-                  })}`
-                : ""}
+              {totalCostUsd == null
+                ? ""
+                : ` · ${formatUsd(totalCostUsd, locale)}`}
             </p>
           </div>
         </div>

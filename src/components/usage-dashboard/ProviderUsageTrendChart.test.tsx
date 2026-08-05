@@ -10,6 +10,7 @@ function bucket(
   startAt: number,
   totalTokens: number,
   eventCount: number,
+  totalCostUsd: string | null = null,
 ): UsageTrendBucketView {
   return {
     startAt,
@@ -20,15 +21,15 @@ function bucket(
     cacheReadTokens: 0,
     cacheCreationTokens: 0,
     totalTokens,
-    totalCostUsd: null,
+    totalCostUsd,
     costSourceCounts: { upstream: 0, estimated: 0, unavailable: eventCount },
   };
 }
 
 describe("ProviderUsageTrendChart", () => {
-  it("uses compact token units in the tooltip", () => {
+  it("pairs compact token units with what the day cost", () => {
     const point = {
-      ...bucket(1_720_000_000, 368_144_526, 1_526),
+      ...bucket(1_720_000_000, 368_144_526, 1_526, "412.5"),
       label: "7/19",
       tooltipLabel: "July 19, 2026",
     };
@@ -37,12 +38,26 @@ describe("ProviderUsageTrendChart", () => {
 
     expect(screen.getByText("July 19, 2026")).toBeInTheDocument();
     expect(screen.getByText(/368\.1M Token/)).toHaveTextContent(
-      "368.1M Token · 1526 records",
+      "368.1M Token · $412.50",
     );
     expect(screen.queryByText(/368,144,526/)).toBeNull();
+    expect(screen.queryByText(/1526/)).toBeNull();
   });
 
-  it("presents one total-token trend with peak and record semantics", () => {
+  it("says an unpriced bucket is unpriced rather than showing it as free", () => {
+    const point = {
+      ...bucket(1_720_000_000, 1_000, 2),
+      label: "7/19",
+      tooltipLabel: "July 19, 2026",
+    };
+
+    render(<ProviderUsageTrendTooltip active payload={[{ payload: point }]} />);
+
+    expect(screen.getByText(/1K Token/)).toHaveTextContent("Cost unavailable");
+    expect(screen.queryByText(/\$0/)).toBeNull();
+  });
+
+  it("presents one total-token trend with peak and spend semantics", () => {
     render(
       <ProviderUsageTrendChart
         granularity="day"
@@ -51,7 +66,7 @@ describe("ProviderUsageTrendChart", () => {
           bucket(1_720_086_400, 5_000, 3),
         ]}
         totalTokens={6_500}
-        recordCount={5}
+        totalCostUsd="18.25"
         rangeLabel="30 days"
       />,
     );
@@ -63,7 +78,7 @@ describe("ProviderUsageTrendChart", () => {
     expect(screen.getByTestId("usage-trend-range")).toHaveTextContent(
       "30 days",
     );
-    expect(screen.getByText(/Peak 5K/)).toHaveTextContent("5 records");
+    expect(screen.getByText(/Peak 5K/)).toHaveTextContent("$18.25");
     expect(
       screen.getByRole("img", { name: "Token usage by day" }),
     ).toBeInTheDocument();
@@ -76,7 +91,7 @@ describe("ProviderUsageTrendChart", () => {
         granularity="hour"
         buckets={[bucket(1_720_000_000, 0, 0)]}
         totalTokens={0}
-        recordCount={0}
+        totalCostUsd="0"
         rangeLabel="Today"
       />,
     );
