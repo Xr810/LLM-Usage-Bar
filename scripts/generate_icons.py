@@ -13,7 +13,7 @@ thing in the menu bar are recognisably the same object.
 
 They differ in orientation because their frames do. A menu bar icon is capped
 at 18pt tall, so stacking the lamps makes each one 4.6pt; laid out along the
-free axis they are ~14pt. An app icon is square, where the upright signal head
+free axis they are ~11pt. An app icon is square, where the upright signal head
 is the shape that fills it.
 
 Android and iOS icons are left alone: this app builds for macOS only, and
@@ -49,12 +49,12 @@ GREEN = (48, 209, 88)
 # source aspect ratio (tray-icon, macos/mod.rs: `icon_height: f64 = 18.0`).
 # Stacked vertically, three lamps in 18pt are 4.6pt each — legible but timid.
 # Laid out horizontally the lamp diameter is set by the *height* instead, so
-# each one is ~14pt, three times the area, at the cost of a ~48pt-wide item.
+# each one is ~11pt, at the cost of a ~46pt-wide item.
 TRAY_SS = 8
 TRAY_HEIGHT = 36  # 18pt at 2x, the device resolution of the slot
-LAMP_U = 30.0
-GAP_U = 2.0
-PAD_U = 4.0
+LAMP_U = 21.0
+GAP_U = 5.5
+PAD_U = 6.5
 
 # The tray icon carries colour, so it is not a template image and macOS will
 # not invert it for the bar's appearance. Everything structural is therefore a
@@ -72,14 +72,15 @@ def tray_icon(lit: str | None = None, mono: bool = False, height: int = TRAY_HEI
     img = Image.new("RGBA", canvas, (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
     u = canvas[0] / long_u
-
-    # Stroked, not filled: the bar shows through, so the lit lamp is the only
-    # solid mass on screen and the eye goes straight to it.
     stroke = max(1, round(2.0 * u))
-    housing = (0, 0, 0, 255) if mono else STRUCTURE + (235,)
+
+    # A rounded rectangle with visible margin, not a shrink-wrapped capsule:
+    # lamps crammed against the housing read as a pill of dots rather than as
+    # a signal head.
+    housing = (0, 0, 0, 235) if mono else STRUCTURE + (215,)
     draw.rounded_rectangle(
         [stroke / 2, stroke / 2, canvas[0] - stroke / 2, canvas[1] - stroke / 2],
-        radius=(short_u / 2 - 0.5) * u,
+        radius=10.5 * u,
         outline=housing,
         width=stroke,
     )
@@ -89,12 +90,25 @@ def tray_icon(lit: str | None = None, mono: bool = False, height: int = TRAY_HEI
     ):
         cx = (PAD_U + LAMP_U / 2 + index * (LAMP_U + GAP_U)) * u
         cy = canvas[1] / 2
-        if mono:
-            fill = (0, 0, 0, 255) if name == lit else (0, 0, 0, 90)
-        else:
-            fill = colour + (255,) if name == lit else STRUCTURE + (78,)
         r = LAMP_U * u / 2
-        draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=fill)
+        if name == lit:
+            # The one solid mass in the icon, so the eye goes straight to it.
+            fill = (0, 0, 0, 255) if mono else colour + (255,)
+            draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=fill)
+        else:
+            # An unlit lamp is an outline. Filled, two of them dominate the
+            # icon with information that is not there.
+            outline = (0, 0, 0, 110) if mono else STRUCTURE + (150,)
+            draw.ellipse(
+                [
+                    cx - r + stroke / 2,
+                    cy - r + stroke / 2,
+                    cx + r - stroke / 2,
+                    cy + r - stroke / 2,
+                ],
+                outline=outline,
+                width=stroke,
+            )
 
     return img.resize((width, height), Image.LANCZOS)
 
