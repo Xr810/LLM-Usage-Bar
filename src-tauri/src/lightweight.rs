@@ -43,7 +43,7 @@ pub fn exit_lightweight_mode(app: &tauri::AppHandle) -> Result<(), String> {
         }
         #[cfg(target_os = "macos")]
         {
-            crate::macos_fix::renegotiate_webview_viewport(window.clone());
+            crate::macos_fix::repair_undersized_window(window.clone());
         }
         #[cfg(target_os = "windows")]
         {
@@ -87,7 +87,7 @@ pub fn exit_lightweight_mode(app: &tauri::AppHandle) -> Result<(), String> {
     }
     #[cfg(target_os = "macos")]
     {
-        crate::macos_fix::renegotiate_webview_viewport(window.clone());
+        crate::macos_fix::repair_undersized_window(window.clone());
     }
 
     #[cfg(target_os = "windows")]
