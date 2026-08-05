@@ -13,6 +13,7 @@ export type CostSource = "upstream" | "estimated" | "unavailable";
 export type PricingOrigin = "user" | "official";
 
 /** The four per-million-token rates that make up one model's price. */
+/** What the user typed. A blank rate means "use the official one". */
 export interface ModelPriceInput {
   inputCostPerMillion: string;
   outputCostPerMillion: string;
@@ -20,11 +21,18 @@ export interface ModelPriceInput {
   cacheCreationCostPerMillion: string;
 }
 
-/** One Provider account's own price for one model, in USD per million tokens. */
-export interface ProviderModelPricingView extends ModelPriceInput {
+/**
+ * One Provider account's own price for one model, in USD per million tokens.
+ * A null rate was left blank and resolves to the official catalogue value.
+ */
+export interface ProviderModelPricingView {
   providerId: string;
   modelId: string;
   displayName: string;
+  inputCostPerMillion: string | null;
+  outputCostPerMillion: string | null;
+  cacheReadCostPerMillion: string | null;
+  cacheCreationCostPerMillion: string | null;
   updatedAt: number;
 }
 export type BindingCredentialStatus =

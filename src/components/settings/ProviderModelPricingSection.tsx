@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChevronDown, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -11,15 +11,19 @@ import {
 } from "@/components/ui/collapsible";
 import {
   useDeleteProviderModelPricing,
+  useModelPricing,
   useProviderModelPricing,
   useUpdateProviderModelPricing,
 } from "@/lib/query/usage";
 import { isNonNegativeDecimalString } from "@/types/usage";
+import { useSystemProviderModels } from "@/lib/query/usageDashboard";
 import type { ProviderModelPricingView } from "@/types/usageDashboard";
 
 interface ProviderModelPricingSectionProps {
   providerId: string;
   providerName: string;
+  /** Credential version the model lookup authenticates with. */
+  credentialVersion: number;
 }
 
 interface DraftPrice {
@@ -34,8 +38,8 @@ const EMPTY_DRAFT: DraftPrice = {
   modelId: "",
   inputCostPerMillion: "",
   outputCostPerMillion: "",
-  cacheReadCostPerMillion: "0",
-  cacheCreationCostPerMillion: "0",
+  cacheReadCostPerMillion: "",
+  cacheCreationCostPerMillion: "",
 };
 
 const PRICE_FIELDS = [
@@ -66,12 +70,14 @@ const PRICE_FIELDS = [
 }>;
 
 function draftFrom(row: ProviderModelPricingView): DraftPrice {
+  // A null rate was left blank and inherits the official one; the box shows it
+  // blank so re-saving does not silently pin today's official rate.
   return {
     modelId: row.modelId,
-    inputCostPerMillion: row.inputCostPerMillion,
-    outputCostPerMillion: row.outputCostPerMillion,
-    cacheReadCostPerMillion: row.cacheReadCostPerMillion,
-    cacheCreationCostPerMillion: row.cacheCreationCostPerMillion,
+    inputCostPerMillion: row.inputCostPerMillion ?? "",
+    outputCostPerMillion: row.outputCostPerMillion ?? "",
+    cacheReadCostPerMillion: row.cacheReadCostPerMillion ?? "",
+    cacheCreationCostPerMillion: row.cacheCreationCostPerMillion ?? "",
   };
 }
 
@@ -86,6 +92,7 @@ function draftFrom(row: ProviderModelPricingView): DraftPrice {
 export function ProviderModelPricingSection({
   providerId,
   providerName,
+  credentialVersion,
 }: ProviderModelPricingSectionProps) {
   const { t } = useTranslation();
   const pricingQuery = useProviderModelPricing(providerId);
@@ -95,6 +102,38 @@ export function ProviderModelPricingSection({
   const [draft, setDraft] = useState<DraftPrice>(EMPTY_DRAFT);
   const [editingModelId, setEditingModelId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Only while the editor is open: it costs an upstream request, and a Provider
+  // without a usable key just fails, which is "no suggestions" rather than an
+  // error worth putting on screen.
+  const providerModels = useSystemProviderModels(
+    providerId,
+    credentialVersion,
+    open,
+  );
+  const officialPricing = useModelPricing();
+  // Matched on the exact ID the user typed. A family ID such as
+  // `claude-sonnet-5` is resolved by prefix at pricing time, not here, so the
+  // placeholder stays honest about what it actually found.
+  const officialForDraft = useMemo(() => {
+    const id = draft.modelId.trim().toLowerCase();
+    if (!id) return null;
+    return (
+      (officialPricing.data ?? []).find(
+        (entry) => entry.modelId.toLowerCase() === id,
+      ) ?? null
+    );
+  }, [draft.modelId, officialPricing.data]);
+  const officialRate = (key: keyof Omit<DraftPrice, "modelId">) =>
+    officialForDraft?.[key] ?? null;
+  // A stored rate is nullable now, and a null one is inherited rather than
+  // absent — rendering it as an empty amount would read as free.
+  const rateText = (value: string | null) =>
+    value === null
+      ? t("usageDashboard.customPricingInheritedRate", {
+          defaultValue: "official",
+        })
+      : `$${value}`;
 
   const rows = pricingQuery.data ?? [];
   const pending = updatePricing.isPending || deletePricing.isPending;
@@ -121,7 +160,12 @@ export function ProviderModelPricingSection({
       draft.cacheReadCostPerMillion,
       draft.cacheCreationCostPerMillion,
     ];
-    if (!amounts.every(isNonNegativeDecimalString)) {
+    // A blank box inherits the official rate, so only a filled one is checked.
+    if (
+      !amounts.every(
+        (value) => !value.trim() || isNonNegativeDecimalString(value),
+      )
+    ) {
       setError(
         t("usage.invalidPrice", {
           defaultValue: "Prices must be non-negative numbers",
@@ -225,11 +269,11 @@ export function ProviderModelPricingSection({
                   </div>
                   <div className="truncate text-xs text-muted-foreground">
                     {t("usageDashboard.customPricingRowSummary", {
-                      input: row.inputCostPerMillion,
-                      output: row.outputCostPerMillion,
-                      cacheRead: row.cacheReadCostPerMillion,
-                      cacheWrite: row.cacheCreationCostPerMillion,
-                      defaultValue: `in $${row.inputCostPerMillion} · out $${row.outputCostPerMillion} · cache read $${row.cacheReadCostPerMillion} · cache write $${row.cacheCreationCostPerMillion} per 1M`,
+                      input: rateText(row.inputCostPerMillion),
+                      output: rateText(row.outputCostPerMillion),
+                      cacheRead: rateText(row.cacheReadCostPerMillion),
+                      cacheWrite: rateText(row.cacheCreationCostPerMillion),
+                      defaultValue: `in ${rateText(row.inputCostPerMillion)} · out ${rateText(row.outputCostPerMillion)} · cache read ${rateText(row.cacheReadCostPerMillion)} · cache write ${rateText(row.cacheCreationCostPerMillion)} per 1M`,
                     })}
                   </div>
                 </div>
@@ -284,6 +328,7 @@ export function ProviderModelPricingSection({
             </Label>
             <Input
               id={fieldId("model")}
+              list={`${fieldId("model")}-options`}
               value={draft.modelId}
               disabled={pending || editingModelId !== null}
               placeholder="claude-sonnet-5"
@@ -294,6 +339,14 @@ export function ProviderModelPricingSection({
                 }))
               }
             />
+            {/* A datalist suggests without constraining. The field has to stay
+                free text: relays serve models their own /v1/models omits, and a
+                family ID is deliberately not a literal model ID. */}
+            <datalist id={`${fieldId("model")}-options`}>
+              {(providerModels.data ?? []).map((model) => (
+                <option key={model} value={model} />
+              ))}
+            </datalist>
             <p className="text-xs text-muted-foreground">
               {t("usageDashboard.customPricingModelIdHint", {
                 defaultValue:
@@ -315,6 +368,15 @@ export function ProviderModelPricingSection({
                   step="0.0001"
                   value={draft[key]}
                   disabled={pending}
+                  // The placeholder is the rate this box will actually use if
+                  // left empty, so a blank field states its own meaning rather
+                  // than looking unset.
+                  placeholder={
+                    officialRate(key) ??
+                    t("usageDashboard.customPricingNoOfficialRate", {
+                      defaultValue: "No official rate",
+                    })
+                  }
                   onChange={(event) =>
                     setDraft((current) => ({
                       ...current,

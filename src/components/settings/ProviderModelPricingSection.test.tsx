@@ -9,6 +9,15 @@ const state = vi.hoisted(() => ({
   isLoading: false,
   update: { mutateAsync: vi.fn(), isPending: false },
   remove: { mutateAsync: vi.fn(), isPending: false },
+  officialPricing: [] as Array<{
+    modelId: string;
+    displayName: string;
+    inputCostPerMillion: string;
+    outputCostPerMillion: string;
+    cacheReadCostPerMillion: string;
+    cacheCreationCostPerMillion: string;
+  }>,
+  providerModels: [] as string[],
 }));
 
 vi.mock("@/lib/query/usage", () => ({
@@ -18,6 +27,11 @@ vi.mock("@/lib/query/usage", () => ({
   }),
   useUpdateProviderModelPricing: () => state.update,
   useDeleteProviderModelPricing: () => state.remove,
+  useModelPricing: () => ({ data: state.officialPricing }),
+}));
+
+vi.mock("@/lib/query/usageDashboard", () => ({
+  useSystemProviderModels: () => ({ data: state.providerModels }),
 }));
 
 function row(
@@ -38,7 +52,11 @@ function row(
 
 function renderSection() {
   return render(
-    <ProviderModelPricingSection providerId="relay-a" providerName="Relay A" />,
+    <ProviderModelPricingSection
+      providerId="relay-a"
+      providerName="Relay A"
+      credentialVersion={0}
+    />,
   );
 }
 
@@ -51,6 +69,8 @@ async function expand(user: ReturnType<typeof userEvent.setup>) {
 describe("ProviderModelPricingSection", () => {
   beforeEach(() => {
     state.rows = [];
+    state.officialPricing = [];
+    state.providerModels = [];
     state.isLoading = false;
     state.update.mutateAsync.mockReset().mockResolvedValue(undefined);
     state.update.isPending = false;
@@ -118,6 +138,80 @@ describe("ProviderModelPricingSection", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent(/non-negative/i);
     expect(state.update.mutateAsync).not.toHaveBeenCalled();
+  });
+
+  it("saves a rate left blank so it can inherit the official one", async () => {
+    // A blank used to be rejected, and the cache pair was pre-filled `0` —
+    // which for an OpenAI-style Provider claims cached tokens are free.
+    const user = userEvent.setup();
+    renderSection();
+    await expand(user);
+
+    await user.type(screen.getByLabelText(/model id/i), "relay-only-model");
+    await user.type(screen.getByLabelText(/^input/i), "1.5");
+    await user.click(screen.getByRole("button", { name: /add price/i }));
+
+    await waitFor(() => expect(state.update.mutateAsync).toHaveBeenCalled());
+    expect(state.update.mutateAsync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        price: {
+          inputCostPerMillion: "1.5",
+          outputCostPerMillion: "",
+          cacheReadCostPerMillion: "",
+          cacheCreationCostPerMillion: "",
+        },
+      }),
+    );
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("shows the official rate a blank box will inherit", async () => {
+    const user = userEvent.setup();
+    state.officialPricing = [
+      {
+        modelId: "claude-sonnet-5",
+        displayName: "claude-sonnet-5",
+        inputCostPerMillion: "3",
+        outputCostPerMillion: "15",
+        cacheReadCostPerMillion: "0.3",
+        cacheCreationCostPerMillion: "3.75",
+      },
+    ];
+    renderSection();
+    await expand(user);
+
+    await user.type(screen.getByLabelText(/model id/i), "claude-sonnet-5");
+
+    // The placeholder states what an empty box actually uses, rather than
+    // leaving it looking unset.
+    expect(screen.getByLabelText(/^input/i)).toHaveAttribute(
+      "placeholder",
+      "3",
+    );
+    expect(screen.getByLabelText(/cache read/i)).toHaveAttribute(
+      "placeholder",
+      "0.3",
+    );
+  });
+
+  it("offers the Provider's own models without constraining the field", async () => {
+    const user = userEvent.setup();
+    state.providerModels = ["gpt-5.6-sol", "gpt-5.6-terra"];
+    renderSection();
+    await expand(user);
+
+    const field = screen.getByLabelText(/model id/i);
+    const listId = field.getAttribute("list");
+    expect(listId).toBeTruthy();
+    const options = Array.from(
+      document.getElementById(listId!)?.querySelectorAll("option") ?? [],
+    ).map((option) => option.getAttribute("value"));
+    expect(options).toEqual(["gpt-5.6-sol", "gpt-5.6-terra"]);
+
+    // Still free text: relays serve models their /v1/models omits, and a family
+    // ID is deliberately not a literal model ID.
+    await user.type(field, "some-unlisted-model");
+    expect(field).toHaveValue("some-unlisted-model");
   });
 
   it("loads an existing row into the form and keeps its model id fixed", async () => {

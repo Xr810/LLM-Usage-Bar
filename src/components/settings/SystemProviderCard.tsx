@@ -202,6 +202,7 @@ export function SystemProviderCard({
         {provider.billingKind === "metered" ? (
           <ProviderModelPricingSection
             providerId={provider.id}
+            credentialVersion={provider.upstreamCredentialVersion}
             providerName={provider.name}
           />
         ) : null}

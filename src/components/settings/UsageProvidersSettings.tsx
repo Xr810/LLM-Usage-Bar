@@ -356,6 +356,7 @@ export function UsageProvidersSettings({
                     <ProviderModelPricingSection
                       providerId={provider.id}
                       providerName={provider.name}
+                      credentialVersion={provider.upstreamCredentialVersion}
                     />
                   </div>
                 ) : null}

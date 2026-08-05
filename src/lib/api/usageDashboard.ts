@@ -101,6 +101,13 @@ export const usageDashboardApi = {
       providerId,
       expectedVersion,
     }),
+  /** Model IDs the Provider's own /v1/models reports. IDs only — the backend
+      strips the rest of the body before it leaves the connection client. */
+  listSystemProviderModels: (
+    providerId: string,
+    expectedVersion: number,
+  ): Promise<string[]> =>
+    invoke("list_system_provider_models", { providerId, expectedVersion }),
   testSystemProviderConnection: (
     providerId: string,
     expectedVersion: number,
