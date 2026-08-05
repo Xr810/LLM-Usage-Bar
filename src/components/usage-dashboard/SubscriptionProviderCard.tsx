@@ -289,7 +289,10 @@ export function SubscriptionProviderCard({
         ) : null}
       </div>
 
-      <div className={cn("grid gap-2.5 px-5 pt-4 sm:grid-cols-2")}>
+      {/* Stacked, not side by side: two meters sharing a card's width left
+          each bar barely wider than its own label, and the reset caption
+          under one column read as belonging to both. */}
+      <div className="grid gap-2.5 px-5 pt-4">
         {quotaWindow(
           t("usageDashboard.fiveHourWindow", { defaultValue: "5-hour window" }),
           quota?.fiveHourUtilizationPercent,

@@ -47,8 +47,8 @@ export function QuotaMeter({
           : "rounded-lg border border-border/50 bg-muted/25 px-3 dark:bg-muted/15",
       )}
     >
-      {/* Every meter keeps the same three rows — label, track, caption — so two
-          of them side by side line up even when one window has no data. The
+      {/* Every meter keeps the same three rows — label, track, caption — so a
+          window with no data still reads as a window rather than as a gap. The
           figure slot is `shrink-0`, so an unavailable window leaves it empty and
           explains itself in the caption instead; putting the sentence there
           starved the label down to "5 …". */}
