@@ -107,7 +107,8 @@ export interface ClaudeCliAuthStatus {
   authenticated: boolean;
   authMethod: "api_key" | "claude_account" | "other" | null;
   subscriptionType: "pro" | "max" | null;
-  quotaAvailability: "unavailable";
+  /** When the newest local quota sample was taken; quota never comes from the CLI. */
+  lastQuotaSampleAt: number | null;
   errorCode: string | null;
 }
 

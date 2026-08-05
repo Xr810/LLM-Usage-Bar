@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => ({
     authenticated: true,
     authMethod: "api_key" as "api_key" | "claude_account" | "other" | null,
     subscriptionType: null as "pro" | "max" | null,
-    quotaAvailability: "unavailable" as const,
+    lastQuotaSampleAt: null as number | null,
     errorCode: null,
   },
 }));
@@ -34,16 +34,27 @@ describe("ClaudeCliAuthSection", () => {
     mocks.statusData.subscriptionType = null;
   });
 
-  it("shows detected API key CLI state, unavailable quota, reconnect, and logout", async () => {
+  it("shows detected API key CLI state, reconnect, and logout", async () => {
     render(<ClaudeCliAuthSection />);
     expect(
       screen.getByText("Claude CLI detected · API Key"),
     ).toBeInTheDocument();
-    expect(screen.getByText("Quota unavailable")).toBeInTheDocument();
+    expect(screen.getByText("No quota sample yet")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Reconnect Claude" }));
     fireEvent.click(screen.getByRole("button", { name: "Disconnect Claude" }));
     await waitFor(() => expect(mocks.login).toHaveBeenCalledOnce());
     expect(mocks.logout).toHaveBeenCalledOnce();
+  });
+
+  it("reports when the local quota sample was taken", () => {
+    // The line used to read "Quota unavailable" unconditionally, contradicting
+    // the dashboard that was showing that very quota.
+    mocks.statusData.lastQuotaSampleAt = Math.floor(Date.now() / 1000) - 180;
+    render(<ClaudeCliAuthSection />);
+
+    expect(screen.getByText(/Quota updated/)).toBeInTheDocument();
+    expect(screen.queryByText("No quota sample yet")).toBeNull();
+    mocks.statusData.lastQuotaSampleAt = null;
   });
 
   it("prefers the official subscription plan when one is available", () => {

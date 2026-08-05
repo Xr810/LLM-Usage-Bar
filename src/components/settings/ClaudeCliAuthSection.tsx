@@ -3,13 +3,14 @@ import { useTranslation } from "react-i18next";
 import { LogIn, LogOut, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { relativeTimeAgo } from "@/lib/relativeTime";
 import {
   useClaudeCliAuthActions,
   useClaudeCliAuthStatus,
 } from "@/lib/query/usageDashboard";
 
 export function ClaudeCliAuthSection() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const status = useClaudeCliAuthStatus();
   const actions = useClaudeCliAuthActions();
   const [failed, setFailed] = useState(false);
@@ -69,10 +70,32 @@ export function ClaudeCliAuthSection() {
                         defaultValue: "Claude CLI detected · Not signed in",
                       })}
             </div>
-            <div className="truncate text-xs text-muted-foreground">
-              {t("usageDashboard.claudeQuotaUnavailable", {
-                defaultValue: "Quota unavailable",
-              })}
+            {/* Quota does not come from the CLI, so this line used to read
+                "Quota unavailable" unconditionally — under a card whose
+                dashboard was showing that quota. It reports the local sample
+                instead. */}
+            <div
+              className="truncate text-xs text-muted-foreground"
+              title={
+                data?.lastQuotaSampleAt
+                  ? new Date(data.lastQuotaSampleAt * 1000).toLocaleString()
+                  : undefined
+              }
+            >
+              {data?.lastQuotaSampleAt
+                ? t("usageDashboard.claudeQuotaSampledAt", {
+                    value: relativeTimeAgo(
+                      data.lastQuotaSampleAt * 1000,
+                      i18n.resolvedLanguage ?? i18n.language,
+                    ),
+                    defaultValue: `Quota updated ${relativeTimeAgo(
+                      data.lastQuotaSampleAt * 1000,
+                      i18n.resolvedLanguage ?? i18n.language,
+                    )}`,
+                  })
+                : t("usageDashboard.claudeQuotaNoSample", {
+                    defaultValue: "No quota sample yet",
+                  })}
             </div>
           </div>
         </div>
