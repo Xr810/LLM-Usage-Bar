@@ -625,6 +625,8 @@ mod tests {
                     max_value_usd: None,
                 },
             ],
+            plan_type: None,
+            plan_renews_at: None,
             manual_reset_credits: None,
             extra_usage: None,
             error: None,
@@ -716,7 +718,9 @@ mod tests {
 
     #[test]
     fn normalizes_documented_windows_and_optional_manual_resets() {
-        let quota = successful_quota("claude");
+        let mut quota = successful_quota("codex");
+        quota.plan_type = Some("pro".to_string());
+        quota.plan_renews_at = Some(1_789_876_543);
 
         let normalized = normalize_subscription_quota(&quota, Some(3)).unwrap();
         assert_eq!(
@@ -728,6 +732,11 @@ mod tests {
             Some("42")
         );
         assert_eq!(normalized.manual_resets_remaining, Some(3));
+        assert_eq!(normalized.raw_payload["planType"], json!("pro"));
+        assert_eq!(
+            normalized.raw_payload["planRenewsAt"],
+            json!(1_789_876_543_i64)
+        );
     }
 
     #[test]

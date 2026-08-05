@@ -142,25 +142,40 @@ mod tests {
         );
     }
 
+    /// Lamp centres measured from the generated assets. `scripts/generate_icons.py`
+    /// authors the mark on a 36px-tall grid, which is an 18pt menu bar slot at 2x.
+    const LAMP_CENTRES_X: [u32; 3] = [17, 45, 73];
+    const LAMP_CENTRE_Y: u32 = 17;
+
     #[test]
-    fn bundled_status_icons_are_circular_single_lamp_signals() {
-        for (status, expected_rgb) in [
-            (UsageStatus::Green, [0x34, 0xC7, 0x59]),
-            (UsageStatus::Yellow, [0xFF, 0xCC, 0x00]),
-            (UsageStatus::Red, [0xFF, 0x3B, 0x30]),
-            (UsageStatus::Unknown, [0x8E, 0x8E, 0x93]),
+    fn bundled_status_icons_light_the_lamp_that_names_the_status() {
+        for (status, lamp, expected_rgb) in [
+            (UsageStatus::Red, Some(0), [0xFF, 0x45, 0x3A]),
+            (UsageStatus::Yellow, Some(1), [0xFF, 0xB0, 0x20]),
+            (UsageStatus::Green, Some(2), [0x30, 0xD1, 0x58]),
+            (UsageStatus::Unknown, None, [0, 0, 0]),
         ] {
             let image = decode_status_icon(status).unwrap();
-            assert_eq!((image.width(), image.height()), (18, 18), "{status:?}");
-            assert_eq!(image.rgba().len(), 18 * 18 * 4, "{status:?}");
+            assert_eq!((image.width(), image.height()), (92, 36), "{status:?}");
+            assert_eq!(image.rgba().len(), 92 * 36 * 4, "{status:?}");
 
-            for (x, y) in [(0, 0), (17, 0), (0, 17), (17, 17)] {
+            // The housing is a rounded rectangle, so the corners are clear.
+            for (x, y) in [(0, 0), (91, 0), (0, 35), (91, 35)] {
                 assert_eq!(pixel(&image, x, y)[3], 0, "{status:?} corner {x},{y}");
             }
-            for (x, y) in [(8, 8), (9, 8), (8, 9), (9, 9)] {
-                let rgba = pixel(&image, x, y);
-                assert_eq!(&rgba[..3], &expected_rgb, "{status:?} center {x},{y}");
-                assert_eq!(rgba[3], 255, "{status:?} center {x},{y}");
+
+            // Status is carried by *which* lamp is lit as well as by its hue, so
+            // it survives a colour-blind reader and a greyscale screenshot. That
+            // only holds if each status lights its own position and no other.
+            for (index, centre_x) in LAMP_CENTRES_X.iter().enumerate() {
+                let rgba = pixel(&image, *centre_x as usize, LAMP_CENTRE_Y as usize);
+                if lamp == Some(index) {
+                    assert_eq!(&rgba[..3], &expected_rgb, "{status:?} lamp {index}");
+                    assert_eq!(rgba[3], 255, "{status:?} lamp {index} must be opaque");
+                } else {
+                    // An unlit lamp is an outline, so its centre is empty.
+                    assert_eq!(rgba[3], 0, "{status:?} lamp {index} must stay unlit");
+                }
             }
 
             assert!(
@@ -170,40 +185,26 @@ mod tests {
                     .any(|rgba| (1..=254).contains(&rgba[3])),
                 "{status:?} must retain an antialiased edge"
             );
-
-            for (x, y) in [(9, 1), (16, 9), (9, 16), (1, 9)] {
-                let housing = pixel(&image, x, y);
-                assert!(
-                    housing[3] >= 200,
-                    "{status:?} circular housing must be visible at {x},{y}"
-                );
-                assert!(
-                    housing[..3].iter().all(|channel| *channel <= 80),
-                    "{status:?} circular housing must remain dark at {x},{y}"
-                );
-            }
-            for (x, y) in [(2, 2), (15, 2), (2, 15), (15, 15)] {
-                assert!(
-                    pixel(&image, x, y)[3] <= 32,
-                    "{status:?} circular housing must clear diagonal {x},{y}"
-                );
-            }
-
-            let nonzero = (0..18)
-                .flat_map(|y| (0..18).map(move |x| (x, y)))
-                .filter(|&(x, y)| pixel(&image, x, y)[3] != 0)
-                .collect::<Vec<_>>();
-            let min_x = nonzero.iter().map(|(x, _)| *x).min().unwrap();
-            let max_x = nonzero.iter().map(|(x, _)| *x).max().unwrap();
-            let min_y = nonzero.iter().map(|(_, y)| *y).min().unwrap();
-            let max_y = nonzero.iter().map(|(_, y)| *y).max().unwrap();
-            let width = max_x - min_x + 1;
-            let height = max_y - min_y + 1;
-            assert_eq!(width, height, "{status:?} circular bounds");
-            assert!((17..=18).contains(&width), "{status:?} diameter {width}");
-            assert_eq!(min_x + max_x, 17, "{status:?} horizontal center");
-            assert_eq!(min_y + max_y, 17, "{status:?} vertical center");
         }
+    }
+
+    #[test]
+    fn bundled_status_icons_keep_structure_readable_on_either_menu_bar() {
+        // The icon carries colour, so it cannot be a template image and macOS
+        // will not invert it for the bar's appearance. Structure therefore has
+        // to be a grey far enough from both bar colours to survive either one.
+        let image = decode_status_icon(UsageStatus::Unknown).unwrap();
+        let housing = pixel(&image, 46, 1);
+        assert!(
+            housing[3] >= 200,
+            "housing must be opaque at the top edge, got alpha {}",
+            housing[3]
+        );
+        let luminance = i32::from(housing[0]);
+        assert!(
+            (90..=160).contains(&luminance),
+            "housing grey {luminance} must clear both a light and a dark bar"
+        );
     }
 
     #[test]

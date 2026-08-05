@@ -173,6 +173,8 @@ export interface QuotaStatusView {
   snapshotId: string;
   fetchedAt: number;
   sourceObservedAt?: number | null;
+  planType?: string | null;
+  planRenewsAt?: number | null;
   fiveHourUtilizationPercent: string | null;
   fiveHourResetsAt: string | null;
   sevenDayUtilizationPercent: string | null;

@@ -71,6 +71,26 @@ export function SubscriptionProviderCard({
     usage.cacheCreationTokens;
   const { icon, iconColor } = dashboardProviderIcon(usage.provider);
 
+  // The plan comes from the credential, so it is only known for Providers whose
+  // token carries one. "pro" is displayed as "Pro"; anything longer is left as
+  // the upstream wrote it beyond the first letter, since "Team" and
+  // "Enterprise" are the upstream's own casing and not ours to restyle.
+  const planLabel = quota?.planType
+    ? quota.planType.charAt(0).toUpperCase() + quota.planType.slice(1)
+    : null;
+  const planRenewsLabel =
+    planLabel && quota?.planRenewsAt
+      ? t("usageDashboard.planRenewsAt", {
+          value: new Date(quota.planRenewsAt * 1000).toLocaleDateString(
+            i18n.resolvedLanguage ?? i18n.language,
+            { year: "numeric", month: "long", day: "numeric" },
+          ),
+          defaultValue: `Renews ${new Date(
+            quota.planRenewsAt * 1000,
+          ).toLocaleDateString()}`,
+        })
+      : null;
+
   const quotaWindow = (
     label: string,
     value: string | null | undefined,
@@ -230,10 +250,19 @@ export function SubscriptionProviderCard({
               <h3 className="truncate text-[15px] font-semibold tracking-tight">
                 {usage.provider.name}
               </h3>
-              <Badge variant="secondary" className="shrink-0">
-                {t("usageDashboard.subscription", {
-                  defaultValue: "Subscription",
-                })}
+              {/* The plan replaces the generic "Subscription" rather than
+                  joining it: this Provider is named "ChatGPT Plus/Pro"
+                  precisely because the app could not tell which, so once it
+                  can, that is the badge worth the space. */}
+              <Badge
+                variant="secondary"
+                className="shrink-0"
+                title={planRenewsLabel ?? undefined}
+              >
+                {planLabel ??
+                  t("usageDashboard.subscription", {
+                    defaultValue: "Subscription",
+                  })}
               </Badge>
             </div>
             {/* Where the numbers came from used to lead this line. It named

@@ -28,6 +28,7 @@
     "trendEmpty": "此范围内暂无用量记录。",
     "customRange": "自定义范围",
     "subscription": "订阅",
+    "planRenewsAt": "{{value}} 续费",
     "metered": "按量",
     "sourceSession": "会话日志",
     "sourceProxy": "本地代理",

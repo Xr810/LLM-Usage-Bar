@@ -28,6 +28,7 @@
     "trendEmpty": "No usage recorded in this range.",
     "customRange": "Custom range",
     "subscription": "Subscription",
+    "planRenewsAt": "Renews {{value}}",
     "metered": "Metered",
     "sourceSession": "Session log",
     "sourceProxy": "Proxy",

@@ -24,6 +24,7 @@ const requiredKeys = [
   "usageDashboard.oneYear",
   "usageDashboard.configureProviders",
   "usageDashboard.subscriptionAccounts",
+  "usageDashboard.planRenewsAt",
   "usageDashboard.remainingQuota",
   "usageDashboard.accountCount",
   "usageDashboard.selectedRangeTokens",

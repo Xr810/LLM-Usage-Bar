@@ -28,6 +28,7 @@
     "trendEmpty": "この期間の利用記録はありません。",
     "customRange": "カスタム範囲",
     "subscription": "サブスクリプション",
+    "planRenewsAt": "{{value}} に更新",
     "metered": "従量制",
     "sourceSession": "セッションログ",
     "sourceProxy": "ローカルプロキシ",

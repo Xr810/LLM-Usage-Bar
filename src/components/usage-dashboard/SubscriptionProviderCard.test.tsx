@@ -248,6 +248,40 @@ describe("SubscriptionProviderCard localized reset countdown", () => {
     );
   });
 
+  it("names the plan once the credential reports one, and keeps the renewal date on hover", () => {
+    const usage = subscriptionUsage();
+    usage.quota!.planType = "pro";
+    // 2026-09-14T00:00:00Z
+    usage.quota!.planRenewsAt = 1_789_344_000;
+
+    render(
+      <SubscriptionProviderCard
+        usage={usage}
+        onRefreshQuota={vi.fn()}
+        onSyncSessions={vi.fn()}
+      />,
+    );
+
+    // The Provider is called "ChatGPT Plus/Pro" precisely because the app
+    // could not tell which; the badge is what resolves it.
+    const badge = screen.getByText("Pro");
+    expect(badge).toBeInTheDocument();
+    expect(badge).toHaveAttribute("title", expect.stringMatching(/2026/));
+    expect(screen.queryByText("Subscription")).toBeNull();
+  });
+
+  it("falls back to the generic badge for a credential that reports no plan", () => {
+    render(
+      <SubscriptionProviderCard
+        usage={subscriptionUsage()}
+        onRefreshQuota={vi.fn()}
+        onSyncSessions={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Subscription")).toBeInTheDocument();
+  });
+
   it.each([
     { used: "1", remaining: 99, toneClass: "bg-success" },
     { used: "50", remaining: 50, toneClass: "bg-warning" },

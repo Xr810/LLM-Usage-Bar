@@ -180,6 +180,28 @@ struct OrgClaim {
 struct OpenAiAuthClaim {
     #[serde(default)]
     chatgpt_account_id: Option<String>,
+    #[serde(default)]
+    chatgpt_plan_type: Option<String>,
+    /// Unix seconds. OpenAI has been observed to send this as a number and as
+    /// a numeric string; accept both rather than silently dropping one.
+    #[serde(default)]
+    chatgpt_subscription_active_until: Option<serde_json::Value>,
+}
+
+impl OpenAiAuthClaim {
+    fn subscription_active_until(&self) -> Option<i64> {
+        match self.chatgpt_subscription_active_until.as_ref()? {
+            serde_json::Value::Number(value) => value.as_i64(),
+            serde_json::Value::String(value) => value.trim().parse::<i64>().ok(),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct CodexSubscriptionMetadata {
+    plan_type: Option<String>,
+    plan_renews_at: Option<i64>,
 }
 
 /// 缓存的 access_token（含过期时间）
@@ -217,6 +239,12 @@ struct CodexAccountData {
     pub refresh_token: String,
     /// 认证时间戳（秒）
     pub authenticated_at: i64,
+    /// OAuth id_token 中经过标准化的 ChatGPT 方案类型。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_type: Option<String>,
+    /// 当前订阅周期的结束时间（Unix 秒）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_renews_at: Option<i64>,
 }
 
 /// 公开的账号信息（返回给前端，复用 CodexAccount 结构）
@@ -460,6 +488,8 @@ impl CodexOAuthManager {
         })?;
 
         let (account_id, email) = extract_identity_from_tokens(&tokens);
+        let subscription_metadata =
+            extract_subscription_metadata_from_tokens(&tokens).unwrap_or_default();
         let account_id = account_id.ok_or_else(|| {
             CodexOAuthError::ParseError("无法从 token 中提取 account_id".to_string())
         })?;
@@ -473,6 +503,7 @@ impl CodexOAuthManager {
                     token: tokens.access_token,
                     expires_at_ms: compute_expires_at_ms(tokens.expires_in),
                 }),
+                subscription_metadata,
             )
             .await?;
 
@@ -590,9 +621,10 @@ impl CodexOAuthManager {
 
         let new_tokens = self.refresh_with_token(&refresh_token).await?;
 
+        let subscription_metadata = extract_subscription_metadata_from_tokens(&new_tokens);
         let access_token = new_tokens.access_token.clone();
         let expires_at_ms = compute_expires_at_ms(new_tokens.expires_in);
-        let mut refresh_token_changed = false;
+        let mut account_data_changed = false;
         let persistence_guard = self.persistence_lock.lock().await;
 
         {
@@ -609,7 +641,18 @@ impl CodexOAuthManager {
             if let Some(new_refresh) = new_tokens.refresh_token {
                 if new_refresh != refresh_token {
                     account.refresh_token = new_refresh;
-                    refresh_token_changed = true;
+                    account_data_changed = true;
+                }
+            }
+
+            if let Some(metadata) = subscription_metadata {
+                if account.plan_type != metadata.plan_type {
+                    account.plan_type = metadata.plan_type;
+                    account_data_changed = true;
+                }
+                if account.plan_renews_at != metadata.plan_renews_at {
+                    account.plan_renews_at = metadata.plan_renews_at;
+                    account_data_changed = true;
                 }
             }
 
@@ -622,7 +665,7 @@ impl CodexOAuthManager {
             );
         }
 
-        if refresh_token_changed {
+        if account_data_changed {
             self.persist_current_state_locked(&persistence_guard)
                 .await?;
         }
@@ -638,6 +681,20 @@ impl CodexOAuthManager {
                 "无可用的 ChatGPT 账号".to_string(),
             )),
         }
+    }
+
+    /// Return the valid token plus the only non-secret id_token metadata used
+    /// by the quota dashboard. The raw id_token never leaves token parsing.
+    pub(crate) async fn get_valid_token_and_subscription_for_account(
+        &self,
+        account_id: &str,
+    ) -> Result<(String, Option<String>, Option<i64>), CodexOAuthError> {
+        let token = self.get_valid_token_for_account(account_id).await?;
+        let accounts = self.accounts.read().await;
+        let account = accounts
+            .get(account_id)
+            .ok_or_else(|| CodexOAuthError::AccountNotFound(account_id.to_string()))?;
+        Ok((token, account.plan_type.clone(), account.plan_renews_at))
     }
 
     /// 获取默认账号 ID（热路径使用，避免克隆整个账号 HashMap）
@@ -765,8 +822,14 @@ impl CodexOAuthManager {
         refresh_token: String,
         email: Option<String>,
     ) -> Result<CodexAccount, CodexOAuthError> {
-        self.add_account_with_access_token_internal(account_id, refresh_token, email, None)
-            .await
+        self.add_account_with_access_token_internal(
+            account_id,
+            refresh_token,
+            email,
+            None,
+            CodexSubscriptionMetadata::default(),
+        )
+        .await
     }
 
     async fn add_account_with_access_token_internal(
@@ -775,6 +838,7 @@ impl CodexOAuthManager {
         refresh_token: String,
         email: Option<String>,
         access_token: Option<CachedAccessToken>,
+        subscription_metadata: CodexSubscriptionMetadata,
     ) -> Result<CodexAccount, CodexOAuthError> {
         let now = chrono::Utc::now().timestamp();
         let persistence_guard = self.persistence_lock.lock().await;
@@ -784,6 +848,8 @@ impl CodexOAuthManager {
             email,
             refresh_token,
             authenticated_at: now,
+            plan_type: subscription_metadata.plan_type,
+            plan_renews_at: subscription_metadata.plan_renews_at,
         };
 
         let account = CodexAccount::from(&data);
@@ -1042,7 +1108,27 @@ fn parse_jwt_claims(token: &str) -> Option<IdTokenClaims> {
         return None;
     }
     let decoded = URL_SAFE_NO_PAD.decode(parts[1]).ok()?;
-    serde_json::from_slice(&decoded).ok()
+    let mut claims: IdTokenClaims = serde_json::from_slice(&decoded).ok()?;
+    if let Some(openai_auth) = claims.openai_auth.as_mut() {
+        openai_auth.chatgpt_plan_type = openai_auth
+            .chatgpt_plan_type
+            .take()
+            .map(|plan_type| plan_type.trim().to_lowercase())
+            .filter(|plan_type| !plan_type.is_empty());
+    }
+    Some(claims)
+}
+
+fn extract_subscription_metadata_from_tokens(
+    tokens: &OAuthTokenResponse,
+) -> Option<CodexSubscriptionMetadata> {
+    let claims = parse_jwt_claims(tokens.id_token.as_deref()?)?;
+    let openai_auth = claims.openai_auth.unwrap_or_default();
+    let plan_renews_at = openai_auth.subscription_active_until();
+    Some(CodexSubscriptionMetadata {
+        plan_type: openai_auth.chatgpt_plan_type,
+        plan_renews_at,
+    })
 }
 
 /// 从 token 响应中提取 (account_id, email)
@@ -1092,6 +1178,21 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::sync::Semaphore;
+
+    fn jwt_with_payload(payload: serde_json::Value) -> String {
+        let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"none"}"#);
+        let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).unwrap());
+        format!("{header}.{payload}.")
+    }
+
+    fn parsed_openai_auth_claim(value: serde_json::Value) -> OpenAiAuthClaim {
+        parse_jwt_claims(&jwt_with_payload(serde_json::json!({
+            "https://api.openai.com/auth": value,
+        })))
+        .unwrap()
+        .openai_auth
+        .unwrap()
+    }
 
     fn delayed_refresh_hook() -> (TestRefreshHook, Arc<Semaphore>, Arc<Semaphore>) {
         let started = Arc::new(Semaphore::new(0));
@@ -1587,6 +1688,48 @@ mod tests {
         let claims = parse_jwt_claims(&jwt).unwrap();
         assert_eq!(claims.chatgpt_account_id.as_deref(), Some("acc-123"));
         assert_eq!(claims.email.as_deref(), Some("test@example.com"));
+    }
+
+    #[test]
+    fn openai_auth_claim_normalizes_chatgpt_plan_type() {
+        let populated = parsed_openai_auth_claim(serde_json::json!({
+            "chatgpt_account_id": "acc-123",
+            "chatgpt_plan_type": "  Pro  ",
+        }));
+        assert_eq!(populated.chatgpt_plan_type.as_deref(), Some("pro"));
+
+        let empty = parsed_openai_auth_claim(serde_json::json!({
+            "chatgpt_plan_type": " \t ",
+        }));
+        assert_eq!(empty.chatgpt_plan_type, None);
+    }
+
+    #[test]
+    fn openai_auth_claim_parses_subscription_active_until_formats() {
+        let number = parsed_openai_auth_claim(serde_json::json!({
+            "chatgpt_subscription_active_until": 1_789_876_543,
+        }));
+        assert_eq!(number.subscription_active_until(), Some(1_789_876_543));
+
+        let numeric_string = parsed_openai_auth_claim(serde_json::json!({
+            "chatgpt_subscription_active_until": "1789876543",
+        }));
+        assert_eq!(
+            numeric_string.subscription_active_until(),
+            Some(1_789_876_543)
+        );
+
+        for value in [
+            serde_json::json!({ "chatgpt_subscription_active_until": null }),
+            serde_json::json!({}),
+            serde_json::json!({ "chatgpt_subscription_active_until": "later" }),
+            serde_json::json!({ "chatgpt_subscription_active_until": true }),
+        ] {
+            assert_eq!(
+                parsed_openai_auth_claim(value).subscription_active_until(),
+                None
+            );
+        }
     }
 
     #[test]

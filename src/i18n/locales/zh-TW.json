@@ -28,6 +28,7 @@
     "trendEmpty": "此範圍內暫無用量記錄。",
     "customRange": "自訂範圍",
     "subscription": "訂閱",
+    "planRenewsAt": "{{value}} 續約",
     "metered": "按量",
     "sourceSession": "工作階段記錄",
     "sourceProxy": "本機代理",

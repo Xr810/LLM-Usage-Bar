@@ -816,6 +816,8 @@ mod tests {
             credential_message: None,
             success,
             tiers,
+            plan_type: None,
+            plan_renews_at: None,
             manual_reset_credits: None,
             extra_usage: None,
             error: None,

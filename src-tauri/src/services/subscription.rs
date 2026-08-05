@@ -84,6 +84,13 @@ pub struct SubscriptionQuota {
     pub credential_message: Option<String>,
     pub success: bool,
     pub tiers: Vec<QuotaTier>,
+    /// ChatGPT plan as reported by the OAuth token: "pro", "plus", "team", ...
+    /// None for tools that do not report one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan_type: Option<String>,
+    /// Unix seconds at which the current subscription period ends.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan_renews_at: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub manual_reset_credits: Option<ManualResetCredits>,
     pub extra_usage: Option<ExtraUsage>,
@@ -99,6 +106,8 @@ impl SubscriptionQuota {
             credential_message: None,
             success: false,
             tiers: vec![],
+            plan_type: None,
+            plan_renews_at: None,
             manual_reset_credits: None,
             extra_usage: None,
             error: None,
@@ -113,6 +122,8 @@ impl SubscriptionQuota {
             credential_message: Some(message.clone()),
             success: false,
             tiers: vec![],
+            plan_type: None,
+            plan_renews_at: None,
             manual_reset_credits: None,
             extra_usage: None,
             error: Some(message),
@@ -555,8 +566,11 @@ pub(crate) async fn query_managed_codex_oauth_quota(
         return Ok(SubscriptionQuota::not_found(MANAGED_CODEX_QUOTA_SOURCE));
     };
 
-    let access_token = match manager.get_valid_token_for_account(&account_id).await {
-        Ok(token) => token,
+    let (access_token, plan_type, plan_renews_at) = match manager
+        .get_valid_token_and_subscription_for_account(&account_id)
+        .await
+    {
+        Ok(credentials) => credentials,
         Err(_) => {
             return Ok(SubscriptionQuota::error(
                 MANAGED_CODEX_QUOTA_SOURCE,
@@ -565,13 +579,16 @@ pub(crate) async fn query_managed_codex_oauth_quota(
             ));
         }
     };
-    query_codex_quota(
+    let mut quota = query_codex_quota(
         &access_token,
         Some(&account_id),
         MANAGED_CODEX_QUOTA_SOURCE,
         "Codex OAuth access token expired or rejected. Please re-login via LLM Usage Bar.",
     )
-    .await
+    .await?;
+    quota.plan_type = plan_type;
+    quota.plan_renews_at = plan_renews_at;
+    Ok(quota)
 }
 
 /// 查询 Codex / ChatGPT 反代订阅额度。
@@ -676,6 +693,8 @@ pub(crate) async fn query_codex_quota(
         credential_message: None,
         success: true,
         tiers,
+        plan_type: None,
+        plan_renews_at: None,
         manual_reset_credits,
         extra_usage: None,
         error: None,
@@ -1140,6 +1159,8 @@ async fn query_gemini_quota(access_token: &str) -> Result<SubscriptionQuota, Str
         credential_message: None,
         success: true,
         tiers,
+        plan_type: None,
+        plan_renews_at: None,
         manual_reset_credits: None,
         extra_usage: None,
         error: None,
