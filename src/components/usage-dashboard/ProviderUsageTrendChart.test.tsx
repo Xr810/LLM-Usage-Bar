@@ -67,6 +67,7 @@ describe("ProviderUsageTrendChart", () => {
         ]}
         totalTokens={6_500}
         totalCostUsd="18.25"
+        costStatus="partial"
         rangeLabel="30 days"
       />,
     );
@@ -76,6 +77,9 @@ describe("ProviderUsageTrendChart", () => {
     ).toBeInTheDocument();
     // Spend is the headline; the tokens that produced it sit underneath.
     expect(screen.getByText("$18.25")).toBeInTheDocument();
+    expect(
+      screen.getByText("Some usage could not be priced"),
+    ).toBeInTheDocument();
     expect(screen.getByTestId("usage-trend-range")).toHaveTextContent(
       "30 days",
     );
@@ -95,6 +99,7 @@ describe("ProviderUsageTrendChart", () => {
         buckets={[bucket(1_720_000_000, 0, 0)]}
         totalTokens={0}
         totalCostUsd="0"
+        costStatus="complete"
         rangeLabel="Today"
       />,
     );
@@ -105,5 +110,7 @@ describe("ProviderUsageTrendChart", () => {
     expect(
       screen.queryByRole("img", { name: "Token usage by hour" }),
     ).toBeNull();
+    expect(screen.queryByText(/usage could not be priced/i)).toBeNull();
+    expect(screen.queryByText(/includes estimated cost/i)).toBeNull();
   });
 });

@@ -2050,6 +2050,13 @@ pub(crate) struct ProviderModelPricingRow {
 }
 
 impl ProviderModelPricingRow {
+    pub(crate) fn has_any_rate(&self) -> bool {
+        self.input.is_some()
+            || self.output.is_some()
+            || self.cache_read.is_some()
+            || self.cache_creation.is_some()
+    }
+
     pub(crate) fn has_blank_rate(&self) -> bool {
         self.input.is_none()
             || self.output.is_none()
@@ -2060,9 +2067,10 @@ impl ProviderModelPricingRow {
 
 /// 查询某个 Provider 账号对某个模型的自定义单价（用户实付价）。
 ///
-/// 与 `find_model_pricing_row` 共用同一套模型 ID 归一化和前缀匹配规则，因此
-/// 用户只填 `claude-sonnet-5` 也能覆盖日志里带日期后缀的实际模型名，行为和
-/// 官方价表保持一致。返回 `None` 表示该 Provider 没有为这个模型设过价。
+/// 与 `find_model_pricing_row` 共用模型 ID 归一化和后缀清理，因此用户只填
+/// `claude-sonnet-5` 也能覆盖日志里带日期后缀的实际模型名。自定义价不做官方
+/// 目录的正向前缀兜底：一个 dated row 只覆盖该 release，不能覆盖 sibling。
+/// 返回 `None` 表示该 Provider 没有为这个模型设过价。
 pub(crate) fn find_provider_model_pricing_row(
     conn: &Connection,
     provider_id: &str,
@@ -2076,14 +2084,6 @@ pub(crate) fn find_provider_model_pricing_row(
     for candidate in &candidates {
         if let Some(row) = query_provider_model_pricing_exact(conn, provider_id, candidate)? {
             return Ok(Some(row));
-        }
-    }
-
-    for candidate in &candidates {
-        if should_try_pricing_prefix_match(candidate) {
-            if let Some(row) = query_provider_model_pricing_prefix(conn, provider_id, candidate)? {
-                return Ok(Some(row));
-            }
         }
     }
 
@@ -2112,33 +2112,6 @@ fn query_provider_model_pricing_exact(
     )
     .optional()
     .map_err(|e| AppError::Database(format!("查询 Provider 自定义定价失败: {e}")))
-}
-
-fn query_provider_model_pricing_prefix(
-    conn: &Connection,
-    provider_id: &str,
-    model_id: &str,
-) -> Result<Option<ProviderModelPricingRow>, AppError> {
-    let pattern = format!("{model_id}-%");
-    conn.query_row(
-        "SELECT input_cost_per_million, output_cost_per_million,
-                cache_read_cost_per_million, cache_creation_cost_per_million
-         FROM provider_model_pricing
-         WHERE provider_id = ?1 AND model_id LIKE ?2
-         ORDER BY LENGTH(model_id) ASC
-         LIMIT 1",
-        [provider_id, &pattern],
-        |row| {
-            Ok(ProviderModelPricingRow {
-                input: row.get(0)?,
-                output: row.get(1)?,
-                cache_read: row.get(2)?,
-                cache_creation: row.get(3)?,
-            })
-        },
-    )
-    .optional()
-    .map_err(|e| AppError::Database(format!("查询 Provider 自定义前缀定价失败: {e}")))
 }
 
 fn model_pricing_candidates(model_id: &str) -> Vec<String> {

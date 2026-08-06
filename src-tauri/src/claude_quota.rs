@@ -29,7 +29,6 @@ const MAX_STATUSLINE_CACHE_BYTES: u64 = 256 * 1_024;
 const MAX_DESKTOP_HISTORY_BYTES: u64 = 4 * 1_048_576;
 const MAX_DESKTOP_HISTORY_SAMPLES: usize = 20_000;
 const MAX_CACHED_STATUSLINE_SESSIONS: usize = 32;
-const CLI_ACCOUNT_FILE_NAME: &str = ".claude.json";
 const MAX_CLI_ACCOUNT_BYTES: u64 = 4 * 1_048_576;
 const MAX_CLAUDE_VERSION_CHARS: usize = 64;
 const MAX_CACHE_AGE_SECONDS: i64 = 15 * 60;
@@ -164,7 +163,7 @@ pub(crate) fn collect_local_quota() -> Result<SubscriptionQuota, String> {
 /// nothing; asking the CLI would mean spawning a process on every quota
 /// refresh. Neither the file's credentials nor any other field is touched.
 fn read_cli_plan_type() -> Option<String> {
-    read_cli_plan_type_at(&config::get_home_dir().join(CLI_ACCOUNT_FILE_NAME))
+    read_cli_plan_type_at(&config::get_claude_account_path())
 }
 
 fn read_cli_plan_type_at(path: &Path) -> Option<String> {

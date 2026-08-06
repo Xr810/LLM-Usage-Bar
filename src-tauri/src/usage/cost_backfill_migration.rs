@@ -31,17 +31,19 @@ use crate::usage::metering::calculator::ModelPricing;
 use crate::usage::metering::parser::TokenUsage;
 use rusqlite::{params, Connection};
 use rust_decimal::Decimal;
+use std::str::FromStr;
 
 const SAVEPOINT: &str = "cost_backfill_v22";
 
 /// One event that carries tokens and an estimate we have to redo.
 struct UncostedEvent {
     event_id: String,
-    /// Stands in for the ingest-time app type. `decide_cost` falls back to
-    /// `product_group_id` for session-log events, which is every row here, so
-    /// using it reproduces the original cache semantics exactly.
-    product_group_id: String,
-    model: String,
+    /// The compatibility row keeps the exact ingest-time pricing basis for
+    /// events written by the retired proxy. Session-only events have the same
+    /// model/app values in both tables and use a multiplier of one.
+    pricing_model: String,
+    app_type: String,
+    cost_multiplier: String,
     input_tokens: u32,
     output_tokens: u32,
     cache_read_tokens: u32,
@@ -90,12 +92,19 @@ fn backfill(conn: &Connection) -> Result<u64, AppError> {
 fn load_uncosted_events(conn: &Connection) -> Result<Vec<UncostedEvent>, AppError> {
     let mut statement = conn
         .prepare(
-            "SELECT event_id, product_group_id, model,
-                    input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens
-             FROM usage_events
-             WHERE cost_source <> 'upstream'
-               AND (input_tokens > 0 OR output_tokens > 0
-                    OR cache_read_tokens > 0 OR cache_creation_tokens > 0)",
+            "SELECT event.event_id,
+                    COALESCE(NULLIF(legacy.pricing_model, ''), event.model),
+                    COALESCE(NULLIF(legacy.app_type, ''), event.product_group_id),
+                    COALESCE(NULLIF(legacy.cost_multiplier, ''), '1'),
+                    event.input_tokens, event.output_tokens,
+                    event.cache_read_tokens, event.cache_creation_tokens
+             FROM usage_events AS event
+             LEFT JOIN proxy_request_logs AS legacy
+               ON legacy.request_id = event.legacy_request_id
+             WHERE event.cost_source <> 'upstream'
+               AND (event.pricing_origin IS NULL OR event.pricing_origin <> 'user')
+               AND (event.input_tokens > 0 OR event.output_tokens > 0
+                    OR event.cache_read_tokens > 0 OR event.cache_creation_tokens > 0)",
         )
         .map_err(|e| AppError::Database(format!("v21 -> v22 查询待补算事件失败: {e}")))?;
 
@@ -103,12 +112,13 @@ fn load_uncosted_events(conn: &Connection) -> Result<Vec<UncostedEvent>, AppErro
         .query_map([], |row| {
             Ok(UncostedEvent {
                 event_id: row.get(0)?,
-                product_group_id: row.get(1)?,
-                model: row.get(2)?,
-                input_tokens: row.get::<_, i64>(3)?.max(0) as u32,
-                output_tokens: row.get::<_, i64>(4)?.max(0) as u32,
-                cache_read_tokens: row.get::<_, i64>(5)?.max(0) as u32,
-                cache_creation_tokens: row.get::<_, i64>(6)?.max(0) as u32,
+                pricing_model: row.get(1)?,
+                app_type: row.get(2)?,
+                cost_multiplier: row.get(3)?,
+                input_tokens: row.get::<_, i64>(4)?.max(0) as u32,
+                output_tokens: row.get::<_, i64>(5)?.max(0) as u32,
+                cache_read_tokens: row.get::<_, i64>(6)?.max(0) as u32,
+                cache_creation_tokens: row.get::<_, i64>(7)?.max(0) as u32,
             })
         })
         .map_err(|e| AppError::Database(format!("v21 -> v22 读取待补算事件失败: {e}")))?;
@@ -122,9 +132,12 @@ fn rewrite(conn: &Connection, pending: &[UncostedEvent]) -> Result<u64, AppError
     let mut unpriced_models: Vec<String> = Vec::new();
 
     for event in pending {
-        let Some(row) = find_model_pricing_row(conn, &event.model)? else {
-            if !unpriced_models.iter().any(|model| model == &event.model) {
-                unpriced_models.push(event.model.clone());
+        let Some(row) = find_model_pricing_row(conn, &event.pricing_model)? else {
+            if !unpriced_models
+                .iter()
+                .any(|model| model == &event.pricing_model)
+            {
+                unpriced_models.push(event.pricing_model.clone());
             }
             continue;
         };
@@ -138,12 +151,14 @@ fn rewrite(conn: &Connection, pending: &[UncostedEvent]) -> Result<u64, AppError
             cache_creation_tokens: event.cache_creation_tokens,
             ..TokenUsage::default()
         };
-        let cost = CostCalculator::calculate_for_app(
-            &event.product_group_id,
-            &usage,
-            &pricing,
-            Decimal::ONE,
-        );
+        let cost_multiplier = Decimal::from_str(&event.cost_multiplier).map_err(|_| {
+            AppError::Database(format!(
+                "v21 -> v22 事件 {} 的历史成本倍数无效",
+                event.event_id
+            ))
+        })?;
+        let cost =
+            CostCalculator::calculate_for_app(&event.app_type, &usage, &pricing, cost_multiplier);
 
         conn.execute(
             "UPDATE usage_events

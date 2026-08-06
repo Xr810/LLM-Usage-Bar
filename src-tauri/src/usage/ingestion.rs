@@ -454,6 +454,13 @@ fn merge_pricing_rows(
     user: ProviderModelPricingRow,
     official: Option<(String, String, String, String)>,
 ) -> Result<Option<ModelPricing>, AppError> {
+    // A row with no user-entered rate is not user pricing. Let the normal
+    // upstream -> official fallback decide the cost instead of relabelling an
+    // official estimate as the user's price and outranking real billing data.
+    if !user.has_any_rate() {
+        return Ok(None);
+    }
+
     let (official_input, official_output, official_cache_read, official_cache_creation) = official
         .map(|(input, output, cache_read, cache_creation)| {
             (
@@ -1122,6 +1129,70 @@ mod tests {
     }
 
     #[test]
+    fn namespaced_custom_model_id_is_normalized_on_write_and_prices_the_event() {
+        let db = Database::memory().unwrap();
+        save_provider(&db, "global-provider", None);
+        db.upsert_provider_model_pricing(
+            "global-provider",
+            "anthropic/Claude-Sonnet-4-5",
+            "Claude Sonnet 4.5",
+            &price("1", "2", "0", "0"),
+        )
+        .unwrap();
+        assert_eq!(
+            db.list_provider_model_pricing("global-provider").unwrap()[0].model_id,
+            "claude-sonnet-4-5"
+        );
+
+        let mut value = input("namespaced-custom-price", TokenSource::Proxy);
+        value.model = "anthropic/claude-sonnet-4-5".to_string();
+        UsageIngestionService::new(&db).ingest(&value).unwrap();
+
+        let event = db
+            .list_usage_events("global-provider", 0, 200, 1, 10)
+            .unwrap()
+            .items
+            .pop()
+            .unwrap();
+        assert_eq!(event.pricing_origin, Some(PricingOrigin::User));
+        assert_eq!(event.total_cost_usd.as_deref(), Some("3"));
+    }
+
+    #[test]
+    fn all_blank_custom_pricing_does_not_override_upstream_billing() {
+        let db = Database::memory().unwrap();
+        save_provider(&db, "global-provider", None);
+        seed_pricing(&db, "priced-model");
+        db.upsert_provider_model_pricing(
+            "global-provider",
+            "priced-model",
+            "Priced Model",
+            &price("", " ", "\t", ""),
+        )
+        .unwrap();
+
+        let mut value = input("blank-custom-price", TokenSource::Proxy);
+        value.upstream_cost = Some(UpstreamCost {
+            input_cost: None,
+            output_cost: None,
+            cache_read_cost: None,
+            cache_creation_cost: None,
+            total_cost: Some(Decimal::from_str("99").unwrap()),
+        });
+        UsageIngestionService::new(&db).ingest(&value).unwrap();
+
+        let event = db
+            .list_usage_events("global-provider", 0, 200, 1, 10)
+            .unwrap()
+            .items
+            .pop()
+            .unwrap();
+        assert_eq!(event.cost_source, CostSource::Upstream);
+        assert_eq!(event.pricing_origin, None);
+        assert_eq!(event.total_cost_usd.as_deref(), Some("99"));
+    }
+
+    #[test]
     fn partial_provider_pricing_inherits_each_blank_rate_from_official_pricing() {
         let db = Database::memory().unwrap();
         save_provider(&db, "global-provider", None);
@@ -1346,6 +1417,57 @@ mod tests {
         let event = &page.items[0];
         assert_eq!(event.pricing_origin, Some(PricingOrigin::User));
         assert_eq!(event.total_cost_usd.as_deref(), Some("9.0"));
+    }
+
+    #[test]
+    fn dated_custom_prices_do_not_cover_sibling_releases() {
+        let db = Database::memory().unwrap();
+        save_provider(&db, "global-provider", None);
+        for (model, input_rate) in [
+            ("gpt-4o-mini-2024-05-13", "0.15"),
+            ("gpt-4o-mini-2024-07-18", "0.20"),
+        ] {
+            db.upsert_provider_model_pricing(
+                "global-provider",
+                model,
+                model,
+                &price(input_rate, "1", "0", "0"),
+            )
+            .unwrap();
+        }
+
+        let mut exact = input("dated-exact", TokenSource::Proxy);
+        exact.model = "gpt-4o-mini-2024-05-13".to_string();
+        UsageIngestionService::new(&db).ingest(&exact).unwrap();
+
+        let mut sibling = input("dated-sibling", TokenSource::Proxy);
+        sibling.model = "gpt-4o-mini-2024-08-06".to_string();
+        sibling.upstream_cost = Some(UpstreamCost {
+            input_cost: None,
+            output_cost: None,
+            cache_read_cost: None,
+            cache_creation_cost: None,
+            total_cost: Some(Decimal::from_str("99").unwrap()),
+        });
+        UsageIngestionService::new(&db).ingest(&sibling).unwrap();
+
+        let page = db
+            .list_usage_events("global-provider", 0, 200, 1, 10)
+            .unwrap();
+        let exact = page
+            .items
+            .iter()
+            .find(|event| event.event_id == "dated-exact")
+            .unwrap();
+        assert_eq!(exact.pricing_origin, Some(PricingOrigin::User));
+        let sibling = page
+            .items
+            .iter()
+            .find(|event| event.event_id == "dated-sibling")
+            .unwrap();
+        assert_eq!(sibling.cost_source, CostSource::Upstream);
+        assert_eq!(sibling.pricing_origin, None);
+        assert_eq!(sibling.total_cost_usd.as_deref(), Some("99"));
     }
 
     /// Removing the custom price falls back to upstream evidence first.

@@ -37,7 +37,7 @@ mod usage_events;
 pub use app_config::{AppType, MultiAppConfig};
 pub use claude_quota::run_claude_statusline_bridge;
 pub use commands::*;
-pub use config::{get_claude_mcp_path, get_claude_settings_path, read_json_file};
+pub use config::{get_claude_account_path, get_claude_settings_path, read_json_file};
 pub use database::Database;
 pub use error::AppError;
 pub use prompt::Prompt;

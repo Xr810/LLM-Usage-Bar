@@ -7,6 +7,7 @@
 
 use crate::database::{lock_conn, Database};
 use crate::error::AppError;
+use crate::services::usage_stats::clean_model_id_for_pricing;
 use crate::usage::domain::{ModelPriceInput, ProviderModelPricingView};
 use rusqlite::{params, OptionalExtension, Row};
 use rust_decimal::Decimal;
@@ -89,7 +90,7 @@ impl Database {
         display_name: &str,
         price: &ModelPriceInput,
     ) -> Result<(), AppError> {
-        let model_id = model_id.trim().to_ascii_lowercase();
+        let model_id = clean_model_id_for_pricing(model_id);
         if model_id.is_empty() {
             return Err(AppError::localized(
                 "usage.modelIdRequired",
@@ -164,9 +165,10 @@ impl Database {
         model_id: &str,
     ) -> Result<(), AppError> {
         let conn = lock_conn!(self.conn);
+        let model_id = clean_model_id_for_pricing(model_id);
         conn.execute(
             "DELETE FROM provider_model_pricing WHERE provider_id = ?1 AND model_id = ?2",
-            params![provider_id, model_id.trim().to_ascii_lowercase()],
+            params![provider_id, model_id],
         )
         .map_err(|error| AppError::Database(format!("删除 Provider 自定义定价失败: {error}")))?;
         Ok(())
@@ -270,12 +272,12 @@ mod tests {
     }
 
     #[test]
-    fn model_ids_are_stored_lowercase_so_lookup_normalization_matches() {
+    fn model_ids_are_stored_with_the_same_normalization_used_by_lookup() {
         let db = db_with(&[("relay-a", BillingKind::Metered)]);
 
         db.upsert_provider_model_pricing(
             "relay-a",
-            "  Claude-Sonnet-5  ",
+            "  anthropic/Claude-Sonnet-5  ",
             "",
             &price("1", "2", "0", "0"),
         )

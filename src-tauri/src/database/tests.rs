@@ -2755,6 +2755,37 @@ fn schema_migration_v21_to_v22_backfills_eligible_costs_and_restores_immutabilit
         [CHATGPT_SUBSCRIPTION_ID],
     )
     .expect("seed v21 usage events");
+    conn.execute_batch(
+        "INSERT INTO proxy_request_logs (
+            request_id, provider_id, app_type, model, pricing_model,
+            latency_ms, status_code, cost_multiplier, created_at
+         ) VALUES
+            ('v22-multiplier-log', 'legacy-provider', 'codex',
+             'v22-priced-model', 'v22-priced-model', 1, 200, '2', 1),
+            ('v22-pricing-model-log', 'legacy-provider', 'codex',
+             'v22-alias-model', 'v22-priced-model', 1, 200, '1', 2);",
+    )
+    .expect("seed v21 compatibility pricing basis");
+    conn.execute(
+        "INSERT INTO usage_events (
+            event_id, source, provider_id, product_group_id, occurred_at, model,
+            input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
+            input_cost_usd, output_cost_usd, cache_read_cost_usd,
+            cache_creation_cost_usd, total_cost_usd, cost_source,
+            legacy_request_id, created_at, agent_module_id, pricing_origin
+         ) VALUES
+            ('v22-multiplier', 'proxy', ?1, 'codex', 5, 'v22-priced-model',
+             1500, 200, 400, 50, '0', '0', '0', '0', '0', 'estimated',
+             'v22-multiplier-log', 5, 'codex', 'official'),
+            ('v22-pricing-model', 'proxy', ?1, 'codex', 6, 'v22-alias-model',
+             1000, 0, 0, 0, NULL, NULL, NULL, NULL, NULL, 'unavailable',
+             'v22-pricing-model-log', 6, 'codex', NULL),
+            ('v22-user-price', 'session_log', ?1, 'codex', 7, 'v22-priced-model',
+             1000, 0, 0, 0, '8.88', '0', '0', '0', '8.88', 'estimated',
+             NULL, 7, 'codex', 'user')",
+        [CHATGPT_SUBSCRIPTION_ID],
+    )
+    .expect("seed v21 pricing-basis regression events");
     Database::set_user_version(&conn, 21).expect("mark fixture as schema v21");
 
     Database::apply_schema_migrations_on_conn(&conn).expect("migrate v21 to v22");
@@ -2820,6 +2851,55 @@ fn schema_migration_v21_to_v22_backfills_eligible_costs_and_restores_immutabilit
         )
         .expect("read still-unpriced event");
     assert_eq!(unpriced, (None, "unavailable".to_string(), None));
+
+    let multiplier_total: String = conn
+        .query_row(
+            "SELECT total_cost_usd FROM usage_events WHERE event_id = 'v22-multiplier'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("read multiplier-preserving backfill");
+    let multiplier_expected =
+        CostCalculator::calculate_for_app("codex", &usage, &pricing, Decimal::from(2));
+    assert_eq!(multiplier_total, multiplier_expected.total_cost.to_string());
+
+    let pricing_model_total: String = conn
+        .query_row(
+            "SELECT total_cost_usd FROM usage_events WHERE event_id = 'v22-pricing-model'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("read pricing-model-preserving backfill");
+    let pricing_model_expected = CostCalculator::calculate_for_app(
+        "codex",
+        &TokenUsage {
+            input_tokens: 1000,
+            ..TokenUsage::default()
+        },
+        &pricing,
+        Decimal::ONE,
+    );
+    assert_eq!(
+        pricing_model_total,
+        pricing_model_expected.total_cost.to_string()
+    );
+
+    let user_price: (String, String, Option<String>) = conn
+        .query_row(
+            "SELECT input_cost_usd, total_cost_usd, pricing_origin
+             FROM usage_events WHERE event_id = 'v22-user-price'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("read preserved user-priced event");
+    assert_eq!(
+        user_price,
+        (
+            "8.88".to_string(),
+            "8.88".to_string(),
+            Some("user".to_string())
+        )
+    );
 
     let existing_cost: (
         Option<String>,

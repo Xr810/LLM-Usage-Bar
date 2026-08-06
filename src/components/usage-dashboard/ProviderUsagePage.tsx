@@ -126,6 +126,7 @@ export function ProviderUsagePage({
           buckets={projection.trendBuckets}
           totalTokens={projection.overallTotalTokens}
           totalCostUsd={projection.overallTotalCostUsd}
+          costStatus={projection.overallCostStatus}
           rangeLabel={rangeLabel}
           rangeControls={rangeControls}
         />

@@ -9,6 +9,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import type {
   UsageTrendBucketView,
@@ -16,6 +17,7 @@ import type {
 } from "@/types/usageDashboard";
 import { formatUsd } from "../tray-usage/trayUsagePresentation";
 import { formatTokensCompact } from "./usagePresentation";
+import type { MeteredCostStatus } from "./usageDashboardProjection";
 
 interface ProviderUsageTrendChartProps {
   granularity: UsageTrendGranularity;
@@ -23,6 +25,7 @@ interface ProviderUsageTrendChartProps {
   totalTokens: number;
   /** Spend over the same range; subscription usage counts at list price. */
   totalCostUsd: string | null;
+  costStatus: MeteredCostStatus;
   rangeLabel: string;
   rangeControls?: ReactNode;
 }
@@ -70,6 +73,7 @@ export function ProviderUsageTrendChart({
   buckets,
   totalTokens,
   totalCostUsd,
+  costStatus,
   rangeLabel,
   rangeControls,
 }: ProviderUsageTrendChartProps) {
@@ -113,6 +117,20 @@ export function ProviderUsageTrendChart({
     (peak, bucket) => Math.max(peak, bucket.totalTokens),
     0,
   );
+  const costStatusText =
+    costStatus === "partial"
+      ? t("usageDashboard.costPartial", {
+          defaultValue: "Some usage could not be priced",
+        })
+      : costStatus === "estimated"
+        ? t("usageDashboard.costEstimatedSummary", {
+            defaultValue: "Includes estimated cost",
+          })
+        : costStatus === "unavailable"
+          ? t("usageDashboard.costUnavailableSummary", {
+              defaultValue: "Cost unavailable",
+            })
+          : null;
 
   return (
     <section aria-labelledby="usage-trend-heading">
@@ -142,12 +160,17 @@ export function ProviderUsageTrendChart({
               tokens that produced it stay underneath, where the peak gives the
               chart's tallest point a number. */}
           <div className="text-right">
-            <div className="text-lg font-semibold metric">
-              {totalCostUsd == null
-                ? t("usageDashboard.costUnavailableSummary", {
-                    defaultValue: "Cost unavailable",
-                  })
-                : formatUsd(totalCostUsd, locale)}
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <div className="text-lg font-semibold metric">
+                {totalCostUsd == null
+                  ? t("usageDashboard.costUnavailableSummary", {
+                      defaultValue: "Cost unavailable",
+                    })
+                  : formatUsd(totalCostUsd, locale)}
+              </div>
+              {costStatusText ? (
+                <Badge variant="outline">{costStatusText}</Badge>
+              ) : null}
             </div>
             <p
               className="mt-0.5 text-[11px] text-muted-foreground"
