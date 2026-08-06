@@ -9,7 +9,6 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { ProviderIcon } from "@/components/ProviderIcon";
 import { dashboardProviderIcon } from "@/components/usage-dashboard/usagePresentation";
 import type { UsageProviderView } from "@/types/usageDashboard";
@@ -71,7 +70,10 @@ export function SystemProviderPicker({
           </span>
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-[min(24rem,90vw)] p-0">
+      <PopoverContent
+        align="start"
+        className="w-[min(24rem,90vw)] overflow-hidden p-0"
+      >
         <div className="relative border-b p-2">
           <Search
             aria-hidden="true"
@@ -91,7 +93,11 @@ export function SystemProviderPicker({
             className="pl-9"
           />
         </div>
-        <ScrollArea className="max-h-72">
+        {/* Native overflow, not the styled ScrollArea: that one sizes its
+            viewport with `h-full`, which has no definite height to resolve
+            against under a `max-h`, so the list was clipped and never
+            scrolled. A max-height still lets a filtered list shrink. */}
+        <div className="max-h-72 overflow-y-auto overscroll-contain">
           <ul className="p-1">
             {matches.map((provider) => {
               const { icon, iconColor } = dashboardProviderIcon(provider);
@@ -130,7 +136,7 @@ export function SystemProviderPicker({
               </li>
             ) : null}
           </ul>
-        </ScrollArea>
+        </div>
       </PopoverContent>
     </Popover>
   );

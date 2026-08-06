@@ -219,6 +219,21 @@ it("searches the catalog inside the picker and toggles what it finds", () => {
   ).toBeInTheDocument();
 });
 
+it("offers the whole catalogue in the picker, not only what a search finds", () => {
+  render(<UsageProvidersSettings />);
+
+  fireEvent.click(
+    screen.getByRole("button", { name: /Add a built-in Provider/ }),
+  );
+
+  // The list is scrollable rather than truncated: everything is reachable
+  // without knowing a name to type.
+  expect(screen.getAllByRole("checkbox")).toHaveLength(fixedProviders.length);
+  expect(
+    screen.getByRole("checkbox", { name: "Cerebras API" }),
+  ).toBeInTheDocument();
+});
+
 it("removes a picked Provider only after the confirmation is accepted", () => {
   setEnabledMock.mutateAsync.mockClear();
   render(<UsageProvidersSettings />);
