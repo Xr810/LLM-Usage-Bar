@@ -1,8 +1,7 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Blocks, Search, Wallet } from "lucide-react";
+import { Blocks, Wallet } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
   Card,
   CardContent,
@@ -14,6 +13,7 @@ import { UsageProviderDialog } from "@/components/usage-dashboard/UsageProviderD
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { SettingsSection } from "./SettingsSection";
 import { SystemProviderCard } from "./SystemProviderCard";
+import { SystemProviderPicker } from "./SystemProviderPicker";
 import {
   useDeleteUsageProvider,
   useSaveUsageProvider,
@@ -52,23 +52,6 @@ const SYSTEM_PROVIDER_ORDER = [
   "cerebras-api",
 ];
 
-function providerMatchesSearch(
-  provider: UsageProviderView,
-  normalizedQuery: string,
-): boolean {
-  if (!normalizedQuery) return true;
-  return [
-    provider.name,
-    provider.systemPresetKey,
-    provider.canonicalEndpoint,
-    provider.productGroupId,
-  ]
-    .filter((value): value is string => Boolean(value))
-    .join(" ")
-    .toLocaleLowerCase()
-    .includes(normalizedQuery);
-}
-
 interface UsageProvidersSettingsProps {
   targetProviderId?: string;
   onTargetHandled?: () => void;
@@ -87,7 +70,7 @@ export function UsageProvidersSettings({
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<UsageProviderView | null>(null);
   const [deleting, setDeleting] = useState<UsageProviderView | null>(null);
-  const [providerSearch, setProviderSearch] = useState("");
+  const [removing, setRemoving] = useState<UsageProviderView | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const run = async (operation: () => Promise<unknown>) => {
@@ -135,23 +118,12 @@ export function UsageProvidersSettings({
       provider.systemPresetKey === null ||
       provider.systemPresetKey === undefined,
   );
-  const normalizedProviderSearch = providerSearch.trim().toLocaleLowerCase();
+  // `enabled` already means "on my list": the dashboard filters on it and keeps
+  // a removed Provider's history, so picking and removing need no new state.
   const visibleSystemProviders = useMemo(
-    () =>
-      systemProviders.filter((provider) =>
-        providerMatchesSearch(provider, normalizedProviderSearch),
-      ),
-    [normalizedProviderSearch, systemProviders],
+    () => systemProviders.filter((provider) => provider.enabled),
+    [systemProviders],
   );
-  const visibleCustomProviders = useMemo(
-    () =>
-      customProviders.filter((provider) =>
-        providerMatchesSearch(provider, normalizedProviderSearch),
-      ),
-    [customProviders, normalizedProviderSearch],
-  );
-  const hasVisibleProviders =
-    visibleSystemProviders.length + visibleCustomProviders.length > 0;
 
   return (
     <div className="space-y-4 pb-6">
@@ -164,28 +136,24 @@ export function UsageProvidersSettings({
         })}
       >
         <div className="space-y-2">
-          <div className="relative">
-            <Search
-              aria-hidden="true"
-              className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
-            />
-            <Input
-              type="search"
-              value={providerSearch}
-              onChange={(event) => setProviderSearch(event.target.value)}
-              aria-label={t("usageDashboard.searchProviders", {
-                defaultValue: "Search Providers",
-              })}
-              placeholder={t("usageDashboard.searchProvidersPlaceholder", {
-                defaultValue: "Search by Provider name or endpoint...",
-              })}
-              className="pl-9"
-            />
-          </div>
+          {/* The search moved inside the picker, where it has a catalogue to
+              search. Out here it filtered a list the user had already chosen. */}
+          <SystemProviderPicker
+            providers={systemProviders}
+            isPending={setEnabled.isPending}
+            onToggle={(provider, picked) =>
+              void run(() =>
+                setEnabled.mutateAsync({
+                  providerId: provider.id,
+                  enabled: picked,
+                }),
+              )
+            }
+          />
           <p className="text-xs text-muted-foreground">
             {t("usageDashboard.providerCatalogHint", {
               defaultValue:
-                "Search the built-in catalog, then sign in or save an API key. Usage, balance, and quota still depend on the monitoring sources each Provider exposes.",
+                "Pick the Providers you use, then sign in or save an API key. Usage, balance, and quota still depend on the monitoring sources each Provider exposes.",
             })}
           </p>
         </div>
@@ -219,16 +187,17 @@ export function UsageProvidersSettings({
           showBudget={independentProviderBudgets && provider.enabled}
           targetProviderId={targetProviderId}
           onTargetHandled={onTargetHandled}
+          onRemove={setRemoving}
+          isRemovePending={setEnabled.isPending}
         />
       ))}
 
-      {!providersQuery.isLoading &&
-      normalizedProviderSearch &&
-      !hasVisibleProviders ? (
+      {!providersQuery.isLoading && visibleSystemProviders.length === 0 ? (
         <Card className="border-dashed">
           <CardContent className="p-6 text-center text-sm text-muted-foreground">
-            {t("usageDashboard.noMatchingProviders", {
-              defaultValue: "No Providers match this search.",
+            {t("usageDashboard.noPickedProviders", {
+              defaultValue:
+                "No built-in Providers picked yet. Add the ones you use.",
             })}
           </CardContent>
         </Card>
@@ -249,7 +218,7 @@ export function UsageProvidersSettings({
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-2">
-          {visibleCustomProviders.map((provider) => {
+          {customProviders.map((provider) => {
             const { icon, iconColor } = dashboardProviderIcon(provider);
             return (
               <div
@@ -363,9 +332,7 @@ export function UsageProvidersSettings({
               </div>
             );
           })}
-          {!providersQuery.isLoading &&
-          !normalizedProviderSearch &&
-          customProviders.length === 0 ? (
+          {!providersQuery.isLoading && customProviders.length === 0 ? (
             <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
               {t("usageDashboard.noCustomProvidersConfigured", {
                 defaultValue: "No custom Providers configured",
@@ -400,6 +367,31 @@ export function UsageProvidersSettings({
         provider={editing}
         onSave={(input) => saveProvider.mutateAsync(input)}
         isPending={saveProvider.isPending}
+      />
+      <ConfirmDialog
+        isOpen={removing !== null}
+        title={t("confirm.removeProvider", {
+          defaultValue: "Remove Provider",
+        })}
+        message={t("confirm.removeProviderMessage", {
+          name: removing?.name ?? "",
+          defaultValue: `Remove "${removing?.name ?? ""}" from your Providers? Recorded usage and any saved credential are kept, so adding it back restores them.`,
+        })}
+        confirmText={t("common.remove", { defaultValue: "Remove" })}
+        cancelText={t("common.cancel", { defaultValue: "Cancel" })}
+        onConfirm={() => {
+          const provider = removing;
+          setRemoving(null);
+          if (provider) {
+            void run(() =>
+              setEnabled.mutateAsync({
+                providerId: provider.id,
+                enabled: false,
+              }),
+            );
+          }
+        }}
+        onCancel={() => setRemoving(null)}
       />
       <ConfirmDialog
         isOpen={deleting !== null}

@@ -119,7 +119,7 @@
     "providersSettingsDescription": "Manage Provider billing identity and data-source metadata. Agent membership is managed only from Agents.",
     "searchProviders": "Search Providers",
     "searchProvidersPlaceholder": "Search by Provider name or endpoint...",
-    "providerCatalogHint": "Search the built-in catalog, then sign in or save an API key. Usage, balance, and quota still depend on the monitoring sources each Provider exposes.",
+    "providerCatalogHint": "Pick the Providers you use, then sign in or save an API key. Usage, balance, and quota still depend on the monitoring sources each Provider exposes.",
     "noMatchingProviders": "No Providers match this search.",
     "customProviders": "Custom Providers",
     "customProvidersDescription": "Add or edit Providers with your own routing and metadata.",
@@ -157,7 +157,10 @@
     "providerEmpty": "No Provider accounts are configured.",
     "remainingPercent": "{{value}}% left",
     "fiveHourWindow": "5-hour window",
-    "sevenDayWindow": "Weekly allowance"
+    "sevenDayWindow": "Weekly allowance",
+    "addBuiltInProvider": "Add a built-in Provider",
+    "noPickedProviders": "No built-in Providers picked yet. Add the ones you use.",
+    "removeProvider": "Remove {{name}}"
   },
   "dashboardAgents": {
     "settingsDescription": "Manage Agent navigation and explicit Provider bindings. Fixed Agent identities cannot be renamed or deleted."
@@ -197,7 +200,8 @@
     "enabled": "Enabled",
     "disabled": "Disabled",
     "enable": "Enable",
-    "disable": "Disable"
+    "disable": "Disable",
+    "remove": "Remove"
   },
   "header": {
     "windowMinimize": "Minimize window",
@@ -225,7 +229,9 @@
   },
   "confirm": {
     "deleteProvider": "Delete Provider",
-    "deleteProviderMessage": "Are you sure you want to delete provider \"{{name}}\"? This action cannot be undone."
+    "deleteProviderMessage": "Are you sure you want to delete provider \"{{name}}\"? This action cannot be undone.",
+    "removeProvider": "Remove Provider",
+    "removeProviderMessage": "Remove \"{{name}}\" from your Providers? Recorded usage and any saved credential are kept, so adding it back restores them."
   },
   "settings": {
     "title": "Settings",

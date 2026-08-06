@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { Trash2 } from "lucide-react";
 import { CodexOAuthSection } from "@/components/providers/forms/CodexOAuthSection";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,10 +11,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import {
-  useSetUsageProviderEnabled,
-  useSystemProviderCredentialActions,
-} from "@/lib/query/usageDashboard";
+import { useSystemProviderCredentialActions } from "@/lib/query/usageDashboard";
 import type { UsageProviderView } from "@/types/usageDashboard";
 import { ClaudeCliAuthSection } from "./ClaudeCliAuthSection";
 import { ProviderDailyBudgetField } from "./ProviderDailyBudgetField";
@@ -26,6 +24,9 @@ interface SystemProviderCardProps {
   showBudget?: boolean;
   targetProviderId?: string;
   onTargetHandled?: () => void;
+  /** Asks to take this Provider off the list; the parent confirms first. */
+  onRemove: (provider: UsageProviderView) => void;
+  isRemovePending?: boolean;
 }
 
 export function SystemProviderCard({
@@ -33,10 +34,11 @@ export function SystemProviderCard({
   showBudget = true,
   targetProviderId,
   onTargetHandled,
+  onRemove,
+  isRemovePending = false,
 }: SystemProviderCardProps) {
   const { t } = useTranslation();
   const credentials = useSystemProviderCredentialActions();
-  const setEnabled = useSetUsageProviderEnabled();
   const [apiKey, setApiKey] = useState("");
   const [failed, setFailed] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<
@@ -106,31 +108,20 @@ export function SystemProviderCard({
             </CardDescription>
           </div>
         </div>
+        {/* A card is on this list because the user put it there, so the only
+            action its header needs is taking it back off. */}
         <Button
-          size="sm"
-          variant="outline"
-          disabled={setEnabled.isPending}
-          aria-label={t(
-            provider.enabled
-              ? "usageDashboard.disableProvider"
-              : "usageDashboard.enableProvider",
-            {
-              name: provider.name,
-              defaultValue: `${provider.enabled ? "Disable" : "Enable"} ${provider.name}`,
-            },
-          )}
-          onClick={() =>
-            void run(() =>
-              setEnabled.mutateAsync({
-                providerId: provider.id,
-                enabled: !provider.enabled,
-              }),
-            )
-          }
+          size="icon"
+          variant="ghost"
+          className="size-8 shrink-0 hover:bg-destructive/10 hover:text-destructive"
+          disabled={isRemovePending}
+          aria-label={t("usageDashboard.removeProvider", {
+            name: provider.name,
+            defaultValue: `Remove ${provider.name}`,
+          })}
+          onClick={() => onRemove(provider)}
         >
-          {provider.enabled
-            ? t("common.disable", { defaultValue: "Disable" })
-            : t("common.enable", { defaultValue: "Enable" })}
+          <Trash2 className="size-4" aria-hidden="true" />
         </Button>
       </CardHeader>
       <CardContent className="space-y-4">

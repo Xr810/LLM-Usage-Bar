@@ -2,6 +2,11 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
 import { UsageProvidersSettings } from "./UsageProvidersSettings";
 
+const setEnabledMock = vi.hoisted(() => ({
+  mutateAsync: vi.fn(),
+  isPending: false,
+}));
+
 const fixedProviders = [
   ["system-chatgpt-subscription", "ChatGPT", "chatgpt-subscription"],
   ["system-claude-subscription", "Claude", "claude-subscription"],
@@ -60,10 +65,7 @@ vi.mock("@/lib/query/usageDashboard", () => ({
   }),
   useSaveUsageProvider: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useDeleteUsageProvider: () => ({ mutateAsync: vi.fn(), isPending: false }),
-  useSetUsageProviderEnabled: () => ({
-    mutateAsync: vi.fn(),
-    isPending: false,
-  }),
+  useSetUsageProviderEnabled: () => setEnabledMock,
 }));
 
 vi.mock("@/lib/query/trayUsage", () => ({
@@ -83,10 +85,12 @@ vi.mock("./SystemProviderCard", () => ({
     provider,
     targetProviderId,
     showBudget,
+    onRemove,
   }: {
     provider: { id: string; name: string };
     targetProviderId?: string;
     showBudget?: boolean;
+    onRemove: (provider: { id: string; name: string }) => void;
   }) => (
     <div
       data-testid="fixed-provider-card"
@@ -95,6 +99,11 @@ vi.mock("./SystemProviderCard", () => ({
       data-show-budget={showBudget}
     >
       {provider.name}
+      <button
+        type="button"
+        aria-label={`Remove ${provider.name}`}
+        onClick={() => onRemove(provider)}
+      />
     </div>
   ),
 }));
@@ -179,23 +188,59 @@ it("renders the built-in Provider catalog in canonical order before custom Provi
   ).toBeInTheDocument();
 });
 
-it("searches the Provider catalog by name and preset identity", () => {
+it("searches the catalog inside the picker and toggles what it finds", () => {
+  setEnabledMock.mutateAsync.mockClear();
   render(<UsageProvidersSettings />);
 
+  // The catalogue is behind a control now; the page itself lists only what has
+  // been picked, so the search has to live where the catalogue is.
+  fireEvent.click(
+    screen.getByRole("button", { name: /Add a built-in Provider/ }),
+  );
   const search = screen.getByRole("searchbox", { name: "Search Providers" });
   fireEvent.change(search, { target: { value: "moonshot" } });
 
-  expect(screen.getByText("Kimi / Moonshot API")).toBeInTheDocument();
-  expect(screen.queryByText("OpenAI API")).toBeNull();
-  expect(screen.queryByText("Custom Example")).toBeNull();
+  const options = screen
+    .getAllByRole("checkbox")
+    .map((box) => box.getAttribute("aria-label"));
+  expect(options).toEqual(["Kimi / Moonshot API"]);
+
+  fireEvent.click(
+    screen.getByRole("checkbox", { name: "Kimi / Moonshot API" }),
+  );
+  expect(setEnabledMock.mutateAsync).toHaveBeenCalledWith({
+    providerId: "system-kimi-api",
+    enabled: false,
+  });
 
   fireEvent.change(search, { target: { value: "not-a-provider" } });
   expect(
     screen.getByText("No Providers match this search."),
   ).toBeInTheDocument();
+});
+
+it("removes a picked Provider only after the confirmation is accepted", () => {
+  setEnabledMock.mutateAsync.mockClear();
+  render(<UsageProvidersSettings />);
+
+  fireEvent.click(screen.getByRole("button", { name: "Remove OpenRouter" }));
+  // The trash icon opens a question; it does not answer it.
+  expect(setEnabledMock.mutateAsync).not.toHaveBeenCalled();
+  // Removal keeps history and the credential, so the copy has to say so —
+  // a "delete" that quietly preserves things is the worse surprise.
   expect(
-    screen.getByRole("button", { name: "Add Provider" }),
+    screen.getByText(/Recorded usage and any saved credential are kept/),
   ).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(setEnabledMock.mutateAsync).not.toHaveBeenCalled();
+
+  fireEvent.click(screen.getByRole("button", { name: "Remove OpenRouter" }));
+  fireEvent.click(screen.getByRole("button", { name: /^Remove$/ }));
+  expect(setEnabledMock.mutateAsync).toHaveBeenCalledWith({
+    providerId: "system-openrouter-api",
+    enabled: false,
+  });
 });
 
 it("forwards fixed and custom targets while keeping custom budget editors full-width and metered-only", () => {

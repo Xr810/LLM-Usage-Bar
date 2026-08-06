@@ -119,7 +119,7 @@
     "providersSettingsDescription": "Provider の課金 ID とデータソースのメタデータを管理します。Agent への所属は Agent 設定でのみ管理します。",
     "searchProviders": "Provider を検索",
     "searchProvidersPlaceholder": "Provider 名または Endpoint で検索…",
-    "providerCatalogHint": "内蔵カタログを検索して、ログインまたは API key を保存します。使用量、残高、クォータの表示可否は、各 Provider が公開する監視ソースに依存します。",
+    "providerCatalogHint": "使用する Provider を選び、サインインするか API キーを保存します。使用量・残高・クォータは各 Provider が提供する監視ソースに依存します。",
     "noMatchingProviders": "検索に一致する Provider はありません。",
     "customProviders": "カスタム Provider",
     "customProvidersDescription": "独自のルーティングとメタデータを持つ Provider を追加または編集します。",
@@ -157,7 +157,10 @@
     "providerEmpty": "プロバイダーアカウントが設定されていません。",
     "remainingPercent": "残り {{value}}%",
     "fiveHourWindow": "5 時間枠",
-    "sevenDayWindow": "週間枠"
+    "sevenDayWindow": "週間枠",
+    "addBuiltInProvider": "組み込み Provider を追加",
+    "noPickedProviders": "組み込み Provider が未選択です。使うものを追加してください。",
+    "removeProvider": "{{name}} を削除"
   },
   "dashboardAgents": {
     "settingsDescription": "Agent のナビゲーションと明示的な Provider バインドを管理します。固定 Agent の ID は変更または削除できません。"
@@ -197,7 +200,8 @@
     "enabled": "有効",
     "disabled": "無効",
     "enable": "有効化",
-    "disable": "無効化"
+    "disable": "無効化",
+    "remove": "削除"
   },
   "header": {
     "windowMinimize": "ウィンドウを最小化",
@@ -225,7 +229,9 @@
   },
   "confirm": {
     "deleteProvider": "プロバイダーを削除",
-    "deleteProviderMessage": "プロバイダー「{{name}}」を削除してもよろしいですか？この操作は元に戻せません。"
+    "deleteProviderMessage": "プロバイダー「{{name}}」を削除してもよろしいですか？この操作は元に戻せません。",
+    "removeProvider": "Provider を削除",
+    "removeProviderMessage": "「{{name}}」を Provider 一覧から外しますか？記録済みの使用量と保存済みの資格情報は保持され、再度追加すれば元に戻ります。"
   },
   "settings": {
     "title": "設定",

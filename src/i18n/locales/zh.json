@@ -119,7 +119,7 @@
     "providersSettingsDescription": "管理 Provider 的计费身份与数据来源元数据；Agent 归属仅在 Agent 设置中管理。",
     "searchProviders": "搜索 Provider",
     "searchProvidersPlaceholder": "按 Provider 名称或 Endpoint 搜索…",
-    "providerCatalogHint": "搜索内置目录后登录或保存 API key。用量、余额和配额能否显示，仍取决于各 Provider 实际开放的监控数据来源。",
+    "providerCatalogHint": "勾选你实际使用的 Provider，然后登录或保存 API Key。用量、余额和额度仍取决于各 Provider 提供的监测来源。",
     "noMatchingProviders": "没有匹配的 Provider。",
     "customProviders": "自定义 Provider",
     "customProvidersDescription": "添加或编辑使用自有路由与元数据的 Provider。",
@@ -157,7 +157,10 @@
     "providerEmpty": "尚未配置 Provider 账号。",
     "remainingPercent": "剩余 {{value}}%",
     "fiveHourWindow": "5 小时额度",
-    "sevenDayWindow": "周额度"
+    "sevenDayWindow": "周额度",
+    "addBuiltInProvider": "添加内置 Provider",
+    "noPickedProviders": "还没有选择内置 Provider，把你用的加进来。",
+    "removeProvider": "移除 {{name}}"
   },
   "dashboardAgents": {
     "settingsDescription": "管理 Agent 导航与显式 Provider 绑定。固定 Agent 的身份不能重命名或删除。"
@@ -197,7 +200,8 @@
     "enabled": "已开启",
     "disabled": "已停用",
     "enable": "启用",
-    "disable": "停用"
+    "disable": "停用",
+    "remove": "移除"
   },
   "header": {
     "windowMinimize": "最小化窗口",
@@ -225,7 +229,9 @@
   },
   "confirm": {
     "deleteProvider": "删除供应商",
-    "deleteProviderMessage": "确定要删除供应商 \"{{name}}\" 吗？此操作无法撤销。"
+    "deleteProviderMessage": "确定要删除供应商 \"{{name}}\" 吗？此操作无法撤销。",
+    "removeProvider": "移除 Provider",
+    "removeProviderMessage": "把「{{name}}」从你的 Provider 列表里移除？已记录的用量和已保存的凭据都会保留，重新添加即可恢复。"
   },
   "settings": {
     "title": "设置",
