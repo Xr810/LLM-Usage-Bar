@@ -435,7 +435,6 @@
     "dailyBudget": "Daily budget",
     "providerAllowance": "{{allowance}} for {{provider}}",
     "providerAllowanceForAgent": "{{allowance}} for {{provider}} · {{agent}}",
-    "plan": "Plan: {{plan}}",
     "invalidQuotaPercent": "Usage percentage unavailable",
     "quotaUnavailable": "Quota data unavailable",
     "invalidResetTimestamp": "Reset time unavailable",

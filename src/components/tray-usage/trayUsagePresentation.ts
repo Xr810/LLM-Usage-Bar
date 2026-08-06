@@ -28,6 +28,20 @@ function parseNonNegativeNumber(value: string | null): number | null {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }
 
+/**
+ * The Provider as a person names it: "ChatGPT Pro", not "ChatGPT" with the tier
+ * filed underneath. The stored name is deliberately just the product — the tier
+ * comes from the credential and only exists for accounts whose token reports
+ * one, so it is appended here rather than baked into the name.
+ */
+export function providerDisplayName(
+  name: string,
+  planLabel?: string | null,
+): string {
+  const plan = planLabel?.trim();
+  return plan ? `${name} ${plan}` : name;
+}
+
 export function formatUsd(value: string | null, locale: string): string {
   const parsed = parseNonNegativeNumber(value);
   if (parsed == null) return PLACEHOLDER;

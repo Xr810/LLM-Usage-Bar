@@ -153,7 +153,6 @@ const requiredKeys = [
   "trayUsage.dailyBudget",
   "trayUsage.providerAllowance",
   "trayUsage.providerAllowanceForAgent",
-  "trayUsage.plan",
   "usageDashboard.claudeCliDetected",
   "usageDashboard.claudeCliDetectedSignedOut",
   "usageDashboard.claudeApiKey",

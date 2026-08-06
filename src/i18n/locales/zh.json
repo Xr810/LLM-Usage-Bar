@@ -435,7 +435,6 @@
     "dailyBudget": "每日预算",
     "providerAllowance": "{{provider}} 的{{allowance}}",
     "providerAllowanceForAgent": "{{agent}} · {{provider}} 的{{allowance}}",
-    "plan": "套餐：{{plan}}",
     "invalidQuotaPercent": "用量百分比不可用",
     "quotaUnavailable": "额度数据不可用",
     "invalidResetTimestamp": "重置时间不可用",

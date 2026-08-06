@@ -6,6 +6,7 @@ import {
   formatPercent,
   formatResetTime,
   hasUsablePercent,
+  providerDisplayName,
   providerIconName,
   quotaUnavailableReasonLabel,
   type TrayProviderRow,
@@ -38,15 +39,14 @@ export function TraySubscriptionSection({
       <div className="space-y-2">
         {rows.map(({ agentModuleId, agentName, provider }) => {
           if (!provider.subscription) return null;
-          const planText = provider.subscription.planLabel
-            ? t("trayUsage.plan", {
-                plan: provider.subscription.planLabel,
-                defaultValue: "Plan: {{plan}}",
-              })
-            : null;
-          const subtitle = showAgentName
-            ? [planText, agentName].filter(Boolean).join(" · ")
-            : planText;
+          // The tier belongs in the name — "ChatGPT Pro" is what the account
+          // is called. Filed underneath as "Plan: Pro" it read as a separate
+          // fact about a Provider whose name looked incomplete.
+          const displayName = providerDisplayName(
+            provider.providerName,
+            provider.subscription.planLabel,
+          );
+          const subtitle = showAgentName ? agentName : null;
           return (
             <article
               key={`${agentModuleId}:${provider.providerId}`}
@@ -65,11 +65,9 @@ export function TraySubscriptionSection({
                       account visible without scrolling. */}
                   <h3
                     className="flex min-w-0 items-baseline gap-1.5 text-[13px] font-semibold leading-tight"
-                    title={provider.providerName}
+                    title={displayName}
                   >
-                    <span className="min-w-0 truncate">
-                      {provider.providerName}
-                    </span>
+                    <span className="min-w-0 truncate">{displayName}</span>
                     {/* The account name identifies the row, the plan only
                         qualifies it — so the plan gives up width first. */}
                     {subtitle ? (

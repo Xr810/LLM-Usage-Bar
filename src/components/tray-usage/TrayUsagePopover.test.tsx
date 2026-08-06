@@ -171,7 +171,7 @@ describe("TrayUsagePopover Provider-only UI", () => {
     expect(
       screen.getByRole("heading", { name: "Provider monitoring" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("ChatGPT")).toBeInTheDocument();
+    expect(screen.getByText("ChatGPT Plus")).toBeInTheDocument();
     expect(screen.getByText("OpenAI API")).toBeInTheDocument();
     // Spend stays on the collapsed summary row; the chart and model line are
     // behind the per-account disclosure so the popover stays glanceable.
@@ -387,7 +387,7 @@ describe("TrayUsagePopover Provider-only UI", () => {
 
   it("opens the Provider dashboard from the live tray popover", async () => {
     render(<TrayUsagePopover />, { wrapper: wrapper() });
-    expect(await screen.findByText("ChatGPT")).toBeInTheDocument();
+    expect(await screen.findByText("ChatGPT Plus")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Open details" }));
     await waitFor(() =>
@@ -400,7 +400,7 @@ describe("TrayUsagePopover Provider-only UI", () => {
 
   it("refreshes on show and hides on Escape", async () => {
     render(<TrayUsagePopover />, { wrapper: wrapper() });
-    await screen.findByText("ChatGPT");
+    await screen.findByText("ChatGPT Plus");
 
     act(() => emitTauriEvent("tray-popover-shown"));
     await waitFor(() =>

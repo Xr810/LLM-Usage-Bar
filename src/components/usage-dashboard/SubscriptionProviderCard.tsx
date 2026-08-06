@@ -9,6 +9,7 @@ import { relativeTimeAgo } from "@/lib/relativeTime";
 import type { ProviderUsageView } from "@/types/usageDashboard";
 import { useTranslation } from "react-i18next";
 import { QuotaMeter } from "./QuotaMeter";
+import { providerDisplayName } from "../tray-usage/trayUsagePresentation";
 import {
   DEFAULT_REMAINING_THRESHOLDS,
   dashboardProviderIcon,
@@ -247,22 +248,19 @@ export function SubscriptionProviderCard({
           />
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <h3 className="truncate text-[15px] font-semibold tracking-tight">
-                {usage.provider.name}
-              </h3>
-              {/* The plan replaces the generic "Subscription" rather than
-                  joining it — "ChatGPT" plus a "Pro" badge says everything the
-                  old "ChatGPT Plus/Pro" was hedging about. A Provider whose
-                  credential reports no plan keeps the generic word. */}
-              <Badge
-                variant="secondary"
-                className="shrink-0"
+              {/* The tier is part of what the account is called, so it goes in
+                  the name. The badge beside it marks billing kind, which is
+                  what distinguishes this card from a metered one. */}
+              <h3
+                className="truncate text-[15px] font-semibold tracking-tight"
                 title={planRenewsLabel ?? undefined}
               >
-                {planLabel ??
-                  t("usageDashboard.subscription", {
-                    defaultValue: "Subscription",
-                  })}
+                {providerDisplayName(usage.provider.name, planLabel)}
+              </h3>
+              <Badge variant="secondary" className="shrink-0">
+                {t("usageDashboard.subscription", {
+                  defaultValue: "Subscription",
+                })}
               </Badge>
             </div>
             {/* Where the numbers came from used to lead this line. It named

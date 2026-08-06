@@ -435,7 +435,6 @@
     "dailyBudget": "1 日の予算",
     "providerAllowance": "{{provider}} の{{allowance}}",
     "providerAllowanceForAgent": "{{agent}} · {{provider}} の{{allowance}}",
-    "plan": "プラン：{{plan}}",
     "invalidQuotaPercent": "使用率を取得できません",
     "quotaUnavailable": "上限データを取得できません",
     "invalidResetTimestamp": "リセット時刻を取得できません",

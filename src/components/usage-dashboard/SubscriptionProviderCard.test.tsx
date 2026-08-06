@@ -262,15 +262,16 @@ describe("SubscriptionProviderCard localized reset countdown", () => {
       />,
     );
 
-    // The Provider is called "ChatGPT" precisely because the app
-    // could not tell which; the badge is what resolves it.
-    const badge = screen.getByText("Pro");
-    expect(badge).toBeInTheDocument();
-    expect(badge).toHaveAttribute("title", expect.stringMatching(/2026/));
-    expect(screen.queryByText("Subscription")).toBeNull();
+    // The tier is part of what the account is called, not a separate fact
+    // filed beside a name that looks unfinished.
+    const heading = screen.getByRole("heading", { name: "ChatGPT Pro" });
+    expect(heading).toHaveAttribute("title", expect.stringMatching(/2026/));
+    // The badge marks billing kind, which is what separates this card from a
+    // metered one — it is not where the tier goes.
+    expect(screen.getByText("Subscription")).toBeInTheDocument();
   });
 
-  it("falls back to the generic badge for a credential that reports no plan", () => {
+  it("leaves the name alone for a credential that reports no plan", () => {
     render(
       <SubscriptionProviderCard
         usage={subscriptionUsage()}
@@ -279,7 +280,9 @@ describe("SubscriptionProviderCard localized reset countdown", () => {
       />,
     );
 
-    expect(screen.getByText("Subscription")).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "ChatGPT" }),
+    ).toBeInTheDocument();
   });
 
   it.each([
