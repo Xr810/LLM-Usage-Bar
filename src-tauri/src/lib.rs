@@ -897,8 +897,11 @@ pub fn run() {
                                 crate::tray_popover::TrayClickAction::Ignore => {}
                             }
 
+                            // `tray` is only read by the macOS popover branch
+                            // above, so it joins the rest here rather than
+                            // becoming an unused parameter off that platform.
                             #[cfg(not(target_os = "macos"))]
-                            let _ = (rect, button, button_state);
+                            let _ = (tray, rect, button, button_state);
                         }
                         _ => log::debug!("unhandled event {event:?}"),
                     }
