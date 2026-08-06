@@ -55,7 +55,6 @@ const requiredKeys = [
   "usageDashboard.durationHours",
   "usageDashboard.durationMinutes",
   "usageDashboard.quotaWindowUnavailable",
-  "usageDashboard.costComplete",
   "usageDashboard.costEstimated",
   "usageDashboard.costPartial",
   "usageDashboard.costUnavailable",

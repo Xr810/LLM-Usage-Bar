@@ -113,7 +113,6 @@
     "selectedRangeTokens": "Tokens",
     "selectedRangeTokensHint": "{{value}} tokens across every Provider in the selected time range",
     "meteredOverview": "Metered overview",
-    "costComplete": "Trusted cost data",
     "costPartial": "Some usage could not be priced",
     "costEstimatedSummary": "Includes estimated cost",
     "costUnavailableSummary": "Cost unavailable",

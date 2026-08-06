@@ -55,9 +55,14 @@ export function ProviderUsagePage({
           defaultValue: "Cost unavailable",
         })
       : `$${projection.meteredTotalCostUsd}`;
+  // Only a caveat earns the badge. "Trusted cost data" reported the absence of
+  // a problem on every render, which is a permanent label that says nothing —
+  // and left an idle account wearing a verdict about numbers it does not have.
   const costStatusText =
     projection.meteredCostStatus === "partial"
-      ? t("usageDashboard.costPartial", { defaultValue: "Partial cost data" })
+      ? t("usageDashboard.costPartial", {
+          defaultValue: "Some usage could not be priced",
+        })
       : projection.meteredCostStatus === "estimated"
         ? t("usageDashboard.costEstimatedSummary", {
             defaultValue: "Includes estimated cost",
@@ -66,9 +71,7 @@ export function ProviderUsagePage({
           ? t("usageDashboard.costUnavailableSummary", {
               defaultValue: "Cost unavailable",
             })
-          : t("usageDashboard.costComplete", {
-              defaultValue: "Trusted cost data",
-            });
+          : null;
 
   if (
     projection.subscriptionProviders.length === 0 &&
@@ -212,7 +215,9 @@ export function ProviderUsagePage({
                   defaultValue: "Metered overview",
                 })}
               </h3>
-              <Badge variant="outline">{costStatusText}</Badge>
+              {costStatusText ? (
+                <Badge variant="outline">{costStatusText}</Badge>
+              ) : null}
             </div>
             <dl className="flex items-center gap-6">
               <div className="min-w-0">

@@ -113,7 +113,6 @@
     "selectedRangeTokens": "Token 合计",
     "selectedRangeTokensHint": "所选时间范围内全部 Provider 的 Token 总量：{{value}}",
     "meteredOverview": "按量总览",
-    "costComplete": "费用数据完整",
     "costPartial": "部分用量无法定价",
     "costEstimatedSummary": "包含估算费用",
     "costUnavailableSummary": "费用不可用",

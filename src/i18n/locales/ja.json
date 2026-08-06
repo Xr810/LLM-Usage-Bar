@@ -113,7 +113,6 @@
     "selectedRangeTokens": "トークン合計",
     "selectedRangeTokensHint": "選択期間における全 Provider のトークン合計：{{value}}",
     "meteredOverview": "従量課金の概要",
-    "costComplete": "料金データは完全です",
     "costPartial": "一部の使用量に料金を付けられません",
     "costEstimatedSummary": "推定料金を含みます",
     "costUnavailableSummary": "料金を取得できません",
