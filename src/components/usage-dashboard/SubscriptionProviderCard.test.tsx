@@ -37,7 +37,7 @@ function subscriptionUsage(): ProviderUsageView {
   return {
     provider: {
       id: "system-chatgpt-subscription",
-      name: "ChatGPT Plus/Pro",
+      name: "ChatGPT",
       billingKind: "subscription",
       productGroupId: "codex",
       tokenSources: ["session_log"],
@@ -154,7 +154,7 @@ describe("SubscriptionProviderCard localized reset countdown", () => {
   it("keeps the window label readable when that window is unavailable", () => {
     // The unavailable copy is a sentence, not a figure. Putting it in the
     // right-aligned value slot starved the label down to "5 …" in the real app.
-    // ChatGPT Plus/Pro in the real app: no 5-hour window, a healthy weekly one.
+    // ChatGPT in the real app: no 5-hour window, a healthy weekly one.
     const usage = subscriptionUsage();
     usage.quota!.fiveHourUtilizationPercent = null;
     usage.quota!.fiveHourResetsAt = null;
@@ -262,7 +262,7 @@ describe("SubscriptionProviderCard localized reset countdown", () => {
       />,
     );
 
-    // The Provider is called "ChatGPT Plus/Pro" precisely because the app
+    // The Provider is called "ChatGPT" precisely because the app
     // could not tell which; the badge is what resolves it.
     const badge = screen.getByText("Pro");
     expect(badge).toBeInTheDocument();

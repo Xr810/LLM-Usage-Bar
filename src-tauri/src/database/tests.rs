@@ -1618,7 +1618,7 @@ mod migration_v16_to_v17 {
                 (
                     "system-chatgpt-subscription".into(),
                     "chatgpt-subscription".into(),
-                    "ChatGPT Plus/Pro".into(),
+                    "ChatGPT".into(),
                     "subscription".into(),
                 ),
                 (

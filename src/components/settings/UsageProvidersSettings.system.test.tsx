@@ -3,7 +3,7 @@ import { expect, it, vi } from "vitest";
 import { UsageProvidersSettings } from "./UsageProvidersSettings";
 
 const fixedProviders = [
-  ["system-chatgpt-subscription", "ChatGPT Plus/Pro", "chatgpt-subscription"],
+  ["system-chatgpt-subscription", "ChatGPT", "chatgpt-subscription"],
   ["system-claude-subscription", "Claude Pro/Max", "claude-subscription"],
   ["system-openai-api", "OpenAI API", "openai-api"],
   ["system-anthropic-api", "Anthropic API", "anthropic-api"],
@@ -140,7 +140,7 @@ it("renders the built-in Provider catalog in canonical order before custom Provi
       .getAllByTestId("fixed-provider-card")
       .map((card) => card.textContent),
   ).toEqual([
-    "ChatGPT Plus/Pro",
+    "ChatGPT",
     "Claude Pro/Max",
     "OpenAI API",
     "Anthropic API",
@@ -166,12 +166,8 @@ it("renders the built-in Provider catalog in canonical order before custom Provi
   expect(pageText.indexOf("Cerebras API")).toBeLessThan(
     pageText.indexOf("Custom Example"),
   );
-  expect(
-    screen.queryByRole("button", { name: "Edit ChatGPT Plus/Pro" }),
-  ).toBeNull();
-  expect(
-    screen.queryByRole("button", { name: "Delete ChatGPT Plus/Pro" }),
-  ).toBeNull();
+  expect(screen.queryByRole("button", { name: "Edit ChatGPT" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Delete ChatGPT" })).toBeNull();
   expect(
     screen.getByRole("button", { name: "Edit Custom Example" }),
   ).toBeInTheDocument();

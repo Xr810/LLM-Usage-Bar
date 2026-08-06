@@ -251,9 +251,9 @@ export function SubscriptionProviderCard({
                 {usage.provider.name}
               </h3>
               {/* The plan replaces the generic "Subscription" rather than
-                  joining it: this Provider is named "ChatGPT Plus/Pro"
-                  precisely because the app could not tell which, so once it
-                  can, that is the badge worth the space. */}
+                  joining it — "ChatGPT" plus a "Pro" badge says everything the
+                  old "ChatGPT Plus/Pro" was hedging about. A Provider whose
+                  credential reports no plan keeps the generic word. */}
               <Badge
                 variant="secondary"
                 className="shrink-0"

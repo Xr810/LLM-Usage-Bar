@@ -146,7 +146,7 @@ it("does not render a budget editor for subscription Providers", () => {
       provider={
         {
           id: "system-chatgpt-subscription",
-          name: "ChatGPT Plus/Pro",
+          name: "ChatGPT",
           billingKind: "subscription",
           dailyBudgetUsd: null,
           systemAuthKind: "codex_oauth",

@@ -23,7 +23,7 @@ describe("UsageDashboardPage Provider-only contract", () => {
     expect(
       await screen.findByRole("heading", { name: "Provider monitoring" }),
     ).toBeInTheDocument();
-    expect(await screen.findByText("ChatGPT Plus/Pro")).toBeInTheDocument();
+    expect(await screen.findByText("ChatGPT")).toBeInTheDocument();
     expect(
       screen.getByRole("heading", { name: "Remaining quota" }),
     ).toBeInTheDocument();
@@ -60,7 +60,7 @@ describe("UsageDashboardPage Provider-only contract", () => {
   it("queries exact Provider-wide ranges for today, 7 days, 30 days, and 1 year", async () => {
     const user = userEvent.setup();
     renderPage();
-    await screen.findByText("ChatGPT Plus/Pro");
+    await screen.findByText("ChatGPT");
 
     await user.click(screen.getByRole("button", { name: "Today" }));
     await waitFor(() =>
@@ -114,7 +114,7 @@ describe("UsageDashboardPage Provider-only contract", () => {
 
   it("does not expose manual Provider actions in the monitoring dashboard", async () => {
     renderPage();
-    await screen.findByText("ChatGPT Plus/Pro");
+    await screen.findByText("ChatGPT");
 
     expect(screen.queryByRole("button", { name: "Refresh quota" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Sync sessions" })).toBeNull();

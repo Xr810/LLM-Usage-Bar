@@ -41,7 +41,7 @@ const snapshot: TrayUsageSnapshot = {
       providers: [
         {
           providerId: "system-chatgpt-subscription",
-          providerName: "ChatGPT Plus/Pro",
+          providerName: "ChatGPT",
           systemPresetKey: "chatgpt-subscription",
           billingKind: "subscription",
           status: "yellow",
@@ -171,7 +171,7 @@ describe("TrayUsagePopover Provider-only UI", () => {
     expect(
       screen.getByRole("heading", { name: "Provider monitoring" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("ChatGPT Plus/Pro")).toBeInTheDocument();
+    expect(screen.getByText("ChatGPT")).toBeInTheDocument();
     expect(screen.getByText("OpenAI API")).toBeInTheDocument();
     // Spend stays on the collapsed summary row; the chart and model line are
     // behind the per-account disclosure so the popover stays glanceable.
@@ -282,7 +282,7 @@ describe("TrayUsagePopover Provider-only UI", () => {
 
     expect(
       screen.getByRole("progressbar", {
-        name: "5-hour allowance for ChatGPT Plus/Pro",
+        name: "5-hour allowance for ChatGPT",
       }),
     ).toHaveAttribute("aria-valuenow", "95");
   });
@@ -387,7 +387,7 @@ describe("TrayUsagePopover Provider-only UI", () => {
 
   it("opens the Provider dashboard from the live tray popover", async () => {
     render(<TrayUsagePopover />, { wrapper: wrapper() });
-    expect(await screen.findByText("ChatGPT Plus/Pro")).toBeInTheDocument();
+    expect(await screen.findByText("ChatGPT")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Open details" }));
     await waitFor(() =>
@@ -400,7 +400,7 @@ describe("TrayUsagePopover Provider-only UI", () => {
 
   it("refreshes on show and hides on Escape", async () => {
     render(<TrayUsagePopover />, { wrapper: wrapper() });
-    await screen.findByText("ChatGPT Plus/Pro");
+    await screen.findByText("ChatGPT");
 
     act(() => emitTauriEvent("tray-popover-shown"));
     await waitFor(() =>

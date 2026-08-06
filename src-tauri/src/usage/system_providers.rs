@@ -84,7 +84,10 @@ pub fn system_provider_definitions() -> Vec<SystemProviderDefinition> {
         SystemProviderDefinition {
             id: CHATGPT_SUBSCRIPTION_ID,
             preset_key: "chatgpt-subscription",
-            name: "ChatGPT Plus/Pro",
+            // Just "ChatGPT": the tier is read from the OAuth token and appended
+            // where the Provider is displayed. The old name spelled out both
+            // options because the app could not tell them apart.
+            name: "ChatGPT",
             billing_kind: BillingKind::Subscription,
             product_group_id: "chatgpt-subscription",
             token_sources: &[TokenSource::Proxy, TokenSource::SessionLog],

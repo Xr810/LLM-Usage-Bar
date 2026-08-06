@@ -56,7 +56,7 @@ describe("SettingsPage Provider-only integration", () => {
         (card) => within(card).getByRole("heading", { level: 3 }).textContent,
       ),
     ).toEqual([
-      "ChatGPT Plus/Pro",
+      "ChatGPT",
       "Claude Pro/Max",
       "OpenAI API",
       "Anthropic API",

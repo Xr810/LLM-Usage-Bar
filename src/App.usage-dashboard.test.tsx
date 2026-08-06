@@ -46,7 +46,7 @@ describe("Provider-only usage dashboard main path", () => {
     ).toBeInTheDocument();
     expect(screen.queryByRole("tablist", { name: "Agents" })).toBeNull();
     expect(screen.queryByText("Codex", { selector: "[role=tab]" })).toBeNull();
-    expect(await screen.findByText("ChatGPT Plus/Pro")).toBeInTheDocument();
+    expect(await screen.findByText("ChatGPT")).toBeInTheDocument();
     expect(screen.getAllByText("OpenRouter")).toHaveLength(2);
   });
 

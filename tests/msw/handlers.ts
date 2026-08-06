@@ -41,7 +41,7 @@ export const trayUsageSnapshotFixture: TrayUsageSnapshot = {
       providers: [
         {
           providerId: "system-chatgpt-subscription",
-          providerName: "ChatGPT Plus/Pro",
+          providerName: "ChatGPT",
           systemPresetKey: "chatgpt-subscription",
           billingKind: "subscription",
           status: "green",
@@ -256,7 +256,7 @@ const customBindingCredentialFields = {
 const initialUsageProvidersFixture: UsageProviderView[] = [
   {
     id: "system-chatgpt-subscription",
-    name: "ChatGPT Plus/Pro",
+    name: "ChatGPT",
     billingKind: "subscription",
     productGroupId: "chatgpt-subscription",
     tokenSources: ["proxy", "session_log"],
