@@ -4,7 +4,7 @@ import { UsageProvidersSettings } from "./UsageProvidersSettings";
 
 const fixedProviders = [
   ["system-chatgpt-subscription", "ChatGPT", "chatgpt-subscription"],
-  ["system-claude-subscription", "Claude Pro/Max", "claude-subscription"],
+  ["system-claude-subscription", "Claude", "claude-subscription"],
   ["system-openai-api", "OpenAI API", "openai-api"],
   ["system-anthropic-api", "Anthropic API", "anthropic-api"],
   ["system-openrouter-api", "OpenRouter", "openrouter-api"],
@@ -141,7 +141,7 @@ it("renders the built-in Provider catalog in canonical order before custom Provi
       .map((card) => card.textContent),
   ).toEqual([
     "ChatGPT",
-    "Claude Pro/Max",
+    "Claude",
     "OpenAI API",
     "Anthropic API",
     "OpenRouter",

@@ -103,7 +103,9 @@ pub fn system_provider_definitions() -> Vec<SystemProviderDefinition> {
         SystemProviderDefinition {
             id: CLAUDE_SUBSCRIPTION_ID,
             preset_key: "claude-subscription",
-            name: "Claude Pro/Max",
+            // Just "Claude": the tier comes from the CLI's account profile and
+            // is appended where the Provider is displayed.
+            name: "Claude",
             billing_kind: BillingKind::Subscription,
             product_group_id: "claude-subscription",
             token_sources: &[TokenSource::SessionLog],

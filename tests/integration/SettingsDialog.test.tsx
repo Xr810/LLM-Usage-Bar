@@ -57,7 +57,7 @@ describe("SettingsPage Provider-only integration", () => {
       ),
     ).toEqual([
       "ChatGPT",
-      "Claude Pro/Max",
+      "Claude",
       "OpenAI API",
       "Anthropic API",
       "OpenRouter",

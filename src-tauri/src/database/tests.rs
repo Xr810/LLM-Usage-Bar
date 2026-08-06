@@ -1624,7 +1624,7 @@ mod migration_v16_to_v17 {
                 (
                     "system-claude-subscription".into(),
                     "claude-subscription".into(),
-                    "Claude Pro/Max".into(),
+                    "Claude".into(),
                     "subscription".into(),
                 ),
                 (

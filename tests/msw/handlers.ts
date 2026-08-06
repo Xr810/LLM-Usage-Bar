@@ -299,7 +299,7 @@ const initialUsageProvidersFixture: UsageProviderView[] = [
   },
   {
     id: "system-claude-subscription",
-    name: "Claude Pro/Max",
+    name: "Claude",
     billingKind: "subscription",
     productGroupId: "claude-subscription",
     tokenSources: ["session_log"],

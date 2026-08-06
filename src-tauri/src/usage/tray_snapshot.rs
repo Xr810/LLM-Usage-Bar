@@ -1755,5 +1755,4 @@ mod tests {
         assert_eq!(display_plan_label("enterprise"), "Enterprise");
         assert_eq!(display_plan_label(""), "");
     }
-
 }

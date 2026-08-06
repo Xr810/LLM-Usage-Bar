@@ -28,6 +28,8 @@ const MAX_STATUSLINE_CACHE_BYTES: u64 = 256 * 1_024;
 const MAX_DESKTOP_HISTORY_BYTES: u64 = 4 * 1_048_576;
 const MAX_DESKTOP_HISTORY_SAMPLES: usize = 20_000;
 const MAX_CACHED_STATUSLINE_SESSIONS: usize = 32;
+const CLI_ACCOUNT_FILE_NAME: &str = ".claude.json";
+const MAX_CLI_ACCOUNT_BYTES: u64 = 4 * 1_048_576;
 const MAX_CLAUDE_VERSION_CHARS: usize = 64;
 const MAX_CACHE_AGE_SECONDS: i64 = 15 * 60;
 const CACHE_LOCK_TIMEOUT: Duration = Duration::from_millis(250);
@@ -152,6 +154,45 @@ pub(crate) fn collect_local_quota() -> Result<SubscriptionQuota, String> {
         &statusline_cache_path(),
         now,
     )
+}
+
+/// The subscription tier, read from the Claude CLI's own account profile.
+///
+/// `~/.claude.json` carries `oauthAccount.organizationType`, which is where the
+/// CLI keeps the plan it reports as `subscriptionType`. Reading the file costs
+/// nothing; asking the CLI would mean spawning a process on every quota
+/// refresh. Neither the file's credentials nor any other field is touched.
+fn read_cli_plan_type() -> Option<String> {
+    read_cli_plan_type_at(&config::get_home_dir().join(CLI_ACCOUNT_FILE_NAME))
+}
+
+fn read_cli_plan_type_at(path: &Path) -> Option<String> {
+    let metadata = fs::metadata(path).ok()?;
+    if metadata.len() > MAX_CLI_ACCOUNT_BYTES {
+        return None;
+    }
+    let contents = fs::read_to_string(path).ok()?;
+    let document: serde_json::Value = serde_json::from_str(&contents).ok()?;
+    let organization_type = document
+        .get("oauthAccount")?
+        .get("organizationType")?
+        .as_str()?;
+    normalize_plan_type(organization_type)
+}
+
+/// `claude_pro` is Pro, `claude_max_5x` is Max 5x. The prefix is Anthropic's
+/// namespace rather than part of the plan's name, and anything past it is left
+/// as written: a tier this app has not seen should still read as itself rather
+/// than be dropped for not matching a known list.
+fn normalize_plan_type(organization_type: &str) -> Option<String> {
+    let plan = organization_type
+        .trim()
+        .to_lowercase()
+        .strip_prefix("claude_")
+        .unwrap_or(organization_type.trim())
+        .replace('_', " ");
+    let plan = plan.trim().to_string();
+    (!plan.is_empty()).then_some(plan)
 }
 
 fn statusline_cache_path() -> PathBuf {
@@ -552,7 +593,7 @@ fn collect_local_quota_from_paths_at(
         credential_message: None,
         success: true,
         tiers,
-        plan_type: None,
+        plan_type: read_cli_plan_type(),
         plan_renews_at: None,
         manual_reset_credits: None,
         extra_usage: None,
@@ -685,7 +726,9 @@ fn collect_statusline_quota_from_path_at(
         credential_message: None,
         success: true,
         tiers: observations.into_iter().map(|value| value.tier).collect(),
-        plan_type: None,
+        // Both Claude collectors describe the same account, so both report its
+        // plan — whichever one a given machine ends up serving.
+        plan_type: read_cli_plan_type(),
         plan_renews_at: None,
         manual_reset_credits: None,
         extra_usage: None,
@@ -1673,5 +1716,61 @@ mod tests {
             collect_local_quota_from_paths_at(Some(&history_path), &temp_cache_path(), 10_000)
                 .unwrap_err();
         assert!(error.contains("invalid Claude five_hour"));
+    }
+    #[test]
+    fn plan_type_strips_the_namespace_and_keeps_what_follows() {
+        assert_eq!(normalize_plan_type("claude_pro").as_deref(), Some("pro"));
+        assert_eq!(normalize_plan_type("claude_max").as_deref(), Some("max"));
+        // A tier this app has not seen must read as itself rather than be
+        // dropped for failing to match a known list.
+        assert_eq!(
+            normalize_plan_type("claude_max_20x").as_deref(),
+            Some("max 20x")
+        );
+        assert_eq!(
+            normalize_plan_type("  CLAUDE_TEAM ").as_deref(),
+            Some("team")
+        );
+        // Something outside the namespace is still a plan, just not ours to rename.
+        assert_eq!(
+            normalize_plan_type("enterprise").as_deref(),
+            Some("enterprise")
+        );
+        assert_eq!(normalize_plan_type("claude_"), None);
+        assert_eq!(normalize_plan_type("   "), None);
+    }
+
+    #[test]
+    fn plan_type_reads_the_cli_account_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".claude.json");
+
+        // Absent, unparseable, and shapes without the field all mean "unknown",
+        // never a guess.
+        assert_eq!(read_cli_plan_type_at(&path), None);
+        fs::write(&path, b"not json").unwrap();
+        assert_eq!(read_cli_plan_type_at(&path), None);
+        fs::write(&path, br#"{"oauthAccount":{}}"#).unwrap();
+        assert_eq!(read_cli_plan_type_at(&path), None);
+
+        fs::write(
+            &path,
+            br#"{"oauthAccount":{"organizationType":"claude_pro","emailAddress":"a@b.c"}}"#,
+        )
+        .unwrap();
+        assert_eq!(read_cli_plan_type_at(&path).as_deref(), Some("pro"));
+    }
+
+    #[test]
+    fn plan_type_ignores_an_implausibly_large_account_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".claude.json");
+        let padding = " ".repeat(MAX_CLI_ACCOUNT_BYTES as usize + 1);
+        fs::write(
+            &path,
+            format!(r#"{{"oauthAccount":{{"organizationType":"claude_pro"}}}}{padding}"#),
+        )
+        .unwrap();
+        assert_eq!(read_cli_plan_type_at(&path), None);
     }
 }
