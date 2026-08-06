@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Plus, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -35,6 +35,11 @@ export function SystemProviderPicker({
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  // This picker lives inside the settings Dialog, whose modal scroll lock
+  // blocks wheel events outside its own subtree — so the list has to be
+  // portalled into the dialog rather than onto `document.body`.
+  const [container, setContainer] = useState<HTMLElement | null>(null);
 
   const query = search.trim().toLocaleLowerCase();
   const matches = useMemo(
@@ -56,11 +61,21 @@ export function SystemProviderPicker({
       open={open}
       onOpenChange={(next) => {
         setOpen(next);
-        if (!next) setSearch("");
+        if (next) {
+          setContainer(
+            triggerRef.current?.closest<HTMLElement>('[role="dialog"]') ?? null,
+          );
+        } else {
+          setSearch("");
+        }
       }}
     >
       <PopoverTrigger asChild>
-        <Button variant="outline" className="w-full border-dashed">
+        <Button
+          ref={triggerRef}
+          variant="outline"
+          className="w-full border-dashed"
+        >
           <Plus className="mr-1.5 size-4" aria-hidden="true" />
           {t("usageDashboard.addBuiltInProvider", {
             defaultValue: "Add a built-in Provider",
@@ -72,6 +87,7 @@ export function SystemProviderPicker({
       </PopoverTrigger>
       <PopoverContent
         align="start"
+        container={container}
         className="w-[min(24rem,90vw)] overflow-hidden p-0"
       >
         <div className="relative border-b p-2">
