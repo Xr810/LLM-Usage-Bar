@@ -136,25 +136,7 @@
   },
   {
     "file": "src-tauri/src/commands/misc.rs",
-    "lineNumber": 2734,
-    "columnNumber": 42,
-    "matchedText": "cc_switch",
-    "context": "let script_file = temp_dir.join(format!(\"cc_switch_launcher_{}.sh\", std::process::id()));",
-    "kind": "unsupportedPlatform",
-    "reason": "exact Windows or Linux-only branch excluded from macOS delivery"
-  },
-  {
-    "file": "src-tauri/src/commands/misc.rs",
-    "lineNumber": 2835,
-    "columnNumber": 39,
-    "matchedText": "cc_switch",
-    "context": "let bat_file = temp_dir.join(format!(\"cc_switch_claude_{}.bat\", std::process::id()));",
-    "kind": "unsupportedPlatform",
-    "reason": "exact Windows or Linux-only branch excluded from macOS delivery"
-  },
-  {
-    "file": "src-tauri/src/commands/misc.rs",
-    "lineNumber": 3086,
+    "lineNumber": 2888,
     "columnNumber": 39,
     "matchedText": "cc_switch",
     "context": "let bat_file = temp_dir.join(format!(\"cc_switch_{}_{}.bat\", label, pid));",
@@ -163,7 +145,7 @@
   },
   {
     "file": "src-tauri/src/commands/misc.rs",
-    "lineNumber": 3088,
+    "lineNumber": 2890,
     "columnNumber": 21,
     "matchedText": "cc-switch",
     "context": "\"@echo off\\r\\necho [cc-switch] Starting: {label}\\r\\necho.\\r\\n{cmd}\\r\\necho.\\r\\necho [cc-switch] Command exited. Press any key to close.\\r\\npause >nul\\r\\ndel \\\"%~f0\\\" >nul 2>&1\\r\\n\",",
@@ -172,7 +154,7 @@
   },
   {
     "file": "src-tauri/src/commands/misc.rs",
-    "lineNumber": 3088,
+    "lineNumber": 2890,
     "columnNumber": 86,
     "matchedText": "cc-switch",
     "context": "\"@echo off\\r\\necho [cc-switch] Starting: {label}\\r\\necho.\\r\\n{cmd}\\r\\necho.\\r\\necho [cc-switch] Command exited. Press any key to close.\\r\\npause >nul\\r\\ndel \\\"%~f0\\\" >nul 2>&1\\r\\n\",",

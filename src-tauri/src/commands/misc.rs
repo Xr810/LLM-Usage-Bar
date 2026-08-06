@@ -1219,7 +1219,7 @@ fn is_windows_app_execution_alias_dir(path: &Path) -> bool {
         .ends_with("\\microsoft\\windowsapps")
 }
 
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+#[cfg(any(target_os = "windows", test))]
 fn push_env_child_dir(
     paths: &mut Vec<std::path::PathBuf>,
     value: Option<std::ffi::OsString>,
@@ -1230,7 +1230,7 @@ fn push_env_child_dir(
     }
 }
 
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+#[cfg(any(target_os = "windows", test))]
 fn extend_existing_child_search_paths(
     paths: &mut Vec<std::path::PathBuf>,
     base: &Path,
@@ -2720,41 +2720,6 @@ fn shell_single_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-fn is_windows_unc_path(path: &str) -> bool {
-    path.starts_with(r"\\")
-}
-
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-fn build_windows_cwd_command_str(path: &str) -> String {
-    let escaped = escape_windows_batch_value(path);
-
-    if is_windows_unc_path(path) {
-        // `cmd.exe` cannot make a UNC path current via `cd`; `pushd` maps it first.
-        format!("pushd \"{escaped}\" || exit /b 1\r\n")
-    } else {
-        format!("cd /d \"{escaped}\" || exit /b 1\r\n")
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn build_windows_cwd_command(cwd: Option<&Path>) -> String {
-    cwd.map(|dir| build_windows_cwd_command_str(&dir.to_string_lossy()))
-        .unwrap_or_default()
-}
-
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-fn escape_windows_batch_value(value: &str) -> String {
-    value
-        .replace('^', "^^")
-        .replace('%', "%%")
-        .replace('&', "^&")
-        .replace('|', "^|")
-        .replace('<', "^<")
-        .replace('>', "^>")
-        .replace('(', "^(")
-        .replace(')', "^)")
-}
 /// Windows: Run a start command with common error handling
 #[cfg(target_os = "windows")]
 fn run_windows_start_command(args: &[&str], terminal_name: &str) -> Result<(), String> {
@@ -4625,33 +4590,6 @@ mod tests {
         assert!(
             build_macos_ghostty_applescript(p).contains(expected),
             "Ghostty did not keep the non-exec launcher"
-        );
-    }
-
-    #[test]
-    fn build_windows_cwd_command_str_uses_cd_for_drive_paths() {
-        let command = build_windows_cwd_command_str(r"C:\work\repo");
-
-        assert_eq!(command, "cd /d \"C:\\work\\repo\" || exit /b 1\r\n");
-    }
-
-    #[test]
-    fn build_windows_cwd_command_str_uses_pushd_for_unc_paths() {
-        let command = build_windows_cwd_command_str(r"\\wsl$\Ubuntu\home\coder\repo");
-
-        assert_eq!(
-            command,
-            "pushd \"\\\\wsl$\\Ubuntu\\home\\coder\\repo\" || exit /b 1\r\n"
-        );
-    }
-
-    #[test]
-    fn build_windows_cwd_command_str_escapes_batch_metacharacters() {
-        let command = build_windows_cwd_command_str(r"\\server\share\100%&(test)");
-
-        assert_eq!(
-            command,
-            "pushd \"\\\\server\\share\\100%%^&^(test^)\" || exit /b 1\r\n"
         );
     }
 }

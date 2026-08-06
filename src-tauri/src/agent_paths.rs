@@ -133,10 +133,12 @@ pub fn get_opencode_dir() -> PathBuf {
 /// 读 `LOCALAPPDATA` 环境变量,缺失/空时回退 `~\AppData\Local`,再拼 `hermes`。
 #[cfg(target_os = "windows")]
 fn default_hermes_dir() -> PathBuf {
-    windows_local_hermes_dir(
-        std::env::var_os("LOCALAPPDATA").as_deref(),
-        &crate::config::get_home_dir(),
-    )
+    std::env::var_os("LOCALAPPDATA")
+        .map(|value| value.to_string_lossy().trim().to_string())
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| crate::config::get_home_dir().join("AppData").join("Local"))
+        .join("hermes")
 }
 
 /// 平台默认 Hermes 目录(Mac/Linux):`~/.hermes`。

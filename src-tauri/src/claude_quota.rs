@@ -22,6 +22,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const CACHE_SCHEMA_VERSION: u8 = 5;
 const CACHE_FILE_NAME: &str = "claude-statusline-quota.json";
 const CACHE_LOCK_FILE_NAME: &str = "claude-statusline-quota.lock";
+#[cfg(any(target_os = "macos", test))]
 const DESKTOP_HISTORY_FILE_NAME: &str = "plan-usage-history.json";
 const MAX_STATUSLINE_INPUT_BYTES: u64 = 1_048_576;
 const MAX_STATUSLINE_CACHE_BYTES: u64 = 256 * 1_024;

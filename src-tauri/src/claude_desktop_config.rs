@@ -25,7 +25,7 @@ pub fn get_config_library_path() -> Result<std::path::PathBuf, AppError> {
     #[cfg(windows)]
     {
         let local_app_data = std::env::var_os("LOCALAPPDATA")
-            .map(PathBuf::from)
+            .map(std::path::PathBuf::from)
             .unwrap_or_else(|| crate::config::get_home_dir().join("AppData").join("Local"));
         Ok(local_app_data.join("Claude-3p").join(CONFIG_LIBRARY_DIR))
     }
