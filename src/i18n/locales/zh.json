@@ -11,7 +11,7 @@
     "activityRange": "最近 12 个月 · 本地日历日",
     "activityChartLabel": "最近 12 个月的每日 Token 活动",
     "activeDays": "{{count}} 个活跃日",
-    "activityInteractionHint": "悬停预览 · 点击固定",
+    "activityInteractionHint": "把鼠标移到某一天查看详情",
     "recentStreak": "最近连续活跃 {{count}} 天",
     "lowActivity": "低",
     "highActivity": "高",

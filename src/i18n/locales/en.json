@@ -11,7 +11,7 @@
     "activityRange": "Last 12 months · local calendar days",
     "activityChartLabel": "Daily token activity for the last 12 months",
     "activeDays": "{{count}} active days",
-    "activityInteractionHint": "Hover to preview · Click to pin",
+    "activityInteractionHint": "Hover a day for its detail",
     "recentStreak": "Recent streak {{count}} days",
     "lowActivity": "Low",
     "highActivity": "High",

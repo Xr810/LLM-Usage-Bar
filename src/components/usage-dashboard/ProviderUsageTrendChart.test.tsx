@@ -74,11 +74,14 @@ describe("ProviderUsageTrendChart", () => {
     expect(
       screen.getByRole("heading", { name: "Usage trend" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("6.5K")).toBeInTheDocument();
+    // Spend is the headline; the tokens that produced it sit underneath.
+    expect(screen.getByText("$18.25")).toBeInTheDocument();
     expect(screen.getByTestId("usage-trend-range")).toHaveTextContent(
       "30 days",
     );
-    expect(screen.getByText(/Peak 5K/)).toHaveTextContent("$18.25");
+    const detail = screen.getByText(/Peak 5K Token/);
+    expect(detail).toHaveTextContent("Tokens 6.5K");
+    expect(detail).toHaveAttribute("title", "6,500");
     expect(
       screen.getByRole("img", { name: "Token usage by day" }),
     ).toBeInTheDocument();

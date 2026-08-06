@@ -138,22 +138,30 @@ export function ProviderUsageTrendChart({
               <span data-testid="usage-trend-range">{rangeLabel}</span>
             </p>
           </div>
+          {/* Spend leads: it is the figure the range is being read for. The
+              tokens that produced it stay underneath, where the peak gives the
+              chart's tallest point a number. */}
           <div className="text-right">
-            <div
-              className="text-lg font-semibold metric"
+            <div className="text-lg font-semibold metric">
+              {totalCostUsd == null
+                ? t("usageDashboard.costUnavailableSummary", {
+                    defaultValue: "Cost unavailable",
+                  })
+                : formatUsd(totalCostUsd, locale)}
+            </div>
+            <p
+              className="mt-0.5 text-[11px] text-muted-foreground"
               title={totalTokens.toLocaleString(locale)}
             >
-              {formatTokensCompact(totalTokens)}
-            </div>
-            <p className="mt-0.5 text-[11px] text-muted-foreground">
-              {t("usageDashboard.totalTokens", { defaultValue: "Total" })} ·{" "}
               {t("usageDashboard.peakTokens", {
-                value: formatTokensCompact(peakTokens),
+                value: `${formatTokensCompact(peakTokens)} Token`,
                 defaultValue: "Peak {{value}}",
               })}
-              {totalCostUsd == null
-                ? ""
-                : ` · ${formatUsd(totalCostUsd, locale)}`}
+              {" · "}
+              {t("usageDashboard.totalTokensNamed", {
+                defaultValue: "Tokens",
+              })}{" "}
+              {formatTokensCompact(totalTokens)}
             </p>
           </div>
         </div>

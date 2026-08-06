@@ -169,7 +169,6 @@ export function ProviderActivityHeatmap({
   const [hoveredDayKey, setHoveredDayKey] = useState<string | null>(null);
   const [keyboardDayKey, setKeyboardDayKey] = useState<string | null>(null);
   const [focusedDayKey, setFocusedDayKey] = useState<string | null>(null);
-  const [pinnedDayKey, setPinnedDayKey] = useState<string | null>(null);
   const scrollViewportRef = useRef<HTMLDivElement>(null);
   const didPositionInitialScrollRef = useRef(false);
   const dayByKey = useMemo(
@@ -187,9 +186,10 @@ export function ProviderActivityHeatmap({
     ? keyboardDayKey
     : fallbackDayKey;
   const hoveredDay = hoveredDayKey ? dayByKey.get(hoveredDayKey) : undefined;
+  // Pointer or keyboard only. A pinned day outlived the gesture that chose it,
+  // so the panel sat on some date the user had moved away from minutes ago.
   const focusedDay = focusedDayKey ? dayByKey.get(focusedDayKey) : undefined;
-  const pinnedDay = pinnedDayKey ? dayByKey.get(pinnedDayKey) : undefined;
-  const detailDay = hoveredDay ?? focusedDay ?? pinnedDay;
+  const detailDay = hoveredDay ?? focusedDay;
   const monthByWeek = new Map<number, string>();
   days.forEach((day, index) => {
     const week = Math.floor((leadingBlanks + index) / 7);
@@ -250,11 +250,6 @@ export function ProviderActivityHeatmap({
           : delta == null
             ? null
             : Math.min(days.length - 1, Math.max(0, index + delta));
-    if (event.key === "Escape") {
-      event.preventDefault();
-      setPinnedDayKey(null);
-      return;
-    }
     if (nextIndex == null || nextIndex === index) return;
     event.preventDefault();
     const buttons = event.currentTarget
@@ -315,7 +310,7 @@ export function ProviderActivityHeatmap({
               ) : (
                 <span className="text-muted-foreground/75">
                   {t("usageDashboard.activityInteractionHint", {
-                    defaultValue: "Hover to preview · Click to pin",
+                    defaultValue: "Hover a day for its detail",
                   })}
                 </span>
               )}
@@ -366,15 +361,9 @@ export function ProviderActivityHeatmap({
                       data-activity-date={day.key}
                       data-activity-level={day.level}
                       aria-label={detail}
-                      aria-pressed={day.key === pinnedDayKey}
-                      className="group flex h-[var(--activity-slot)] w-[var(--activity-slot)] cursor-pointer items-center justify-center rounded-[4px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      className="group flex h-[var(--activity-slot)] w-[var(--activity-slot)] items-center justify-center rounded-[4px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       onMouseEnter={() => setHoveredDayKey(day.key)}
                       onMouseLeave={() => setHoveredDayKey(null)}
-                      onClick={() =>
-                        setPinnedDayKey((currentDayKey) =>
-                          currentDayKey === day.key ? null : day.key,
-                        )
-                      }
                       onFocus={() => {
                         setKeyboardDayKey(day.key);
                         setFocusedDayKey(day.key);
@@ -391,8 +380,6 @@ export function ProviderActivityHeatmap({
                         className={cn(
                           "pointer-events-none h-[var(--activity-cell)] w-[var(--activity-cell)] rounded-[3px] transition-transform duration-100 ease-out group-hover:scale-110 group-focus-visible:scale-110",
                           CELL_TONES[day.level],
-                          day.key === pinnedDayKey &&
-                            "ring-2 ring-primary ring-offset-1 ring-offset-card",
                         )}
                       />
                     </button>
