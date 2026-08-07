@@ -4,7 +4,7 @@
 
 use once_cell::sync::Lazy;
 use tauri::menu::{CheckMenuItem, Menu, MenuBuilder, MenuItem, Submenu, SubmenuBuilder};
-use tauri::{Emitter, Manager};
+use tauri::Manager;
 use tauri_plugin_opener::OpenerExt;
 
 use crate::app_config::AppType;
@@ -54,8 +54,6 @@ pub struct TrayTexts {
     pub lightweight_mode: &'static str,
     pub quit: &'static str,
     pub _auto_label: &'static str,
-    pub projects_label: &'static str,
-    pub no_project_label: &'static str,
 }
 
 impl TrayTexts {
@@ -68,8 +66,6 @@ impl TrayTexts {
                 lightweight_mode: "Lightweight Mode",
                 quit: "Quit",
                 _auto_label: "Auto (Failover)",
-                projects_label: "Projects",
-                no_project_label: "No project",
             },
             "ja" => Self {
                 show_main: "メインウィンドウを開く",
@@ -78,8 +74,6 @@ impl TrayTexts {
                 lightweight_mode: "軽量モード",
                 quit: "終了",
                 _auto_label: "自動 (フェイルオーバー)",
-                projects_label: "プロジェクト",
-                no_project_label: "プロジェクトを使用しない",
             },
             "zh-TW" => Self {
                 show_main: "開啟主介面",
@@ -88,8 +82,6 @@ impl TrayTexts {
                 lightweight_mode: "輕量模式",
                 quit: "退出",
                 _auto_label: "自動 (故障轉移)",
-                projects_label: "專案",
-                no_project_label: "不使用專案",
             },
             _ => Self {
                 show_main: "打开主界面",
@@ -98,8 +90,6 @@ impl TrayTexts {
                 lightweight_mode: "轻量模式",
                 quit: "退出",
                 _auto_label: "自动 (故障转移)",
-                projects_label: "项目",
-                no_project_label: "不使用项目",
             },
         }
     }
@@ -114,8 +104,6 @@ pub struct TrayAppSection {
     pub log_name: &'static str,
 }
 
-/// Auto 菜单项后缀
-pub const AUTO_SUFFIX: &str = "auto";
 pub const TRAY_ID: &str = "llm-usage-bar";
 
 pub const TRAY_SECTIONS: [TrayAppSection; 3] = [
@@ -336,261 +324,6 @@ fn sort_providers(
     sorted
 }
 
-/// 处理项目 Profile 托盘事件，返回是否已处理
-///
-/// 事件 id 形如 `profile_<scope>_<uuid>`（同一项目在各分组子菜单里各有一项，
-/// 应用时只作用于该分组）；`profile_none_<scope>` 表示某分组"不使用项目"
-/// （只清该分组标记，不动配置）。
-pub fn handle_profile_tray_event(app: &tauri::AppHandle, event_id: &str) -> bool {
-    let Some(suffix) = event_id.strip_prefix("profile_") else {
-        return false;
-    };
-
-    if let Some(scope_str) = suffix.strip_prefix("none_") {
-        let Ok(scope) = crate::services::profile::ProfileScope::parse(scope_str) else {
-            log::error!("未知的项目分组托盘事件: {event_id}");
-            return true;
-        };
-        if let Some(app_state) = app.try_state::<AppState>() {
-            if let Err(e) = app_state.db.set_current_profile_id(scope.as_str(), None) {
-                log::error!("清除当前项目失败: {e}");
-            }
-        }
-        // 通知主窗口刷新（profileId=null 表示该分组已清除当前项目）
-        if let Err(e) = app.emit(
-            "profile-applied",
-            serde_json::json!({ "profileId": null, "scope": scope.as_str() }),
-        ) {
-            log::error!("发射 profile-applied 事件失败: {e}");
-        }
-        refresh_tray_menu(app);
-        return true;
-    }
-
-    // scope 是固定枚举字符串（不含下划线），uuid 只含连字符，首个下划线即分界
-    let Some((scope_str, profile_id)) = suffix.split_once('_') else {
-        log::error!("无法解析项目托盘事件: {event_id}");
-        return true;
-    };
-    let Ok(scope) = crate::services::profile::ProfileScope::parse(scope_str) else {
-        log::error!("未知的项目分组托盘事件: {event_id}");
-        return true;
-    };
-
-    log::info!("应用项目: {profile_id}（{scope_str} 组）");
-    let app_handle = app.clone();
-    let profile_id = profile_id.to_string();
-    tauri::async_runtime::spawn_blocking(move || {
-        let Some(app_state) = app_handle.try_state::<AppState>() else {
-            return;
-        };
-        match crate::services::profile::ProfileService::apply(app_state.inner(), &profile_id, scope)
-        {
-            Ok((warnings, should_stop_proxy)) => {
-                for warning in &warnings {
-                    log::warn!("[Profile] 应用项目 {profile_id} 警告: {warning}");
-                }
-
-                if should_stop_proxy {
-                    let app_handle2 = app_handle.clone();
-                    let proxy_service = app_state.proxy_service.clone();
-                    tauri::async_runtime::spawn(async move {
-                        if let Err(e) = proxy_service.stop().await {
-                            log::warn!("托盘切换项目后停止代理服务失败: {e}");
-                        }
-                        if let Some(state) = app_handle2.try_state::<AppState>() {
-                            crate::commands::emit_profile_apply_events(
-                                &app_handle2,
-                                state.inner(),
-                                &profile_id,
-                                scope,
-                            );
-                        }
-                    });
-                } else {
-                    crate::commands::emit_profile_apply_events(
-                        &app_handle,
-                        app_state.inner(),
-                        &profile_id,
-                        scope,
-                    );
-                }
-            }
-            Err(e) => {
-                log::error!("应用项目 {profile_id} 失败: {e}");
-                refresh_tray_menu(&app_handle);
-            }
-        }
-    });
-    true
-}
-
-/// 处理供应商托盘事件
-pub fn handle_provider_tray_event(app: &tauri::AppHandle, event_id: &str) -> bool {
-    for section in TRAY_SECTIONS.iter() {
-        if let Some(suffix) = event_id.strip_prefix(section.prefix) {
-            // 处理 Auto 点击
-            if suffix == AUTO_SUFFIX {
-                log::info!("切换到{} Auto模式", section.log_name);
-                let app_handle = app.clone();
-                let app_type = section.app_type.clone();
-                tauri::async_runtime::spawn_blocking(move || {
-                    if let Err(e) = handle_auto_click(&app_handle, &app_type) {
-                        log::error!("切换{}Auto模式失败: {e}", section.log_name);
-                    }
-                });
-                return true;
-            }
-
-            // 处理供应商点击
-            log::info!("切换到{}供应商: {suffix}", section.log_name);
-            let app_handle = app.clone();
-            let provider_id = suffix.to_string();
-            let app_type = section.app_type.clone();
-            tauri::async_runtime::spawn_blocking(move || {
-                if let Err(e) = handle_provider_click(&app_handle, &app_type, &provider_id) {
-                    log::error!("切换{}供应商失败: {e}", section.log_name);
-                }
-            });
-            return true;
-        }
-    }
-    false
-}
-
-/// 处理 Auto 点击：启用 proxy 和 auto_failover
-fn handle_auto_click(app: &tauri::AppHandle, app_type: &AppType) -> Result<(), AppError> {
-    if let Some(app_state) = app.try_state::<AppState>() {
-        let app_type_str = app_type.as_str();
-
-        // 强一致语义：Auto 模式开启后立即切到队列 P1（P1→P2→...）
-        // 若队列为空，则尝试把“当前供应商”自动加入队列作为 P1，避免用户陷入无法开启的死锁。
-        let mut queue = app_state.db.get_failover_queue(app_type_str)?;
-        if queue.is_empty() {
-            let current_id =
-                crate::settings::get_effective_current_provider(&app_state.db, app_type)?;
-            let Some(current_id) = current_id else {
-                return Err(AppError::Message(
-                    "故障转移队列为空，且未设置当前供应商，无法启用 Auto 模式".to_string(),
-                ));
-            };
-            app_state
-                .db
-                .add_to_failover_queue(app_type_str, &current_id)?;
-            queue = app_state.db.get_failover_queue(app_type_str)?;
-        }
-
-        let p1_provider_id = queue
-            .first()
-            .map(|item| item.provider_id.clone())
-            .ok_or_else(|| AppError::Message("故障转移队列为空，无法启用 Auto 模式".to_string()))?;
-
-        // 真正启用 failover：启动代理服务 + 执行接管 + 开启 auto_failover
-        let proxy_service = &app_state.proxy_service;
-
-        // 1) 确保代理服务运行（会自动设置 proxy_enabled = true）
-        let is_running = futures::executor::block_on(proxy_service.is_running());
-        if !is_running {
-            log::info!("[Tray] Auto 模式：启动代理服务");
-            if let Err(e) = futures::executor::block_on(proxy_service.start()) {
-                log::error!("[Tray] 启动代理服务失败: {e}");
-                return Err(AppError::Message(format!("启动代理服务失败: {e}")));
-            }
-        }
-
-        // 2) 执行 Live 配置接管（确保该 app 被代理接管）
-        log::info!("[Tray] Auto 模式：对 {app_type_str} 执行接管");
-        if let Err(e) =
-            futures::executor::block_on(proxy_service.set_takeover_for_app(app_type_str, true))
-        {
-            log::error!("[Tray] 执行接管失败: {e}");
-            return Err(AppError::Message(format!("执行接管失败: {e}")));
-        }
-
-        // 3) 设置 auto_failover_enabled = true
-        app_state
-            .db
-            .set_proxy_flags_sync(app_type_str, true, true)?;
-
-        // 3.1) 立即切到队列 P1（热切换：不写 Live，仅更新 DB/settings/备份）
-        if let Err(e) = futures::executor::block_on(
-            proxy_service.switch_proxy_target(app_type_str, &p1_provider_id),
-        ) {
-            log::error!("[Tray] Auto 模式切换到队列 P1 失败: {e}");
-            return Err(AppError::Message(format!(
-                "Auto 模式切换到队列 P1 失败: {e}"
-            )));
-        }
-
-        // 4) 更新托盘菜单
-        if let Ok(new_menu) = create_tray_menu(app, app_state.inner()) {
-            if let Some(tray) = app.tray_by_id(TRAY_ID) {
-                let _ = tray.set_menu(Some(new_menu));
-            }
-        }
-
-        // 5) 发射事件到前端
-        let event_data = serde_json::json!({
-            "appType": app_type_str,
-            "proxyEnabled": true,
-            "autoFailoverEnabled": true,
-            "providerId": p1_provider_id
-        });
-        if let Err(e) = app.emit("proxy-flags-changed", event_data.clone()) {
-            log::error!("发射 proxy-flags-changed 事件失败: {e}");
-        }
-        // 发射 provider-switched 事件（保持向后兼容，Auto 切换也算一种切换）
-        if let Err(e) = app.emit("provider-switched", event_data) {
-            log::error!("发射 provider-switched 事件失败: {e}");
-        }
-    }
-    Ok(())
-}
-
-/// 处理供应商点击：关闭 auto_failover + 切换供应商
-fn handle_provider_click(
-    app: &tauri::AppHandle,
-    app_type: &AppType,
-    provider_id: &str,
-) -> Result<(), AppError> {
-    if let Some(app_state) = app.try_state::<AppState>() {
-        let app_type_str = app_type.as_str();
-
-        // 获取当前 proxy 状态，保持 enabled 不变，只关闭 auto_failover
-        let (proxy_enabled, _) = app_state.db.get_proxy_flags_sync(app_type_str);
-        app_state
-            .db
-            .set_proxy_flags_sync(app_type_str, proxy_enabled, false)?;
-
-        // 切换供应商。需要本地路由的供应商也不在这里自动启动代理，
-        // 由用户在页面/设置中手动开启。
-        crate::services::ProviderService::switch(app_state.inner(), app_type.clone(), provider_id)?;
-
-        // 更新托盘菜单
-        if let Ok(new_menu) = create_tray_menu(app, app_state.inner()) {
-            if let Some(tray) = app.tray_by_id(TRAY_ID) {
-                let _ = tray.set_menu(Some(new_menu));
-            }
-        }
-
-        // 发射事件到前端
-        let event_data = serde_json::json!({
-            "appType": app_type_str,
-            "proxyEnabled": proxy_enabled,
-            "autoFailoverEnabled": false,
-            "providerId": provider_id
-        });
-        if let Err(e) = app.emit("proxy-flags-changed", event_data.clone()) {
-            log::error!("发射 proxy-flags-changed 事件失败: {e}");
-        }
-        // 发射 provider-switched 事件（保持向后兼容）
-        if let Err(e) = app.emit("provider-switched", event_data) {
-            log::error!("发射 provider-switched 事件失败: {e}");
-        }
-    }
-    Ok(())
-}
-
 /// 创建动态托盘菜单
 pub fn create_tray_menu(
     app: &tauri::AppHandle,
@@ -622,9 +355,6 @@ pub fn create_tray_menu(
         .item(&show_main_item)
         .item(&open_website_item)
         .separator();
-
-    // Pre-compute proxy running state (used to disable official providers in tray menu)
-    let is_proxy_running = futures::executor::block_on(app_state.proxy_service.is_running());
 
     // 每个应用类型折叠为子菜单，避免供应商过多时菜单过长
     for section in TRAY_SECTIONS.iter() {
@@ -659,15 +389,8 @@ pub fn create_tray_menu(
             };
             let submenu_id = format!("submenu_{}", app_type_str);
 
-            // Check if this app is under proxy takeover (for disabling official providers)
-            let is_app_taken_over = is_proxy_running
-                && (futures::executor::block_on(app_state.db.get_live_backup(app_type_str))
-                    .ok()
-                    .flatten()
-                    .is_some()
-                    || app_state
-                        .proxy_service
-                        .detect_takeover_in_live_config_for_app(&section.app_type));
+            // Proxy takeover is gone, so no provider is ever blocked here.
+            let is_app_taken_over = false;
 
             let mut submenu_builder = SubmenuBuilder::with_id(app, &submenu_id, &submenu_label);
 
@@ -702,90 +425,6 @@ pub fn create_tray_menu(
         }
 
         menu_builder = menu_builder.separator();
-    }
-
-    // 项目 Profile 子菜单：项目列表全应用共享，按分组嵌套子菜单各自勾选/应用
-    // （组内应用可见且存在项目时才显示该组）
-    {
-        use crate::services::profile::ProfileScope;
-
-        let any_scope_visible = ProfileScope::ALL.iter().any(|scope| {
-            scope
-                .apps()
-                .iter()
-                .any(|app_type| visible_apps.is_visible(app_type))
-        });
-        let profiles = if any_scope_visible {
-            app_state.db.get_all_profiles()?
-        } else {
-            Vec::new()
-        };
-
-        let mut scope_submenus = Vec::new();
-        for scope in ProfileScope::ALL {
-            if profiles.is_empty()
-                || !scope
-                    .apps()
-                    .iter()
-                    .any(|app_type| visible_apps.is_visible(app_type))
-            {
-                continue;
-            }
-            let current_profile_id = app_state
-                .db
-                .get_current_profile_id(scope.as_str())?
-                .unwrap_or_default();
-            // 分组标签用产品名，不进 i18n
-            let scope_label = match scope {
-                ProfileScope::Claude => "Claude Code",
-                ProfileScope::ClaudeDesktop => "Claude Desktop",
-                ProfileScope::Codex => "Codex",
-            };
-            let mut scope_builder = SubmenuBuilder::with_id(
-                app,
-                format!("submenu_profiles_{}", scope.as_str()),
-                scope_label,
-            );
-            for profile in &profiles {
-                let item = CheckMenuItem::with_id(
-                    app,
-                    format!("profile_{}_{}", scope.as_str(), profile.id),
-                    &profile.name,
-                    true,
-                    current_profile_id == profile.id,
-                    None::<&str>,
-                )
-                .map_err(|e| AppError::Message(format!("创建项目菜单项失败: {e}")))?;
-                scope_builder = scope_builder.item(&item);
-            }
-            let none_item = CheckMenuItem::with_id(
-                app,
-                format!("profile_none_{}", scope.as_str()),
-                tray_texts.no_project_label,
-                true,
-                current_profile_id.is_empty(),
-                None::<&str>,
-            )
-            .map_err(|e| AppError::Message(format!("创建不使用项目菜单项失败: {e}")))?;
-            let scope_submenu = scope_builder
-                .separator()
-                .item(&none_item)
-                .build()
-                .map_err(|e| AppError::Message(format!("构建项目分组子菜单失败: {e}")))?;
-            scope_submenus.push(scope_submenu);
-        }
-
-        if !scope_submenus.is_empty() {
-            let mut profiles_builder =
-                SubmenuBuilder::with_id(app, "submenu_profiles", tray_texts.projects_label);
-            for scope_submenu in &scope_submenus {
-                profiles_builder = profiles_builder.item(scope_submenu);
-            }
-            let profiles_submenu = profiles_builder
-                .build()
-                .map_err(|e| AppError::Message(format!("构建项目子菜单失败: {e}")))?;
-            menu_builder = menu_builder.item(&profiles_submenu).separator();
-        }
     }
 
     let lightweight_item = CheckMenuItem::with_id(
@@ -977,20 +616,10 @@ pub fn handle_tray_menu_event(app: &tauri::AppHandle, event_id: &str) {
             app.exit(0);
         }
         _ => {
-            if handle_profile_tray_event(app, event_id) {
-                return;
-            }
-            if handle_provider_tray_event(app, event_id) {
-                return;
-            }
             log::warn!("未处理的菜单事件: {event_id}");
         }
     }
 }
-
-static LAST_TRAY_USAGE_REFRESH: std::sync::Mutex<Option<std::time::Instant>> =
-    std::sync::Mutex::new(None);
-const MIN_TRAY_USAGE_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// 合并多次快速触发的"usage 标题软更新"：批量刷新期间多个 usage 命令
 /// 同时成功时，只会产生一次就地 `set_text` 批量调用。走软更新而不是
@@ -1011,103 +640,6 @@ pub fn schedule_tray_refresh(app: &tauri::AppHandle) {
         TRAY_REBUILD_SCHEDULED.store(false, Ordering::Release);
         update_tray_usage_labels(&app);
     });
-}
-
-/// 并行刷新每个可见 app "当前 provider" 的用量；成功 / 失败结果都通过各
-/// command 的 write-through 逻辑写入 `UsageCache`，单次重建菜单由
-/// `schedule_tray_refresh` 做合并。内部 10 秒节流防止鼠标悬停反复进出时
-/// 雪崩请求；互斥锁被毒化时以上次状态为准继续推进，不会永久阻塞。
-///
-/// 刷新面与 `format_usage_suffix` 的展示面严格对齐 —— 每次悬停最多发
-/// `TRAY_SECTIONS.len()` 次外部请求；只有显式启用的用量查询（含官方订阅、
-/// coding_plan / balance / Copilot / 自定义脚本）才会发请求。
-pub(crate) async fn refresh_all_usage_in_tray(app: &tauri::AppHandle) {
-    use crate::commands::CopilotAuthState;
-    use futures::future::join_all;
-
-    {
-        let mut guard = LAST_TRAY_USAGE_REFRESH
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let now = std::time::Instant::now();
-        if let Some(last) = *guard {
-            if now.duration_since(last) < MIN_TRAY_USAGE_REFRESH_INTERVAL {
-                return;
-            }
-        }
-        *guard = Some(now);
-    }
-
-    let Some(app_state) = app.try_state::<AppState>() else {
-        return;
-    };
-
-    // 与 `create_tray_menu` 保持一致：用户隐藏的 app 不参与外部 API 查询，
-    // 避免在未使用的 app 上浪费请求、撞 rate limit 或反复触发鉴权失败日志。
-    let visible_apps = crate::settings::get_settings()
-        .visible_apps
-        .unwrap_or_default();
-
-    let mut script_futures = Vec::new();
-
-    for section in TRAY_SECTIONS.iter() {
-        if !visible_apps.is_visible(&section.app_type) {
-            continue;
-        }
-
-        let app_type_str = section.app_type.as_str();
-        let log_name = section.log_name;
-
-        // 解析 effective current provider；未设置 / 出错都静默跳过，
-        // 与 create_tray_menu 的行为保持一致。
-        let current_id =
-            match crate::settings::get_effective_current_provider(&app_state.db, &section.app_type)
-            {
-                Ok(Some(id)) => id,
-                Ok(None) => continue,
-                Err(e) => {
-                    log::warn!("[Tray] 读取{log_name}当前供应商失败: {e}");
-                    continue;
-                }
-            };
-        // 只需当前 provider —— by-id 查询避免把整个 app 的 provider 列表加载
-        // 进内存（每次悬停 × 3 sections 的热路径）。
-        let current = match app_state.db.get_provider_by_id(&current_id, app_type_str) {
-            Ok(Some(p)) => p,
-            Ok(None) => continue,
-            Err(e) => {
-                log::warn!("[Tray] 读取{log_name}当前供应商失败: {e}");
-                continue;
-            }
-        };
-
-        // 与 format_usage_suffix 同一优先级：只有显式启用的用量查询才发请求。
-        let is_official_provider = current.category.as_deref() == Some("official");
-        if current.has_usage_script_enabled()
-            && (!is_official_provider || provider_uses_official_subscription(&current))
-        {
-            let app_clone = app.clone();
-            let state = app.state::<AppState>();
-            let copilot_state = app.state::<CopilotAuthState>();
-            let provider_id = current_id.clone();
-            let app_str = app_type_str.to_string();
-            script_futures.push(async move {
-                if let Err(e) = crate::commands::queryProviderUsage(
-                    app_clone,
-                    state,
-                    copilot_state,
-                    provider_id.clone(),
-                    app_str,
-                )
-                .await
-                {
-                    log::debug!("[Tray] 刷新{log_name}供应商 {provider_id} 用量失败: {e}");
-                }
-            });
-        }
-    }
-
-    join_all(script_futures).await;
 }
 
 #[cfg(test)]
@@ -1284,6 +816,8 @@ mod tests {
             credential_message: None,
             success,
             tiers,
+            plan_type: None,
+            plan_renews_at: None,
             manual_reset_credits: None,
             extra_usage: None,
             error: None,

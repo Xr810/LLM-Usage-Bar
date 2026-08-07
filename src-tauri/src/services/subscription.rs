@@ -10,7 +10,7 @@ use tokio::sync::RwLock;
 
 use std::collections::HashMap;
 
-use crate::proxy::providers::codex_oauth_auth::CodexOAuthManager;
+use crate::credentials::codex_oauth_auth::CodexOAuthManager;
 use crate::usage::system_providers::MANAGED_CODEX_QUOTA_SOURCE;
 
 // ── 数据类型 ──────────────────────────────────────────────
@@ -84,6 +84,13 @@ pub struct SubscriptionQuota {
     pub credential_message: Option<String>,
     pub success: bool,
     pub tiers: Vec<QuotaTier>,
+    /// ChatGPT plan as reported by the OAuth token: "pro", "plus", "team", ...
+    /// None for tools that do not report one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan_type: Option<String>,
+    /// Unix seconds at which the current subscription period ends.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan_renews_at: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub manual_reset_credits: Option<ManualResetCredits>,
     pub extra_usage: Option<ExtraUsage>,
@@ -99,6 +106,8 @@ impl SubscriptionQuota {
             credential_message: None,
             success: false,
             tiers: vec![],
+            plan_type: None,
+            plan_renews_at: None,
             manual_reset_credits: None,
             extra_usage: None,
             error: None,
@@ -113,6 +122,8 @@ impl SubscriptionQuota {
             credential_message: Some(message.clone()),
             success: false,
             tiers: vec![],
+            plan_type: None,
+            plan_renews_at: None,
             manual_reset_credits: None,
             extra_usage: None,
             error: Some(message),
@@ -211,7 +222,7 @@ fn read_codex_credentials_from_keychain() -> Option<CodexCredentials> {
 
 /// 从文件读取 Codex 凭据
 fn read_codex_credentials_from_file() -> CodexCredentials {
-    let auth_path = crate::codex_config::get_codex_auth_path();
+    let auth_path = crate::agent_paths::get_codex_auth_path();
 
     if !auth_path.exists() {
         return (None, None, CredentialStatus::NotFound, None);
@@ -555,8 +566,11 @@ pub(crate) async fn query_managed_codex_oauth_quota(
         return Ok(SubscriptionQuota::not_found(MANAGED_CODEX_QUOTA_SOURCE));
     };
 
-    let access_token = match manager.get_valid_token_for_account(&account_id).await {
-        Ok(token) => token,
+    let (access_token, plan_type, plan_renews_at) = match manager
+        .get_valid_token_and_subscription_for_account(&account_id)
+        .await
+    {
+        Ok(credentials) => credentials,
         Err(_) => {
             return Ok(SubscriptionQuota::error(
                 MANAGED_CODEX_QUOTA_SOURCE,
@@ -565,13 +579,16 @@ pub(crate) async fn query_managed_codex_oauth_quota(
             ));
         }
     };
-    query_codex_quota(
+    let mut quota = query_codex_quota(
         &access_token,
         Some(&account_id),
         MANAGED_CODEX_QUOTA_SOURCE,
         "Codex OAuth access token expired or rejected. Please re-login via LLM Usage Bar.",
     )
-    .await
+    .await?;
+    quota.plan_type = plan_type;
+    quota.plan_renews_at = plan_renews_at;
+    Ok(quota)
 }
 
 /// 查询 Codex / ChatGPT 反代订阅额度。
@@ -584,7 +601,7 @@ pub(crate) async fn query_codex_quota(
     tool_label: &str,
     expired_message: &str,
 ) -> Result<SubscriptionQuota, String> {
-    let client = crate::proxy::http_client::get();
+    let client = crate::http_client::get();
 
     let resp = match codex_wham_get(&client, "usage", access_token, account_id)
         .send()
@@ -676,6 +693,8 @@ pub(crate) async fn query_codex_quota(
         credential_message: None,
         success: true,
         tiers,
+        plan_type: None,
+        plan_renews_at: None,
         manual_reset_credits,
         extra_usage: None,
         error: None,
@@ -811,7 +830,7 @@ fn parse_gemini_keychain_json(content: &str) -> GeminiCredentials {
 
 /// 从文件读取 Gemini 凭据
 fn read_gemini_credentials_from_file() -> GeminiCredentials {
-    let cred_path = crate::gemini_config::get_gemini_dir().join("oauth_creds.json");
+    let cred_path = crate::agent_paths::get_gemini_dir().join("oauth_creds.json");
     if !cred_path.exists() {
         return (None, None, CredentialStatus::NotFound, None);
     }
@@ -894,7 +913,7 @@ const GEMINI_OAUTH_CLIENT_SECRET: &str = "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";
 /// Google OAuth access_token 仅有 ~1h 有效期，需要定期用 refresh_token 刷新。
 /// refresh_token 本身不过期（除非用户撤销授权）。
 async fn refresh_gemini_token(refresh_token: &str) -> Option<String> {
-    let client = crate::proxy::http_client::get();
+    let client = crate::http_client::get();
 
     let resp = client
         .post("https://oauth2.googleapis.com/token")
@@ -975,7 +994,7 @@ fn classify_gemini_model(model_id: &str) -> &str {
 /// 1. loadCodeAssist → 获取 cloudaicompanionProject
 /// 2. retrieveUserQuota → 获取按模型分桶的配额数据
 async fn query_gemini_quota(access_token: &str) -> Result<SubscriptionQuota, String> {
-    let client = crate::proxy::http_client::get();
+    let client = crate::http_client::get();
 
     // ── Step 1: loadCodeAssist 获取项目 ID ──
     let load_resp = client
@@ -1140,6 +1159,8 @@ async fn query_gemini_quota(access_token: &str) -> Result<SubscriptionQuota, Str
         credential_message: None,
         success: true,
         tiers,
+        plan_type: None,
+        plan_renews_at: None,
         manual_reset_credits: None,
         extra_usage: None,
         error: None,

@@ -70,12 +70,16 @@ export function MeteredProviderCard({
     },
     {
       label: "USD",
+      // No events in this range means nothing was spent. Only an account that
+      // has usage the app could not price has a cost it cannot report.
       value:
         usage.totalCostUsd != null
           ? `$${usage.totalCostUsd}`
-          : t("usageDashboard.costUnavailableSummary", {
-              defaultValue: "Cost unavailable",
-            }),
+          : usage.eventCount === 0
+            ? "$0"
+            : t("usageDashboard.costUnavailableSummary", {
+                defaultValue: "Cost unavailable",
+              }),
       title: undefined,
     },
   ];

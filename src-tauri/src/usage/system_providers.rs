@@ -36,6 +36,7 @@ pub struct SystemProviderDefinition {
     pub quota_interval_seconds: Option<u64>,
     pub upstream_protocol: Option<&'static str>,
     pub connection_test_path: Option<&'static str>,
+    pub model_list_path: Option<&'static str>,
     pub route_config: Option<serde_json::Value>,
 }
 
@@ -45,15 +46,16 @@ fn metered_api_provider(
     name: &'static str,
     base_url: &'static str,
 ) -> SystemProviderDefinition {
-    metered_api_provider_with_connection_path(id, preset_key, name, base_url, "/models")
+    metered_api_provider_with_paths(id, preset_key, name, base_url, "/models", "/models")
 }
 
-fn metered_api_provider_with_connection_path(
+fn metered_api_provider_with_paths(
     id: &'static str,
     preset_key: &'static str,
     name: &'static str,
     base_url: &'static str,
     connection_test_path: &'static str,
+    model_list_path: &'static str,
 ) -> SystemProviderDefinition {
     SystemProviderDefinition {
         id,
@@ -68,6 +70,7 @@ fn metered_api_provider_with_connection_path(
         quota_interval_seconds: None,
         upstream_protocol: Some("codex"),
         connection_test_path: Some(connection_test_path),
+        model_list_path: Some(model_list_path),
         route_config: Some(serde_json::json!({
             "base_url": base_url,
             "apiFormat": "openai_chat",
@@ -81,7 +84,10 @@ pub fn system_provider_definitions() -> Vec<SystemProviderDefinition> {
         SystemProviderDefinition {
             id: CHATGPT_SUBSCRIPTION_ID,
             preset_key: "chatgpt-subscription",
-            name: "ChatGPT Plus/Pro",
+            // Just "ChatGPT": the tier is read from the OAuth token and appended
+            // where the Provider is displayed. The old name spelled out both
+            // options because the app could not tell them apart.
+            name: "ChatGPT",
             billing_kind: BillingKind::Subscription,
             product_group_id: "chatgpt-subscription",
             token_sources: &[TokenSource::Proxy, TokenSource::SessionLog],
@@ -91,12 +97,15 @@ pub fn system_provider_definitions() -> Vec<SystemProviderDefinition> {
             quota_interval_seconds: Some(300),
             upstream_protocol: Some("codex"),
             connection_test_path: None,
+            model_list_path: None,
             route_config: None,
         },
         SystemProviderDefinition {
             id: CLAUDE_SUBSCRIPTION_ID,
             preset_key: "claude-subscription",
-            name: "Claude Pro/Max",
+            // Just "Claude": the tier comes from the CLI's account profile and
+            // is appended where the Provider is displayed.
+            name: "Claude",
             billing_kind: BillingKind::Subscription,
             product_group_id: "claude-subscription",
             token_sources: &[TokenSource::SessionLog],
@@ -106,6 +115,7 @@ pub fn system_provider_definitions() -> Vec<SystemProviderDefinition> {
             quota_interval_seconds: Some(300),
             upstream_protocol: None,
             connection_test_path: None,
+            model_list_path: None,
             route_config: None,
         },
         SystemProviderDefinition {
@@ -121,6 +131,7 @@ pub fn system_provider_definitions() -> Vec<SystemProviderDefinition> {
             quota_interval_seconds: None,
             upstream_protocol: Some("codex"),
             connection_test_path: Some("/models"),
+            model_list_path: Some("/models"),
             route_config: Some(serde_json::json!({
                 "base_url": "https://api.openai.com/v1",
                 "apiFormat": "openai_chat",
@@ -140,6 +151,7 @@ pub fn system_provider_definitions() -> Vec<SystemProviderDefinition> {
             quota_interval_seconds: None,
             upstream_protocol: Some("claude"),
             connection_test_path: Some("/v1/models"),
+            model_list_path: Some("/v1/models"),
             route_config: Some(serde_json::json!({
                 "base_url": "https://api.anthropic.com",
                 "apiFormat": "anthropic",
@@ -162,6 +174,7 @@ pub fn system_provider_definitions() -> Vec<SystemProviderDefinition> {
             // validate the submitted key. `/key` is the official read-only
             // endpoint for the current authenticated API key.
             connection_test_path: Some("/key"),
+            model_list_path: Some("/models"),
             route_config: Some(serde_json::json!({
                 "base_url": "https://openrouter.ai/api/v1",
                 "apiFormat": "openai_chat",
@@ -234,7 +247,7 @@ pub fn system_provider_definitions() -> Vec<SystemProviderDefinition> {
             "Fireworks AI",
             "https://api.fireworks.ai/inference/v1",
         ),
-        metered_api_provider_with_connection_path(
+        metered_api_provider_with_paths(
             PERPLEXITY_API_ID,
             "perplexity-api",
             "Perplexity API",
@@ -242,6 +255,7 @@ pub fn system_provider_definitions() -> Vec<SystemProviderDefinition> {
             // `/v1/models` is public and would accept a bogus key. Listing
             // async Sonar requests is read-only and requires authentication.
             "/v1/async/sonar",
+            "/v1/models",
         ),
         metered_api_provider(
             SILICONFLOW_API_ID,
@@ -249,7 +263,7 @@ pub fn system_provider_definitions() -> Vec<SystemProviderDefinition> {
             "SiliconFlow API",
             "https://api.siliconflow.cn/v1",
         ),
-        metered_api_provider_with_connection_path(
+        metered_api_provider_with_paths(
             NVIDIA_NIM_API_ID,
             "nvidia-nim-api",
             "NVIDIA NIM API",
@@ -257,6 +271,7 @@ pub fn system_provider_definitions() -> Vec<SystemProviderDefinition> {
             // NVIDIA's hosted `/models` catalog is public and does not prove
             // that a key can invoke hosted inference. Keep the canonical path
             // for discovery, but the UI suppresses the misleading key test.
+            "/models",
             "/models",
         ),
         metered_api_provider(

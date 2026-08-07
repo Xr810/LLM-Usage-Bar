@@ -1,14 +1,8 @@
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { ShieldCheck } from "lucide-react";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { useUnassignedUsageDiagnostics } from "@/lib/query/usageDashboard";
+import { SettingsSection } from "./SettingsSection";
 
 function formatTime(value: number) {
   return new Date(value * 1000).toLocaleString();
@@ -36,9 +30,8 @@ function DiagnosticsSection({
         </span>
       </header>
       {count === 0 ? (
-        <p className="px-4 py-7 text-center text-sm text-muted-foreground">
-          {emptyText}
-        </p>
+        // A clear result deserves one quiet line, not a panel-sized empty state.
+        <p className="px-4 py-2.5 text-sm text-muted-foreground">{emptyText}</p>
       ) : (
         <div className="divide-y divide-border/60">{children}</div>
       )}
@@ -88,41 +81,30 @@ export function UsageDiagnosticsPanel() {
 
   return (
     <div className="space-y-5 pb-6">
-      <Card>
-        <CardHeader className="flex-row items-start gap-4 space-y-0">
-          <div className="rounded-lg bg-primary/10 p-2.5 text-primary">
-            <ShieldCheck className="h-5 w-5" aria-hidden="true" />
-          </div>
-          <div className="space-y-1.5">
-            <CardTitle className="text-base">
-              {t("usageDiagnostics.title", {
-                defaultValue: "Usage ownership diagnostics",
-              })}
-            </CardTitle>
-            <CardDescription>
-              {t("usageDiagnostics.description", {
-                defaultValue:
-                  "Read-only aggregate history. The app never guesses or reassigns ownership.",
-              })}
-            </CardDescription>
-          </div>
-        </CardHeader>
-        <CardContent>
-          <div className="flex items-center gap-2.5 rounded-lg bg-muted/50 px-3.5 py-2.5 text-sm dark:bg-muted/30">
-            <span
-              aria-hidden="true"
-              className={
-                data.unassignedEventCount === 0
-                  ? "h-2 w-2 shrink-0 rounded-full bg-success"
-                  : "h-2 w-2 shrink-0 rounded-full bg-warning"
-              }
-            />
-            <span className="font-medium tabular-nums">
-              {unassignedCountText}
-            </span>
-          </div>
-        </CardContent>
-      </Card>
+      <SettingsSection
+        icon={ShieldCheck}
+        title={t("usageDiagnostics.title", {
+          defaultValue: "Usage ownership diagnostics",
+        })}
+        description={t("usageDiagnostics.description", {
+          defaultValue:
+            "Read-only aggregate history. The app never guesses or reassigns ownership.",
+        })}
+      >
+        <div className="flex items-center gap-2.5 rounded-lg bg-muted/50 px-3.5 py-2.5 text-sm dark:bg-muted/30">
+          <span
+            aria-hidden="true"
+            className={
+              data.unassignedEventCount === 0
+                ? "h-2 w-2 shrink-0 rounded-full bg-success"
+                : "h-2 w-2 shrink-0 rounded-full bg-warning"
+            }
+          />
+          <span className="font-medium tabular-nums">
+            {unassignedCountText}
+          </span>
+        </div>
+      </SettingsSection>
 
       <DiagnosticsSection
         title={t("usageDiagnostics.unassignedGroups", {

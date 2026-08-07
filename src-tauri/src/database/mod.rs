@@ -2,10 +2,8 @@
 //!
 //! 此模块提供应用的核心数据存储功能，包括：
 //! - 供应商配置管理
-//! - MCP 服务器配置
-//! - 提示词管理
-//! - Skills 管理
 //! - 通用设置存储
+//! - 配额、用量事件与聚合统计
 //!
 //! ## 架构设计
 //!
@@ -17,9 +15,6 @@
 //! ├── migration.rs  - JSON → SQLite 数据迁移
 //! └── dao/          - 数据访问对象
 //!     ├── providers.rs
-//!     ├── mcp.rs
-//!     ├── prompts.rs
-//!     ├── skills.rs
 //!     └── settings.rs
 //! ```
 
@@ -34,10 +29,7 @@ mod tests;
 
 // DAO 类型导出供外部使用
 pub(crate) use dao::agent_modules::AgentModuleDeleteOutcome;
-pub(crate) use dao::agent_provider_bindings::{
-    resolve_direct_api_format, resolve_direct_credential_placement, BindingAuthMode,
-    DirectCredentialPlacement,
-};
+pub(crate) use dao::agent_provider_bindings::BindingAuthMode;
 pub(crate) use dao::binding_credentials::{
     CredentialBindingSnapshot, CredentialJournalEntry, CredentialMutationKind,
     CredentialOperationReservation,
@@ -46,14 +38,7 @@ pub(crate) use dao::provider_credentials::{
     ProviderCredentialJournalEntry, ProviderCredentialOperationReservation,
     ProviderCredentialSnapshot,
 };
-pub(crate) use dao::providers_seed::{is_official_seed_id, CLAUDE_DESKTOP_OFFICIAL_PROVIDER_ID};
-pub(crate) use dao::proxy::{
-    validate_cost_multiplier, validate_pricing_source, PRICING_SOURCE_REQUEST,
-    PRICING_SOURCE_RESPONSE,
-};
 pub use dao::usage_sync_cursors::UsageSyncCursor;
-pub use dao::FailoverQueueItem;
-pub use dao::Profile;
 pub(crate) use identity_migration::{prepare_database_identity, DatabaseIdentityOutcome};
 
 use crate::config::get_app_config_dir;
@@ -68,7 +53,7 @@ use std::sync::Mutex;
 
 /// 当前 Schema 版本号
 /// 每次修改表结构时递增，并在 schema.rs 中添加相应的迁移逻辑
-pub(crate) const SCHEMA_VERSION: i32 = 19;
+pub(crate) const SCHEMA_VERSION: i32 = 23;
 
 /// 安全地序列化 JSON，避免 unwrap panic
 pub(crate) fn to_json_string<T: Serialize>(value: &T) -> Result<String, AppError> {
@@ -173,9 +158,6 @@ impl Database {
         db.ensure_model_pricing_seeded()?;
 
         // Startup cleanup: prune old logs and reclaim space
-        if let Err(e) = db.cleanup_old_stream_check_logs(7) {
-            log::warn!("Startup stream_check_logs cleanup failed: {e}");
-        }
         if let Err(e) = db.rollup_and_prune(30) {
             log::warn!("Startup rollup_and_prune failed: {e}");
         }
@@ -305,23 +287,5 @@ impl Database {
         }
 
         Ok(rebuilt)
-    }
-
-    /// 检查 MCP 服务器表是否为空
-    pub fn is_mcp_table_empty(&self) -> Result<bool, AppError> {
-        let conn = lock_conn!(self.conn);
-        let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM mcp_servers", [], |row| row.get(0))
-            .map_err(|e| AppError::Database(e.to_string()))?;
-        Ok(count == 0)
-    }
-
-    /// 检查提示词表是否为空
-    pub fn is_prompts_table_empty(&self) -> Result<bool, AppError> {
-        let conn = lock_conn!(self.conn);
-        let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM prompts", [], |row| row.get(0))
-            .map_err(|e| AppError::Database(e.to_string()))?;
-        Ok(count == 0)
     }
 }

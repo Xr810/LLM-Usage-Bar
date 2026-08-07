@@ -47,21 +47,30 @@ export function QuotaMeter({
           : "rounded-lg border border-border/50 bg-muted/25 px-3 dark:bg-muted/15",
       )}
     >
+      {/* Every meter keeps the same three rows — label, track, caption — so a
+          window with no data still reads as a window rather than as a gap. The
+          figure slot is `shrink-0`, so an unavailable window leaves it empty and
+          explains itself in the caption instead; putting the sentence there
+          starved the label down to "5 …". */}
       <div className="flex items-baseline justify-between gap-2">
         <span className="truncate text-xs text-muted-foreground">{label}</span>
-        <span className="shrink-0 text-sm font-semibold tracking-tight metric">
-          {valueText}
-        </span>
+        {fillPercent != null ? (
+          <span className="shrink-0 text-sm font-semibold tracking-tight metric">
+            {valueText}
+          </span>
+        ) : null}
       </div>
-      {fillPercent != null ? (
-        <div
-          role="progressbar"
-          aria-label={meterLabel}
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={Math.round(fillPercent)}
-          className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted"
-        >
+      <div
+        role={fillPercent != null ? "progressbar" : undefined}
+        aria-label={fillPercent != null ? meterLabel : undefined}
+        aria-valuemin={fillPercent != null ? 0 : undefined}
+        aria-valuemax={fillPercent != null ? 100 : undefined}
+        aria-valuenow={
+          fillPercent != null ? Math.round(fillPercent) : undefined
+        }
+        className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted"
+      >
+        {fillPercent != null ? (
           <div
             className={cn(
               "h-full rounded-full transition-[width] duration-500 ease-out",
@@ -69,11 +78,14 @@ export function QuotaMeter({
             )}
             style={{ width: `${Math.min(100, Math.max(0, fillPercent))}%` }}
           />
-        </div>
-      ) : null}
-      {footer ? (
-        <div className="mt-1.5 truncate text-[11px] leading-4 text-muted-foreground">
-          {footer}
+        ) : null}
+      </div>
+      {/* The caption carries the reset countdown, or the reason this window has
+          nothing to show. It wraps rather than truncating: the sentence is the
+          only thing explaining an empty track. */}
+      {(footer ?? (fillPercent == null ? valueText : null)) ? (
+        <div className="mt-1.5 text-[11px] leading-4 text-muted-foreground">
+          {footer ?? valueText}
         </div>
       ) : null}
     </div>

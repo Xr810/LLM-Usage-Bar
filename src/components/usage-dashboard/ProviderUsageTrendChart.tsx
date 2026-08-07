@@ -9,18 +9,23 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import type {
   UsageTrendBucketView,
   UsageTrendGranularity,
 } from "@/types/usageDashboard";
+import { formatUsd } from "../tray-usage/trayUsagePresentation";
 import { formatTokensCompact } from "./usagePresentation";
+import type { MeteredCostStatus } from "./usageDashboardProjection";
 
 interface ProviderUsageTrendChartProps {
   granularity: UsageTrendGranularity;
   buckets: UsageTrendBucketView[];
   totalTokens: number;
-  recordCount: number;
+  /** Spend over the same range; subscription usage counts at list price. */
+  totalCostUsd: string | null;
+  costStatus: MeteredCostStatus;
   rangeLabel: string;
   rangeControls?: ReactNode;
 }
@@ -39,7 +44,8 @@ export function ProviderUsageTrendTooltip({
   active,
   payload,
 }: ProviderUsageTrendTooltipProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const locale = i18n.resolvedLanguage || i18n.language || "en";
   const point = payload?.[0]?.payload;
   if (!active || !point) return null;
 
@@ -50,10 +56,13 @@ export function ProviderUsageTrendTooltip({
       </p>
       <p className="mt-1 text-xs text-muted-foreground metric">
         {formatTokensCompact(point.totalTokens)} Token ·{" "}
-        {t("usageDashboard.recordCount", {
-          count: point.eventCount,
-          defaultValue: "{{count}} records",
-        })}
+        {/* A bucket whose events were never priced says so rather than
+            reading as a day that cost nothing. */}
+        {point.totalCostUsd == null
+          ? t("usageDashboard.costUnavailableSummary", {
+              defaultValue: "Cost unavailable",
+            })
+          : formatUsd(point.totalCostUsd, locale)}
       </p>
     </div>
   );
@@ -63,7 +72,8 @@ export function ProviderUsageTrendChart({
   granularity,
   buckets,
   totalTokens,
-  recordCount,
+  totalCostUsd,
+  costStatus,
   rangeLabel,
   rangeControls,
 }: ProviderUsageTrendChartProps) {
@@ -107,6 +117,20 @@ export function ProviderUsageTrendChart({
     (peak, bucket) => Math.max(peak, bucket.totalTokens),
     0,
   );
+  const costStatusText =
+    costStatus === "partial"
+      ? t("usageDashboard.costPartial", {
+          defaultValue: "Some usage could not be priced",
+        })
+      : costStatus === "estimated"
+        ? t("usageDashboard.costEstimatedSummary", {
+            defaultValue: "Includes estimated cost",
+          })
+        : costStatus === "unavailable"
+          ? t("usageDashboard.costUnavailableSummary", {
+              defaultValue: "Cost unavailable",
+            })
+          : null;
 
   return (
     <section aria-labelledby="usage-trend-heading">
@@ -132,25 +156,35 @@ export function ProviderUsageTrendChart({
               <span data-testid="usage-trend-range">{rangeLabel}</span>
             </p>
           </div>
+          {/* Spend leads: it is the figure the range is being read for. The
+              tokens that produced it stay underneath, where the peak gives the
+              chart's tallest point a number. */}
           <div className="text-right">
-            <div
-              className="text-lg font-semibold metric"
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <div className="text-lg font-semibold metric">
+                {totalCostUsd == null
+                  ? t("usageDashboard.costUnavailableSummary", {
+                      defaultValue: "Cost unavailable",
+                    })
+                  : formatUsd(totalCostUsd, locale)}
+              </div>
+              {costStatusText ? (
+                <Badge variant="outline">{costStatusText}</Badge>
+              ) : null}
+            </div>
+            <p
+              className="mt-0.5 text-[11px] text-muted-foreground"
               title={totalTokens.toLocaleString(locale)}
             >
-              {formatTokensCompact(totalTokens)}
-            </div>
-            <p className="mt-0.5 text-[11px] text-muted-foreground">
-              {t("usageDashboard.totalTokens", { defaultValue: "Total" })} ·{" "}
               {t("usageDashboard.peakTokens", {
-                value: formatTokensCompact(peakTokens),
+                value: `${formatTokensCompact(peakTokens)} Token`,
                 defaultValue: "Peak {{value}}",
               })}
-              {recordCount > 0
-                ? ` · ${t("usageDashboard.recordCount", {
-                    count: recordCount,
-                    defaultValue: "{{count}} records",
-                  })}`
-                : ""}
+              {" · "}
+              {t("usageDashboard.totalTokensNamed", {
+                defaultValue: "Tokens",
+              })}{" "}
+              {formatTokensCompact(totalTokens)}
             </p>
           </div>
         </div>

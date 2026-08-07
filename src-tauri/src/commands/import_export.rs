@@ -10,7 +10,6 @@ use crate::commands::sync_support::{
 };
 use crate::database::backup::BackupEntry;
 use crate::error::AppError;
-use crate::services::provider::ProviderService;
 use crate::store::AppState;
 
 // ─── File import/export ──────────────────────────────────────
@@ -64,22 +63,6 @@ pub async fn import_config_from_file(
     .map_err(|e: AppError| e.to_string())
 }
 
-#[tauri::command]
-pub async fn sync_current_providers_live(state: State<'_, AppState>) -> Result<Value, String> {
-    let db = state.db.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let app_state = AppState::new(db);
-        ProviderService::sync_current_to_live(&app_state)?;
-        Ok::<_, AppError>(json!({
-            "success": true,
-            "message": "Live configuration synchronized"
-        }))
-    })
-    .await
-    .map_err(|e| format!("同步当前供应商失败: {e}"))?
-    .map_err(|e: AppError| e.to_string())
-}
-
 // ─── File dialogs ────────────────────────────────────────────
 
 /// 保存文件对话框
@@ -107,20 +90,6 @@ pub async fn open_file_dialog<R: tauri::Runtime>(
     let result = dialog
         .file()
         .add_filter("SQL", &["sql"])
-        .blocking_pick_file();
-
-    Ok(result.map(|p| p.to_string()))
-}
-
-/// 打开 ZIP 文件选择对话框
-#[tauri::command]
-pub async fn open_zip_file_dialog<R: tauri::Runtime>(
-    app: tauri::AppHandle<R>,
-) -> Result<Option<String>, String> {
-    let dialog = app.dialog();
-    let result = dialog
-        .file()
-        .add_filter("ZIP / Skill", &["zip", "skill"])
         .blocking_pick_file();
 
     Ok(result.map(|p| p.to_string()))

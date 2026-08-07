@@ -44,6 +44,54 @@ pub enum CostSource {
     Unavailable,
 }
 
+/// Which price catalogue produced an estimated cost.
+///
+/// `User` means a Provider-specific `provider_model_pricing` row selected the
+/// estimate. Individual blank rates may still be inherited from the official
+/// catalogue; keeping the origin as `User` makes the custom configuration that
+/// governed the estimate auditable. `Official` means no Provider-specific row
+/// participated and the built-in `model_pricing` reference supplied the whole
+/// estimate. Upstream and unavailable costs have no pricing origin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PricingOrigin {
+    User,
+    Official,
+}
+
+impl PricingOrigin {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PricingOrigin::User => "user",
+            PricingOrigin::Official => "official",
+        }
+    }
+}
+
+/// The four per-million-token rates that make up one model's price.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelPriceInput {
+    pub input_cost_per_million: String,
+    pub output_cost_per_million: String,
+    pub cache_read_cost_per_million: String,
+    pub cache_creation_cost_per_million: String,
+}
+
+/// One Provider account's own price for one model, in USD per million tokens.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderModelPricingView {
+    pub provider_id: String,
+    pub model_id: String,
+    pub display_name: String,
+    pub input_cost_per_million: Option<String>,
+    pub output_cost_per_million: Option<String>,
+    pub cache_read_cost_per_million: Option<String>,
+    pub cache_creation_cost_per_million: Option<String>,
+    pub updated_at: i64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentModuleInput {
@@ -301,6 +349,9 @@ pub struct UsageEvent {
     pub cache_creation_cost_usd: Option<String>,
     pub total_cost_usd: Option<String>,
     pub cost_source: CostSource,
+    /// Which price catalogue produced the estimate, captured at ingestion time.
+    /// Null for upstream-reported costs, unavailable costs, and pre-v20 events.
+    pub pricing_origin: Option<PricingOrigin>,
     pub legacy_request_id: Option<String>,
     pub created_at: i64,
 }
@@ -443,6 +494,8 @@ pub struct QuotaStatusView {
     pub snapshot_id: String,
     pub fetched_at: i64,
     pub source_observed_at: Option<i64>,
+    pub plan_type: Option<String>,
+    pub plan_renews_at: Option<i64>,
     pub five_hour_utilization_percent: Option<String>,
     pub five_hour_resets_at: Option<String>,
     pub seven_day_utilization_percent: Option<String>,
@@ -462,6 +515,15 @@ impl QuotaStatusView {
                 .and_then(Value::as_i64)
                 .filter(|timestamp_ms| *timestamp_ms > 0)
                 .map(|timestamp_ms| timestamp_ms / 1_000),
+            plan_type: snapshot
+                .raw_payload
+                .get("planType")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            plan_renews_at: snapshot
+                .raw_payload
+                .get("planRenewsAt")
+                .and_then(Value::as_i64),
             five_hour_utilization_percent: snapshot.five_hour_utilization_percent.clone(),
             five_hour_resets_at: snapshot.five_hour_resets_at.clone(),
             seven_day_utilization_percent: snapshot.seven_day_utilization_percent.clone(),
@@ -751,5 +813,33 @@ mod tests {
             status.manual_reset_credits[1].expires_at,
             "2026-08-01T00:00:00+00:00"
         );
+    }
+
+    #[test]
+    fn quota_status_lifts_plan_metadata_without_exposing_raw_payload() {
+        let mut snapshot = QuotaSnapshot {
+            snapshot_id: "quota-plan".to_string(),
+            provider_id: "chatgpt".to_string(),
+            fetched_at: 1,
+            five_hour_utilization_percent: None,
+            five_hour_resets_at: None,
+            seven_day_utilization_percent: None,
+            seven_day_resets_at: None,
+            manual_resets_remaining: None,
+            raw_payload: json!({
+                "planType": "pro",
+                "planRenewsAt": 1_789_876_543,
+            }),
+            created_at: 1,
+        };
+
+        let populated = QuotaStatusView::from_snapshot(&snapshot);
+        assert_eq!(populated.plan_type.as_deref(), Some("pro"));
+        assert_eq!(populated.plan_renews_at, Some(1_789_876_543));
+
+        snapshot.raw_payload = json!({});
+        let absent = QuotaStatusView::from_snapshot(&snapshot);
+        assert_eq!(absent.plan_type, None);
+        assert_eq!(absent.plan_renews_at, None);
     }
 }

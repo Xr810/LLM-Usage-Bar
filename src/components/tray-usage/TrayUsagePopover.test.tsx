@@ -41,7 +41,7 @@ const snapshot: TrayUsageSnapshot = {
       providers: [
         {
           providerId: "system-chatgpt-subscription",
-          providerName: "ChatGPT Plus/Pro",
+          providerName: "ChatGPT",
           systemPresetKey: "chatgpt-subscription",
           billingKind: "subscription",
           status: "yellow",
@@ -49,6 +49,7 @@ const snapshot: TrayUsageSnapshot = {
           recentUsage: {
             startAt: 1_781_611_200,
             endAt: 1_784_203_200,
+            todayTokens: 4_200_000,
             totalTokens: 87_000_000,
             todayCostUsd: "1.25",
             totalCostUsd: "48.5",
@@ -98,6 +99,7 @@ const snapshot: TrayUsageSnapshot = {
           recentUsage: {
             startAt: 1_781_611_200,
             endAt: 1_784_203_200,
+            todayTokens: 0,
             totalTokens: 2_300_000,
             todayCostUsd: "8",
             totalCostUsd: "20",
@@ -169,16 +171,17 @@ describe("TrayUsagePopover Provider-only UI", () => {
     expect(
       screen.getByRole("heading", { name: "Provider monitoring" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("ChatGPT Plus/Pro")).toBeInTheDocument();
+    expect(screen.getByText("ChatGPT Plus")).toBeInTheDocument();
     expect(screen.getByText("OpenAI API")).toBeInTheDocument();
+    // Spend stays on the collapsed summary row; the chart and model line are
+    // behind the per-account disclosure so the popover stays glanceable.
+    expect(screen.getAllByText("$1.25")).not.toHaveLength(0);
+    expect(screen.queryByText("Most used model: gpt-5.6-sol")).toBeNull();
     expect(
-      screen.getByText("Most used model: gpt-5.6-sol"),
-    ).toBeInTheDocument();
-    expect(
-      screen.getAllByRole("img", {
+      screen.queryAllByRole("img", {
         name: "Token usage for the last 30 days",
       }),
-    ).toHaveLength(2);
+    ).toHaveLength(0);
     expect(
       screen.queryByText(/Estimated from this Provider/),
     ).not.toBeInTheDocument();
@@ -190,6 +193,33 @@ describe("TrayUsagePopover Provider-only UI", () => {
         name: "Daily budget for OpenAI API",
       }),
     ).toHaveAttribute("aria-valuenow", "80");
+  });
+
+  it("reveals the chart and most-used model once an account is expanded", async () => {
+    const user = userEvent.setup();
+    render(<TrayUsagePopoverView {...props()} />);
+
+    const [firstDisclosure] = screen.getAllByRole("button", {
+      name: "Usage details",
+    });
+    await user.click(firstDisclosure);
+
+    expect(
+      screen.getByText("Most used model: gpt-5.6-sol"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getAllByRole("img", {
+        name: "Token usage for the last 30 days",
+      }),
+    ).toHaveLength(1);
+    // Today first, then 30 days — the same order as the spend row, and a fixed
+    // window rather than "whichever day this account was last used".
+    const labels = screen.getAllByRole("term").map((node) => node.textContent);
+    expect(labels.slice(0, 2)).toEqual([
+      "Today's tokens",
+      "Last 30 days tokens",
+    ]);
+    expect(screen.getByText("4.2M")).toBeInTheDocument();
   });
 
   it("uses the weekly label and expands GPT manual reset credits", async () => {
@@ -252,7 +282,7 @@ describe("TrayUsagePopover Provider-only UI", () => {
 
     expect(
       screen.getByRole("progressbar", {
-        name: "5-hour allowance for ChatGPT Plus/Pro",
+        name: "5-hour allowance for ChatGPT",
       }),
     ).toHaveAttribute("aria-valuenow", "95");
   });
@@ -357,7 +387,7 @@ describe("TrayUsagePopover Provider-only UI", () => {
 
   it("opens the Provider dashboard from the live tray popover", async () => {
     render(<TrayUsagePopover />, { wrapper: wrapper() });
-    expect(await screen.findByText("ChatGPT Plus/Pro")).toBeInTheDocument();
+    expect(await screen.findByText("ChatGPT Plus")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Open details" }));
     await waitFor(() =>
@@ -370,7 +400,7 @@ describe("TrayUsagePopover Provider-only UI", () => {
 
   it("refreshes on show and hides on Escape", async () => {
     render(<TrayUsagePopover />, { wrapper: wrapper() });
-    await screen.findByText("ChatGPT Plus/Pro");
+    await screen.findByText("ChatGPT Plus");
 
     act(() => emitTauriEvent("tray-popover-shown"));
     await waitFor(() =>

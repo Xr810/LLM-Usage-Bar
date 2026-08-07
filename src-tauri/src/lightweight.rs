@@ -41,6 +41,10 @@ pub fn exit_lightweight_mode(app: &tauri::AppHandle) -> Result<(), String> {
         {
             crate::linux_fix::nudge_main_window(window.clone());
         }
+        #[cfg(target_os = "macos")]
+        {
+            crate::macos_fix::repair_undersized_window(window.clone());
+        }
         #[cfg(target_os = "windows")]
         {
             let _ = window.set_skip_taskbar(false);
@@ -80,6 +84,10 @@ pub fn exit_lightweight_mode(app: &tauri::AppHandle) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     {
         crate::linux_fix::nudge_main_window(window.clone());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        crate::macos_fix::repair_undersized_window(window.clone());
     }
 
     #[cfg(target_os = "windows")]

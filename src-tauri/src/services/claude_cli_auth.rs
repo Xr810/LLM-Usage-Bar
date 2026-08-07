@@ -36,7 +36,10 @@ pub struct ClaudeCliAuthStatus {
     pub authenticated: bool,
     pub auth_method: Option<ClaudeAuthMethod>,
     pub subscription_type: Option<ClaudeSubscriptionType>,
-    pub quota_availability: &'static str,
+    /// When the newest local quota sample was taken, or `None` if there is
+    /// none yet. Quota does not come from the CLI — the CLI has no quota API —
+    /// so this is filled in by the command layer from the stored samples.
+    pub last_quota_sample_at: Option<i64>,
     pub error_code: Option<String>,
 }
 
@@ -194,7 +197,7 @@ impl ClaudeCliAuthService {
             authenticated: false,
             auth_method: None,
             subscription_type: None,
-            quota_availability: "unavailable",
+            last_quota_sample_at: None,
             error_code,
         }
     }
@@ -237,7 +240,7 @@ impl ClaudeCliAuthService {
             authenticated: true,
             auth_method,
             subscription_type,
-            quota_availability: "unavailable",
+            last_quota_sample_at: None,
             error_code: None,
         }
     }
@@ -346,7 +349,7 @@ mod tests {
             assert!(status.installed);
             assert!(status.authenticated, "exit 0 is authoritative");
             assert_eq!(status.subscription_type, subscription_type);
-            assert_eq!(status.quota_availability, "unavailable");
+            assert_eq!(status.last_quota_sample_at, None);
             assert_eq!(status.error_code, None);
             let json = serde_json::to_string(&status).unwrap();
             assert!(!json.contains("must-not-escape"));
@@ -399,7 +402,7 @@ mod tests {
             assert_eq!(status.installed, installed);
             assert!(!status.authenticated);
             assert_eq!(status.error_code.as_deref(), Some(code));
-            assert_eq!(status.quota_availability, "unavailable");
+            assert_eq!(status.last_quota_sample_at, None);
         }
 
         for output in [output(0, "not-json"), output(0, "[]"), output(2, "{}")] {
@@ -442,6 +445,6 @@ mod tests {
         assert_eq!(runner.logout_calls.load(Ordering::SeqCst), 1);
         assert!(status.installed);
         assert!(!status.authenticated);
-        assert_eq!(status.quota_availability, "unavailable");
+        assert_eq!(status.last_quota_sample_at, None);
     }
 }

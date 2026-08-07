@@ -135,22 +135,14 @@ struct SchemaObjectIdentity {
 /// Tables whose data rows are skipped when exporting for WebDAV sync.
 const SYNC_SKIP_TABLES: &[&str] = &[
     "proxy_request_logs",
-    "stream_check_logs",
-    "provider_health",
-    "proxy_live_backup",
     "usage_daily_rollups",
     "agent_credential_operations",
     "provider_credential_operations",
 ];
 
 /// Tables whose local data is preserved (restored from local snapshot) during WebDAV import.
-/// Excludes ephemeral tables like provider_health that can safely rebuild at runtime.
-const SYNC_PRESERVE_TABLES: &[&str] = &[
-    "proxy_request_logs",
-    "stream_check_logs",
-    "proxy_live_backup",
-    "usage_daily_rollups",
-];
+/// Device-local usage history is restored after sync imports.
+const SYNC_PRESERVE_TABLES: &[&str] = &["proxy_request_logs", "usage_daily_rollups"];
 
 fn normalized_secret_key(key: &str) -> String {
     key.chars()
@@ -920,42 +912,6 @@ impl Database {
             return Err(Self::credential_conflict());
         }
 
-        let live_backups: i64 =
-            conn.query_row("SELECT COUNT(*) FROM proxy_live_backup", [], |row| {
-                row.get(0)
-            })?;
-        if live_backups != 0 {
-            return Err(Self::credential_conflict());
-        }
-
-        let unsafe_mcp: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM mcp_servers
-             WHERE server_config != '{}'
-                OR enabled_claude != 0 OR enabled_codex != 0
-                OR enabled_gemini != 0 OR enabled_opencode != 0
-                OR enabled_hermes != 0",
-            [],
-            |row| row.get(0),
-        )?;
-        let unsafe_proxy: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM proxy_config
-             WHERE proxy_enabled != 0 OR enabled != 0 OR auto_failover_enabled != 0",
-            [],
-            |row| row.get(0),
-        )?;
-        if unsafe_mcp != 0 || unsafe_proxy != 0 {
-            return Err(Self::credential_conflict());
-        }
-        if Self::has_column(conn, "proxy_config", "live_takeover_active")? {
-            let active: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM proxy_config WHERE live_takeover_active != 0",
-                [],
-                |row| row.get(0),
-            )?;
-            if active != 0 {
-                return Err(Self::credential_conflict());
-            }
-        }
         let nonempty_meta: i64 = conn.query_row(
             "SELECT COUNT(*) FROM providers WHERE meta != '{}'",
             [],
@@ -969,26 +925,16 @@ impl Database {
             ("providers", "settings_config"),
             ("providers", "meta"),
             ("usage_providers", "route_config"),
-            ("mcp_servers", "server_config"),
             ("quota_snapshots", "raw_payload"),
         ] {
             Self::validate_redacted_json_column(conn, table, column)?;
         }
         Self::validate_redacted_settings(conn)?;
         Self::validate_redacted_url_column(conn, "provider_endpoints", "url")?;
-        for (table, column) in [
-            ("providers", "website_url"),
-            ("mcp_servers", "homepage"),
-            ("mcp_servers", "docs"),
-            ("skills", "readme_url"),
-        ] {
-            Self::validate_redacted_url_column(conn, table, column)?;
-        }
+        Self::validate_redacted_url_column(conn, "providers", "website_url")?;
         for (table, column, empty_allowed) in [
             ("quota_fetch_state", "last_error", false),
-            ("provider_health", "last_error", false),
             ("proxy_request_logs", "error_message", false),
-            ("stream_check_logs", "message", true),
         ] {
             if !Self::table_exists(conn, table)? || !Self::has_column(conn, table, column)? {
                 continue;
@@ -1340,20 +1286,8 @@ impl Database {
                 conn.execute("UPDATE providers SET meta = '{}'", [])?;
             }
             Self::sanitize_json_backup_column(conn, "usage_providers", "route_config", None)?;
-            if Self::table_exists(conn, "mcp_servers")? {
-                conn.execute(
-                    "UPDATE mcp_servers
-                     SET server_config = '{}', enabled_claude = 0,
-                         enabled_codex = 0, enabled_gemini = 0,
-                         enabled_opencode = 0, enabled_hermes = 0",
-                    [],
-                )?;
-            }
             Self::sanitize_url_backup_column(conn, "provider_endpoints", "url")?;
             Self::sanitize_url_backup_column(conn, "providers", "website_url")?;
-            Self::sanitize_url_backup_column(conn, "mcp_servers", "homepage")?;
-            Self::sanitize_url_backup_column(conn, "mcp_servers", "docs")?;
-            Self::sanitize_url_backup_column(conn, "skills", "readme_url")?;
             Self::sanitize_backup_settings(conn)?;
 
             if Self::table_exists(conn, "usage_providers")? {
@@ -1378,34 +1312,16 @@ impl Database {
                     conn.execute_batch(&format!("{trigger_sql};"))?;
                 }
             }
-            if Self::table_exists(conn, "proxy_live_backup")? {
-                conn.execute("DELETE FROM proxy_live_backup", [])?;
-            }
-            if Self::table_exists(conn, "proxy_config")? {
-                conn.execute(
-                    "UPDATE proxy_config
-                     SET proxy_enabled = 0, enabled = 0, auto_failover_enabled = 0",
-                    [],
-                )?;
-                if Self::has_column(conn, "proxy_config", "live_takeover_active")? {
-                    conn.execute("UPDATE proxy_config SET live_takeover_active = 0", [])?;
-                }
-            }
             conn.execute(
                 "UPDATE settings SET value = 'false' WHERE key LIKE 'proxy_takeover_%'",
                 [],
             )?;
-            for (table, column, replacement) in [
-                ("quota_fetch_state", "last_error", None),
-                ("provider_health", "last_error", None),
-                ("proxy_request_logs", "error_message", None),
-                ("stream_check_logs", "message", Some("")),
+            for (table, column) in [
+                ("quota_fetch_state", "last_error"),
+                ("proxy_request_logs", "error_message"),
             ] {
                 if Self::table_exists(conn, table)? && Self::has_column(conn, table, column)? {
-                    conn.execute(
-                        &format!("UPDATE \"{table}\" SET \"{column}\" = ?1"),
-                        [replacement],
-                    )?;
+                    conn.execute(&format!("UPDATE \"{table}\" SET \"{column}\" = NULL"), [])?;
                 }
             }
             if Self::table_exists(conn, "agent_provider_bindings")? {
@@ -1703,14 +1619,6 @@ impl Database {
 
         // Periodic maintenance is always enabled, regardless of auto-backup settings.
         let mut reclaimed_rows = 0u64;
-        match self.cleanup_old_stream_check_logs(7) {
-            Ok(deleted) => {
-                reclaimed_rows += deleted;
-            }
-            Err(e) => {
-                log::warn!("Periodic stream_check_logs cleanup failed: {e}");
-            }
-        }
         match self.rollup_and_prune(30) {
             Ok(deleted) => {
                 reclaimed_rows += deleted;
@@ -1807,13 +1715,10 @@ impl Database {
         let provider_count: i64 = conn
             .query_row("SELECT COUNT(*) FROM providers", [], |row| row.get(0))
             .map_err(|e| AppError::Database(e.to_string()))?;
-        let mcp_count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM mcp_servers", [], |row| row.get(0))
-            .map_err(|e| AppError::Database(e.to_string()))?;
 
-        if provider_count == 0 && mcp_count == 0 {
+        if provider_count == 0 {
             return Err(AppError::Config(
-                "导入的 SQL 未包含有效的供应商或 MCP 数据".to_string(),
+                "导入的 SQL 未包含有效的供应商数据".to_string(),
             ));
         }
         Ok(())
@@ -2399,21 +2304,6 @@ mod tests {
              )",
             [],
         )?;
-        conn.execute(
-            "INSERT INTO mcp_servers (
-                 id, name, server_config, tags, enabled_claude, enabled_codex
-             ) VALUES (
-                 'backup-secret-mcp', 'Backup Secret MCP',
-                 '{\"env\":{\"GITHUB_PAT\":\"mcp-pat-secret\"},\"args\":[\"--token\",\"mcp-arg-secret\"]}',
-                 '[]', 1, 1
-             )",
-            [],
-        )?;
-        conn.execute(
-            "INSERT INTO proxy_live_backup (app_type, original_config, backed_up_at)
-             VALUES ('codex', '{\"refresh_token\":\"live-refresh-secret\"}', 'now')",
-            [],
-        )?;
         for (key, value) in [
             ("claude_desktop_gateway_token", "gateway-setting-secret"),
             (
@@ -2449,22 +2339,6 @@ mod tests {
             [],
         )?;
         conn.execute(
-            "INSERT INTO provider_health (
-                 provider_id, app_type, last_error, updated_at
-             ) VALUES ('backup-provider', 'claude', 'health-error-secret', 'now')",
-            [],
-        )?;
-        conn.execute(
-            "INSERT INTO stream_check_logs (
-                 provider_id, provider_name, app_type, status, success,
-                 message, tested_at
-             ) VALUES (
-                 'backup-provider', 'Backup Provider', 'claude', 'error', 0,
-                 'stream-error-secret', 10
-             )",
-            [],
-        )?;
-        conn.execute(
             "INSERT INTO proxy_request_logs (
                  request_id, provider_id, app_type, model, latency_ms,
                  status_code, error_message, created_at
@@ -2472,12 +2346,6 @@ mod tests {
                  'backup-error-request', 'backup-provider', 'claude', 'model', 1,
                  500, 'request-error-secret', 10
              )",
-            [],
-        )?;
-        conn.execute(
-            "UPDATE proxy_config
-             SET proxy_enabled = 1, enabled = 1, auto_failover_enabled = 1
-             WHERE app_type = 'codex'",
             [],
         )?;
         Ok(())
@@ -2575,38 +2443,6 @@ mod tests {
                 )),
             )?,
             (None, None)
-        );
-        assert_eq!(
-            backup.query_row(
-                "SELECT server_config, enabled_claude, enabled_codex
-                 FROM mcp_servers WHERE id = 'backup-secret-mcp'",
-                [],
-                |row| Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, bool>(1)?,
-                    row.get::<_, bool>(2)?
-                )),
-            )?,
-            ("{}".to_string(), false, false)
-        );
-        assert_eq!(
-            backup.query_row("SELECT COUNT(*) FROM proxy_live_backup", [], |row| {
-                row.get::<_, i64>(0)
-            })?,
-            0
-        );
-        assert_eq!(
-            backup.query_row(
-                "SELECT proxy_enabled, enabled, auto_failover_enabled
-                 FROM proxy_config WHERE app_type = 'codex'",
-                [],
-                |row| Ok((
-                    row.get::<_, bool>(0)?,
-                    row.get::<_, bool>(1)?,
-                    row.get::<_, bool>(2)?
-                )),
-            )?,
-            (false, false, false)
         );
         drop(backup);
         let bytes = std::fs::read(&backup_path).expect("read sanitized SQLite backup bytes");
@@ -4086,13 +3922,6 @@ mod tests {
                 ) VALUES ('2026-03-01', 'claude', 'local-provider', 'claude-3', 7, 7, 700, 350, 0, 0, '0.07', 120)",
                 [],
             )?;
-            conn.execute(
-                "INSERT INTO stream_check_logs (
-                    provider_id, provider_name, app_type, status, success, message,
-                    response_time_ms, http_status, model_used, retry_count, tested_at
-                ) VALUES ('local-provider', 'Local Provider', 'claude', 'operational', 1, 'ok', 42, 200, 'claude-3', 0, 1000)",
-                [],
-            )?;
         }
 
         local_db.import_sql_string_for_sync(&remote_sql)?;
@@ -4110,7 +3939,7 @@ mod tests {
             "remote config should be imported"
         );
 
-        let (request_logs, rollups, stream_logs): (i64, i64, i64) = {
+        let (request_logs, rollups): (i64, i64) = {
             let conn = crate::database::lock_conn!(local_db.conn);
             let request_logs =
                 conn.query_row("SELECT COUNT(*) FROM proxy_request_logs", [], |row| {
@@ -4120,19 +3949,10 @@ mod tests {
                 conn.query_row("SELECT COUNT(*) FROM usage_daily_rollups", [], |row| {
                     row.get(0)
                 })?;
-            let stream_logs =
-                conn.query_row("SELECT COUNT(*) FROM stream_check_logs", [], |row| {
-                    row.get(0)
-                })?;
-            (request_logs, rollups, stream_logs)
+            (request_logs, rollups)
         };
         assert_eq!(request_logs, 1, "local request logs should be preserved");
         assert_eq!(rollups, 1, "local rollups should be preserved");
-        assert_eq!(
-            stream_logs, 1,
-            "local stream check logs should be preserved"
-        );
-
         Ok(())
     }
 
@@ -4155,7 +3975,6 @@ mod tests {
         let db = Database::memory()?;
         let now = chrono::Utc::now().timestamp();
         let old_ts = now - 40 * 86400;
-        let old_stream_ts = now - 8 * 86400;
 
         {
             let conn = crate::database::lock_conn!(db.conn);
@@ -4167,41 +3986,26 @@ mod tests {
                 ) VALUES ('old-req', 'p1', 'claude', 'claude-3', 100, 50, '0.01', 100, 200, ?1)",
                 [old_ts],
             )?;
-            conn.execute(
-                "INSERT INTO stream_check_logs (
-                    provider_id, provider_name, app_type, status, success, message,
-                    response_time_ms, http_status, model_used, retry_count, tested_at
-                ) VALUES ('p1', 'Provider 1', 'claude', 'operational', 1, 'ok', 42, 200, 'claude-3', 0, ?1)",
-                [old_stream_ts],
-            )?;
         }
 
         db.periodic_backup_if_needed()?;
 
-        let (remaining_request_logs, stream_logs, rollups): (i64, i64, i64) = {
+        let (remaining_request_logs, rollups): (i64, i64) = {
             let conn = crate::database::lock_conn!(db.conn);
             let remaining_request_logs =
                 conn.query_row("SELECT COUNT(*) FROM proxy_request_logs", [], |row| {
-                    row.get(0)
-                })?;
-            let stream_logs =
-                conn.query_row("SELECT COUNT(*) FROM stream_check_logs", [], |row| {
                     row.get(0)
                 })?;
             let rollups =
                 conn.query_row("SELECT COUNT(*) FROM usage_daily_rollups", [], |row| {
                     row.get(0)
                 })?;
-            (remaining_request_logs, stream_logs, rollups)
+            (remaining_request_logs, rollups)
         };
 
         assert_eq!(
             remaining_request_logs, 0,
             "old request logs should still be pruned when auto backup is disabled"
-        );
-        assert_eq!(
-            stream_logs, 0,
-            "old stream check logs should still be pruned when auto backup is disabled"
         );
         assert_eq!(rollups, 1, "old request logs should be rolled up");
 

@@ -4,6 +4,37 @@ export type BillingKind = "subscription" | "metered";
 export type TokenSource = "proxy" | "session_log";
 export type SessionSource = "claude" | "codex";
 export type CostSource = "upstream" | "estimated" | "unavailable";
+
+/**
+ * `user` means the account's own price — what you actually pay. `official`
+ * means the built-in reference catalogue, which is also what subscription
+ * equivalent-API costs are always valued at.
+ */
+export type PricingOrigin = "user" | "official";
+
+/** The four per-million-token rates that make up one model's price. */
+/** What the user typed. A blank rate means "use the official one". */
+export interface ModelPriceInput {
+  inputCostPerMillion: string;
+  outputCostPerMillion: string;
+  cacheReadCostPerMillion: string;
+  cacheCreationCostPerMillion: string;
+}
+
+/**
+ * One Provider account's own price for one model, in USD per million tokens.
+ * A null rate was left blank and resolves to the official catalogue value.
+ */
+export interface ProviderModelPricingView {
+  providerId: string;
+  modelId: string;
+  displayName: string;
+  inputCostPerMillion: string | null;
+  outputCostPerMillion: string | null;
+  cacheReadCostPerMillion: string | null;
+  cacheCreationCostPerMillion: string | null;
+  updatedAt: number;
+}
 export type BindingCredentialStatus =
   "not_required" | "missing" | "configured" | "unavailable";
 export type SystemProviderAuthKind =
@@ -84,7 +115,8 @@ export interface ClaudeCliAuthStatus {
   authenticated: boolean;
   authMethod: "api_key" | "claude_account" | "other" | null;
   subscriptionType: "pro" | "max" | null;
-  quotaAvailability: "unavailable";
+  /** When the newest local quota sample was taken; quota never comes from the CLI. */
+  lastQuotaSampleAt: number | null;
   errorCode: string | null;
 }
 
@@ -141,6 +173,8 @@ export interface QuotaStatusView {
   snapshotId: string;
   fetchedAt: number;
   sourceObservedAt?: number | null;
+  planType?: string | null;
+  planRenewsAt?: number | null;
   fiveHourUtilizationPercent: string | null;
   fiveHourResetsAt: string | null;
   sevenDayUtilizationPercent: string | null;
@@ -238,6 +272,11 @@ export interface UsageEvent {
   cacheCreationCostUsd: string | null;
   totalCostUsd: string | null;
   costSource: CostSource;
+  /**
+   * Which price catalogue produced an estimate. Null for upstream-reported and
+   * unavailable costs, and for events recorded before schema v20.
+   */
+  pricingOrigin: PricingOrigin | null;
   legacyRequestId: string | null;
   createdAt: number;
 }

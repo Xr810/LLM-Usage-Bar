@@ -22,6 +22,11 @@ vi.mock("./ProviderDailyBudgetField", () => ({
     </div>
   ),
 }));
+vi.mock("./ProviderModelPricingSection", () => ({
+  ProviderModelPricingSection: ({ providerId }: { providerId: string }) => (
+    <div data-testid={`pricing-${providerId}`}>Model prices</div>
+  ),
+}));
 vi.mock("./ClaudeCliAuthSection", () => ({
   ClaudeCliAuthSection: () => <div>Claude auth</div>,
 }));
@@ -56,6 +61,7 @@ beforeEach(() => {
 it("shows one inline API key field and verifies with the saved credential version", async () => {
   render(
     <SystemProviderCard
+      onRemove={vi.fn()}
       provider={
         {
           id: "system-openai-api",
@@ -104,6 +110,7 @@ it("places a targeted budget editor after authentication for metered Providers",
   const onTargetHandled = vi.fn();
   render(
     <SystemProviderCard
+      onRemove={vi.fn()}
       provider={
         {
           id: "system-openai-api",
@@ -138,10 +145,11 @@ it("places a targeted budget editor after authentication for metered Providers",
 it("does not render a budget editor for subscription Providers", () => {
   render(
     <SystemProviderCard
+      onRemove={vi.fn()}
       provider={
         {
           id: "system-chatgpt-subscription",
-          name: "ChatGPT Plus/Pro",
+          name: "ChatGPT",
           billingKind: "subscription",
           dailyBudgetUsd: null,
           systemAuthKind: "codex_oauth",
@@ -163,6 +171,7 @@ it("does not render a budget editor for subscription Providers", () => {
 it("saves NVIDIA's API key without calling its unsupported connection test", async () => {
   render(
     <SystemProviderCard
+      onRemove={vi.fn()}
       provider={
         {
           id: "system-nvidia-nim-api",

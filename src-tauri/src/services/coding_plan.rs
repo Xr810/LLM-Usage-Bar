@@ -91,6 +91,8 @@ fn make_error(msg: String) -> SubscriptionQuota {
         credential_message: None,
         success: false,
         tiers: vec![],
+        plan_type: None,
+        plan_renews_at: None,
         manual_reset_credits: None,
         extra_usage: None,
         error: Some(msg),
@@ -101,7 +103,7 @@ fn make_error(msg: String) -> SubscriptionQuota {
 // ── Kimi For Coding ─────────────────────────────────────────
 
 async fn query_kimi(api_key: &str) -> Result<SubscriptionQuota, String> {
-    let client = crate::proxy::http_client::get();
+    let client = crate::http_client::get();
 
     let resp = client
         .get("https://api.kimi.com/coding/v1/usages")
@@ -124,6 +126,8 @@ async fn query_kimi(api_key: &str) -> Result<SubscriptionQuota, String> {
             credential_message: Some("Invalid API key".to_string()),
             success: false,
             tiers: vec![],
+            plan_type: None,
+            plan_renews_at: None,
             manual_reset_credits: None,
             extra_usage: None,
             error: Some(format!("Authentication failed (HTTP {status})")),
@@ -201,6 +205,8 @@ async fn query_kimi(api_key: &str) -> Result<SubscriptionQuota, String> {
         credential_message: None,
         success: true,
         tiers,
+        plan_type: None,
+        plan_renews_at: None,
         manual_reset_credits: None,
         extra_usage: None,
         error: None,
@@ -317,7 +323,7 @@ fn zhipu_quota_base(base_url: &str) -> &'static str {
 }
 
 async fn query_zhipu(base_url: &str, api_key: &str) -> Result<SubscriptionQuota, String> {
-    let client = crate::proxy::http_client::get();
+    let client = crate::http_client::get();
     let url = format!(
         "{}/api/monitor/usage/quota/limit",
         zhipu_quota_base(base_url)
@@ -345,6 +351,8 @@ async fn query_zhipu(base_url: &str, api_key: &str) -> Result<SubscriptionQuota,
             credential_message: Some("Invalid API key".to_string()),
             success: false,
             tiers: vec![],
+            plan_type: None,
+            plan_renews_at: None,
             manual_reset_credits: None,
             extra_usage: None,
             error: Some(format!("Authentication failed (HTTP {status})")),
@@ -403,6 +411,8 @@ fn zhipu_quota_from_body(body: &serde_json::Value) -> SubscriptionQuota {
         credential_message: level,
         success: true,
         tiers,
+        plan_type: None,
+        plan_renews_at: None,
         manual_reset_credits: None,
         extra_usage: None,
         error: None,
@@ -413,7 +423,7 @@ fn zhipu_quota_from_body(body: &serde_json::Value) -> SubscriptionQuota {
 // ── MiniMax ─────────────────────────────────────────────────
 
 async fn query_minimax(api_key: &str, is_cn: bool) -> Result<SubscriptionQuota, String> {
-    let client = crate::proxy::http_client::get();
+    let client = crate::http_client::get();
 
     let api_domain = if is_cn {
         "api.minimaxi.com"
@@ -443,6 +453,8 @@ async fn query_minimax(api_key: &str, is_cn: bool) -> Result<SubscriptionQuota, 
             credential_message: Some("Invalid API key".to_string()),
             success: false,
             tiers: vec![],
+            plan_type: None,
+            plan_renews_at: None,
             manual_reset_credits: None,
             extra_usage: None,
             error: Some(format!("Authentication failed (HTTP {status})")),
@@ -490,6 +502,8 @@ async fn query_minimax(api_key: &str, is_cn: bool) -> Result<SubscriptionQuota, 
         credential_message: None,
         success: true,
         tiers,
+        plan_type: None,
+        plan_renews_at: None,
         manual_reset_credits: None,
         extra_usage: None,
         error: None,
@@ -500,7 +514,7 @@ async fn query_minimax(api_key: &str, is_cn: bool) -> Result<SubscriptionQuota, 
 // ── ZenMux ──────────────────────────────────────────────────
 
 async fn query_zenmux(base_url: &str, api_key: &str) -> Result<SubscriptionQuota, String> {
-    let client = crate::proxy::http_client::get();
+    let client = crate::http_client::get();
 
     let resp = client
         .get(base_url)
@@ -523,6 +537,8 @@ async fn query_zenmux(base_url: &str, api_key: &str) -> Result<SubscriptionQuota
             credential_message: Some("Invalid API key".to_string()),
             success: false,
             tiers: vec![],
+            plan_type: None,
+            plan_renews_at: None,
             manual_reset_credits: None,
             extra_usage: None,
             error: Some(format!("Authentication failed (HTTP {status})")),
@@ -630,6 +646,8 @@ async fn query_zenmux(base_url: &str, api_key: &str) -> Result<SubscriptionQuota
         },
         success: true,
         tiers,
+        plan_type: None,
+        plan_renews_at: None,
         manual_reset_credits: None,
         extra_usage: None,
         error: None,
@@ -905,7 +923,7 @@ async fn volcengine_openapi_call(
     secret_access_key: &str,
     action: &str,
 ) -> VolcCall {
-    let client = crate::proxy::http_client::get();
+    let client = crate::http_client::get();
     // canonical query 同时用于签名与实际 URL，确保两者逐字一致（否则签名不匹配）。
     let canonical_query = volcengine_canonical_query(action, region);
     let url = format!("https://{VOLCENGINE_OPENAPI_HOST}/?{canonical_query}");
@@ -1084,6 +1102,8 @@ fn volcengine_success(tiers: Vec<QuotaTier>, plan: Option<String>) -> Subscripti
         credential_message: plan,
         success: true,
         tiers,
+        plan_type: None,
+        plan_renews_at: None,
         manual_reset_credits: None,
         extra_usage: None,
         error: None,
@@ -1098,6 +1118,8 @@ fn volcengine_auth_error(detail: String) -> SubscriptionQuota {
         credential_message: Some("Invalid API key".to_string()),
         success: false,
         tiers: vec![],
+        plan_type: None,
+        plan_renews_at: None,
         manual_reset_credits: None,
         extra_usage: None,
         error: Some(detail),
@@ -1190,6 +1212,8 @@ fn coding_plan_not_found(error: &str) -> SubscriptionQuota {
         credential_message: None,
         success: false,
         tiers: vec![],
+        plan_type: None,
+        plan_renews_at: None,
         manual_reset_credits: None,
         extra_usage: None,
         error: Some(error.to_string()),
@@ -1222,7 +1246,7 @@ async fn query_zhipu_team_at(
     organization_id: &str,
     project_id: &str,
 ) -> Result<SubscriptionQuota, String> {
-    let client = crate::proxy::http_client::get();
+    let client = crate::http_client::get();
     let url = format!("{quota_url_base}?type=2");
 
     let resp = client
@@ -1249,6 +1273,8 @@ async fn query_zhipu_team_at(
             credential_message: Some("Invalid API key".to_string()),
             success: false,
             tiers: vec![],
+            plan_type: None,
+            plan_renews_at: None,
             manual_reset_credits: None,
             extra_usage: None,
             error: Some(format!("Authentication failed (HTTP {status})")),

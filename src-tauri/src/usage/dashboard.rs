@@ -463,6 +463,7 @@ mod tests {
             cache_creation_cost_usd: None,
             total_cost_usd: total_cost_usd.map(str::to_string),
             cost_source,
+            pricing_origin: None,
             legacy_request_id: None,
             created_at: occurred_at,
         }
@@ -539,7 +540,11 @@ mod tests {
             seven_day_utilization_percent: Some("50".to_string()),
             seven_day_resets_at: None,
             manual_resets_remaining: Some(2),
-            raw_payload: json!({"secret": "must-not-leak"}),
+            raw_payload: json!({
+                "planType": "pro",
+                "planRenewsAt": 1_789_876_543,
+                "secret": "must-not-leak"
+            }),
             created_at: 120,
         })
         .unwrap();
@@ -564,8 +569,14 @@ mod tests {
         assert_eq!(subscription.cost_source_counts.estimated, 0);
         assert!(subscription.quota.is_some());
         assert!(subscription.quota_fetch_state.is_some());
-        assert!(!serde_json::to_string(subscription)
-            .unwrap()
+        let serialized_subscription = serde_json::to_value(subscription).unwrap();
+        assert_eq!(serialized_subscription["quota"]["planType"], json!("pro"));
+        assert_eq!(
+            serialized_subscription["quota"]["planRenewsAt"],
+            json!(1_789_876_543_i64)
+        );
+        assert!(!serialized_subscription
+            .to_string()
             .contains("must-not-leak"));
 
         let metered = &product.metered_providers[0];

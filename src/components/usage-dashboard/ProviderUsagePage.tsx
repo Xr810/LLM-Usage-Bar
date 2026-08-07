@@ -55,9 +55,14 @@ export function ProviderUsagePage({
           defaultValue: "Cost unavailable",
         })
       : `$${projection.meteredTotalCostUsd}`;
+  // Only a caveat earns the badge. "Trusted cost data" reported the absence of
+  // a problem on every render, which is a permanent label that says nothing —
+  // and left an idle account wearing a verdict about numbers it does not have.
   const costStatusText =
     projection.meteredCostStatus === "partial"
-      ? t("usageDashboard.costPartial", { defaultValue: "Partial cost data" })
+      ? t("usageDashboard.costPartial", {
+          defaultValue: "Some usage could not be priced",
+        })
       : projection.meteredCostStatus === "estimated"
         ? t("usageDashboard.costEstimatedSummary", {
             defaultValue: "Includes estimated cost",
@@ -66,9 +71,7 @@ export function ProviderUsagePage({
           ? t("usageDashboard.costUnavailableSummary", {
               defaultValue: "Cost unavailable",
             })
-          : t("usageDashboard.costComplete", {
-              defaultValue: "Trusted cost data",
-            });
+          : null;
 
   if (
     projection.subscriptionProviders.length === 0 &&
@@ -109,97 +112,93 @@ export function ProviderUsagePage({
 
   return (
     <div className="space-y-7">
-      <div className="grid items-start gap-4 min-[900px]:grid-cols-[300px_minmax(0,1fr)] min-[1180px]:grid-cols-[330px_minmax(0,1fr)]">
-        <section
-          className="overflow-hidden rounded-xl border bg-card px-4 shadow-card"
-          aria-labelledby="subscription-heading"
-        >
-          <div className="flex items-start justify-between gap-3 py-4">
-            <div>
-              <h2 id="subscription-heading" className="text-sm font-semibold">
-                {t("usageDashboard.remainingQuota", {
-                  defaultValue: "Remaining quota",
-                })}
-              </h2>
-              <p className="mt-1 text-[11px] text-muted-foreground">
-                {t("usageDashboard.subscriptionAccounts", {
-                  defaultValue: "Subscription accounts",
-                })}
-              </p>
-            </div>
-            <span className="shrink-0 text-xs text-muted-foreground metric">
-              {t("usageDashboard.accountCount", {
-                count: projection.subscriptionProviders.length,
-                defaultValue: "{{count}} accounts",
-              })}
-            </span>
-          </div>
+      {/* Activity first: it carries the range control, and every figure below
+          it — both section totals and every card — is scoped by that range. */}
+      <div className="space-y-4">
+        <ProviderActivityHeatmap
+          buckets={activityBuckets}
+          startAt={activityStartAt}
+          endAt={activityEndAt}
+          isLoading={isActivityLoading}
+        />
+        <ProviderUsageTrendChart
+          granularity={projection.trendGranularity}
+          buckets={projection.trendBuckets}
+          totalTokens={projection.overallTotalTokens}
+          totalCostUsd={projection.overallTotalCostUsd}
+          costStatus={projection.overallCostStatus}
+          rangeLabel={rangeLabel}
+          rangeControls={rangeControls}
+        />
+      </div>
 
-          {projection.subscriptionProviders.length ? (
-            <div>
-              {projection.subscriptionProviders.map((usage) => (
-                <SubscriptionProviderCard
-                  key={usage.provider.id}
-                  usage={usage}
-                  layout="sidebar"
-                  onRefreshQuota={onRefreshQuota}
-                  onSyncSessions={onSyncSessions}
-                  isRefreshingQuota={isRefreshingQuota}
-                  isSyncingSessions={isSyncingSessions}
-                  remainingThresholds={remainingThresholds}
-                />
-              ))}
-            </div>
-          ) : (
-            <div className="border-t border-dashed border-border py-8 text-center text-sm text-muted-foreground">
-              {t("usageDashboard.noSubscriptionProviders", {
-                defaultValue: "No subscription Provider accounts.",
-              })}
-            </div>
+      <section className="space-y-3" aria-labelledby="subscription-heading">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+          {sectionHeading(
+            "subscription-heading",
+            t("usageDashboard.remainingQuota", {
+              defaultValue: "Remaining quota",
+            }),
+            projection.subscriptionProviders.length,
           )}
-
-          <dl className="grid grid-cols-2 gap-2 border-t border-border/60 py-4">
-            <div className="rounded-lg bg-muted/20 px-3 py-2.5">
-              <dt className="text-[10px] text-muted-foreground">
+          {/* Both figures cover every Provider over the selected time range,
+              which the labels alone cannot say without crowding the row — the
+              tooltips carry it. */}
+          <dl className="flex items-baseline gap-5 text-xs text-muted-foreground">
+            <div
+              className="flex items-baseline gap-1.5"
+              title={t("usageDashboard.selectedRangeTokensHint", {
+                value: projection.overallTotalTokens.toLocaleString(),
+                defaultValue: `${projection.overallTotalTokens.toLocaleString()} tokens across every Provider in the selected time range`,
+              })}
+            >
+              <dt>
                 {t("usageDashboard.selectedRangeTokens", {
-                  defaultValue: "Selected range",
+                  defaultValue: "Tokens",
                 })}
               </dt>
-              <dd
-                className="mt-1 text-base font-semibold metric"
-                title={projection.overallTotalTokens.toLocaleString()}
-              >
+              <dd className="font-semibold text-foreground metric">
                 {formatTokensCompact(projection.overallTotalTokens)}
               </dd>
             </div>
-            <div className="rounded-lg bg-muted/20 px-3 py-2.5">
-              <dt className="text-[10px] text-muted-foreground">
-                {t("usageDashboard.records", { defaultValue: "Records" })}
-              </dt>
-              <dd className="mt-1 text-base font-semibold metric">
+            <div
+              className="flex items-baseline gap-1.5"
+              title={t("usageDashboard.recordsHint", {
+                defaultValue:
+                  "Recorded calls across every Provider in the selected time range",
+              })}
+            >
+              <dt>{t("usageDashboard.records", { defaultValue: "Calls" })}</dt>
+              <dd className="font-semibold text-foreground metric">
                 {projection.overallRequestCount.toLocaleString()}
               </dd>
             </div>
           </dl>
-        </section>
-
-        <div className="min-w-0 space-y-4">
-          <ProviderActivityHeatmap
-            buckets={activityBuckets}
-            startAt={activityStartAt}
-            endAt={activityEndAt}
-            isLoading={isActivityLoading}
-          />
-          <ProviderUsageTrendChart
-            granularity={projection.trendGranularity}
-            buckets={projection.trendBuckets}
-            totalTokens={projection.overallTotalTokens}
-            recordCount={projection.overallRequestCount}
-            rangeLabel={rangeLabel}
-            rangeControls={rangeControls}
-          />
         </div>
-      </div>
+
+        {projection.subscriptionProviders.length ? (
+          <div className="grid gap-4 min-[880px]:grid-cols-2 min-[1240px]:grid-cols-3">
+            {projection.subscriptionProviders.map((usage) => (
+              <SubscriptionProviderCard
+                key={usage.provider.id}
+                usage={usage}
+                layout="compact"
+                onRefreshQuota={onRefreshQuota}
+                onSyncSessions={onSyncSessions}
+                isRefreshingQuota={isRefreshingQuota}
+                isSyncingSessions={isSyncingSessions}
+                remainingThresholds={remainingThresholds}
+              />
+            ))}
+          </div>
+        ) : (
+          <div className="rounded-xl border border-dashed border-border bg-muted/20 px-4 py-6 text-center text-sm text-muted-foreground dark:bg-muted/10">
+            {t("usageDashboard.noSubscriptionProviders", {
+              defaultValue: "No subscription Provider accounts.",
+            })}
+          </div>
+        )}
+      </section>
 
       <section className="space-y-3" aria-labelledby="metered-heading">
         {sectionHeading(
@@ -217,7 +216,9 @@ export function ProviderUsagePage({
                   defaultValue: "Metered overview",
                 })}
               </h3>
-              <Badge variant="outline">{costStatusText}</Badge>
+              {costStatusText ? (
+                <Badge variant="outline">{costStatusText}</Badge>
+              ) : null}
             </div>
             <dl className="flex items-center gap-6">
               <div className="min-w-0">

@@ -160,10 +160,19 @@ export function projectAgentDashboard(
   const knownCosts = meteredProviders
     .map((usage) => usage.totalCostUsd)
     .filter((value): value is string => value != null);
-  const meteredTotalCostUsd = addDecimalStrings(knownCosts);
+  // An account with no events in this range cost nothing, which is known, not
+  // missing — without the guard an idle Provider reported its cost as
+  // unavailable, next to the zeroes that explain why there is none.
+  const meteredHasEvents = meteredProviders.some(
+    (usage) => usage.eventCount > 0,
+  );
+  const meteredTotalCostUsd = meteredHasEvents
+    ? addDecimalStrings(knownCosts)
+    : "0";
   const hasUnavailable = meteredProviders.some(
     (usage) =>
-      usage.totalCostUsd == null || usage.costSourceCounts.unavailable > 0,
+      usage.eventCount > 0 &&
+      (usage.totalCostUsd == null || usage.costSourceCounts.unavailable > 0),
   );
   const hasEstimated = meteredProviders.some(
     (usage) => usage.costSourceCounts.estimated > 0,
@@ -235,10 +244,19 @@ export function projectProviderDashboard(
   const knownCosts = meteredProviders
     .map((usage) => usage.totalCostUsd)
     .filter((value): value is string => value != null);
-  const meteredTotalCostUsd = addDecimalStrings(knownCosts);
+  // An account with no events in this range cost nothing, which is known, not
+  // missing — without the guard an idle Provider reported its cost as
+  // unavailable, next to the zeroes that explain why there is none.
+  const meteredHasEvents = meteredProviders.some(
+    (usage) => usage.eventCount > 0,
+  );
+  const meteredTotalCostUsd = meteredHasEvents
+    ? addDecimalStrings(knownCosts)
+    : "0";
   const hasUnavailable = meteredProviders.some(
     (usage) =>
-      usage.totalCostUsd == null || usage.costSourceCounts.unavailable > 0,
+      usage.eventCount > 0 &&
+      (usage.totalCostUsd == null || usage.costSourceCounts.unavailable > 0),
   );
   const hasEstimated = meteredProviders.some(
     (usage) => usage.costSourceCounts.estimated > 0,

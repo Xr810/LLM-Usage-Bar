@@ -38,39 +38,6 @@ export function findOldIdentityMatches(line: string): OldIdentityMatch[] {
 
 const removedTask4OwnedLines: readonly RemovedOwnedIdentityLine[] = [
   {
-    file: "src-tauri/src/services/skill.rs",
-    lineNumber: 44,
-    context: "CcSwitch,",
-    reason: "prior writable current-product storage variant",
-  },
-  {
-    file: "src-tauri/src/services/skill.rs",
-    lineNumber: 483,
-    context:
-      'SkillStorageLocation::CcSwitch => get_app_config_dir().join("skills"),',
-    reason: "prior writable current-product storage path arm",
-  },
-  {
-    file: "src-tauri/src/services/skill.rs",
-    lineNumber: 1168,
-    context:
-      'SkillStorageLocation::CcSwitch => get_app_config_dir().join("skills"),',
-    reason: "prior storage migration target arm",
-  },
-  {
-    file: "src-tauri/src/services/skill.rs",
-    lineNumber: 1402,
-    context: 'scan_sources.push((ssot_dir, "cc-switch".to_string()));',
-    reason: "prior transient current-product scan label",
-  },
-  {
-    file: "src-tauri/src/services/skill.rs",
-    lineNumber: 1472,
-    context:
-      'search_sources.push((ssot_dir.clone(), "cc-switch".to_string()));',
-    reason: "prior transient current-product import label",
-  },
-  {
     file: "src-tauri/src/settings.rs",
     lineNumber: 448,
     context:
@@ -84,29 +51,11 @@ const removedTask4OwnedLines: readonly RemovedOwnedIdentityLine[] = [
     reason: "prior writable frontend storage wire value",
   },
   {
-    file: "src/lib/api/skills.ts",
-    lineNumber: 209,
-    context: 'target: "cc_switch" | "unified",',
-    reason: "prior writable Tauri command input",
-  },
-  {
     file: "src/lib/schemas/settings.ts",
     lineNumber: 38,
     context:
       'skillStorageLocation: z.enum(["cc_switch", "unified"]).optional(),',
     reason: "prior current settings write schema",
-  },
-  {
-    file: "src/components/settings/SkillStorageLocationSettings.tsx",
-    lineNumber: 82,
-    context: 'active={value === "cc_switch"}',
-    reason: "prior current storage UI state",
-  },
-  {
-    file: "src/components/settings/SkillStorageLocationSettings.tsx",
-    lineNumber: 84,
-    context: 'onClick={() => handleSelect("cc_switch")}',
-    reason: "prior current storage UI action",
   },
 ];
 

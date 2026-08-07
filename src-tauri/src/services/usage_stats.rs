@@ -4,8 +4,8 @@
 
 use crate::database::{lock_conn, Database};
 use crate::error::AppError;
-use crate::proxy::usage::calculator::ModelPricing;
 use crate::services::sql_helpers::fresh_input_sql;
+use crate::usage::metering::calculator::ModelPricing;
 use chrono::{Local, NaiveDate, TimeZone, Timelike};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -2041,6 +2041,79 @@ fn query_model_pricing_prefix(
     .map_err(|e| AppError::Database(format!("查询模型前缀定价失败: {e}")))
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ProviderModelPricingRow {
+    pub input: Option<String>,
+    pub output: Option<String>,
+    pub cache_read: Option<String>,
+    pub cache_creation: Option<String>,
+}
+
+impl ProviderModelPricingRow {
+    pub(crate) fn has_any_rate(&self) -> bool {
+        self.input.is_some()
+            || self.output.is_some()
+            || self.cache_read.is_some()
+            || self.cache_creation.is_some()
+    }
+
+    pub(crate) fn has_blank_rate(&self) -> bool {
+        self.input.is_none()
+            || self.output.is_none()
+            || self.cache_read.is_none()
+            || self.cache_creation.is_none()
+    }
+}
+
+/// 查询某个 Provider 账号对某个模型的自定义单价（用户实付价）。
+///
+/// 与 `find_model_pricing_row` 共用模型 ID 归一化和后缀清理，因此用户只填
+/// `claude-sonnet-5` 也能覆盖日志里带日期后缀的实际模型名。自定义价不做官方
+/// 目录的正向前缀兜底：一个 dated row 只覆盖该 release，不能覆盖 sibling。
+/// 返回 `None` 表示该 Provider 没有为这个模型设过价。
+pub(crate) fn find_provider_model_pricing_row(
+    conn: &Connection,
+    provider_id: &str,
+    model_id: &str,
+) -> Result<Option<ProviderModelPricingRow>, AppError> {
+    let candidates = model_pricing_candidates(model_id);
+    if candidates.is_empty() {
+        return Ok(None);
+    }
+
+    for candidate in &candidates {
+        if let Some(row) = query_provider_model_pricing_exact(conn, provider_id, candidate)? {
+            return Ok(Some(row));
+        }
+    }
+
+    Ok(None)
+}
+
+fn query_provider_model_pricing_exact(
+    conn: &Connection,
+    provider_id: &str,
+    model_id: &str,
+) -> Result<Option<ProviderModelPricingRow>, AppError> {
+    conn.query_row(
+        "SELECT input_cost_per_million, output_cost_per_million,
+                cache_read_cost_per_million, cache_creation_cost_per_million
+         FROM provider_model_pricing
+         WHERE provider_id = ?1 AND model_id = ?2",
+        [provider_id, model_id],
+        |row| {
+            Ok(ProviderModelPricingRow {
+                input: row.get(0)?,
+                output: row.get(1)?,
+                cache_read: row.get(2)?,
+                cache_creation: row.get(3)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(|e| AppError::Database(format!("查询 Provider 自定义定价失败: {e}")))
+}
+
 fn model_pricing_candidates(model_id: &str) -> Vec<String> {
     let cleaned = clean_model_id_for_pricing(model_id);
     if is_placeholder_pricing_model(&cleaned) {
@@ -2078,7 +2151,7 @@ fn model_pricing_candidates(model_id: &str) -> Vec<String> {
     candidates
 }
 
-fn clean_model_id_for_pricing(model_id: &str) -> String {
+pub(crate) fn clean_model_id_for_pricing(model_id: &str) -> String {
     let normalized = model_id
         .rsplit_once('/')
         .map_or(model_id, |(_, r)| r)

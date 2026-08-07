@@ -5,9 +5,11 @@ import { Card } from "@/components/ui/card";
 import { ProviderIcon } from "@/components/ProviderIcon";
 import { ManualResetCredits } from "@/components/ManualResetCredits";
 import { cn } from "@/lib/utils";
+import { relativeTimeAgo } from "@/lib/relativeTime";
 import type { ProviderUsageView } from "@/types/usageDashboard";
 import { useTranslation } from "react-i18next";
 import { QuotaMeter } from "./QuotaMeter";
+import { providerDisplayName } from "../tray-usage/trayUsagePresentation";
 import {
   DEFAULT_REMAINING_THRESHOLDS,
   dashboardProviderIcon,
@@ -24,7 +26,11 @@ interface Props {
   isRefreshingQuota?: boolean;
   isSyncingSessions?: boolean;
   remainingThresholds?: RemainingThresholds;
-  layout?: "default" | "sidebar";
+  /**
+   * `compact` is the monitoring dashboard's grid tile: same quota detail, no
+   * manual actions, and a tighter footprint so several accounts fit side by side.
+   */
+  layout?: "default" | "compact";
 }
 
 type RelativeReset = {
@@ -55,7 +61,7 @@ export function SubscriptionProviderCard({
   layout = "default",
 }: Props) {
   const { t, i18n } = useTranslation();
-  const sidebar = layout === "sidebar";
+  const compact = layout === "compact";
   const canRefreshQuota = Boolean(usage.provider.quotaSource);
   const quota = canRefreshQuota ? usage.quota : null;
   const fetchState = canRefreshQuota ? usage.quotaFetchState : null;
@@ -64,30 +70,27 @@ export function SubscriptionProviderCard({
     usage.outputTokens +
     usage.cacheReadTokens +
     usage.cacheCreationTokens;
-  const tokenSourceText = usage.provider.tokenSources
-    .map((source) =>
-      source === "proxy"
-        ? t("usageDashboard.sourceProxy", { defaultValue: "Proxy" })
-        : t("usageDashboard.sourceSession", { defaultValue: "Session log" }),
-    )
-    .join(" + ");
-  const sourceText =
-    usage.provider.quotaSource === "claude_local"
-      ? [
-          t("usageDashboard.sourceClaudeLocalQuota", {
-            defaultValue:
-              "Quota: latest local sample per window (Desktop / Pro Code; account match unverified)",
-          }),
-          tokenSourceText
-            ? t("usageDashboard.sourceClaudeCodeUnattributed", {
-                defaultValue: "Tokens: Claude Code log (Provider unverified)",
-              })
-            : null,
-        ]
-          .filter(Boolean)
-          .join(" · ")
-      : tokenSourceText;
   const { icon, iconColor } = dashboardProviderIcon(usage.provider);
+
+  // The plan comes from the credential, so it is only known for Providers whose
+  // token carries one. "pro" is displayed as "Pro"; anything longer is left as
+  // the upstream wrote it beyond the first letter, since "Team" and
+  // "Enterprise" are the upstream's own casing and not ours to restyle.
+  const planLabel = quota?.planType
+    ? quota.planType.charAt(0).toUpperCase() + quota.planType.slice(1)
+    : null;
+  const planRenewsLabel =
+    planLabel && quota?.planRenewsAt
+      ? t("usageDashboard.planRenewsAt", {
+          value: new Date(quota.planRenewsAt * 1000).toLocaleDateString(
+            i18n.resolvedLanguage ?? i18n.language,
+            { year: "numeric", month: "long", day: "numeric" },
+          ),
+          defaultValue: `Renews ${new Date(
+            quota.planRenewsAt * 1000,
+          ).toLocaleDateString()}`,
+        })
+      : null;
 
   const quotaWindow = (
     label: string,
@@ -127,7 +130,7 @@ export function SubscriptionProviderCard({
     return (
       <QuotaMeter
         key={label}
-        flat={sidebar}
+        flat={compact}
         label={label}
         meterLabel={label}
         fillPercent={remaining}
@@ -142,17 +145,18 @@ export function SubscriptionProviderCard({
         }
         footer={
           absoluteReset ? (
+            // The exact timestamp is long and rarely what you want at a glance;
+            // lead with "in 2h" and keep the absolute time on hover.
             <span title={absoluteReset}>
-              {t("usageDashboard.resetsAt", {
-                value: absoluteReset,
-                defaultValue: `Resets ${absoluteReset}`,
-              })}
               {relativeLabel
-                ? ` · ${t("usageDashboard.resetsIn", {
+                ? t("usageDashboard.resetsIn", {
                     value: relativeLabel,
                     defaultValue: `in ${relativeLabel}`,
-                  })}`
-                : ""}
+                  })
+                : t("usageDashboard.resetsAt", {
+                    value: absoluteReset,
+                    defaultValue: `Resets ${absoluteReset}`,
+                  })}
             </span>
           ) : undefined
         }
@@ -160,15 +164,19 @@ export function SubscriptionProviderCard({
     );
   };
 
-  const tokenItems = sidebar
+  const tokenItems = compact
     ? [
         {
-          label: t("usageDashboard.totalTokens", { defaultValue: "Total" }),
+          // Named rather than "Total": on a compact card it stands beside the
+          // call count, where a bare "Total" reads as totalling those.
+          label: t("usageDashboard.totalTokensNamed", {
+            defaultValue: "Tokens",
+          }),
           value: totalTokens,
           text: formatTokensCompact(totalTokens),
         },
         {
-          label: t("usageDashboard.records", { defaultValue: "Records" }),
+          label: t("usageDashboard.records", { defaultValue: "Calls" }),
           value: usage.eventCount,
           text: usage.eventCount.toLocaleString(
             i18n.resolvedLanguage ?? i18n.language,
@@ -211,35 +219,43 @@ export function SubscriptionProviderCard({
     usage.provider.quotaSource === "claude_local"
       ? (quota?.sourceObservedAt ?? quota?.fetchedAt)
       : (fetchState?.lastSuccessAt ?? quota?.fetchedAt);
+  // "3 minutes ago" answers "is this current?" at a glance; the exact
+  // timestamp stays available as the line's tooltip.
+  const freshnessLabel = lastSuccessAt
+    ? relativeTimeAgo(
+        lastSuccessAt * 1000,
+        i18n.resolvedLanguage ?? i18n.language,
+      )
+    : "";
+  const hasManualResets =
+    quota?.manualResetsRemaining != null ||
+    (quota?.manualResetCredits?.length ?? 0) > 0;
 
   return (
     <Card
       data-testid={`subscription-provider-${usage.provider.id}`}
       data-layout={layout}
-      className={cn(
-        "overflow-hidden",
-        sidebar &&
-          "rounded-none border-x-0 border-b-0 bg-transparent shadow-none",
-      )}
+      className={cn("flex flex-col overflow-hidden", compact && "h-full")}
     >
-      <div
-        className={cn(
-          "flex items-center justify-between gap-3 pt-4",
-          sidebar ? "px-0" : "px-5",
-        )}
-      >
+      <div className="flex items-center justify-between gap-3 px-5 pt-4">
         <div className="flex min-w-0 items-center gap-3">
           <ProviderIcon
             icon={icon}
             color={iconColor}
             name={usage.provider.name}
-            size={sidebar ? 30 : 34}
+            size={compact ? 30 : 34}
             className="shrink-0 rounded-[10px] border border-border/50"
           />
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <h3 className="truncate text-[15px] font-semibold tracking-tight">
-                {usage.provider.name}
+              {/* The tier is part of what the account is called, so it goes in
+                  the name. The badge beside it marks billing kind, which is
+                  what distinguishes this card from a metered one. */}
+              <h3
+                className="truncate text-[15px] font-semibold tracking-tight"
+                title={planRenewsLabel ?? undefined}
+              >
+                {providerDisplayName(usage.provider.name, planLabel)}
               </h3>
               <Badge variant="secondary" className="shrink-0">
                 {t("usageDashboard.subscription", {
@@ -247,20 +263,22 @@ export function SubscriptionProviderCard({
                 })}
               </Badge>
             </div>
-            <p className="mt-0.5 truncate text-xs text-muted-foreground">
-              {sourceText}
-              {lastSuccessAt ? (
-                <>
-                  {" · "}
-                  {t("usageDashboard.lastUpdated", {
-                    value: new Date(lastSuccessAt * 1000).toLocaleString(),
-                    defaultValue: `Last updated ${new Date(
-                      lastSuccessAt * 1000,
-                    ).toLocaleString()}`,
-                  })}
-                </>
-              ) : null}
-            </p>
+            {/* Where the numbers came from used to lead this line. It named
+                every source and caveat on every card, on every render, to
+                answer a question asked once — the freshness is what actually
+                changes and is what the line is for now. */}
+            {lastSuccessAt ? (
+              <p
+                data-testid="provider-provenance"
+                className="mt-0.5 truncate text-xs text-muted-foreground"
+                title={new Date(lastSuccessAt * 1000).toLocaleString()}
+              >
+                {t("usageDashboard.lastUpdated", {
+                  value: freshnessLabel,
+                  defaultValue: `Last updated ${freshnessLabel}`,
+                })}
+              </p>
+            ) : null}
           </div>
         </div>
         {fetchState?.stale ? (
@@ -271,12 +289,10 @@ export function SubscriptionProviderCard({
         ) : null}
       </div>
 
-      <div
-        className={cn(
-          "grid gap-2.5 pt-4",
-          sidebar ? "grid-cols-1 px-0" : "px-5 sm:grid-cols-2",
-        )}
-      >
+      {/* Stacked, not side by side: two meters sharing a card's width left
+          each bar barely wider than its own label, and the reset caption
+          under one column read as belonging to both. */}
+      <div className="grid gap-2.5 px-5 pt-4">
         {quotaWindow(
           t("usageDashboard.fiveHourWindow", { defaultValue: "5-hour window" }),
           quota?.fiveHourUtilizationPercent,
@@ -291,19 +307,25 @@ export function SubscriptionProviderCard({
         )}
       </div>
 
-      <div className={cn("pt-2", sidebar ? "px-0" : "px-5")}>
-        <ManualResetCredits
-          availableCount={quota?.manualResetsRemaining ?? null}
-          credits={quota?.manualResetCredits ?? []}
-          compact={sidebar}
-        />
-      </div>
+      {/* ManualResetCredits renders nothing for plans without manual resets —
+          skip the wrapper too, or its padding leaves a gap in the card. */}
+      {hasManualResets ? (
+        <div className="px-5 pt-2">
+          <ManualResetCredits
+            availableCount={quota?.manualResetsRemaining ?? null}
+            credits={quota?.manualResetCredits ?? []}
+            compact={compact}
+          />
+        </div>
+      ) : null}
 
-      <div className={cn("pt-4", sidebar ? "px-0" : "px-5")}>
+      {/* pb-5 matches the card's horizontal padding. A compact card ends here,
+          so without it the block sits on the bottom border. */}
+      <div className="mt-auto px-5 pb-5 pt-4">
         <dl
           className={cn(
             "grid gap-2 rounded-lg bg-muted/25 px-3 py-2.5 dark:bg-muted/15",
-            sidebar ? "grid-cols-2" : "grid-cols-5",
+            compact ? "grid-cols-2" : "grid-cols-5",
           )}
         >
           {tokenItems.map(({ label, value, text }) => (
@@ -323,15 +345,13 @@ export function SubscriptionProviderCard({
       </div>
 
       {fetchState?.stale && fetchState.lastError ? (
-        <p
-          className={cn("pt-2 text-xs text-warning", sidebar ? "px-0" : "px-5")}
-        >
+        <p className="px-5 pt-2 text-xs text-warning">
           {t("usageDashboard.stale", { defaultValue: "Stale" })}:{" "}
           {fetchState.lastError}
         </p>
       ) : null}
-      {!sidebar ? (
-        <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-border/60 px-5 py-3">
+      {!compact ? (
+        <div className="flex flex-wrap items-center gap-2 border-t border-border/60 px-5 py-3">
           {canRefreshQuota ? (
             <Button
               size="sm"

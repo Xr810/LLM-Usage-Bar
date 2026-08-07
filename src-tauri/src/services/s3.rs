@@ -9,7 +9,7 @@ use std::time::Duration;
 use url::Url;
 
 use crate::error::AppError;
-use crate::proxy::http_client;
+use crate::http_client;
 use futures::StreamExt;
 
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
@@ -882,7 +882,7 @@ mod integration_tests {
     #[tokio::test]
     #[ignore]
     async fn live_s3_connection() {
-        crate::proxy::http_client::init(None).ok();
+        crate::http_client::init(None).ok();
         let creds = test_creds();
         let result = test_connection(&creds).await;
         assert!(result.is_ok(), "Connection failed: {:?}", result.err());
@@ -892,7 +892,7 @@ mod integration_tests {
     #[tokio::test]
     #[ignore]
     async fn live_s3_put_get_head_roundtrip() {
-        crate::proxy::http_client::init(None).ok();
+        crate::http_client::init(None).ok();
         let creds = test_creds();
         let key = "cc-switch-sync/v2/default/_integration_test.json";
         let data = br#"{"test":true,"ts":12345}"#;

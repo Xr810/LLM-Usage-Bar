@@ -7,7 +7,15 @@ use tauri::State;
 pub async fn get_claude_cli_auth_status(
     state: State<'_, AppState>,
 ) -> Result<ClaudeCliAuthStatus, AppError> {
-    Ok(state.claude_cli_auth_service.status().await)
+    let mut status = state.claude_cli_auth_service.status().await;
+    // The CLI reports authentication; quota arrives separately as local samples.
+    // Composing them here keeps the auth service off the database while still
+    // letting the card say when the quota it shows was last observed.
+    status.last_quota_sample_at = state
+        .db
+        .latest_quota_snapshot(crate::usage::system_providers::CLAUDE_SUBSCRIPTION_ID)?
+        .map(|snapshot| snapshot.fetched_at);
+    Ok(status)
 }
 
 #[tauri::command]

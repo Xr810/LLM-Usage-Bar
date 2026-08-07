@@ -2,6 +2,7 @@ import { EyeOff, Power } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useSettings } from "@/hooks/useSettings";
 import { ToggleRow } from "@/components/ui/toggle-row";
+import { SettingsSection } from "./SettingsSection";
 
 export function StartupSettings() {
   const { t } = useTranslation();
@@ -14,18 +15,13 @@ export function StartupSettings() {
   };
 
   return (
-    <section className="space-y-4 py-4">
-      <div>
-        <h3 className="text-sm font-medium">
-          {t("settings.startup", { defaultValue: "Startup" })}
-        </h3>
-        <p className="mt-1 text-xs text-muted-foreground">
-          {t("settings.startupDescription", {
-            defaultValue: "Control how LLM Usage Bar starts after you log in.",
-          })}
-        </p>
-      </div>
-
+    <SettingsSection
+      icon={Power}
+      title={t("settings.startup", { defaultValue: "Startup" })}
+      description={t("settings.startupDescription", {
+        defaultValue: "Control how LLM Usage Bar starts after you log in.",
+      })}
+    >
       <div className="space-y-3">
         <ToggleRow
           icon={<Power className="h-4 w-4 text-orange-500" />}
@@ -47,6 +43,6 @@ export function StartupSettings() {
           />
         ) : null}
       </div>
-    </section>
+    </SettingsSection>
   );
 }

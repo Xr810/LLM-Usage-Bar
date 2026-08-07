@@ -28,6 +28,13 @@ pub fn take_pending_main_window_destination() -> Result<Option<MainWindowDestina
     crate::tray_popover::take_pending_main_window_destination()
 }
 
+/// The renderer has painted the destination it was sent to; the window can be
+/// shown now instead of letting the user watch it get there.
+#[tauri::command]
+pub fn acknowledge_main_window_ready() {
+    crate::tray_popover::acknowledge_main_window_ready();
+}
+
 #[tauri::command]
 pub fn quit_from_tray(app: AppHandle) {
     app.exit(0);

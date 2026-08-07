@@ -34,6 +34,16 @@ pub struct TrayUsageSnapshot {
     pub agents: Vec<TrayAgentUsageView>,
 }
 
+/// "pro" as the upstream reports it, "Pro" as a person reads it. Only the first
+/// letter is touched: "Team" and "Enterprise" are the upstream's own casing.
+fn display_plan_label(plan_type: &str) -> String {
+    let mut chars = plan_type.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
 impl TrayUsageSnapshot {
     pub fn unknown(generated_at: i64) -> Self {
         Self {
@@ -106,6 +116,9 @@ pub struct TrayProviderUsageView {
 pub struct TrayProviderRecentUsageView {
     pub start_at: i64,
     pub end_at: i64,
+    /// Tokens for the local day, from the same aggregate as `today_cost_usd` so
+    /// the two "today" figures can never describe different windows.
+    pub today_tokens: u64,
     pub total_tokens: u64,
     pub today_cost_usd: Option<String>,
     pub total_cost_usd: Option<String>,
@@ -319,6 +332,7 @@ impl TrayUsageProjector {
                 let recent_usage = TrayProviderRecentUsageView {
                     start_at: windows.rolling_30_start_at,
                     end_at: windows.end_at,
+                    today_tokens: checked_total_tokens(&today)?,
                     total_tokens: checked_total_tokens(&rolling_30_day)?,
                     today_cost_usd: display_cost(&today),
                     total_cost_usd: display_cost(&rolling_30_day),
@@ -414,7 +428,13 @@ impl TrayUsageProjector {
 
         Ok((
             TraySubscriptionUsageView {
-                plan_label: None,
+                // The popover has always rendered this beside the account name;
+                // it had no source until the OAuth token's plan reached the
+                // quota snapshot.
+                plan_label: quota_status
+                    .as_ref()
+                    .and_then(|quota| quota.plan_type.as_deref())
+                    .map(display_plan_label),
                 windows,
                 manual_resets_remaining: quota_status
                     .as_ref()
@@ -740,6 +760,7 @@ mod tests {
             cache_creation_cost_usd: None,
             total_cost_usd: total_cost_usd.map(str::to_string),
             cost_source,
+            pricing_origin: None,
             legacy_request_id: None,
             created_at: occurred_at,
         }
@@ -1280,7 +1301,10 @@ mod tests {
         let snapshot = TrayUsageProjector::new(db.clone()).project_at(now).unwrap();
         let provider = find_provider(&snapshot, "codex", "a-private-subscription");
         let subscription = provider.subscription.as_ref().unwrap();
-        assert_eq!(subscription.plan_label, None);
+        assert_eq!(
+            subscription.plan_label, None,
+            "a payload without a plan must not invent one"
+        );
         assert_eq!(subscription.windows.len(), 2);
         assert_eq!(
             subscription.windows[0].unavailable_reason.as_deref(),
@@ -1538,6 +1562,7 @@ mod tests {
                     recent_usage: TrayProviderRecentUsageView {
                         start_at: 1,
                         end_at: 200,
+                        today_tokens: 7,
                         total_tokens: 42,
                         today_cost_usd: Some("5".to_string()),
                         total_cost_usd: Some("80".to_string()),
@@ -1589,6 +1614,7 @@ mod tests {
         let recent_usage_json = json!({
             "startAt": 1,
             "endAt": 200,
+            "todayTokens": 7,
             "totalTokens": 42,
             "todayCostUsd": "5",
             "totalCostUsd": "80",
@@ -1687,5 +1713,46 @@ mod tests {
         ] {
             assert!(!serialized.contains(forbidden), "{forbidden}: {serialized}");
         }
+    }
+    #[test]
+    fn subscription_plan_label_comes_from_the_quota_snapshot() {
+        let db = Arc::new(Database::memory().unwrap());
+        db.save_usage_provider(&provider(
+            "a-subscription",
+            BillingKind::Subscription,
+            Some("fixture"),
+        ))
+        .unwrap();
+        bind(&db, "plan-binding", "codex", "a-subscription", true);
+        let now = chrono::Local::now();
+        db.append_quota_success(&quota_snapshot(
+            "a-subscription",
+            now.timestamp() - 10,
+            Some("20"),
+            None,
+            Some("30"),
+            None,
+            // The tray reads the same lifted field the dashboard does; the rest
+            // of the payload must not reach the popover.
+            json!({"planType": "pro", "secret": "must-not-leak"}),
+        ))
+        .unwrap();
+
+        let snapshot = TrayUsageProjector::new(db.clone()).project_at(now).unwrap();
+        let provider = find_provider(&snapshot, "codex", "a-subscription");
+        let subscription = provider.subscription.as_ref().unwrap();
+        assert_eq!(subscription.plan_label.as_deref(), Some("Pro"));
+        assert!(!serde_json::to_string(&snapshot)
+            .unwrap()
+            .contains("must-not-leak"));
+    }
+
+    #[test]
+    fn plan_label_only_touches_the_first_letter() {
+        assert_eq!(display_plan_label("pro"), "Pro");
+        assert_eq!(display_plan_label("plus"), "Plus");
+        // Upstream casing beyond the first letter is theirs, not ours.
+        assert_eq!(display_plan_label("enterprise"), "Enterprise");
+        assert_eq!(display_plan_label(""), "");
     }
 }

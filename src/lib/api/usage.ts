@@ -12,41 +12,14 @@ import type {
   PaginatedLogs,
   SessionSyncResult,
   DataSourceSummary,
+  OfficialPricingRefreshOutcome,
 } from "@/types/usage";
-import type { UsageResult } from "@/types";
-import type { AppId } from "./types";
-import type { TemplateType } from "@/config/constants";
+import type {
+  ModelPriceInput,
+  ProviderModelPricingView,
+} from "@/types/usageDashboard";
 
 export const usageApi = {
-  // Provider usage script methods
-  query: async (providerId: string, appId: AppId): Promise<UsageResult> => {
-    return invoke("queryProviderUsage", { providerId, app: appId });
-  },
-
-  testScript: async (
-    providerId: string,
-    appId: AppId,
-    scriptCode: string,
-    timeout?: number,
-    apiKey?: string,
-    baseUrl?: string,
-    accessToken?: string,
-    userId?: string,
-    templateType?: TemplateType,
-  ): Promise<UsageResult> => {
-    return invoke("testUsageScript", {
-      providerId,
-      app: appId,
-      scriptCode,
-      timeout,
-      apiKey,
-      baseUrl,
-      accessToken,
-      userId,
-      templateType,
-    });
-  },
-
   // Proxy usage statistics methods
   getUsageSummary: async (
     startDate?: number,
@@ -146,6 +119,18 @@ export const usageApi = {
     return invoke("get_model_pricing");
   },
 
+  refreshOfficialPricing: async (): Promise<OfficialPricingRefreshOutcome> => {
+    return invoke("refresh_official_pricing");
+  },
+
+  getOfficialPricingLastRefreshAt: async (): Promise<number | null> => {
+    return invoke("get_official_pricing_last_refresh_at");
+  },
+
+  getOfficialPricingLastImportedCount: async (): Promise<number | null> => {
+    return invoke("get_official_pricing_last_imported_count");
+  },
+
   updateModelPricing: async (
     modelId: string,
     displayName: string,
@@ -166,6 +151,33 @@ export const usageApi = {
 
   deleteModelPricing: async (modelId: string): Promise<void> => {
     return invoke("delete_model_pricing", { modelId });
+  },
+
+  getProviderModelPricing: async (
+    providerId: string,
+  ): Promise<ProviderModelPricingView[]> => {
+    return invoke("get_provider_model_pricing", { providerId });
+  },
+
+  updateProviderModelPricing: async (
+    providerId: string,
+    modelId: string,
+    displayName: string,
+    price: ModelPriceInput,
+  ): Promise<void> => {
+    return invoke("update_provider_model_pricing", {
+      providerId,
+      modelId,
+      displayName,
+      price,
+    });
+  },
+
+  deleteProviderModelPricing: async (
+    providerId: string,
+    modelId: string,
+  ): Promise<void> => {
+    return invoke("delete_provider_model_pricing", { providerId, modelId });
   },
 
   checkProviderLimits: async (

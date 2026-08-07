@@ -6,6 +6,7 @@ import {
   formatPercent,
   formatResetTime,
   hasUsablePercent,
+  providerDisplayName,
   providerIconName,
   quotaUnavailableReasonLabel,
   type TrayProviderRow,
@@ -38,15 +39,14 @@ export function TraySubscriptionSection({
       <div className="space-y-2">
         {rows.map(({ agentModuleId, agentName, provider }) => {
           if (!provider.subscription) return null;
-          const planText = provider.subscription.planLabel
-            ? t("trayUsage.plan", {
-                plan: provider.subscription.planLabel,
-                defaultValue: "Plan: {{plan}}",
-              })
-            : null;
-          const subtitle = showAgentName
-            ? [planText, agentName].filter(Boolean).join(" · ")
-            : planText;
+          // The tier belongs in the name — "ChatGPT Pro" is what the account
+          // is called. Filed underneath as "Plan: Pro" it read as a separate
+          // fact about a Provider whose name looked incomplete.
+          const displayName = providerDisplayName(
+            provider.providerName,
+            provider.subscription.planLabel,
+          );
+          const subtitle = showAgentName ? agentName : null;
           return (
             <article
               key={`${agentModuleId}:${provider.providerId}`}
@@ -60,19 +60,22 @@ export function TraySubscriptionSection({
                     size={22}
                     className="rounded-md"
                   />
-                  <div className="min-w-0">
-                    <h3
-                      className="truncate text-[13px] font-semibold leading-tight"
-                      title={provider.providerName}
-                    >
-                      {provider.providerName}
-                    </h3>
+                  {/* Plan sits inline with the name rather than on its own
+                      line — in a 520px popover every saved row is another
+                      account visible without scrolling. */}
+                  <h3
+                    className="flex min-w-0 items-baseline gap-1.5 text-[13px] font-semibold leading-tight"
+                    title={displayName}
+                  >
+                    <span className="min-w-0 truncate">{displayName}</span>
+                    {/* The account name identifies the row, the plan only
+                        qualifies it — so the plan gives up width first. */}
                     {subtitle ? (
-                      <p className="truncate text-[11px] leading-tight text-muted-foreground">
+                      <span className="min-w-0 shrink-[999] truncate text-[11px] font-normal text-muted-foreground">
                         {subtitle}
-                      </p>
+                      </span>
                     ) : null}
-                  </div>
+                  </h3>
                 </div>
                 <TrayUsageStatusBadge status={provider.status} t={t} />
               </div>
@@ -119,12 +122,25 @@ export function TraySubscriptionSection({
                         defaultValue: "Resets {{time}}",
                       });
                   return (
+                    // Two lines per window instead of three: the reset time
+                    // rides beside the window label, leaving label+value, bar.
                     <div key={window.kind} className="space-y-1">
                       <div className="flex items-baseline justify-between gap-3 text-xs">
-                        <span className="text-muted-foreground">
-                          {allowanceLabel}
+                        <span className="flex min-w-0 items-baseline gap-1.5">
+                          <span className="shrink-0 text-muted-foreground">
+                            {allowanceLabel}
+                          </span>
+                          <span className="truncate text-[11px] text-muted-foreground/80">
+                            {resetLabel}
+                            {unavailableReason ? (
+                              <span className="text-foreground">
+                                {" · "}
+                                {unavailableReason}
+                              </span>
+                            ) : null}
+                          </span>
                         </span>
-                        <span className="font-semibold tabular-nums">
+                        <span className="shrink-0 font-semibold tabular-nums">
                           {t("trayUsage.remaining", {
                             percent: formatPercent(window.remainingPercent),
                             defaultValue: "{{percent}} remaining",
@@ -140,15 +156,6 @@ export function TraySubscriptionSection({
                           status={window.status}
                         />
                       ) : null}
-                      <div className="text-[11px] leading-tight text-muted-foreground">
-                        <span>{resetLabel}</span>
-                        {unavailableReason ? (
-                          <span className="text-foreground">
-                            {" · "}
-                            {unavailableReason}
-                          </span>
-                        ) : null}
-                      </div>
                     </div>
                   );
                 })}

@@ -6,25 +6,15 @@ pub mod agent_modules;
 pub mod agent_provider_bindings;
 pub(crate) mod binding_credentials;
 pub mod dashboard_modules;
-pub mod failover;
-pub mod mcp;
-pub mod profiles;
-pub mod prompts;
 pub(crate) mod provider_credentials;
+pub mod provider_model_pricing;
 pub mod providers;
 pub mod providers_seed;
-pub mod proxy;
 pub mod quota;
 pub mod settings;
-pub mod skills;
-pub mod stream_check;
-pub mod universal_providers;
 pub mod usage_events;
 pub mod usage_providers;
 pub mod usage_rollup;
 pub mod usage_sync_cursors;
 
 // 所有 DAO 方法都通过 Database impl 提供，无需单独导出
-// 导出 FailoverQueueItem / Profile 供外部使用
-pub use failover::FailoverQueueItem;
-pub use profiles::Profile;

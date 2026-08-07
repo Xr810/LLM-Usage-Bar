@@ -8,8 +8,6 @@ use zip::write::SimpleFileOptions;
 use zip::DateTime;
 
 use crate::error::AppError;
-use crate::services::skill::SkillService;
-
 use crate::services::sync_protocol::{
     io_context_localized, localized, MAX_SYNC_ARTIFACT_BYTES, REMOTE_SKILLS_ZIP,
 };
@@ -24,8 +22,22 @@ pub(crate) struct SkillsBackup {
     existed: bool,
 }
 
+fn skills_ssot_dir() -> Result<PathBuf, AppError> {
+    let dir = match crate::settings::get_skill_storage_location() {
+        crate::settings::SkillStorageLocation::LlmUsageBar => {
+            crate::config::get_app_config_dir().join("skills")
+        }
+        crate::settings::SkillStorageLocation::Unified => dirs::home_dir()
+            .ok_or_else(|| AppError::Config("Failed to resolve home directory".to_string()))?
+            .join(".agents")
+            .join("skills"),
+    };
+    fs::create_dir_all(&dir).map_err(|e| AppError::io(&dir, e))?;
+    Ok(dir)
+}
+
 pub(crate) fn zip_skills_ssot(dest_path: &Path) -> Result<(), AppError> {
-    let source = SkillService::get_ssot_dir().map_err(|e| {
+    let source = skills_ssot_dir().map_err(|e| {
         localized(
             "webdav.sync.skills_ssot_dir_failed",
             format!("获取 Skills SSOT 目录失败: {e}"),
@@ -133,7 +145,7 @@ pub(crate) fn restore_skills_zip(raw: &[u8]) -> Result<(), AppError> {
         )?;
     }
 
-    let ssot = SkillService::get_ssot_dir().map_err(|e| {
+    let ssot = skills_ssot_dir().map_err(|e| {
         localized(
             "webdav.sync.skills_ssot_dir_failed",
             format!("获取 Skills SSOT 目录失败: {e}"),
@@ -162,7 +174,7 @@ pub(crate) fn restore_skills_zip(raw: &[u8]) -> Result<(), AppError> {
 }
 
 pub(crate) fn backup_current_skills() -> Result<SkillsBackup, AppError> {
-    let ssot = SkillService::get_ssot_dir().map_err(|e| {
+    let ssot = skills_ssot_dir().map_err(|e| {
         localized(
             "webdav.sync.skills_ssot_dir_failed",
             format!("获取 Skills SSOT 目录失败: {e}"),

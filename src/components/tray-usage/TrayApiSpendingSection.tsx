@@ -73,32 +73,14 @@ export function TrayApiSpendingSection({
               <TrayUsageStatusBadge status={budget.status} t={t} />
             </div>
 
-            <dl className="grid grid-cols-2 gap-x-3 rounded-lg bg-muted/25 px-2.5 py-2 dark:bg-muted/15">
-              <div className="min-w-0">
-                <dt className="truncate text-[11px] text-muted-foreground">
-                  {t("trayUsage.today", { defaultValue: "Today" })}
-                </dt>
-                <dd className="mt-0.5 truncate text-[13px] font-semibold tabular-nums">
-                  {formatUsd(budget.todayCostUsd, locale)}
-                </dd>
-              </div>
-              <div className="min-w-0">
-                <dt className="truncate text-[11px] text-muted-foreground">
-                  {t("trayUsage.combinedDailyLimit", {
-                    defaultValue: "Combined daily limit",
-                  })}
-                </dt>
-                <dd className="mt-0.5 truncate text-[13px] font-semibold tabular-nums">
-                  {formatUsd(budget.dailyBudgetUsd, locale)}
-                </dd>
-              </div>
-            </dl>
-
+            {/* Today's spend and the limit are already stated together on the
+                "$8.00 of $20.00" line below — a tile repeating them read as a
+                second, different budget. */}
             <div className="space-y-1">
               <div className="flex items-baseline justify-between gap-3 text-xs">
                 <span className="text-muted-foreground">
                   {t("trayUsage.combinedDailyLimit", {
-                    defaultValue: "Combined daily limit",
+                    defaultValue: "Daily limit",
                   })}
                 </span>
                 <span className="text-[11px] text-muted-foreground">
@@ -257,27 +239,9 @@ export function TrayApiSpendingSection({
                 <TrayUsageStatusBadge status={provider.status} t={t} />
               </div>
 
-              <dl className="grid grid-cols-2 gap-x-3 rounded-lg bg-muted/25 px-2.5 py-2 dark:bg-muted/15">
-                <div className="min-w-0">
-                  <dt className="truncate text-[11px] text-muted-foreground">
-                    {t("trayUsage.today", { defaultValue: "Today" })}
-                  </dt>
-                  <dd className="mt-0.5 truncate text-[13px] font-semibold tabular-nums">
-                    {formatUsd(todayCost, locale)}
-                  </dd>
-                </div>
-                <div className="min-w-0">
-                  <dt className="truncate text-[11px] text-muted-foreground">
-                    {t("trayUsage.dailyBudget", {
-                      defaultValue: "Daily budget",
-                    })}
-                  </dt>
-                  <dd className="mt-0.5 truncate text-[13px] font-semibold tabular-nums">
-                    {formatUsd(usage.dailyBudgetUsd, locale)}
-                  </dd>
-                </div>
-              </dl>
-
+              {/* Today's spend and the budget already appear together on the
+                  "$8.00 of $10.00" line below, and again on the usage summary
+                  row — a third copy in a tile was just noise. */}
               <div className="space-y-1">
                 <div className="flex items-baseline justify-between gap-3 text-xs">
                   <span className="text-muted-foreground">

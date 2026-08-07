@@ -38,7 +38,7 @@ export function UsageDashboardPage({
   const advanceRangeClock = useCallback(() => setRangeClockMs(Date.now()), []);
   useUsageEventBridge(advanceRangeClock);
   useEffect(() => {
-    const interval = globalThis.setInterval(advanceRangeClock, 30_000);
+    const interval = globalThis.setInterval(advanceRangeClock, 60_000);
     return () => globalThis.clearInterval(interval);
   }, [advanceRangeClock]);
 

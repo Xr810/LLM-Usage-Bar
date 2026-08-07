@@ -1,8 +1,7 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Search } from "lucide-react";
+import { Blocks, Wallet } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
   Card,
   CardContent,
@@ -12,7 +11,9 @@ import {
 } from "@/components/ui/card";
 import { UsageProviderDialog } from "@/components/usage-dashboard/UsageProviderDialog";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { SettingsSection } from "./SettingsSection";
 import { SystemProviderCard } from "./SystemProviderCard";
+import { SystemProviderPicker } from "./SystemProviderPicker";
 import {
   useDeleteUsageProvider,
   useSaveUsageProvider,
@@ -21,7 +22,9 @@ import {
 } from "@/lib/query/usageDashboard";
 import type { UsageProviderView } from "@/types/usageDashboard";
 import { ProviderDailyBudgetField } from "./ProviderDailyBudgetField";
+import { ProviderModelPricingSection } from "./ProviderModelPricingSection";
 import { ApiBudgetSettings } from "./ApiBudgetSettings";
+import { OfficialPricingRefreshSection } from "./OfficialPricingRefreshSection";
 import { ProviderIcon } from "@/components/ProviderIcon";
 import { dashboardProviderIcon } from "@/components/usage-dashboard/usagePresentation";
 import { useApiBudgetConfig } from "@/lib/query/trayUsage";
@@ -49,23 +52,6 @@ const SYSTEM_PROVIDER_ORDER = [
   "cerebras-api",
 ];
 
-function providerMatchesSearch(
-  provider: UsageProviderView,
-  normalizedQuery: string,
-): boolean {
-  if (!normalizedQuery) return true;
-  return [
-    provider.name,
-    provider.systemPresetKey,
-    provider.canonicalEndpoint,
-    provider.productGroupId,
-  ]
-    .filter((value): value is string => Boolean(value))
-    .join(" ")
-    .toLocaleLowerCase()
-    .includes(normalizedQuery);
-}
-
 interface UsageProvidersSettingsProps {
   targetProviderId?: string;
   onTargetHandled?: () => void;
@@ -84,7 +70,7 @@ export function UsageProvidersSettings({
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<UsageProviderView | null>(null);
   const [deleting, setDeleting] = useState<UsageProviderView | null>(null);
-  const [providerSearch, setProviderSearch] = useState("");
+  const [removing, setRemoving] = useState<UsageProviderView | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const run = async (operation: () => Promise<unknown>) => {
@@ -132,89 +118,63 @@ export function UsageProvidersSettings({
       provider.systemPresetKey === null ||
       provider.systemPresetKey === undefined,
   );
-  const normalizedProviderSearch = providerSearch.trim().toLocaleLowerCase();
+  // `enabled` already means "on my list": the dashboard filters on it and keeps
+  // a removed Provider's history, so picking and removing need no new state.
   const visibleSystemProviders = useMemo(
-    () =>
-      systemProviders.filter((provider) =>
-        providerMatchesSearch(provider, normalizedProviderSearch),
-      ),
-    [normalizedProviderSearch, systemProviders],
+    () => systemProviders.filter((provider) => provider.enabled),
+    [systemProviders],
   );
-  const visibleCustomProviders = useMemo(
-    () =>
-      customProviders.filter((provider) =>
-        providerMatchesSearch(provider, normalizedProviderSearch),
-      ),
-    [customProviders, normalizedProviderSearch],
-  );
-  const hasVisibleProviders =
-    visibleSystemProviders.length + visibleCustomProviders.length > 0;
 
   return (
     <div className="space-y-4 pb-6">
-      <Card>
-        <CardHeader className="space-y-4">
-          <div className="space-y-1.5">
-            <CardTitle className="text-base">
-              {t("usageDashboard.providers", { defaultValue: "Providers" })}
-            </CardTitle>
-            <CardDescription>
-              {t("usageDashboard.providersSettingsDescription", {
-                defaultValue:
-                  "Manage Provider accounts, monitoring sources, refresh settings, and budgets.",
-              })}
-            </CardDescription>
-          </div>
-          <div className="space-y-2">
-            <div className="relative">
-              <Search
-                aria-hidden="true"
-                className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
-              />
-              <Input
-                type="search"
-                value={providerSearch}
-                onChange={(event) => setProviderSearch(event.target.value)}
-                aria-label={t("usageDashboard.searchProviders", {
-                  defaultValue: "Search Providers",
-                })}
-                placeholder={t("usageDashboard.searchProvidersPlaceholder", {
-                  defaultValue: "Search by Provider name or endpoint...",
-                })}
-                className="pl-9"
-              />
-            </div>
-            <p className="text-xs text-muted-foreground">
-              {t("usageDashboard.providerCatalogHint", {
-                defaultValue:
-                  "Search the built-in catalog, then sign in or save an API key. Usage, balance, and quota still depend on the monitoring sources each Provider exposes.",
-              })}
-            </p>
-          </div>
-        </CardHeader>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">
-            {t("usageDashboard.apiSpendingLimits", {
-              defaultValue: "API spending limits",
-            })}
-          </CardTitle>
-          <CardDescription>
-            {t("usageDashboard.apiSpendingLimitsDescription", {
-              defaultValue:
-                "Use one combined limit for all enabled API Providers, or opt into separate Provider limits.",
-            })}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <ApiBudgetSettings
-            config={budgetConfig}
-            isLoading={budgetConfigQuery.isLoading}
+      <SettingsSection
+        icon={Blocks}
+        title={t("usageDashboard.providers", { defaultValue: "Providers" })}
+        description={t("usageDashboard.providersSettingsDescription", {
+          defaultValue:
+            "Manage Provider accounts, monitoring sources, refresh settings, and budgets.",
+        })}
+      >
+        <div className="space-y-2">
+          {/* The search moved inside the picker, where it has a catalogue to
+              search. Out here it filtered a list the user had already chosen. */}
+          <SystemProviderPicker
+            providers={systemProviders}
+            isPending={setEnabled.isPending}
+            onToggle={(provider, picked) =>
+              void run(() =>
+                setEnabled.mutateAsync({
+                  providerId: provider.id,
+                  enabled: picked,
+                }),
+              )
+            }
           />
-        </CardContent>
-      </Card>
+          <p className="text-xs text-muted-foreground">
+            {t("usageDashboard.providerCatalogHint", {
+              defaultValue:
+                "Pick the Providers you use, then sign in or save an API key. Usage, balance, and quota still depend on the monitoring sources each Provider exposes.",
+            })}
+          </p>
+        </div>
+      </SettingsSection>
+
+      <SettingsSection
+        icon={Wallet}
+        title={t("usageDashboard.apiSpendingLimits", {
+          defaultValue: "API spending limits",
+        })}
+        description={t("usageDashboard.apiSpendingLimitsDescription", {
+          defaultValue:
+            "Use one combined limit for all enabled API Providers, or opt into separate Provider limits.",
+        })}
+      >
+        <ApiBudgetSettings
+          config={budgetConfig}
+          isLoading={budgetConfigQuery.isLoading}
+        />
+        <OfficialPricingRefreshSection />
+      </SettingsSection>
 
       {providersQuery.isLoading ? (
         <div>{t("common.loading", { defaultValue: "Loading" })}</div>
@@ -227,16 +187,17 @@ export function UsageProvidersSettings({
           showBudget={independentProviderBudgets && provider.enabled}
           targetProviderId={targetProviderId}
           onTargetHandled={onTargetHandled}
+          onRemove={setRemoving}
+          isRemovePending={setEnabled.isPending}
         />
       ))}
 
-      {!providersQuery.isLoading &&
-      normalizedProviderSearch &&
-      !hasVisibleProviders ? (
+      {!providersQuery.isLoading && visibleSystemProviders.length === 0 ? (
         <Card className="border-dashed">
           <CardContent className="p-6 text-center text-sm text-muted-foreground">
-            {t("usageDashboard.noMatchingProviders", {
-              defaultValue: "No Providers match this search.",
+            {t("usageDashboard.noPickedProviders", {
+              defaultValue:
+                "No built-in Providers picked yet. Add the ones you use.",
             })}
           </CardContent>
         </Card>
@@ -257,7 +218,7 @@ export function UsageProvidersSettings({
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-2">
-          {visibleCustomProviders.map((provider) => {
+          {customProviders.map((provider) => {
             const { icon, iconColor } = dashboardProviderIcon(provider);
             return (
               <div
@@ -359,12 +320,19 @@ export function UsageProvidersSettings({
                     />
                   </div>
                 ) : null}
+                {provider.billingKind === "metered" ? (
+                  <div className="w-full">
+                    <ProviderModelPricingSection
+                      providerId={provider.id}
+                      providerName={provider.name}
+                      credentialVersion={provider.upstreamCredentialVersion}
+                    />
+                  </div>
+                ) : null}
               </div>
             );
           })}
-          {!providersQuery.isLoading &&
-          !normalizedProviderSearch &&
-          customProviders.length === 0 ? (
+          {!providersQuery.isLoading && customProviders.length === 0 ? (
             <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
               {t("usageDashboard.noCustomProvidersConfigured", {
                 defaultValue: "No custom Providers configured",
@@ -399,6 +367,31 @@ export function UsageProvidersSettings({
         provider={editing}
         onSave={(input) => saveProvider.mutateAsync(input)}
         isPending={saveProvider.isPending}
+      />
+      <ConfirmDialog
+        isOpen={removing !== null}
+        title={t("confirm.removeProvider", {
+          defaultValue: "Remove Provider",
+        })}
+        message={t("confirm.removeProviderMessage", {
+          name: removing?.name ?? "",
+          defaultValue: `Remove "${removing?.name ?? ""}" from your Providers? Recorded usage and any saved credential are kept, so adding it back restores them.`,
+        })}
+        confirmText={t("common.remove", { defaultValue: "Remove" })}
+        cancelText={t("common.cancel", { defaultValue: "Cancel" })}
+        onConfirm={() => {
+          const provider = removing;
+          setRemoving(null);
+          if (provider) {
+            void run(() =>
+              setEnabled.mutateAsync({
+                providerId: provider.id,
+                enabled: false,
+              }),
+            );
+          }
+        }}
+        onCancel={() => setRemoving(null)}
       />
       <ConfirmDialog
         isOpen={deleting !== null}

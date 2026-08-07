@@ -54,6 +54,23 @@ const REQUIRED_V13_TABLES: &[&str] = &[
     "quota_fetch_state",
 ];
 
+/// Schema version that drops the retired feature tables.
+const FEATURE_TABLE_RETIREMENT_SCHEMA_VERSION: i32 = 21;
+
+/// Tables that existed from v13 and are dropped by v21. Still required for a
+/// database below v21; must be absent at or above it.
+const RETIRED_IN_V21_TABLES: &[&str] = &[
+    "mcp_servers",
+    "prompts",
+    "profiles",
+    "provider_health",
+    "skills",
+    "skill_repos",
+    "proxy_config",
+    "proxy_live_backup",
+    "stream_check_logs",
+];
+
 const REQUIRED_V13_TRIGGERS: &[&str] = &[
     "usage_events_immutable_update",
     "usage_events_immutable_delete",
@@ -1178,12 +1195,18 @@ fn validate_required_v13_tables(conn: &Connection) -> Result<(), AppError> {
     validate_required_immutable_triggers(conn)
 }
 
-fn validate_required_v14_tables(conn: &Connection) -> Result<(), AppError> {
+fn validate_required_v14_tables(conn: &Connection, version: i32) -> Result<(), AppError> {
+    // This runs before the schema migrations, so a database that has already
+    // reached v21 no longer has the tables v21 retires. Requiring them
+    // unconditionally passes on the run that performs the migration and then
+    // fails every launch after it.
+    let retired_are_gone = version >= FEATURE_TABLE_RETIREMENT_SCHEMA_VERSION;
     let mut missing = Vec::new();
     for table in REQUIRED_V13_TABLES
         .iter()
         .copied()
         .filter(|table| *table != "session_log_sync")
+        .filter(|table| !(retired_are_gone && RETIRED_IN_V21_TABLES.contains(table)))
         .chain(["usage_sync_cursors", "session_log_sync_v13_archive"])
     {
         if !Database::table_exists(conn, table)? {
@@ -1251,7 +1274,7 @@ fn validate_database(conn: &Connection, policy: SchemaValidationPolicy) -> Resul
             if version == DATABASE_IDENTITY_SOURCE_SCHEMA_VERSION {
                 validate_required_v13_tables(conn)
             } else {
-                validate_required_v14_tables(conn)
+                validate_required_v14_tables(conn, version)
             }
         }
     }
@@ -1992,9 +2015,11 @@ mod tests {
         atomic_move_noreplace_with_mode, backup_and_validate, database_sidecar_path,
         pin_safe_existing_directory, prepare_database_identity,
         prepare_database_identity_with_hooks, prepare_database_identity_with_test_fault,
-        quarantine_remove, rollback_after_retirement_fence, AtomicMoveMode, DatabaseMigrationLease,
-        FileIdentity, MigrationFaultPoint, MigrationHooks, PinnedDirectory, PublishedFile,
-        SourceWriteBarrier, RETIREMENT_FENCE_TRIGGER_PREFIX,
+        quarantine_remove, rollback_after_retirement_fence, validate_required_v14_tables,
+        AtomicMoveMode, DatabaseMigrationLease, FileIdentity, MigrationFaultPoint, MigrationHooks,
+        PinnedDirectory, PublishedFile, SourceWriteBarrier,
+        FEATURE_TABLE_RETIREMENT_SCHEMA_VERSION, RETIRED_IN_V21_TABLES,
+        RETIREMENT_FENCE_TRIGGER_PREFIX,
     };
     use crate::database::Database;
     use crate::product_identity::{
@@ -2007,6 +2032,41 @@ mod tests {
     use std::panic::{catch_unwind, AssertUnwindSafe};
     use std::path::{Path, PathBuf};
     use std::process::Command;
+
+    /// The identity check runs before the schema migrations, so the launch
+    /// *after* v21 opens a database whose retired tables are already gone.
+    /// Requiring them there made the app unopenable on every restart.
+    #[test]
+    fn identity_validation_accepts_a_database_that_already_retired_its_v21_tables() {
+        let db = Database::memory().expect("memory database");
+        let conn = db.conn.lock().expect("lock");
+
+        for table in RETIRED_IN_V21_TABLES {
+            assert!(
+                !Database::table_exists(&conn, table).unwrap(),
+                "current schema should not create retired table {table}"
+            );
+        }
+
+        validate_required_v14_tables(&conn, FEATURE_TABLE_RETIREMENT_SCHEMA_VERSION)
+            .expect("a v21 database must pass identity validation without the retired tables");
+    }
+
+    /// Below v21 the same tables are still part of the contract, so their
+    /// absence must still be reported rather than silently tolerated.
+    #[test]
+    fn identity_validation_still_requires_the_retired_tables_before_v21() {
+        let db = Database::memory().expect("memory database");
+        let conn = db.conn.lock().expect("lock");
+
+        let error =
+            validate_required_v14_tables(&conn, FEATURE_TABLE_RETIREMENT_SCHEMA_VERSION - 1)
+                .expect_err("a pre-v21 database is still expected to carry the retired tables");
+        let message = error.to_string();
+        for table in RETIRED_IN_V21_TABLES {
+            assert!(message.contains(table), "{message} should name {table}");
+        }
+    }
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{mpsc::sync_channel, Arc, Barrier, Mutex};
 

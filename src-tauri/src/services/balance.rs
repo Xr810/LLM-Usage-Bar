@@ -72,7 +72,7 @@ fn make_auth_error(status: reqwest::StatusCode) -> UsageResult {
 // Response: { balance_infos: [{ currency, total_balance, granted_balance, topped_up_balance }], is_available }
 
 async fn query_deepseek(api_key: &str) -> Result<UsageResult, String> {
-    let client = crate::proxy::http_client::get();
+    let client = crate::http_client::get();
 
     let resp = client
         .get("https://api.deepseek.com/user/balance")
@@ -150,7 +150,7 @@ async fn query_deepseek(api_key: &str) -> Result<UsageResult, String> {
 // Response: { object, type, balance, total_cash_balance, total_voucher_balance }
 
 async fn query_stepfun(api_key: &str) -> Result<UsageResult, String> {
-    let client = crate::proxy::http_client::get();
+    let client = crate::http_client::get();
 
     let resp = client
         .get("https://api.stepfun.com/v1/accounts")
@@ -208,7 +208,7 @@ async fn query_stepfun(api_key: &str) -> Result<UsageResult, String> {
 // Response: { code, data: { balance, chargeBalance, totalBalance, status } }
 
 async fn query_siliconflow(api_key: &str, is_cn: bool) -> Result<UsageResult, String> {
-    let client = crate::proxy::http_client::get();
+    let client = crate::http_client::get();
 
     let domain = if is_cn {
         "api.siliconflow.cn"
@@ -285,7 +285,7 @@ async fn query_siliconflow(api_key: &str, is_cn: bool) -> Result<UsageResult, St
 // Response: { data: { total_credits, total_usage } }
 
 async fn query_openrouter(api_key: &str) -> Result<UsageResult, String> {
-    let client = crate::proxy::http_client::get();
+    let client = crate::http_client::get();
 
     let resp = client
         .get("https://openrouter.ai/api/v1/credits")
@@ -351,7 +351,7 @@ async fn query_openrouter(api_key: &str) -> Result<UsageResult, String> {
 // 金额单位：0.0001 USD
 
 async fn query_novita(api_key: &str) -> Result<UsageResult, String> {
-    let client = crate::proxy::http_client::get();
+    let client = crate::http_client::get();
 
     let resp = client
         .get("https://api.novita.ai/v3/user/balance")

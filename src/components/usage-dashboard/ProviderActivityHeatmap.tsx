@@ -10,6 +10,8 @@ import { useTranslation } from "react-i18next";
 import { Card } from "@/components/ui/card";
 import type { UsageTrendBucketView } from "@/types/usageDashboard";
 import { cn } from "@/lib/utils";
+import { formatUsd } from "../tray-usage/trayUsagePresentation";
+import { addDecimalStrings } from "./usageDashboardProjection";
 import { formatTokensCompact } from "./usagePresentation";
 
 export interface ProviderActivityDay {
@@ -17,6 +19,8 @@ export interface ProviderActivityDay {
   date: Date;
   eventCount: number;
   totalTokens: number;
+  /** Null when any bucket of the day was never priced. */
+  totalCostUsd: string | null;
   level: 0 | 1 | 2 | 3 | 4;
 }
 
@@ -63,17 +67,24 @@ export function buildProviderActivityDays(
 
   const aggregateByDay = new Map<
     string,
-    { eventCount: number; totalTokens: number }
+    { eventCount: number; totalTokens: number; costs: string[] | null }
   >();
   for (const bucket of buckets) {
     const key = localDateKey(new Date(bucket.startAt * 1_000));
     const current = aggregateByDay.get(key) ?? {
       eventCount: 0,
       totalTokens: 0,
+      costs: [] as string[] | null,
     };
     aggregateByDay.set(key, {
       eventCount: current.eventCount + bucket.eventCount,
       totalTokens: current.totalTokens + bucket.totalTokens,
+      // One unpriced bucket makes the whole day unpriced: a partial sum
+      // presented as the day's spend understates it silently.
+      costs:
+        current.costs == null || bucket.totalCostUsd == null
+          ? null
+          : [...current.costs, bucket.totalCostUsd],
     });
   }
 
@@ -92,12 +103,19 @@ export function buildProviderActivityDays(
     const aggregate = aggregateByDay.get(key) ?? {
       eventCount: 0,
       totalTokens: 0,
+      costs: [] as string[] | null,
     };
     days.push({
       key,
       date: cursor,
       eventCount: aggregate.eventCount,
       totalTokens: aggregate.totalTokens,
+      // A day with no buckets at all cost nothing — that is known, not
+      // missing, so it must not fall through to "unpriced".
+      totalCostUsd:
+        aggregate.costs == null
+          ? null
+          : (addDecimalStrings(aggregate.costs) ?? "0"),
       level: 0,
     });
   }
@@ -151,7 +169,6 @@ export function ProviderActivityHeatmap({
   const [hoveredDayKey, setHoveredDayKey] = useState<string | null>(null);
   const [keyboardDayKey, setKeyboardDayKey] = useState<string | null>(null);
   const [focusedDayKey, setFocusedDayKey] = useState<string | null>(null);
-  const [pinnedDayKey, setPinnedDayKey] = useState<string | null>(null);
   const scrollViewportRef = useRef<HTMLDivElement>(null);
   const didPositionInitialScrollRef = useRef(false);
   const dayByKey = useMemo(
@@ -169,9 +186,10 @@ export function ProviderActivityHeatmap({
     ? keyboardDayKey
     : fallbackDayKey;
   const hoveredDay = hoveredDayKey ? dayByKey.get(hoveredDayKey) : undefined;
+  // Pointer or keyboard only. A pinned day outlived the gesture that chose it,
+  // so the panel sat on some date the user had moved away from minutes ago.
   const focusedDay = focusedDayKey ? dayByKey.get(focusedDayKey) : undefined;
-  const pinnedDay = pinnedDayKey ? dayByKey.get(pinnedDayKey) : undefined;
-  const detailDay = hoveredDay ?? focusedDay ?? pinnedDay;
+  const detailDay = hoveredDay ?? focusedDay;
   const monthByWeek = new Map<number, string>();
   days.forEach((day, index) => {
     const week = Math.floor((leadingBlanks + index) / 7);
@@ -232,11 +250,6 @@ export function ProviderActivityHeatmap({
           : delta == null
             ? null
             : Math.min(days.length - 1, Math.max(0, index + delta));
-    if (event.key === "Escape") {
-      event.preventDefault();
-      setPinnedDayKey(null);
-      return;
-    }
     if (nextIndex == null || nextIndex === index) return;
     event.preventDefault();
     const buttons = event.currentTarget
@@ -287,16 +300,17 @@ export function ProviderActivityHeatmap({
                   </strong>
                   <span className="mt-0.5 block text-muted-foreground metric">
                     {formatTokensCompact(detailDay.totalTokens)} Token ·{" "}
-                    {t("usageDashboard.recordCount", {
-                      count: detailDay.eventCount,
-                      defaultValue: "{{count}} records",
-                    })}
+                    {detailDay.totalCostUsd == null
+                      ? t("usageDashboard.costUnavailableSummary", {
+                          defaultValue: "Cost unavailable",
+                        })
+                      : formatUsd(detailDay.totalCostUsd, locale)}
                   </span>
                 </>
               ) : (
                 <span className="text-muted-foreground/75">
                   {t("usageDashboard.activityInteractionHint", {
-                    defaultValue: "Hover to preview · Click to pin",
+                    defaultValue: "Hover a day for its detail",
                   })}
                 </span>
               )}
@@ -313,7 +327,11 @@ export function ProviderActivityHeatmap({
           <div
             ref={scrollViewportRef}
             data-activity-scroll
-            className="mt-5 overflow-x-auto overscroll-x-contain pb-1 [--activity-cell:10px] [--activity-slot:12px] min-[1180px]:[--activity-cell:13px] min-[1180px]:[--activity-slot:17px]"
+            // The year grid is 53 columns wide. Sizing the slot in `cqw` lets it
+            // grow to fill the card instead of stranding empty space beside a
+            // fixed-width grid; the clamp keeps cells legible and still scrolls
+            // horizontally once the card is too narrow for the minimum size.
+            className="mt-5 overflow-x-auto overscroll-x-contain pb-1 [container-type:inline-size] [--activity-slot:clamp(12px,1.82cqw,20px)] [--activity-cell:calc(var(--activity-slot)-4px)]"
             aria-label={t("usageDashboard.activityChartLabel", {
               defaultValue: "Daily token activity for the last 12 months",
             })}
@@ -328,13 +346,13 @@ export function ProviderActivityHeatmap({
                     year: "numeric",
                     month: "short",
                     day: "numeric",
-                  })}: ${day.totalTokens.toLocaleString(locale)} Token · ${t(
-                    "usageDashboard.recordCount",
-                    {
-                      count: day.eventCount,
-                      defaultValue: "{{count}} records",
-                    },
-                  )}`;
+                  })}: ${day.totalTokens.toLocaleString(locale)} Token · ${
+                    day.totalCostUsd == null
+                      ? t("usageDashboard.costUnavailableSummary", {
+                          defaultValue: "Cost unavailable",
+                        })
+                      : formatUsd(day.totalCostUsd, locale)
+                  }`;
                   return (
                     <button
                       key={day.key}
@@ -343,15 +361,9 @@ export function ProviderActivityHeatmap({
                       data-activity-date={day.key}
                       data-activity-level={day.level}
                       aria-label={detail}
-                      aria-pressed={day.key === pinnedDayKey}
-                      className="group flex h-[var(--activity-slot)] w-[var(--activity-slot)] cursor-pointer items-center justify-center rounded-[4px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      className="group flex h-[var(--activity-slot)] w-[var(--activity-slot)] items-center justify-center rounded-[4px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       onMouseEnter={() => setHoveredDayKey(day.key)}
                       onMouseLeave={() => setHoveredDayKey(null)}
-                      onClick={() =>
-                        setPinnedDayKey((currentDayKey) =>
-                          currentDayKey === day.key ? null : day.key,
-                        )
-                      }
                       onFocus={() => {
                         setKeyboardDayKey(day.key);
                         setFocusedDayKey(day.key);
@@ -368,8 +380,6 @@ export function ProviderActivityHeatmap({
                         className={cn(
                           "pointer-events-none h-[var(--activity-cell)] w-[var(--activity-cell)] rounded-[3px] transition-transform duration-100 ease-out group-hover:scale-110 group-focus-visible:scale-110",
                           CELL_TONES[day.level],
-                          day.key === pinnedDayKey &&
-                            "ring-2 ring-primary ring-offset-1 ring-offset-card",
                         )}
                       />
                     </button>

@@ -2,9 +2,14 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
 import { UsageProvidersSettings } from "./UsageProvidersSettings";
 
+const setEnabledMock = vi.hoisted(() => ({
+  mutateAsync: vi.fn(),
+  isPending: false,
+}));
+
 const fixedProviders = [
-  ["system-chatgpt-subscription", "ChatGPT Plus/Pro", "chatgpt-subscription"],
-  ["system-claude-subscription", "Claude Pro/Max", "claude-subscription"],
+  ["system-chatgpt-subscription", "ChatGPT", "chatgpt-subscription"],
+  ["system-claude-subscription", "Claude", "claude-subscription"],
   ["system-openai-api", "OpenAI API", "openai-api"],
   ["system-anthropic-api", "Anthropic API", "anthropic-api"],
   ["system-openrouter-api", "OpenRouter", "openrouter-api"],
@@ -60,10 +65,7 @@ vi.mock("@/lib/query/usageDashboard", () => ({
   }),
   useSaveUsageProvider: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useDeleteUsageProvider: () => ({ mutateAsync: vi.fn(), isPending: false }),
-  useSetUsageProviderEnabled: () => ({
-    mutateAsync: vi.fn(),
-    isPending: false,
-  }),
+  useSetUsageProviderEnabled: () => setEnabledMock,
 }));
 
 vi.mock("@/lib/query/trayUsage", () => ({
@@ -83,10 +85,12 @@ vi.mock("./SystemProviderCard", () => ({
     provider,
     targetProviderId,
     showBudget,
+    onRemove,
   }: {
     provider: { id: string; name: string };
     targetProviderId?: string;
     showBudget?: boolean;
+    onRemove: (provider: { id: string; name: string }) => void;
   }) => (
     <div
       data-testid="fixed-provider-card"
@@ -95,6 +99,11 @@ vi.mock("./SystemProviderCard", () => ({
       data-show-budget={showBudget}
     >
       {provider.name}
+      <button
+        type="button"
+        aria-label={`Remove ${provider.name}`}
+        onClick={() => onRemove(provider)}
+      />
     </div>
   ),
 }));
@@ -115,6 +124,19 @@ vi.mock("./ProviderDailyBudgetField", () => ({
   ),
 }));
 
+vi.mock("./ProviderModelPricingSection", () => ({
+  ProviderModelPricingSection: ({ providerId }: { providerId: string }) => (
+    <div
+      data-testid={`custom-pricing-${providerId}`}
+      className="pricing-section"
+    />
+  ),
+}));
+
+vi.mock("./OfficialPricingRefreshSection", () => ({
+  OfficialPricingRefreshSection: () => <div>Official prices section</div>,
+}));
+
 vi.mock("@/components/usage-dashboard/UsageProviderDialog", () => ({
   UsageProviderDialog: () => null,
 }));
@@ -127,8 +149,8 @@ it("renders the built-in Provider catalog in canonical order before custom Provi
       .getAllByTestId("fixed-provider-card")
       .map((card) => card.textContent),
   ).toEqual([
-    "ChatGPT Plus/Pro",
-    "Claude Pro/Max",
+    "ChatGPT",
+    "Claude",
     "OpenAI API",
     "Anthropic API",
     "OpenRouter",
@@ -153,12 +175,8 @@ it("renders the built-in Provider catalog in canonical order before custom Provi
   expect(pageText.indexOf("Cerebras API")).toBeLessThan(
     pageText.indexOf("Custom Example"),
   );
-  expect(
-    screen.queryByRole("button", { name: "Edit ChatGPT Plus/Pro" }),
-  ).toBeNull();
-  expect(
-    screen.queryByRole("button", { name: "Delete ChatGPT Plus/Pro" }),
-  ).toBeNull();
+  expect(screen.queryByRole("button", { name: "Edit ChatGPT" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Delete ChatGPT" })).toBeNull();
   expect(
     screen.getByRole("button", { name: "Edit Custom Example" }),
   ).toBeInTheDocument();
@@ -170,23 +188,74 @@ it("renders the built-in Provider catalog in canonical order before custom Provi
   ).toBeInTheDocument();
 });
 
-it("searches the Provider catalog by name and preset identity", () => {
+it("searches the catalog inside the picker and toggles what it finds", () => {
+  setEnabledMock.mutateAsync.mockClear();
   render(<UsageProvidersSettings />);
 
+  // The catalogue is behind a control now; the page itself lists only what has
+  // been picked, so the search has to live where the catalogue is.
+  fireEvent.click(
+    screen.getByRole("button", { name: /Add a built-in Provider/ }),
+  );
   const search = screen.getByRole("searchbox", { name: "Search Providers" });
   fireEvent.change(search, { target: { value: "moonshot" } });
 
-  expect(screen.getByText("Kimi / Moonshot API")).toBeInTheDocument();
-  expect(screen.queryByText("OpenAI API")).toBeNull();
-  expect(screen.queryByText("Custom Example")).toBeNull();
+  const options = screen
+    .getAllByRole("checkbox")
+    .map((box) => box.getAttribute("aria-label"));
+  expect(options).toEqual(["Kimi / Moonshot API"]);
+
+  fireEvent.click(
+    screen.getByRole("checkbox", { name: "Kimi / Moonshot API" }),
+  );
+  expect(setEnabledMock.mutateAsync).toHaveBeenCalledWith({
+    providerId: "system-kimi-api",
+    enabled: false,
+  });
 
   fireEvent.change(search, { target: { value: "not-a-provider" } });
   expect(
     screen.getByText("No Providers match this search."),
   ).toBeInTheDocument();
+});
+
+it("offers the whole catalogue in the picker, not only what a search finds", () => {
+  render(<UsageProvidersSettings />);
+
+  fireEvent.click(
+    screen.getByRole("button", { name: /Add a built-in Provider/ }),
+  );
+
+  // The list is scrollable rather than truncated: everything is reachable
+  // without knowing a name to type.
+  expect(screen.getAllByRole("checkbox")).toHaveLength(fixedProviders.length);
   expect(
-    screen.getByRole("button", { name: "Add Provider" }),
+    screen.getByRole("checkbox", { name: "Cerebras API" }),
   ).toBeInTheDocument();
+});
+
+it("removes a picked Provider only after the confirmation is accepted", () => {
+  setEnabledMock.mutateAsync.mockClear();
+  render(<UsageProvidersSettings />);
+
+  fireEvent.click(screen.getByRole("button", { name: "Remove OpenRouter" }));
+  // The trash icon opens a question; it does not answer it.
+  expect(setEnabledMock.mutateAsync).not.toHaveBeenCalled();
+  // Removal keeps history and the credential, so the copy has to say so —
+  // a "delete" that quietly preserves things is the worse surprise.
+  expect(
+    screen.getByText(/Recorded usage and any saved credential are kept/),
+  ).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(setEnabledMock.mutateAsync).not.toHaveBeenCalled();
+
+  fireEvent.click(screen.getByRole("button", { name: "Remove OpenRouter" }));
+  fireEvent.click(screen.getByRole("button", { name: /^Remove$/ }));
+  expect(setEnabledMock.mutateAsync).toHaveBeenCalledWith({
+    providerId: "system-openrouter-api",
+    enabled: false,
+  });
 });
 
 it("forwards fixed and custom targets while keeping custom budget editors full-width and metered-only", () => {

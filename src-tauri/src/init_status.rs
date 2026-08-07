@@ -51,58 +51,6 @@ pub fn set_migration_success() {
     }
 }
 
-/// 获取并消费迁移成功状态（只返回一次 true，之后返回 false）
-pub fn take_migration_success() -> bool {
-    if let Ok(mut guard) = migration_cell().write() {
-        let val = *guard;
-        *guard = false;
-        val
-    } else {
-        false
-    }
-}
-
-// ============================================================
-// Skills SSOT 迁移结果状态
-// ============================================================
-
-#[derive(Debug, Clone, Serialize)]
-pub struct SkillsMigrationPayload {
-    pub count: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
-static SKILLS_MIGRATION_RESULT: OnceLock<RwLock<Option<SkillsMigrationPayload>>> = OnceLock::new();
-
-fn skills_migration_cell() -> &'static RwLock<Option<SkillsMigrationPayload>> {
-    SKILLS_MIGRATION_RESULT.get_or_init(|| RwLock::new(None))
-}
-
-pub fn set_skills_migration_result(count: usize) {
-    if let Ok(mut guard) = skills_migration_cell().write() {
-        *guard = Some(SkillsMigrationPayload { count, error: None });
-    }
-}
-
-pub fn set_skills_migration_error(error: String) {
-    if let Ok(mut guard) = skills_migration_cell().write() {
-        *guard = Some(SkillsMigrationPayload {
-            count: 0,
-            error: Some(error),
-        });
-    }
-}
-
-/// 获取并消费 Skills 迁移结果（只返回一次 Some，之后返回 None）
-pub fn take_skills_migration_result() -> Option<SkillsMigrationPayload> {
-    if let Ok(mut guard) = skills_migration_cell().write() {
-        guard.take()
-    } else {
-        None
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

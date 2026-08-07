@@ -264,6 +264,30 @@ describe("projectAgentDashboard", () => {
       meteredCostStatus: "partial",
     });
   });
+
+  it("treats an account with no events in range as costing nothing, not as unpriced", () => {
+    // The backend reports no cost for an idle account. That is $0, not a gap:
+    // reporting it as unavailable put "cost unavailable" beside the very
+    // zeroes that explain why there is no cost.
+    const idle = usage(provider("idle", "metered"), {
+      eventCount: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      totalCostUsd: null,
+      costSourceCounts: { upstream: 0, estimated: 0, unavailable: 0 },
+    });
+    const result = projectAgentDashboard(
+      agent,
+      dashboard([productGroup("group", [], [idle])]),
+    );
+
+    expect(result).toMatchObject({
+      meteredTotalCostUsd: "0",
+      meteredCostStatus: "complete",
+    });
+  });
 });
 
 describe("projectProviderDashboard", () => {

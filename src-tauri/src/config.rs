@@ -37,8 +37,8 @@ pub fn get_claude_config_dir() -> PathBuf {
     get_home_dir().join(".claude")
 }
 
-/// 默认 Claude MCP 配置文件路径 (~/.claude.json)
-pub fn get_default_claude_mcp_path() -> PathBuf {
+/// Default Claude CLI account profile path (`~/.claude.json`).
+pub fn get_default_claude_account_path() -> PathBuf {
     get_home_dir().join(".claude.json")
 }
 
@@ -101,7 +101,7 @@ fn path_eq_filesystem_object(_left: &Path, _right: &Path) -> bool {
 }
 
 #[cfg(windows)]
-fn derive_wsl_default_mcp_path(dir: &Path) -> Option<PathBuf> {
+fn derive_wsl_default_account_path(dir: &Path) -> Option<PathBuf> {
     use std::path::Prefix;
 
     let normalized = normalize_path_lexically(dir);
@@ -142,15 +142,15 @@ fn derive_wsl_default_mcp_path(dir: &Path) -> Option<PathBuf> {
     None
 }
 
-fn default_mcp_path_for_config_dir(dir: &Path) -> Option<PathBuf> {
+fn default_account_path_for_config_dir(dir: &Path) -> Option<PathBuf> {
     let default_config_dir = get_home_dir().join(".claude");
     if path_eq_lexical(dir, &default_config_dir) {
-        return Some(get_default_claude_mcp_path());
+        return Some(get_default_claude_account_path());
     }
 
     #[cfg(windows)]
     {
-        if let Some(path) = derive_wsl_default_mcp_path(dir) {
+        if let Some(path) = derive_wsl_default_account_path(dir) {
             return Some(path);
         }
     }
@@ -158,19 +158,19 @@ fn default_mcp_path_for_config_dir(dir: &Path) -> Option<PathBuf> {
     None
 }
 
-fn derive_mcp_path_from_override(dir: &Path) -> PathBuf {
+fn derive_account_path_from_override(dir: &Path) -> PathBuf {
     dir.join(".claude.json")
 }
 
-/// 获取 Claude MCP 配置文件路径
-pub fn get_claude_mcp_path() -> PathBuf {
+/// Resolve the account profile for the same Claude config root used by sessions.
+pub fn get_claude_account_path() -> PathBuf {
     if let Some(custom_dir) = crate::settings::get_claude_override_dir() {
-        if let Some(path) = default_mcp_path_for_config_dir(&custom_dir) {
+        if let Some(path) = default_account_path_for_config_dir(&custom_dir) {
             return path;
         }
-        return derive_mcp_path_from_override(&custom_dir);
+        return derive_account_path_from_override(&custom_dir);
     }
-    get_default_claude_mcp_path()
+    get_default_claude_account_path()
 }
 
 /// 获取 Claude Code 主配置文件路径
@@ -306,14 +306,6 @@ pub fn write_json_file<T: Serialize>(path: &Path, data: &T) -> Result<(), AppErr
     atomic_write(path, json.as_bytes())
 }
 
-/// 原子写入文本文件（用于 TOML/纯文本）
-pub fn write_text_file(path: &Path, data: &str) -> Result<(), AppError> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
-    }
-    atomic_write(path, data.as_bytes())
-}
-
 /// 原子写入：写入临时文件后 rename 替换，避免半写状态
 pub fn atomic_write(path: &Path, data: &[u8]) -> Result<(), AppError> {
     if let Some(parent) = path.parent() {
@@ -369,6 +361,15 @@ pub fn atomic_write(path: &Path, data: &[u8]) -> Result<(), AppError> {
             source: e,
         })?;
     }
+    Ok(())
+}
+
+/// 复制文件
+pub fn copy_file(from: &Path, to: &Path) -> Result<(), AppError> {
+    fs::copy(from, to).map_err(|e| AppError::IoContext {
+        context: format!("复制文件失败 ({} -> {})", from.display(), to.display()),
+        source: e,
+    })?;
     Ok(())
 }
 
@@ -461,46 +462,46 @@ mod tests {
     }
 
     #[test]
-    fn derive_mcp_path_from_override_uses_config_dir_for_custom_path() {
+    fn derive_account_path_from_override_uses_config_dir_for_custom_path() {
         let override_dir = PathBuf::from("/tmp/profile/.claude");
-        let derived = derive_mcp_path_from_override(&override_dir);
+        let derived = derive_account_path_from_override(&override_dir);
         assert_eq!(derived, PathBuf::from("/tmp/profile/.claude/.claude.json"));
     }
 
     #[test]
-    fn derive_mcp_path_from_override_uses_config_dir_for_non_hidden_folder() {
+    fn derive_account_path_from_override_uses_config_dir_for_non_hidden_folder() {
         let override_dir = PathBuf::from("/data/claude-config");
-        let derived = derive_mcp_path_from_override(&override_dir);
+        let derived = derive_account_path_from_override(&override_dir);
         assert_eq!(derived, PathBuf::from("/data/claude-config/.claude.json"));
     }
 
     #[test]
-    fn derive_mcp_path_from_override_supports_relative_rootless_dir() {
+    fn derive_account_path_from_override_supports_relative_rootless_dir() {
         let override_dir = PathBuf::from("claude");
-        let derived = derive_mcp_path_from_override(&override_dir);
+        let derived = derive_account_path_from_override(&override_dir);
         assert_eq!(derived, PathBuf::from("claude/.claude.json"));
     }
 
     #[test]
-    fn derive_mcp_path_from_root_like_dir_uses_root_file() {
+    fn derive_account_path_from_root_like_dir_uses_root_file() {
         let override_dir = PathBuf::from("/");
-        let derived = derive_mcp_path_from_override(&override_dir);
+        let derived = derive_account_path_from_override(&override_dir);
         assert_eq!(derived, PathBuf::from("/.claude.json"));
     }
 
     #[test]
-    fn derive_mcp_path_from_override_preserves_leading_parent_dirs() {
+    fn derive_account_path_from_override_preserves_leading_parent_dirs() {
         let override_dir = PathBuf::from("../../profiles/work/.claude");
-        let derived = derive_mcp_path_from_override(&override_dir);
+        let derived = derive_account_path_from_override(&override_dir);
         assert_eq!(derived, override_dir.join(".claude.json"));
     }
 
     #[cfg(windows)]
     #[test]
-    fn wsl_unc_home_default_uses_split_mcp_path() {
+    fn wsl_unc_home_default_uses_split_account_path() {
         let override_dir = PathBuf::from(r"\\wsl$\Ubuntu\home\travis\.claude");
-        let derived = default_mcp_path_for_config_dir(&override_dir)
-            .expect("WSL home default should use split MCP path");
+        let derived = default_account_path_for_config_dir(&override_dir)
+            .expect("WSL home default should use split account path");
         assert_eq!(
             derived,
             PathBuf::from(r"\\wsl$\Ubuntu\home\travis\.claude.json")
@@ -509,10 +510,10 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn wsl_unc_root_default_uses_split_mcp_path() {
+    fn wsl_unc_root_default_uses_split_account_path() {
         let override_dir = PathBuf::from(r"\\wsl.localhost\Ubuntu\root\.claude");
-        let derived = default_mcp_path_for_config_dir(&override_dir)
-            .expect("WSL root default should use split MCP path");
+        let derived = default_account_path_for_config_dir(&override_dir)
+            .expect("WSL root default should use split account path");
         assert_eq!(
             derived,
             PathBuf::from(r"\\wsl.localhost\Ubuntu\root\.claude.json")
@@ -521,11 +522,11 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn wsl_unc_custom_dir_uses_nested_mcp_path() {
+    fn wsl_unc_custom_dir_uses_nested_account_path() {
         let override_dir = PathBuf::from(r"\\wsl$\Ubuntu\opt\claude\.claude");
-        assert!(default_mcp_path_for_config_dir(&override_dir).is_none());
+        assert!(default_account_path_for_config_dir(&override_dir).is_none());
         assert_eq!(
-            derive_mcp_path_from_override(&override_dir),
+            derive_account_path_from_override(&override_dir),
             PathBuf::from(r"\\wsl$\Ubuntu\opt\claude\.claude\.claude.json")
         );
     }
@@ -625,38 +626,5 @@ mod tests {
             serde_json::to_string(&sorted_a).unwrap(),
             serde_json::to_string(&sorted_b).unwrap(),
         );
-    }
-}
-
-/// 复制文件
-pub fn copy_file(from: &Path, to: &Path) -> Result<(), AppError> {
-    fs::copy(from, to).map_err(|e| AppError::IoContext {
-        context: format!("复制文件失败 ({} -> {})", from.display(), to.display()),
-        source: e,
-    })?;
-    Ok(())
-}
-
-/// 删除文件
-pub fn delete_file(path: &Path) -> Result<(), AppError> {
-    if path.exists() {
-        fs::remove_file(path).map_err(|e| AppError::io(path, e))?;
-    }
-    Ok(())
-}
-
-/// 检查 Claude Code 配置状态
-#[derive(Serialize, Deserialize)]
-pub struct ConfigStatus {
-    pub exists: bool,
-    pub path: String,
-}
-
-/// 获取 Claude Code 配置状态
-pub fn get_claude_config_status() -> ConfigStatus {
-    let path = get_claude_settings_path();
-    ConfigStatus {
-        exists: path.exists(),
-        path: path.to_string_lossy().to_string(),
     }
 }

@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { takePendingMainWindowDestination } from "@/lib/api/trayUsage";
+import {
+  acknowledgeMainWindowReady,
+  takePendingMainWindowDestination,
+} from "@/lib/api/trayUsage";
 import type { MainWindowDestination } from "@/types/trayUsage";
 import { useTauriEvent } from "./useTauriEvent";
 
@@ -55,10 +58,27 @@ export function useMainWindowNavigation({
       openProviderSettings(destination.providerId);
     }
 
+    const wasLast = pending.length === 1;
+
     setPending((current) => {
       const index = current.indexOf(destination);
       if (index < 0) return current;
       return [...current.slice(0, index), ...current.slice(index + 1)];
+    });
+
+    // A tray-initiated reveal holds the window back until this lands, so the
+    // user sees the destination rather than watching it arrive. Two frames:
+    // the first callback still runs before the browser paints this state
+    // change, the second runs once it is on screen.
+    //
+    // Deliberately not cancelled on cleanup — removing the destination above
+    // re-runs this effect immediately, and a cleanup would cancel the frames
+    // before they ever fire, stranding the window for the full timeout.
+    if (!wasLast) return;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        void acknowledgeMainWindowReady().catch(() => undefined);
+      });
     });
   }, [openProviderSettings, openUsage, pending]);
 }

@@ -28,8 +28,7 @@ describe("frontend identity compatibility", () => {
 
       for (const path of oldIdentityPaths(locale)) {
         expect(
-          path.startsWith("providerForm.legacyUpstreamPromotion.") ||
-            path === "settings.importExportHint" ||
+          path === "settings.importExportHint" ||
             path === "settings.webdavSync.remoteRootDefault" ||
             path === "settings.s3Sync.remoteRootDefault",
           path,
@@ -38,14 +37,4 @@ describe("frontend identity compatibility", () => {
     },
   );
 
-  it.each(Object.entries(locales))(
-    "%s preserves the inherited promotion coupon bytes",
-    (_language, locale) => {
-      const promotions = locale.providerForm.legacyUpstreamPromotion;
-      expect(promotions.nekocode).toContain("cc-switch");
-      expect(promotions.apinebula).toContain("ccswitch");
-      expect(promotions.cubence).toContain("CCSWITCH");
-      expect(promotions.zetaapi).toContain("CC-SWITCH");
-    },
-  );
 });

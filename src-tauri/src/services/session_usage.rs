@@ -11,13 +11,13 @@
 use crate::config::get_claude_config_dir;
 use crate::database::{lock_conn, Database, UsageSyncCursor};
 use crate::error::AppError;
-use crate::proxy::usage::calculator::{CostCalculator, ModelPricing};
-use crate::proxy::usage::parser::TokenUsage;
 use crate::services::usage_stats::{
     effective_usage_log_filter, find_model_pricing, should_skip_session_insert, DedupKey,
 };
 use crate::usage::domain::{TokenSource, CLAUDE_CODE_AGENT_MODULE_ID};
 use crate::usage::ingestion::{LegacyLogInput, UsageIngestionInput, UsageIngestionService};
+use crate::usage::metering::calculator::{CostCalculator, ModelPricing};
+use crate::usage::metering::parser::TokenUsage;
 use crate::usage::session::{validate_bound_session_agent, ProviderSessionSyncResult};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -379,7 +379,7 @@ fn sync_single_file(
 
         let request_id = format!(
             "{}{}",
-            crate::proxy::usage::parser::SESSION_REQUEST_ID_PREFIX,
+            crate::usage::metering::parser::SESSION_REQUEST_ID_PREFIX,
             msg.message_id
         );
 

@@ -7,6 +7,29 @@ use rust_decimal::Decimal;
 use std::str::FromStr;
 use tauri::State;
 
+/// Refresh the machine-maintained official model price catalogue.
+#[tauri::command]
+pub async fn refresh_official_pricing(
+    state: State<'_, AppState>,
+) -> Result<crate::services::official_pricing::RefreshOutcome, AppError> {
+    crate::services::official_pricing::refresh_official_pricing(&state.db).await
+}
+
+/// Return the timestamp of the last successful official-price refresh.
+#[tauri::command]
+pub fn get_official_pricing_last_refresh_at(
+    state: State<'_, AppState>,
+) -> Result<Option<i64>, AppError> {
+    crate::services::official_pricing::last_refresh_at(&state.db)
+}
+
+#[tauri::command]
+pub fn get_official_pricing_last_imported_count(
+    state: State<'_, AppState>,
+) -> Result<Option<u64>, AppError> {
+    crate::services::official_pricing::last_imported_count(&state.db)
+}
+
 /// 获取使用量汇总
 #[tauri::command]
 pub fn get_usage_summary(
@@ -245,6 +268,43 @@ pub fn update_model_pricing(
     }
 
     Ok(())
+}
+
+/// 获取某个 Provider 账号的自定义模型定价（用户实付价）
+#[tauri::command]
+pub fn get_provider_model_pricing(
+    state: State<'_, AppState>,
+    provider_id: String,
+) -> Result<Vec<crate::usage::domain::ProviderModelPricingView>, AppError> {
+    state.db.list_provider_model_pricing(&provider_id)
+}
+
+/// 保存某个 Provider 账号对某个模型的自定义定价
+///
+/// 只影响之后新采集的用量；已入库的事件保持采集当时的价格不变。
+#[tauri::command]
+pub fn update_provider_model_pricing(
+    state: State<'_, AppState>,
+    provider_id: String,
+    model_id: String,
+    display_name: String,
+    price: crate::usage::domain::ModelPriceInput,
+) -> Result<(), AppError> {
+    state
+        .db
+        .upsert_provider_model_pricing(&provider_id, &model_id, &display_name, &price)
+}
+
+/// 删除某个 Provider 账号对某个模型的自定义定价，之后回落到上游成本或官方价
+#[tauri::command]
+pub fn delete_provider_model_pricing(
+    state: State<'_, AppState>,
+    provider_id: String,
+    model_id: String,
+) -> Result<(), AppError> {
+    state
+        .db
+        .delete_provider_model_pricing(&provider_id, &model_id)
 }
 
 /// 检查 Provider 使用限额

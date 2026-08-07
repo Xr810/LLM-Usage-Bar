@@ -121,6 +121,49 @@ fn clear_pending_main_window_destination_for_test() {
         .take();
 }
 
+/// How long the reveal waits for the renderer to report the destination is on
+/// screen. Long enough for a settings dialog to mount and paint, short enough
+/// that a wedged renderer is a delay rather than a window that never opens.
+const REVEAL_ACK_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(400);
+
+type RevealAckSlot = Mutex<Option<tokio::sync::oneshot::Sender<()>>>;
+
+static MAIN_WINDOW_REVEAL_ACK: OnceLock<RevealAckSlot> = OnceLock::new();
+
+fn reveal_ack_slot() -> &'static RevealAckSlot {
+    MAIN_WINDOW_REVEAL_ACK.get_or_init(|| Mutex::new(None))
+}
+
+/// Arm the wait for the renderer's acknowledgement.
+///
+/// Dropping a previous sender resolves its receiver with an error, so a reveal
+/// that was never acknowledged stops waiting as soon as a newer one starts
+/// instead of holding its window back for the full timeout.
+fn arm_reveal_ack_in(slot: &RevealAckSlot) -> tokio::sync::oneshot::Receiver<()> {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    if let Ok(mut slot) = slot.lock() {
+        *slot = Some(sender);
+    }
+    receiver
+}
+
+fn acknowledge_in(slot: &RevealAckSlot) {
+    if let Ok(mut slot) = slot.lock() {
+        if let Some(sender) = slot.take() {
+            let _ = sender.send(());
+        }
+    }
+}
+
+fn arm_reveal_ack() -> tokio::sync::oneshot::Receiver<()> {
+    arm_reveal_ack_in(reveal_ack_slot())
+}
+
+/// The renderer reports that the requested destination has been painted.
+pub fn acknowledge_main_window_ready() {
+    acknowledge_in(reveal_ack_slot());
+}
+
 #[cfg(any(target_os = "macos", test))]
 pub fn classify_tray_click(button: MouseButton, state: MouseButtonState) -> TrayClickAction {
     match (button, state) {
@@ -259,6 +302,30 @@ pub fn open_main_window(
     hide(app)?;
     let pending_attempt = set_pending_main_window_destination(destination)?;
 
+    // Settings is a dialog over the usage dashboard, not a page of its own, so
+    // revealing first put the dashboard on screen and let the user watch the
+    // dialog mount on top of it. A live renderer navigates while the window is
+    // still hidden and reports back when the destination is painted; only then
+    // is the window worth showing.
+    if app.get_webview_window("main").is_some() {
+        let acknowledged = arm_reveal_ack();
+        let _ = app.emit_to("main", "main-window-navigate", ());
+
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            // The result is deliberately ignored: a timeout, a dropped sender
+            // and a real acknowledgement all mean the same thing here — stop
+            // waiting and show the window.
+            let _ = tokio::time::timeout(REVEAL_ACK_TIMEOUT, acknowledged).await;
+            if let Err(error) = reveal_main_window(&app) {
+                log::error!("Failed to reveal main window after navigation: {error}");
+            }
+        });
+        return Ok(());
+    }
+
+    // No window yet: it has to be built before it can navigate, and the
+    // renderer drains the destination as it boots.
     if let Err(error) = reveal_main_window(app) {
         if let Err(rollback_error) = rollback_pending_main_window_destination(&pending_attempt) {
             log::warn!("failed to rollback pending main navigation: {rollback_error}");
@@ -319,6 +386,8 @@ pub fn reveal_main_window(app: &AppHandle) -> Result<(), AppError> {
 
         #[cfg(target_os = "linux")]
         crate::linux_fix::nudge_main_window(main);
+        #[cfg(target_os = "macos")]
+        crate::macos_fix::repair_undersized_window(main);
 
         Ok(())
     })();
@@ -352,6 +421,51 @@ mod tests {
             position: PhysicalPosition::new(x, y),
             size: PhysicalSize::new(width, height),
         }
+    }
+
+    // The ack slot is exercised on its own rather than through the process-wide
+    // one: these tests run in parallel, and a shared slot would have them arm
+    // and drop each other's senders.
+    fn ack_slot() -> RevealAckSlot {
+        Mutex::new(None)
+    }
+
+    #[tokio::test]
+    async fn the_renderer_releases_the_reveal_it_was_armed_for() {
+        let slot = ack_slot();
+        let acknowledged = arm_reveal_ack_in(&slot);
+        acknowledge_in(&slot);
+        assert_eq!(acknowledged.await, Ok(()));
+    }
+
+    #[tokio::test]
+    async fn a_newer_reveal_stops_the_previous_one_from_waiting_out_its_timeout() {
+        let slot = ack_slot();
+        let stale = arm_reveal_ack_in(&slot);
+        let current = arm_reveal_ack_in(&slot);
+
+        // Arming again drops the previous sender, which resolves its receiver
+        // with an error — the stale reveal proceeds instead of holding its
+        // window back for the full timeout.
+        assert!(stale.await.is_err());
+
+        acknowledge_in(&slot);
+        assert_eq!(current.await, Ok(()));
+    }
+
+    #[tokio::test]
+    async fn an_acknowledgement_nobody_asked_for_is_ignored() {
+        let slot = ack_slot();
+        acknowledge_in(&slot);
+
+        // In particular it must not leave a permit behind that lets the next
+        // reveal skip its wait and show the window mid-navigation.
+        let acknowledged = arm_reveal_ack_in(&slot);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), acknowledged)
+                .await
+                .is_err()
+        );
     }
 
     #[cfg(target_os = "macos")]

@@ -37,7 +37,7 @@ function subscriptionUsage(): ProviderUsageView {
   return {
     provider: {
       id: "system-chatgpt-subscription",
-      name: "ChatGPT Plus/Pro",
+      name: "ChatGPT",
       billingKind: "subscription",
       productGroupId: "codex",
       tokenSources: ["session_log"],
@@ -108,7 +108,7 @@ describe("SubscriptionProviderCard localized reset countdown", () => {
   it("ignores stale quota payloads when quota collection is unavailable", () => {
     const usage = subscriptionUsage();
     usage.provider.id = "system-claude-subscription";
-    usage.provider.name = "Claude Pro/Max";
+    usage.provider.name = "Claude";
     usage.provider.productGroupId = "claude-subscription";
     usage.provider.sessionSourceBindings = ["claude"];
     usage.provider.quotaSource = null;
@@ -151,6 +151,40 @@ describe("SubscriptionProviderCard localized reset countdown", () => {
     ).toBeInTheDocument();
   });
 
+  it("keeps the window label readable when that window is unavailable", () => {
+    // The unavailable copy is a sentence, not a figure. Putting it in the
+    // right-aligned value slot starved the label down to "5 …" in the real app.
+    // ChatGPT in the real app: no 5-hour window, a healthy weekly one.
+    const usage = subscriptionUsage();
+    usage.quota!.fiveHourUtilizationPercent = null;
+    usage.quota!.fiveHourResetsAt = null;
+    usage.quota!.sevenDayUtilizationPercent = "14";
+    usage.quota!.sevenDayResetsAt = "2026-07-17T01:00:00.000Z";
+
+    render(
+      <SubscriptionProviderCard
+        usage={usage}
+        layout="compact"
+        onRefreshQuota={vi.fn()}
+        onSyncSessions={vi.fn()}
+      />,
+    );
+
+    // Label and explanation are separate elements, so neither can squeeze the other.
+    const label = screen.getByText("5-hour window");
+    const explanation = screen.getByText(
+      "This subscription does not provide this quota window",
+    );
+    expect(label).toBeInTheDocument();
+    expect(explanation).toBeInTheDocument();
+    expect(label).not.toBe(explanation);
+    expect(label.contains(explanation)).toBe(false);
+    // The window with real data still shows its figure alongside its label.
+    expect(screen.getByText("Weekly allowance")).toBeInTheDocument();
+    // Only the window with data draws a bar; the unavailable one draws none.
+    expect(screen.getAllByRole("progressbar")).toHaveLength(1);
+  });
+
   it("keeps Provider actions wired in the default layout", () => {
     const usage = subscriptionUsage();
     const onRefreshQuota = vi.fn().mockResolvedValue({});
@@ -175,7 +209,7 @@ describe("SubscriptionProviderCard localized reset countdown", () => {
   it("separates Claude quota provenance from unverified Code token logs", () => {
     const usage = subscriptionUsage();
     usage.provider.id = "system-claude-subscription";
-    usage.provider.name = "Claude Pro/Max";
+    usage.provider.name = "Claude";
     usage.provider.productGroupId = "claude-subscription";
     usage.provider.sessionSourceBindings = ["claude"];
     usage.provider.quotaSource = "claude_local";
@@ -198,17 +232,57 @@ describe("SubscriptionProviderCard localized reset countdown", () => {
       />,
     );
 
-    expect(
-      screen.getByTestId("subscription-provider-system-claude-subscription"),
-    ).toHaveTextContent(
-      "Quota: latest local sample per window (Desktop / Pro Code; account match unverified) · Tokens: Claude Code log (Provider unverified)",
+    // The line carries the freshness alone now; naming the sources and their
+    // caveats on every render answered a question asked once.
+    const provenance = screen.getByTestId("provider-provenance");
+    expect(provenance).not.toHaveTextContent(/local sample|Claude Code log/);
+    // It shows a relative age; the exact timestamp is the tooltip, and it must
+    // come from the local sample (1_234) rather than the fetch attempt (9_999).
+    expect(provenance).toHaveAttribute(
+      "title",
+      new Date(1_234 * 1_000).toLocaleString(),
     );
+    expect(provenance).not.toHaveAttribute(
+      "title",
+      new Date(9_999 * 1_000).toLocaleString(),
+    );
+  });
+
+  it("names the plan once the credential reports one, and keeps the renewal date on hover", () => {
+    const usage = subscriptionUsage();
+    usage.quota!.planType = "pro";
+    // 2026-09-14T00:00:00Z
+    usage.quota!.planRenewsAt = 1_789_344_000;
+
+    render(
+      <SubscriptionProviderCard
+        usage={usage}
+        onRefreshQuota={vi.fn()}
+        onSyncSessions={vi.fn()}
+      />,
+    );
+
+    // The tier is part of what the account is called, not a separate fact
+    // filed beside a name that looks unfinished.
+    const heading = screen.getByRole("heading", { name: "ChatGPT Pro" });
+    expect(heading).toHaveAttribute("title", expect.stringMatching(/2026/));
+    // The badge marks billing kind, which is what separates this card from a
+    // metered one — it is not where the tier goes.
+    expect(screen.getByText("Subscription")).toBeInTheDocument();
+  });
+
+  it("leaves the name alone for a credential that reports no plan", () => {
+    render(
+      <SubscriptionProviderCard
+        usage={subscriptionUsage()}
+        onRefreshQuota={vi.fn()}
+        onSyncSessions={vi.fn()}
+      />,
+    );
+
     expect(
-      screen.getByTestId("subscription-provider-system-claude-subscription"),
-    ).toHaveTextContent(new Date(1_234 * 1_000).toLocaleString());
-    expect(
-      screen.getByTestId("subscription-provider-system-claude-subscription"),
-    ).not.toHaveTextContent(new Date(9_999 * 1_000).toLocaleString());
+      screen.getByRole("heading", { name: "ChatGPT" }),
+    ).toBeInTheDocument();
   });
 
   it.each([
@@ -322,11 +396,11 @@ describe("SubscriptionProviderCard localized reset countdown", () => {
     ).toBeNull();
   });
 
-  it("keeps quota details but hides Provider actions in the sidebar layout", () => {
+  it("keeps quota details but hides Provider actions in the compact layout", () => {
     render(
       <SubscriptionProviderCard
         usage={subscriptionUsage()}
-        layout="sidebar"
+        layout="compact"
         onRefreshQuota={vi.fn()}
         onSyncSessions={vi.fn()}
       />,
@@ -334,7 +408,7 @@ describe("SubscriptionProviderCard localized reset countdown", () => {
 
     expect(
       screen.getByTestId("subscription-provider-system-chatgpt-subscription"),
-    ).toHaveAttribute("data-layout", "sidebar");
+    ).toHaveAttribute("data-layout", "compact");
     expect(screen.getByText("5-hour window")).toBeInTheDocument();
     expect(screen.getByText("Weekly allowance")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Refresh quota" })).toBeNull();

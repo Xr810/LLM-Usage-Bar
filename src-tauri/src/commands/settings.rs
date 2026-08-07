@@ -52,114 +52,14 @@ pub async fn get_settings() -> Result<crate::settings::AppSettings, String> {
 /// 保存设置
 #[tauri::command]
 pub async fn save_settings(
-    state: tauri::State<'_, crate::store::AppState>,
+    _state: tauri::State<'_, crate::store::AppState>,
     settings: crate::settings::AppSettings,
 ) -> Result<bool, String> {
     let existing = crate::settings::get_settings();
     let merged = merge_settings_for_save(settings, &existing);
-    let unify_codex_changed =
-        merged.unify_codex_session_history != existing.unify_codex_session_history;
-    let unify_codex_enabled = merged.unify_codex_session_history;
     crate::settings::update_settings(merged).map_err(|e| e.to_string())?;
 
-    // 统一会话开关变更时立即重写当前官方 Codex 供应商的 live 配置，
-    // 不必等下一次切换才生效。
-    if unify_codex_changed {
-        // live 重写失败时回滚设置并把保存整体报失败：若设置保持已切换状态，
-        // live 仍跑旧桶，后续的历史迁移/还原会让会话再次分裂（开启=历史
-        // 迁走而新会话仍写 openai 桶；关闭=会话还原而 live 仍写 custom）。
-        // 报错让前端 saved=false 短路还原；回滚是整次保存的事务语义
-        // （本开关的保存只携带开关相关字段）。
-        if let Err(err) =
-            crate::services::provider::reapply_current_codex_official_live(state.inner())
-        {
-            log::warn!("统一 Codex 会话历史开关变更后重写 live 配置失败，回滚设置: {err}");
-            if let Err(rollback_err) = crate::settings::update_settings(existing) {
-                log::error!("回滚统一会话开关设置失败: {rollback_err}");
-            }
-            return Err(format!(
-                "统一 Codex 会话历史开关未生效（live 配置重写失败）: {err}"
-            ));
-        }
-
-        if unify_codex_enabled {
-            // 后台执行存量迁移（openai 桶 → custom 桶；仅当用户勾选了迁入既有
-            // 会话，函数内部自门控）。大会话目录可能要读数秒，不能阻塞设置保存；
-            // 失败时不写完成标记，下次启动自动重试。
-            tauri::async_runtime::spawn_blocking(|| {
-                match crate::codex_history_migration::maybe_migrate_codex_official_history_to_unified_bucket() {
-                    Ok(outcome) => {
-                        if let Some(reason) = outcome.skipped_reason {
-                            log::debug!("○ Codex official history unify migration skipped: {reason}");
-                        } else {
-                            log::info!(
-                                "✓ Codex official history unify migration completed: jsonl_files={}, state_rows={}",
-                                outcome.migrated_jsonl_files,
-                                outcome.migrated_state_rows
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        log::warn!("✗ Codex official history unify migration failed: {e}");
-                    }
-                }
-            });
-        } else {
-            // 清除标记与迁移意愿，让重新开启并再次勾选时能补迁
-            // 关闭期间落入 openai 桶的官方会话。
-            if let Err(err) = crate::settings::clear_codex_official_history_unify_migration() {
-                log::warn!("清除统一会话迁移标记失败: {err}");
-            }
-            if let Err(err) = crate::settings::clear_codex_unify_migrate_existing() {
-                log::warn!("清除统一会话迁移意愿失败: {err}");
-            }
-        }
-    }
     Ok(true)
-}
-
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CodexUnifyHistoryRestoreResult {
-    pub restored_jsonl_files: usize,
-    pub restored_state_rows: usize,
-    /// 还原被跳过的原因（如当前目录没有账本），前端据此提示而非报"成功 0 项"。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub skipped_reason: Option<String>,
-}
-
-/// 是否存在统一会话开关的迁移备份（决定关闭弹窗里是否显示"恢复备份"勾选）。
-#[tauri::command]
-pub async fn has_codex_unify_history_backup() -> Result<bool, String> {
-    Ok(crate::codex_history_migration::has_codex_official_history_unify_backup())
-}
-
-/// 按迁移备份账本把当时迁入共享桶的官方会话还原回 "openai" 桶。
-/// 由关闭统一会话开关的确认弹窗触发；幂等，可安全重试。
-#[tauri::command]
-pub async fn restore_codex_unified_history() -> Result<CodexUnifyHistoryRestoreResult, String> {
-    let outcome = tauri::async_runtime::spawn_blocking(|| {
-        crate::codex_history_migration::restore_codex_official_history_from_backups()
-    })
-    .await
-    .map_err(|e| e.to_string())?
-    .map_err(|e| e.to_string())?;
-
-    if let Some(reason) = &outcome.skipped_reason {
-        log::debug!("○ Codex official history restore skipped: {reason}");
-    } else {
-        log::info!(
-            "✓ Codex official history restored from backups: jsonl_files={}, state_rows={}",
-            outcome.restored_jsonl_files,
-            outcome.restored_state_rows
-        );
-    }
-
-    Ok(CodexUnifyHistoryRestoreResult {
-        restored_jsonl_files: outcome.restored_jsonl_files,
-        restored_state_rows: outcome.restored_state_rows,
-        skipped_reason: outcome.skipped_reason,
-    })
 }
 
 /// 重启应用程序（当 app_config_dir 变更后使用）
@@ -188,20 +88,6 @@ pub async fn install_update_and_restart(_app: AppHandle) -> Result<bool, String>
 }
 
 fn install_update_and_restart_result() -> Result<bool, String> {
-    Err(crate::product_identity::MANAGED_UPDATES_UNAVAILABLE.to_string())
-}
-
-/// 检查是否有可用的应用更新，返回可用的新版本号（无更新时返回 None）。
-///
-/// 数据库版本过新的恢复界面用它判断：升级应用能否解决问题。若返回 None，说明
-/// 已是最新版本，但数据库仍不兼容（通常由第三方客户端或更高版本创建），应提示用户
-/// 升级无法解决，而不是让其反复尝试。
-#[tauri::command]
-pub async fn check_app_update_available(_app: AppHandle) -> Result<Option<String>, String> {
-    check_app_update_available_result()
-}
-
-fn check_app_update_available_result() -> Result<Option<String>, String> {
     Err(crate::product_identity::MANAGED_UPDATES_UNAVAILABLE.to_string())
 }
 
@@ -235,27 +121,12 @@ pub async fn set_auto_launch(enabled: bool) -> Result<bool, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        check_app_update_available_result, install_update_and_restart_result,
-        merge_settings_for_save,
-    };
+    use super::merge_settings_for_save;
     use crate::settings::{
         AppSettings, CodexOfficialHistoryUnifyMigration, CodexProviderTemplateMigration,
         CodexThirdPartyHistoryProviderBucketMigration, LocalMigrations, S3SyncSettings,
         WebDavSyncSettings,
     };
-
-    #[test]
-    fn managed_update_commands_fail_closed() {
-        assert_eq!(
-            check_app_update_available_result(),
-            Err("managed_updates_unavailable".to_string())
-        );
-        assert_eq!(
-            install_update_and_restart_result(),
-            Err("managed_updates_unavailable".to_string())
-        );
-    }
 
     #[test]
     fn save_settings_should_preserve_existing_webdav_when_payload_omits_it() {
@@ -560,106 +431,4 @@ mod tests {
 #[tauri::command]
 pub async fn get_auto_launch_status() -> Result<bool, String> {
     crate::auto_launch::is_auto_launch_enabled().map_err(|e| format!("获取开机自启状态失败: {e}"))
-}
-
-/// 获取整流器配置
-#[tauri::command]
-pub async fn get_rectifier_config(
-    state: tauri::State<'_, crate::AppState>,
-) -> Result<crate::proxy::types::RectifierConfig, String> {
-    state.db.get_rectifier_config().map_err(|e| e.to_string())
-}
-
-/// 设置整流器配置
-#[tauri::command]
-pub async fn set_rectifier_config(
-    state: tauri::State<'_, crate::AppState>,
-    config: crate::proxy::types::RectifierConfig,
-) -> Result<bool, String> {
-    state
-        .db
-        .set_rectifier_config(&config)
-        .map_err(|e| e.to_string())?;
-    Ok(true)
-}
-
-/// 获取优化器配置
-#[tauri::command]
-pub async fn get_optimizer_config(
-    state: tauri::State<'_, crate::AppState>,
-) -> Result<crate::proxy::types::OptimizerConfig, String> {
-    state.db.get_optimizer_config().map_err(|e| e.to_string())
-}
-
-/// 设置优化器配置
-#[tauri::command]
-pub async fn set_optimizer_config(
-    state: tauri::State<'_, crate::AppState>,
-    config: crate::proxy::types::OptimizerConfig,
-) -> Result<bool, String> {
-    // Validate cache_ttl: only allow known values
-    match config.cache_ttl.as_str() {
-        "5m" | "1h" => {}
-        other => {
-            return Err(format!(
-                "Invalid cache_ttl value: '{other}'. Allowed values: '5m', '1h'"
-            ))
-        }
-    }
-    state
-        .db
-        .set_optimizer_config(&config)
-        .map_err(|e| e.to_string())?;
-    Ok(true)
-}
-
-/// 获取 Copilot 优化器配置
-#[tauri::command]
-pub async fn get_copilot_optimizer_config(
-    state: tauri::State<'_, crate::AppState>,
-) -> Result<crate::proxy::types::CopilotOptimizerConfig, String> {
-    state
-        .db
-        .get_copilot_optimizer_config()
-        .map_err(|e| e.to_string())
-}
-
-/// 设置 Copilot 优化器配置
-#[tauri::command]
-pub async fn set_copilot_optimizer_config(
-    state: tauri::State<'_, crate::AppState>,
-    config: crate::proxy::types::CopilotOptimizerConfig,
-) -> Result<bool, String> {
-    state
-        .db
-        .set_copilot_optimizer_config(&config)
-        .map_err(|e| e.to_string())?;
-    Ok(true)
-}
-
-/// 获取日志配置
-#[tauri::command]
-pub async fn get_log_config(
-    state: tauri::State<'_, crate::AppState>,
-) -> Result<crate::proxy::types::LogConfig, String> {
-    state.db.get_log_config().map_err(|e| e.to_string())
-}
-
-/// 设置日志配置
-#[tauri::command]
-pub async fn set_log_config(
-    state: tauri::State<'_, crate::AppState>,
-    config: crate::proxy::types::LogConfig,
-) -> Result<bool, String> {
-    state
-        .db
-        .set_log_config(&config)
-        .map_err(|e| e.to_string())?;
-    log::set_max_level(config.to_level_filter());
-    log::info!(
-        "日志配置已更新: enabled={}, level={}",
-        config.enabled,
-        config.level
-    );
-    Ok(true)
 }

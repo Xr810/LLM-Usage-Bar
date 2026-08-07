@@ -27,6 +27,8 @@ export const usageDashboardKeys = {
     [...usageDashboardKeys.setupRoot(), agentModuleId] as const,
   diagnostics: () => [...usageDashboardKeys.all, "diagnostics"] as const,
   claudeAuth: () => [...usageDashboardKeys.all, "claude-cli-auth"] as const,
+  providerModels: (providerId: string) =>
+    [...usageDashboardKeys.all, "provider-models", providerId] as const,
   dashboards: () => [...usageDashboardKeys.all, "dashboard"] as const,
   providerDashboard: (startAt: number, endAt: number) =>
     [...usageDashboardKeys.dashboards(), "providers", startAt, endAt] as const,
@@ -110,6 +112,28 @@ export function useUnassignedUsageDiagnostics() {
   return useQuery({
     queryKey: usageDashboardKeys.diagnostics(),
     queryFn: usageDashboardApi.getUnassignedUsageDiagnostics,
+  });
+}
+
+/**
+ * Model IDs from the Provider's own endpoint, for the custom-price form.
+ *
+ * Only fetched once the form is open — it costs an upstream request and a
+ * Provider without a key will simply fail, which the form treats as "no
+ * suggestions" rather than an error worth showing.
+ */
+export function useSystemProviderModels(
+  providerId: string,
+  expectedVersion: number,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: usageDashboardKeys.providerModels(providerId),
+    queryFn: () =>
+      usageDashboardApi.listSystemProviderModels(providerId, expectedVersion),
+    enabled,
+    retry: false,
+    staleTime: 5 * 60 * 1000,
   });
 }
 

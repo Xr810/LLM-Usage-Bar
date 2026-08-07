@@ -74,6 +74,7 @@ fn event() -> UsageEvent {
         cache_creation_cost_usd: None,
         total_cost_usd: Some("0.3".to_string()),
         cost_source: CostSource::Upstream,
+        pricing_origin: None,
         legacy_request_id: None,
         created_at: 50,
     }
@@ -268,16 +269,15 @@ async fn nine_command_adapters_validate_and_never_serialize_provider_secrets() {
 }
 
 #[test]
-fn all_nine_public_commands_are_registered_once() {
+fn all_public_usage_commands_are_registered_once() {
     let source = include_str!("../src/lib.rs");
     for command in [
         "list_usage_providers",
         "save_usage_provider",
         "set_usage_provider_enabled",
-        "get_route_bindings",
-        "set_route_binding",
         "get_usage_dashboard",
         "get_usage_events",
+        "list_system_provider_models",
         "refresh_provider_quota",
         "sync_provider_session_usage",
     ] {
@@ -324,7 +324,6 @@ fn all_task_six_agent_commands_and_legacy_routes_are_registered_once() {
         "set_agent_provider_binding_api_key",
         "replace_agent_provider_binding_api_key",
         "clear_agent_provider_binding_api_key",
-        "get_agent_proxy_setup_info",
         "get_unassigned_usage_diagnostics",
         "get_usage_dashboard",
         "get_usage_events",
@@ -335,9 +334,5 @@ fn all_task_six_agent_commands_and_legacy_routes_are_registered_once() {
             1,
             "{command} must be registered exactly once"
         );
-    }
-    for legacy in ["get_route_bindings", "set_route_binding"] {
-        let registration = format!("commands::{legacy},");
-        assert_eq!(source.matches(&registration).count(), 1);
     }
 }

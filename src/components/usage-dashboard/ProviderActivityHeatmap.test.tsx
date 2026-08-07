@@ -14,6 +14,7 @@ function bucket(
   startAt: number,
   totalTokens: number,
   eventCount: number,
+  totalCostUsd: string | null = null,
 ): UsageTrendBucketView {
   return {
     startAt,
@@ -24,7 +25,7 @@ function bucket(
     cacheReadTokens: 0,
     cacheCreationTokens: 0,
     totalTokens,
-    totalCostUsd: null,
+    totalCostUsd,
     costSourceCounts: { upstream: 0, estimated: 0, unavailable: eventCount },
   };
 }
@@ -61,12 +62,31 @@ describe("ProviderActivityHeatmap", () => {
     });
   });
 
-  it("renders one accessible cell per day with Token and record details", () => {
+  it("sums a day's spend, and drops it entirely when one bucket was never priced", () => {
+    const days = buildProviderActivityDays(
+      [
+        bucket(timestamp(2026, 6, 1, 9), 100, 1, "1.25"),
+        bucket(timestamp(2026, 6, 1, 18), 300, 2, "0.75"),
+        // The unpriced bucket is what makes 7/3 unknown: reporting only its
+        // priced neighbour would understate the day as if the rest were free.
+        bucket(timestamp(2026, 6, 3, 8), 1_000, 1, "9"),
+        bucket(timestamp(2026, 6, 3, 12), 4_000, 4, null),
+      ],
+      startAt,
+      endAt,
+    );
+
+    expect(days[0]).toMatchObject({ totalTokens: 400, totalCostUsd: "2" });
+    expect(days[1]).toMatchObject({ totalTokens: 0, totalCostUsd: "0" });
+    expect(days[2]).toMatchObject({ totalTokens: 5_000, totalCostUsd: null });
+  });
+
+  it("renders one accessible cell per day with Token and spend details", () => {
     render(
       <ProviderActivityHeatmap
         buckets={[
-          bucket(timestamp(2026, 6, 1, 9), 1_250, 2),
-          bucket(timestamp(2026, 6, 3, 9), 9_500, 6),
+          bucket(timestamp(2026, 6, 1, 9), 1_250, 2, "3.5"),
+          bucket(timestamp(2026, 6, 3, 9), 9_500, 6, "12"),
         ]}
         startAt={startAt}
         endAt={endAt}
@@ -79,38 +99,36 @@ describe("ProviderActivityHeatmap", () => {
     expect(screen.getByText("2 active days")).toBeInTheDocument();
     const cells = screen.getAllByRole("button");
     expect(cells).toHaveLength(3);
-    expect(cells[0]).toHaveAccessibleName(/1,250 Token · 2 records/);
+    expect(cells[0]).toHaveAccessibleName(/1,250 Token · \$3\.50/);
     expect(cells[1]).toHaveAttribute("data-activity-level", "0");
     expect(cells[2]).toHaveAttribute("data-activity-level", "4");
-    expect(cells[0]).toHaveAttribute("aria-pressed", "false");
+    // Nothing is pinnable, so nothing is a toggle.
+    expect(cells[0]).not.toHaveAttribute("aria-pressed");
     expect(
       cells[0]!.querySelector("[data-activity-cell-visual]"),
     ).toBeInTheDocument();
     expect(cells.filter((cell) => cell.tabIndex === 0)).toEqual([cells[2]]);
     expect(screen.queryByText(/2026.*7.*3/)).toBeNull();
-    expect(screen.getByText("Hover to preview · Click to pin")).toBeVisible();
+    expect(screen.getByText("Hover a day for its detail")).toBeVisible();
 
     fireEvent.mouseEnter(cells[0]!);
     expect(screen.getByText(/2026.*7.*1/)).toBeInTheDocument();
-    expect(screen.getByText(/1.3K Token · 2 records/)).toBeInTheDocument();
+    expect(screen.getByText(/1.3K Token · \$3\.50/)).toBeInTheDocument();
     expect(screen.queryByText(/messages/i)).toBeNull();
     fireEvent.mouseLeave(cells[0]!);
     expect(screen.queryByText(/2026.*7.*1/)).toBeNull();
 
     fireEvent.mouseEnter(cells[1]!);
     expect(screen.getByText(/2026.*7.*2/)).toBeInTheDocument();
-    expect(screen.getByText("0 Token · 0 records")).toBeInTheDocument();
+    // A day nothing happened on cost $0 — that is known, not missing.
+    expect(screen.getByText("0 Token · $0.00")).toBeInTheDocument();
     fireEvent.mouseLeave(cells[1]!);
 
+    // Clicking must not leave the panel sitting on a day the pointer left.
     fireEvent.click(cells[0]!);
-    expect(cells[0]).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByText(/2026.*7.*1/)).toBeInTheDocument();
-    fireEvent.mouseEnter(cells[1]!);
-    expect(screen.getByText(/2026.*7.*2/)).toBeInTheDocument();
-    fireEvent.mouseLeave(cells[1]!);
-    expect(screen.getByText(/2026.*7.*1/)).toBeInTheDocument();
-    fireEvent.click(cells[0]!);
-    expect(cells[0]).toHaveAttribute("aria-pressed", "false");
+    expect(screen.queryByText(/2026.*7.*1/)).toBeNull();
+    fireEvent.mouseEnter(cells[0]!);
+    fireEvent.mouseLeave(cells[0]!);
     expect(screen.queryByText(/2026.*7.*1/)).toBeNull();
 
     act(() => cells[2]!.focus());

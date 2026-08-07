@@ -1,11 +1,12 @@
-use crate::credentials::CredentialExposureGuardSet as CredentialExposureGuard;
 use crate::database::{lock_conn, Database, UsageSyncCursor};
 use crate::error::AppError;
-use crate::proxy::usage::calculator::{CostBreakdown, CostCalculator, ModelPricing};
-use crate::proxy::usage::cost_parser::UpstreamCost;
-use crate::proxy::usage::parser::TokenUsage;
-use crate::services::usage_stats::find_model_pricing_row;
-use crate::usage::domain::{CostSource, TokenSource, UsageEvent};
+use crate::services::usage_stats::{
+    find_model_pricing_row, find_provider_model_pricing_row, ProviderModelPricingRow,
+};
+use crate::usage::domain::{BillingKind, CostSource, PricingOrigin, TokenSource, UsageEvent};
+use crate::usage::metering::calculator::{CostBreakdown, CostCalculator, ModelPricing};
+use crate::usage::metering::cost_parser::UpstreamCost;
+use crate::usage::metering::parser::TokenUsage;
 use rusqlite::{params, OptionalExtension, Transaction};
 use rust_decimal::Decimal;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -70,6 +71,9 @@ pub struct UsageIngestionOutcome {
 struct StoredProviderContext {
     product_group_id: String,
     route_app_type: Option<String>,
+    /// Subscription accounts are always valued at the official reference price;
+    /// only metered accounts consult the user's own `provider_model_pricing`.
+    billing_kind: BillingKind,
 }
 
 #[derive(Debug, Clone)]
@@ -88,6 +92,8 @@ struct TrustedCost {
     cache_creation: Option<String>,
     total: Option<String>,
     source: CostSource,
+    /// Set only for estimates, so a stored row records which catalogue priced it.
+    pricing_origin: Option<PricingOrigin>,
 }
 
 impl TrustedCost {
@@ -99,6 +105,7 @@ impl TrustedCost {
             cache_creation: None,
             total: None,
             source: CostSource::Unavailable,
+            pricing_origin: None,
         }
     }
 
@@ -110,10 +117,11 @@ impl TrustedCost {
             cache_creation: cost.cache_creation_cost.map(|value| value.to_string()),
             total: cost.total_cost.map(|value| value.to_string()),
             source: CostSource::Upstream,
+            pricing_origin: None,
         }
     }
 
-    fn from_estimate(cost: CostBreakdown) -> Self {
+    fn from_estimate(cost: CostBreakdown, pricing_origin: PricingOrigin) -> Self {
         Self {
             input: Some(cost.input_cost.to_string()),
             output: Some(cost.output_cost.to_string()),
@@ -121,6 +129,7 @@ impl TrustedCost {
             cache_creation: Some(cost.cache_creation_cost.to_string()),
             total: Some(cost.total_cost.to_string()),
             source: CostSource::Estimated,
+            pricing_origin: Some(pricing_origin),
         }
     }
 }
@@ -135,28 +144,11 @@ impl<'a> UsageIngestionService<'a> {
     }
 
     pub fn ingest(&self, input: &UsageIngestionInput) -> Result<UsageIngestionOutcome, AppError> {
-        self.ingest_internal(input, None)
-    }
-
-    pub(crate) fn ingest_with_credential_guard(
-        &self,
-        input: &UsageIngestionInput,
-        credential_guard: &CredentialExposureGuard,
-    ) -> Result<UsageIngestionOutcome, AppError> {
-        self.ingest_internal(input, Some(credential_guard))
-    }
-
-    fn ingest_internal(
-        &self,
-        input: &UsageIngestionInput,
-        credential_guard: Option<&CredentialExposureGuard>,
-    ) -> Result<UsageIngestionOutcome, AppError> {
         validate_input(input)?;
         let mut conn = lock_conn!(self.db.conn);
         let transaction = conn.transaction()?;
         let created_at = now_timestamp()?;
-        let outcome =
-            ingest_on_transaction_with_guard(&transaction, input, created_at, credential_guard)?;
+        let outcome = ingest_on_transaction(&transaction, input, created_at)?;
 
         transaction.commit()?;
         if outcome.inserted {
@@ -202,36 +194,10 @@ fn ingest_on_transaction(
     input: &UsageIngestionInput,
     created_at: i64,
 ) -> Result<UsageIngestionOutcome, AppError> {
-    ingest_on_transaction_with_guard(transaction, input, created_at, None)
-}
-
-fn ingest_on_transaction_with_guard(
-    transaction: &Transaction<'_>,
-    input: &UsageIngestionInput,
-    created_at: i64,
-    credential_guard: Option<&CredentialExposureGuard>,
-) -> Result<UsageIngestionOutcome, AppError> {
     let provider = load_and_validate_provider(transaction, input)?;
     let trusted_cost = decide_cost(transaction, input, &provider)?;
     let stable_match = find_stable_cross_source_match(transaction, input)?;
     let event = build_event(input, &provider, &trusted_cost, created_at);
-    if credential_guard.is_some_and(|credential_guard| {
-        persisted_values_contain_credential(
-            credential_guard,
-            input,
-            &event,
-            &trusted_cost,
-            stable_match.as_ref(),
-        )
-    }) {
-        log::warn!(
-            "Usage event omitted because persistence would repeat protected credential material"
-        );
-        return Ok(UsageIngestionOutcome {
-            inserted: false,
-            link_created: false,
-        });
-    }
     let inserted = insert_event(transaction, &event)?;
 
     if !inserted {
@@ -338,7 +304,7 @@ fn load_and_validate_provider(
 ) -> Result<StoredProviderContext, AppError> {
     let provider = transaction
         .query_row(
-            "SELECT product_group_id, token_sources, route_app_type
+            "SELECT product_group_id, token_sources, route_app_type, billing_kind
              FROM usage_providers WHERE id = ?1",
             [&input.provider_id],
             |row| {
@@ -346,11 +312,12 @@ fn load_and_validate_provider(
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, Option<String>>(2)?,
+                    row.get::<_, String>(3)?,
                 ))
             },
         )
         .optional()?;
-    let Some((product_group_id, token_sources, route_app_type)) = provider else {
+    let Some((product_group_id, token_sources, route_app_type, billing_kind)) = provider else {
         return Err(AppError::Message("usage provider not found".to_string()));
     };
     let token_sources: Vec<TokenSource> = serde_json::from_str(&token_sources)
@@ -361,47 +328,99 @@ fn load_and_validate_provider(
             token_source_value(input.source)
         )));
     }
+    let billing_kind = match billing_kind.as_str() {
+        "subscription" => BillingKind::Subscription,
+        "metered" => BillingKind::Metered,
+        other => {
+            return Err(AppError::Database(format!(
+                "invalid provider billing_kind: {other}"
+            )))
+        }
+    };
     if input.source == TokenSource::Proxy {
         if let Some(context) = &input.frozen_provider_context {
             return Ok(StoredProviderContext {
                 product_group_id: context.product_group_id.clone(),
                 route_app_type: Some(context.route_app_type.clone()),
+                billing_kind,
             });
         }
     }
     Ok(StoredProviderContext {
         product_group_id,
         route_app_type,
+        billing_kind,
     })
 }
 
+/// Decide what one event cost, in this order:
+///
+/// 1. A metered account's own price for the model, when the user has set one.
+///    Blank components inherit the corresponding official catalogue rate.
+///    The user's real purchase price outranks whatever the upstream reported,
+///    because a relay's self-reported cost is its list price, not the rate the
+///    user actually pays.
+/// 2. An explicit upstream cost, which is real billing evidence.
+/// 3. The official reference catalogue, as an estimate.
+///
+/// Subscription accounts never reach steps 1 and 2: their spend is a synthetic
+/// "equivalent API cost" and is always valued at the official list price.
+///
+/// Prices are resolved once, at ingest. Editing a price later does not rewrite
+/// stored events — `usage_events` is append-only evidence.
 fn decide_cost(
     transaction: &Transaction<'_>,
     input: &UsageIngestionInput,
     provider: &StoredProviderContext,
 ) -> Result<TrustedCost, AppError> {
-    if let Some(upstream) = input
-        .upstream_cost
-        .as_ref()
-        .filter(|cost| cost.has_any_value())
-    {
-        return Ok(TrustedCost::from_upstream(upstream));
-    }
-
     let pricing_model = input
         .legacy
         .as_ref()
         .map(|legacy| legacy.pricing_model.as_str())
         .filter(|model| !model.trim().is_empty())
         .unwrap_or(&input.model);
-    let pricing = find_model_pricing_row(transaction, pricing_model)?
-        .map(|(input, output, cache_read, cache_creation)| {
-            ModelPricing::from_strings(&input, &output, &cache_read, &cache_creation)
-                .map_err(|error| AppError::Database(format!("invalid model pricing: {error}")))
-        })
-        .transpose()?;
-    let Some(pricing) = pricing else {
-        return Ok(TrustedCost::unavailable());
+    let is_metered = provider.billing_kind == BillingKind::Metered;
+
+    let user_pricing_row = if is_metered {
+        find_provider_model_pricing_row(transaction, &input.provider_id, pricing_model)?
+    } else {
+        None
+    };
+
+    // A user row only wins once it resolves to four complete rates. If a blank
+    // component has no official rate to inherit, the row cannot price anything
+    // and the later steps still apply — discarding a real upstream charge
+    // because a custom price was half-filled would manufacture exactly the
+    // uncosted events v22 had to repair.
+    let user_pricing = match user_pricing_row {
+        Some(user_row) => {
+            let official_row = if user_row.has_blank_rate() {
+                find_model_pricing_row(transaction, pricing_model)?
+            } else {
+                None
+            };
+            merge_pricing_rows(user_row, official_row)?
+        }
+        None => None,
+    };
+
+    let (pricing, pricing_origin) = match user_pricing {
+        Some(pricing) => (pricing, PricingOrigin::User),
+        None => {
+            if is_metered {
+                if let Some(upstream) = input
+                    .upstream_cost
+                    .as_ref()
+                    .filter(|cost| cost.has_any_value())
+                {
+                    return Ok(TrustedCost::from_upstream(upstream));
+                }
+            }
+            match parse_pricing_row(find_model_pricing_row(transaction, pricing_model)?)? {
+                Some(pricing) => (pricing, PricingOrigin::Official),
+                None => return Ok(TrustedCost::unavailable()),
+            }
+        }
     };
 
     let app_type = input
@@ -417,7 +436,54 @@ fn decide_cost(
         .unwrap_or(Decimal::ONE);
     Ok(TrustedCost::from_estimate(
         CostCalculator::calculate_for_app(app_type, &input.usage, &pricing, multiplier),
+        pricing_origin,
     ))
+}
+
+fn parse_pricing_row(
+    row: Option<(String, String, String, String)>,
+) -> Result<Option<ModelPricing>, AppError> {
+    row.map(|(input, output, cache_read, cache_creation)| {
+        ModelPricing::from_strings(&input, &output, &cache_read, &cache_creation)
+            .map_err(|error| AppError::Database(format!("invalid model pricing: {error}")))
+    })
+    .transpose()
+}
+
+fn merge_pricing_rows(
+    user: ProviderModelPricingRow,
+    official: Option<(String, String, String, String)>,
+) -> Result<Option<ModelPricing>, AppError> {
+    // A row with no user-entered rate is not user pricing. Let the normal
+    // upstream -> official fallback decide the cost instead of relabelling an
+    // official estimate as the user's price and outranking real billing data.
+    if !user.has_any_rate() {
+        return Ok(None);
+    }
+
+    let (official_input, official_output, official_cache_read, official_cache_creation) = official
+        .map(|(input, output, cache_read, cache_creation)| {
+            (
+                Some(input),
+                Some(output),
+                Some(cache_read),
+                Some(cache_creation),
+            )
+        })
+        .unwrap_or((None, None, None, None));
+    let input = user.input.or(official_input);
+    let output = user.output.or(official_output);
+    let cache_read = user.cache_read.or(official_cache_read);
+    let cache_creation = user.cache_creation.or(official_cache_creation);
+    let (Some(input), Some(output), Some(cache_read), Some(cache_creation)) =
+        (input, output, cache_read, cache_creation)
+    else {
+        return Ok(None);
+    };
+
+    ModelPricing::from_strings(&input, &output, &cache_read, &cache_creation)
+        .map(Some)
+        .map_err(|error| AppError::Database(format!("invalid model pricing: {error}")))
 }
 
 fn find_stable_cross_source_match(
@@ -497,125 +563,13 @@ fn build_event(
         cache_creation_cost_usd: cost.cache_creation.clone(),
         total_cost_usd: cost.total.clone(),
         cost_source: cost.source,
+        pricing_origin: cost.pricing_origin,
         legacy_request_id: input
             .legacy
             .as_ref()
             .map(|legacy| legacy.request_id.clone()),
         created_at,
     }
-}
-
-fn persisted_values_contain_credential(
-    credential_guard: &CredentialExposureGuard,
-    input: &UsageIngestionInput,
-    event: &UsageEvent,
-    cost: &TrustedCost,
-    stable_match: Option<&StableCrossSourceMatch>,
-) -> bool {
-    let text_values = [
-        event.event_id.as_str(),
-        token_source_value(event.source),
-        event.provider_id.as_str(),
-        event.product_group_id.as_str(),
-        event.model.as_str(),
-        cost_source_value(event.cost_source),
-    ];
-    if text_values
-        .into_iter()
-        .any(|value| credential_guard.contains(value))
-    {
-        return true;
-    }
-
-    let optional_text_values = [
-        event.agent_module_id.as_deref(),
-        event.request_id.as_deref(),
-        event.session_id.as_deref(),
-        event.upstream_correlation_id.as_deref(),
-        event.input_cost_usd.as_deref(),
-        event.output_cost_usd.as_deref(),
-        event.cache_read_cost_usd.as_deref(),
-        event.cache_creation_cost_usd.as_deref(),
-        event.total_cost_usd.as_deref(),
-        event.legacy_request_id.as_deref(),
-    ];
-    if optional_text_values
-        .into_iter()
-        .flatten()
-        .any(|value| credential_guard.contains(value))
-    {
-        return true;
-    }
-
-    let numeric_values = [
-        event.occurred_at.to_string(),
-        event.input_tokens.to_string(),
-        event.output_tokens.to_string(),
-        event.cache_read_tokens.to_string(),
-        event.cache_creation_tokens.to_string(),
-        event.created_at.to_string(),
-    ];
-    if numeric_values
-        .into_iter()
-        .any(|value| credential_guard.contains(&value))
-    {
-        return true;
-    }
-
-    if stable_match.is_some_and(|stable_match| {
-        [
-            stable_match.event_id.as_str(),
-            token_source_value(stable_match.source),
-            stable_match.link_kind,
-            stable_match.link_value.as_str(),
-        ]
-        .into_iter()
-        .any(|value| credential_guard.contains(value))
-    }) {
-        return true;
-    }
-
-    input.legacy.as_ref().is_some_and(|legacy| {
-        let text_values = [
-            legacy.request_id.as_str(),
-            legacy.provider_id.as_str(),
-            legacy.app_type.as_str(),
-            input.model.as_str(),
-            legacy.request_model.as_str(),
-            legacy.pricing_model.as_str(),
-            cost.input.as_deref().unwrap_or("0"),
-            cost.output.as_deref().unwrap_or("0"),
-            cost.cache_read.as_deref().unwrap_or("0"),
-            cost.cache_creation.as_deref().unwrap_or("0"),
-            cost.total.as_deref().unwrap_or("0"),
-            token_source_value(input.source),
-        ];
-        text_values
-            .into_iter()
-            .any(|value| credential_guard.contains(value))
-            || [
-                legacy.error_message.as_deref(),
-                legacy.session_id.as_deref(),
-                legacy.provider_type.as_deref(),
-            ]
-            .into_iter()
-            .flatten()
-            .any(|value| credential_guard.contains(value))
-            || [
-                legacy.latency_ms.to_string(),
-                legacy
-                    .first_token_ms
-                    .map(|value| value.to_string())
-                    .unwrap_or_default(),
-                legacy.status_code.to_string(),
-                i64::from(legacy.is_streaming).to_string(),
-                legacy.cost_multiplier.to_string(),
-                event.created_at.to_string(),
-            ]
-            .into_iter()
-            .filter(|value| !value.is_empty())
-            .any(|value| credential_guard.contains(&value))
-    })
 }
 
 fn insert_event(transaction: &Transaction<'_>, event: &UsageEvent) -> Result<bool, AppError> {
@@ -626,10 +580,10 @@ fn insert_event(transaction: &Transaction<'_>, event: &UsageEvent) -> Result<boo
             request_id, session_id, upstream_correlation_id, input_cost_usd,
             output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd,
             total_cost_usd, cost_source, legacy_request_id, created_at,
-            agent_module_id
+            agent_module_id, pricing_origin
          ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-            ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22
+            ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23
          ) ON CONFLICT(event_id) DO NOTHING",
         params![
             event.event_id,
@@ -660,6 +614,7 @@ fn insert_event(transaction: &Transaction<'_>, event: &UsageEvent) -> Result<boo
             event.legacy_request_id,
             event.created_at,
             event.agent_module_id,
+            event.pricing_origin.map(PricingOrigin::as_str),
         ],
     )?;
     if inserted == 0 {
@@ -769,12 +724,21 @@ mod tests {
         UsageIngestionService,
     };
     use crate::database::{Database, UsageSyncCursor};
-    use crate::proxy::usage::cost_parser::UpstreamCost;
-    use crate::proxy::usage::parser::TokenUsage;
     use crate::usage::domain::{
-        AgentModuleInput, AgentProviderBindingInput, BillingKind, CostSource, TokenSource,
-        UsageProviderInput,
+        AgentModuleInput, AgentProviderBindingInput, BillingKind, CostSource, ModelPriceInput,
+        PricingOrigin, TokenSource, UsageProviderInput,
     };
+    use crate::usage::metering::cost_parser::UpstreamCost;
+    use crate::usage::metering::parser::TokenUsage;
+
+    fn price(input: &str, output: &str, cache_read: &str, cache_creation: &str) -> ModelPriceInput {
+        ModelPriceInput {
+            input_cost_per_million: input.to_string(),
+            output_cost_per_million: output.to_string(),
+            cache_read_cost_per_million: cache_read.to_string(),
+            cache_creation_cost_per_million: cache_creation.to_string(),
+        }
+    }
     use rust_decimal::Decimal;
     use std::str::FromStr;
 
@@ -1105,6 +1069,440 @@ mod tests {
             )
             .unwrap();
         assert_eq!(legacy_provider, "legacy-provider");
+    }
+
+    fn save_subscription_provider(db: &Database, id: &str) {
+        db.save_usage_provider(&UsageProviderInput {
+            id: id.to_string(),
+            name: id.to_string(),
+            billing_kind: BillingKind::Subscription,
+            product_group_id: "claude-product".to_string(),
+            token_sources: vec![TokenSource::Proxy, TokenSource::SessionLog],
+            session_source_bindings: None,
+            quota_source: None,
+            quota_interval_seconds: None,
+            route_app_type: Some("claude".to_string()),
+            route_config: None,
+            quota_config: None,
+            enabled: true,
+        })
+        .unwrap();
+    }
+
+    /// The user's own purchase price outranks the upstream's self-reported
+    /// cost: a relay reports its list price, not the rate this account pays.
+    #[test]
+    fn provider_custom_pricing_outranks_upstream_cost_and_official_pricing() {
+        let db = Database::memory().unwrap();
+        save_provider(&db, "global-provider", None);
+        seed_pricing(&db, "priced-model");
+        db.upsert_provider_model_pricing(
+            "global-provider",
+            "priced-model",
+            "Priced Model",
+            &price("0.5", "1", "0", "0"),
+        )
+        .unwrap();
+        let service = UsageIngestionService::new(&db);
+
+        let mut value = input("custom-priced", TokenSource::Proxy);
+        value.upstream_cost = Some(UpstreamCost {
+            input_cost: Some(Decimal::from_str("9").unwrap()),
+            output_cost: None,
+            cache_read_cost: None,
+            cache_creation_cost: None,
+            total_cost: Some(Decimal::from_str("99").unwrap()),
+        });
+        service.ingest(&value).unwrap();
+
+        let page = db
+            .list_usage_events("global-provider", 0, 200, 1, 10)
+            .unwrap();
+        let event = &page.items[0];
+        assert_eq!(event.cost_source, CostSource::Estimated);
+        assert_eq!(event.pricing_origin, Some(PricingOrigin::User));
+        // 1M input @ 0.5 + 1M output @ 1, not the official 1/2 and not the
+        // upstream-reported 99.
+        assert_eq!(event.input_cost_usd.as_deref(), Some("0.5"));
+        assert_eq!(event.output_cost_usd.as_deref(), Some("1"));
+        assert_eq!(event.total_cost_usd.as_deref(), Some("1.5"));
+    }
+
+    #[test]
+    fn namespaced_custom_model_id_is_normalized_on_write_and_prices_the_event() {
+        let db = Database::memory().unwrap();
+        save_provider(&db, "global-provider", None);
+        db.upsert_provider_model_pricing(
+            "global-provider",
+            "anthropic/Claude-Sonnet-4-5",
+            "Claude Sonnet 4.5",
+            &price("1", "2", "0", "0"),
+        )
+        .unwrap();
+        assert_eq!(
+            db.list_provider_model_pricing("global-provider").unwrap()[0].model_id,
+            "claude-sonnet-4-5"
+        );
+
+        let mut value = input("namespaced-custom-price", TokenSource::Proxy);
+        value.model = "anthropic/claude-sonnet-4-5".to_string();
+        UsageIngestionService::new(&db).ingest(&value).unwrap();
+
+        let event = db
+            .list_usage_events("global-provider", 0, 200, 1, 10)
+            .unwrap()
+            .items
+            .pop()
+            .unwrap();
+        assert_eq!(event.pricing_origin, Some(PricingOrigin::User));
+        assert_eq!(event.total_cost_usd.as_deref(), Some("3"));
+    }
+
+    #[test]
+    fn all_blank_custom_pricing_does_not_override_upstream_billing() {
+        let db = Database::memory().unwrap();
+        save_provider(&db, "global-provider", None);
+        seed_pricing(&db, "priced-model");
+        db.upsert_provider_model_pricing(
+            "global-provider",
+            "priced-model",
+            "Priced Model",
+            &price("", " ", "\t", ""),
+        )
+        .unwrap();
+
+        let mut value = input("blank-custom-price", TokenSource::Proxy);
+        value.upstream_cost = Some(UpstreamCost {
+            input_cost: None,
+            output_cost: None,
+            cache_read_cost: None,
+            cache_creation_cost: None,
+            total_cost: Some(Decimal::from_str("99").unwrap()),
+        });
+        UsageIngestionService::new(&db).ingest(&value).unwrap();
+
+        let event = db
+            .list_usage_events("global-provider", 0, 200, 1, 10)
+            .unwrap()
+            .items
+            .pop()
+            .unwrap();
+        assert_eq!(event.cost_source, CostSource::Upstream);
+        assert_eq!(event.pricing_origin, None);
+        assert_eq!(event.total_cost_usd.as_deref(), Some("99"));
+    }
+
+    #[test]
+    fn partial_provider_pricing_inherits_each_blank_rate_from_official_pricing() {
+        let db = Database::memory().unwrap();
+        save_provider(&db, "global-provider", None);
+        seed_pricing(&db, "priced-model");
+        db.upsert_provider_model_pricing(
+            "global-provider",
+            "priced-model",
+            "Priced Model",
+            &price("0.5", "", " ", "\t"),
+        )
+        .unwrap();
+
+        let mut value = input("partially-priced", TokenSource::Proxy);
+        value.usage.cache_read_tokens = 1_000_000;
+        value.usage.cache_creation_tokens = 1_000_000;
+        UsageIngestionService::new(&db).ingest(&value).unwrap();
+
+        let page = db
+            .list_usage_events("global-provider", 0, 200, 1, 10)
+            .unwrap();
+        let event = &page.items[0];
+        assert_eq!(event.cost_source, CostSource::Estimated);
+        assert_eq!(event.pricing_origin, Some(PricingOrigin::User));
+        assert_eq!(event.input_cost_usd.as_deref(), Some("0.5"));
+        assert_eq!(event.output_cost_usd.as_deref(), Some("2"));
+        assert_eq!(event.cache_read_cost_usd.as_deref(), Some("0.5"));
+        assert_eq!(event.cache_creation_cost_usd.as_deref(), Some("3"));
+        assert_eq!(event.total_cost_usd.as_deref(), Some("6.0"));
+    }
+
+    /// A half-filled custom price that cannot resolve is not a reason to throw
+    /// away what the relay actually billed. Falling through to the upstream
+    /// charge is the whole difference between an event with a cost and one of
+    /// the uncosted events v22 had to repair.
+    #[test]
+    fn partial_provider_pricing_falls_through_to_the_upstream_charge() {
+        let db = Database::memory().unwrap();
+        save_provider(&db, "global-provider", None);
+        db.upsert_provider_model_pricing(
+            "global-provider",
+            "unknown-model",
+            "Unknown Model",
+            &price("0.5", "", "", ""),
+        )
+        .unwrap();
+
+        let mut value = input("partially-unpriced", TokenSource::Proxy);
+        value.model = "unknown-model".to_string();
+        value.upstream_cost = Some(UpstreamCost {
+            input_cost: None,
+            output_cost: None,
+            cache_read_cost: None,
+            cache_creation_cost: None,
+            total_cost: Some(Decimal::from_str("99").unwrap()),
+        });
+        UsageIngestionService::new(&db).ingest(&value).unwrap();
+
+        let page = db
+            .list_usage_events("global-provider", 0, 200, 1, 10)
+            .unwrap();
+        let event = &page.items[0];
+        assert_eq!(event.cost_source, CostSource::Upstream);
+        assert_eq!(event.total_cost_usd.as_deref(), Some("99"));
+    }
+
+    /// With nothing left to fall through to, the event stays unpriced rather
+    /// than being valued at zero.
+    #[test]
+    fn partial_provider_pricing_without_official_or_upstream_is_unavailable() {
+        let db = Database::memory().unwrap();
+        save_provider(&db, "global-provider", None);
+        db.upsert_provider_model_pricing(
+            "global-provider",
+            "unknown-model",
+            "Unknown Model",
+            &price("0.5", "", "", ""),
+        )
+        .unwrap();
+
+        let mut value = input("partially-unpriced", TokenSource::Proxy);
+        value.model = "unknown-model".to_string();
+        UsageIngestionService::new(&db).ingest(&value).unwrap();
+
+        let page = db
+            .list_usage_events("global-provider", 0, 200, 1, 10)
+            .unwrap();
+        let event = &page.items[0];
+        assert_eq!(event.cost_source, CostSource::Unavailable);
+        assert_eq!(event.pricing_origin, None);
+        assert_eq!(event.total_cost_usd, None);
+    }
+
+    #[test]
+    fn custom_pricing_for_another_account_does_not_leak_across_providers() {
+        let db = Database::memory().unwrap();
+        save_provider(&db, "global-provider", None);
+        save_provider(&db, "other-provider", None);
+        seed_pricing(&db, "priced-model");
+        db.upsert_provider_model_pricing(
+            "other-provider",
+            "priced-model",
+            "Priced Model",
+            &price("0.5", "1", "0", "0"),
+        )
+        .unwrap();
+
+        UsageIngestionService::new(&db)
+            .ingest(&input("official-priced", TokenSource::Proxy))
+            .unwrap();
+
+        let page = db
+            .list_usage_events("global-provider", 0, 200, 1, 10)
+            .unwrap();
+        let event = &page.items[0];
+        assert_eq!(event.pricing_origin, Some(PricingOrigin::Official));
+        assert_eq!(event.total_cost_usd.as_deref(), Some("3"));
+    }
+
+    /// Subscription spend is a synthetic equivalent-API figure, so it is always
+    /// valued at the official list price.
+    #[test]
+    fn subscription_events_always_use_official_pricing() {
+        let db = Database::memory().unwrap();
+        save_subscription_provider(&db, "claude-max");
+        seed_pricing(&db, "priced-model");
+        // A stray custom price must not reach a subscription account even if a
+        // row exists for it.
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "INSERT INTO provider_model_pricing (
+                    provider_id, model_id, display_name,
+                    input_cost_per_million, output_cost_per_million,
+                    cache_read_cost_per_million, cache_creation_cost_per_million,
+                    created_at, updated_at
+                 ) VALUES ('claude-max', 'priced-model', '', '0.01', '0.02', '0', '0', 1, 1)",
+                [],
+            )
+            .unwrap();
+        }
+
+        let mut value = input("subscription-event", TokenSource::SessionLog);
+        value.provider_id = "claude-max".to_string();
+        value.upstream_cost = Some(UpstreamCost {
+            input_cost: None,
+            output_cost: None,
+            cache_read_cost: None,
+            cache_creation_cost: None,
+            total_cost: Some(Decimal::from_str("77").unwrap()),
+        });
+        UsageIngestionService::new(&db).ingest(&value).unwrap();
+
+        let page = db.list_usage_events("claude-max", 0, 200, 1, 10).unwrap();
+        let event = &page.items[0];
+        assert_eq!(event.cost_source, CostSource::Estimated);
+        assert_eq!(event.pricing_origin, Some(PricingOrigin::Official));
+        assert_eq!(event.total_cost_usd.as_deref(), Some("3"));
+    }
+
+    /// Editing a price is not retroactive: stored events keep the price that
+    /// applied when they were recorded.
+    #[test]
+    fn changing_a_price_leaves_already_stored_events_untouched() {
+        let db = Database::memory().unwrap();
+        save_provider(&db, "global-provider", None);
+        seed_pricing(&db, "priced-model");
+        let service = UsageIngestionService::new(&db);
+
+        service
+            .ingest(&input("before", TokenSource::Proxy))
+            .unwrap();
+        db.upsert_provider_model_pricing(
+            "global-provider",
+            "priced-model",
+            "Priced Model",
+            &price("0.5", "1", "0", "0"),
+        )
+        .unwrap();
+        service.ingest(&input("after", TokenSource::Proxy)).unwrap();
+
+        let page = db
+            .list_usage_events("global-provider", 0, 200, 1, 10)
+            .unwrap();
+        let before = page
+            .items
+            .iter()
+            .find(|event| event.event_id == "before")
+            .unwrap();
+        let after = page
+            .items
+            .iter()
+            .find(|event| event.event_id == "after")
+            .unwrap();
+        assert_eq!(before.total_cost_usd.as_deref(), Some("3"));
+        assert_eq!(before.pricing_origin, Some(PricingOrigin::Official));
+        assert_eq!(after.total_cost_usd.as_deref(), Some("1.5"));
+        assert_eq!(after.pricing_origin, Some(PricingOrigin::User));
+    }
+
+    /// A custom price entered for the undated family id must cover the dated
+    /// model names that actually appear in session logs, exactly like the
+    /// official catalogue does.
+    #[test]
+    fn custom_pricing_matches_dated_model_variants() {
+        let db = Database::memory().unwrap();
+        save_provider(&db, "global-provider", None);
+        db.upsert_provider_model_pricing(
+            "global-provider",
+            "claude-sonnet-5",
+            "Claude Sonnet 5",
+            &price("1.5", "7.5", "0", "0"),
+        )
+        .unwrap();
+
+        let mut value = input("dated", TokenSource::Proxy);
+        value.model = "claude-sonnet-5-20260514".to_string();
+        UsageIngestionService::new(&db).ingest(&value).unwrap();
+
+        let page = db
+            .list_usage_events("global-provider", 0, 200, 1, 10)
+            .unwrap();
+        let event = &page.items[0];
+        assert_eq!(event.pricing_origin, Some(PricingOrigin::User));
+        assert_eq!(event.total_cost_usd.as_deref(), Some("9.0"));
+    }
+
+    #[test]
+    fn dated_custom_prices_do_not_cover_sibling_releases() {
+        let db = Database::memory().unwrap();
+        save_provider(&db, "global-provider", None);
+        for (model, input_rate) in [
+            ("gpt-4o-mini-2024-05-13", "0.15"),
+            ("gpt-4o-mini-2024-07-18", "0.20"),
+        ] {
+            db.upsert_provider_model_pricing(
+                "global-provider",
+                model,
+                model,
+                &price(input_rate, "1", "0", "0"),
+            )
+            .unwrap();
+        }
+
+        let mut exact = input("dated-exact", TokenSource::Proxy);
+        exact.model = "gpt-4o-mini-2024-05-13".to_string();
+        UsageIngestionService::new(&db).ingest(&exact).unwrap();
+
+        let mut sibling = input("dated-sibling", TokenSource::Proxy);
+        sibling.model = "gpt-4o-mini-2024-08-06".to_string();
+        sibling.upstream_cost = Some(UpstreamCost {
+            input_cost: None,
+            output_cost: None,
+            cache_read_cost: None,
+            cache_creation_cost: None,
+            total_cost: Some(Decimal::from_str("99").unwrap()),
+        });
+        UsageIngestionService::new(&db).ingest(&sibling).unwrap();
+
+        let page = db
+            .list_usage_events("global-provider", 0, 200, 1, 10)
+            .unwrap();
+        let exact = page
+            .items
+            .iter()
+            .find(|event| event.event_id == "dated-exact")
+            .unwrap();
+        assert_eq!(exact.pricing_origin, Some(PricingOrigin::User));
+        let sibling = page
+            .items
+            .iter()
+            .find(|event| event.event_id == "dated-sibling")
+            .unwrap();
+        assert_eq!(sibling.cost_source, CostSource::Upstream);
+        assert_eq!(sibling.pricing_origin, None);
+        assert_eq!(sibling.total_cost_usd.as_deref(), Some("99"));
+    }
+
+    /// Removing the custom price falls back to upstream evidence first.
+    #[test]
+    fn deleting_custom_pricing_restores_the_upstream_cost_priority() {
+        let db = Database::memory().unwrap();
+        save_provider(&db, "global-provider", None);
+        seed_pricing(&db, "priced-model");
+        db.upsert_provider_model_pricing(
+            "global-provider",
+            "priced-model",
+            "Priced Model",
+            &price("0.5", "1", "0", "0"),
+        )
+        .unwrap();
+        db.delete_provider_model_pricing("global-provider", "priced-model")
+            .unwrap();
+
+        let mut value = input("fallback", TokenSource::Proxy);
+        value.upstream_cost = Some(UpstreamCost {
+            input_cost: None,
+            output_cost: None,
+            cache_read_cost: None,
+            cache_creation_cost: None,
+            total_cost: Some(Decimal::from_str("0.25").unwrap()),
+        });
+        UsageIngestionService::new(&db).ingest(&value).unwrap();
+
+        let page = db
+            .list_usage_events("global-provider", 0, 200, 1, 10)
+            .unwrap();
+        let event = &page.items[0];
+        assert_eq!(event.cost_source, CostSource::Upstream);
+        assert_eq!(event.pricing_origin, None);
+        assert_eq!(event.total_cost_usd.as_deref(), Some("0.25"));
     }
 
     #[test]

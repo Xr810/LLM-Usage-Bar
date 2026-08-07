@@ -1618,13 +1618,13 @@ mod migration_v16_to_v17 {
                 (
                     "system-chatgpt-subscription".into(),
                     "chatgpt-subscription".into(),
-                    "ChatGPT Plus/Pro".into(),
+                    "ChatGPT".into(),
                     "subscription".into(),
                 ),
                 (
                     "system-claude-subscription".into(),
                     "claude-subscription".into(),
-                    "Claude Pro/Max".into(),
+                    "Claude".into(),
                     "subscription".into(),
                 ),
                 (
@@ -2641,6 +2641,419 @@ fn schema_migration_sets_user_version_when_missing() {
 }
 
 #[test]
+fn schema_migration_v20_to_v21_drops_retired_tables_and_preserves_live_data() {
+    let db = Database::memory().expect("create current in-memory database");
+    let conn = db.conn.lock().expect("lock in-memory database");
+
+    let retired_tables = [
+        "mcp_servers",
+        "prompts",
+        "profiles",
+        "provider_health",
+        "skills",
+        "skill_repos",
+        "proxy_config",
+        "proxy_live_backup",
+        "stream_check_logs",
+    ];
+    for table in retired_tables {
+        assert!(
+            !Database::table_exists(&conn, table).unwrap(),
+            "fresh current schema should not create retired table {table}"
+        );
+        conn.execute(&format!("CREATE TABLE {table} (id TEXT)"), [])
+            .unwrap_or_else(|error| panic!("create retired table {table}: {error}"));
+        conn.execute(&format!("INSERT INTO {table} (id) VALUES ('retired')"), [])
+            .unwrap_or_else(|error| panic!("seed retired table {table}: {error}"));
+    }
+
+    conn.execute(
+        "INSERT OR REPLACE INTO settings (key, value) VALUES ('v21_survivor', 'kept')",
+        [],
+    )
+    .expect("seed surviving settings row");
+    conn.execute(
+        "INSERT INTO proxy_request_logs (
+            request_id, provider_id, app_type, model, latency_ms, status_code, created_at
+         ) VALUES ('v21-survivor-log', 'v21-survivor-provider', 'codex', 'gpt-test', 1, 200, 1)",
+        [],
+    )
+    .expect("seed surviving usage log");
+    Database::set_user_version(&conn, 20).expect("mark fixture as schema v20");
+
+    Database::apply_schema_migrations_on_conn(&conn).expect("migrate v20 through current schema");
+
+    assert_eq!(Database::get_user_version(&conn).unwrap(), SCHEMA_VERSION);
+    for table in retired_tables {
+        assert!(
+            !Database::table_exists(&conn, table).unwrap(),
+            "retired table {table} should be dropped"
+        );
+    }
+    assert!(Database::table_exists(&conn, "proxy_request_logs").unwrap());
+    assert!(Database::table_exists(&conn, "provider_endpoints").unwrap());
+    assert_eq!(
+        conn.query_row(
+            "SELECT value FROM settings WHERE key = 'v21_survivor'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap(),
+        "kept"
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT model FROM proxy_request_logs WHERE request_id = 'v21-survivor-log'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap(),
+        "gpt-test"
+    );
+}
+
+#[test]
+fn schema_migration_v21_to_v22_backfills_eligible_costs_and_restores_immutability() {
+    use crate::usage::metering::calculator::{CostCalculator, ModelPricing};
+    use crate::usage::metering::parser::TokenUsage;
+    use crate::usage::system_providers::CHATGPT_SUBSCRIPTION_ID;
+    use rust_decimal::Decimal;
+
+    let db = Database::memory().expect("create current in-memory database");
+    let conn = db.conn.lock().expect("lock in-memory database");
+
+    let pricing =
+        ModelPricing::from_strings("3.25", "7.5", "0.55", "4.75").expect("create expected pricing");
+    conn.execute(
+        "INSERT INTO model_pricing (
+            model_id, display_name, input_cost_per_million, output_cost_per_million,
+            cache_read_cost_per_million, cache_creation_cost_per_million
+         ) VALUES ('v22-priced-model', 'v22-priced-model', ?1, ?2, ?3, ?4)",
+        params!["3.25", "7.5", "0.55", "4.75"],
+    )
+    .expect("seed v22 model pricing");
+    conn.execute(
+        "INSERT INTO usage_events (
+            event_id, source, provider_id, product_group_id, occurred_at, model,
+            input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
+            input_cost_usd, output_cost_usd, cache_read_cost_usd,
+            cache_creation_cost_usd, total_cost_usd, cost_source, created_at,
+            agent_module_id, pricing_origin
+         ) VALUES
+            ('v22-priced', 'session_log', ?1, 'codex', 1, 'v22-priced-model',
+             1500, 200, 400, 50, NULL, NULL, NULL, NULL, NULL,
+             'unavailable', 1, 'codex', NULL),
+            ('v22-unpriced', 'session_log', ?1, 'codex', 2, 'v22-unknown-model',
+             100, 20, 0, 0, NULL, NULL, NULL, NULL, NULL,
+             'unavailable', 2, 'codex', NULL),
+            ('v22-existing-cost', 'session_log', ?1, 'codex', 3, 'v22-priced-model',
+             100, 20, 0, 0, '0.11', '0.22', '0.33', '0.44', '9.99',
+             'upstream', 3, 'codex', NULL),
+            ('v22-zero-token', 'session_log', ?1, 'codex', 4, 'v22-priced-model',
+             0, 0, 0, 0, NULL, NULL, NULL, NULL, NULL,
+             'unavailable', 4, 'codex', NULL)",
+        [CHATGPT_SUBSCRIPTION_ID],
+    )
+    .expect("seed v21 usage events");
+    conn.execute_batch(
+        "INSERT INTO proxy_request_logs (
+            request_id, provider_id, app_type, model, pricing_model,
+            latency_ms, status_code, cost_multiplier, created_at
+         ) VALUES
+            ('v22-multiplier-log', 'legacy-provider', 'codex',
+             'v22-priced-model', 'v22-priced-model', 1, 200, '2', 1),
+            ('v22-pricing-model-log', 'legacy-provider', 'codex',
+             'v22-alias-model', 'v22-priced-model', 1, 200, '1', 2);",
+    )
+    .expect("seed v21 compatibility pricing basis");
+    conn.execute(
+        "INSERT INTO usage_events (
+            event_id, source, provider_id, product_group_id, occurred_at, model,
+            input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
+            input_cost_usd, output_cost_usd, cache_read_cost_usd,
+            cache_creation_cost_usd, total_cost_usd, cost_source,
+            legacy_request_id, created_at, agent_module_id, pricing_origin
+         ) VALUES
+            ('v22-multiplier', 'proxy', ?1, 'codex', 5, 'v22-priced-model',
+             1500, 200, 400, 50, '0', '0', '0', '0', '0', 'estimated',
+             'v22-multiplier-log', 5, 'codex', 'official'),
+            ('v22-pricing-model', 'proxy', ?1, 'codex', 6, 'v22-alias-model',
+             1000, 0, 0, 0, NULL, NULL, NULL, NULL, NULL, 'unavailable',
+             'v22-pricing-model-log', 6, 'codex', NULL),
+            ('v22-user-price', 'session_log', ?1, 'codex', 7, 'v22-priced-model',
+             1000, 0, 0, 0, '8.88', '0', '0', '0', '8.88', 'estimated',
+             NULL, 7, 'codex', 'user')",
+        [CHATGPT_SUBSCRIPTION_ID],
+    )
+    .expect("seed v21 pricing-basis regression events");
+    Database::set_user_version(&conn, 21).expect("mark fixture as schema v21");
+
+    Database::apply_schema_migrations_on_conn(&conn).expect("migrate v21 to v22");
+
+    assert_eq!(Database::get_user_version(&conn).unwrap(), SCHEMA_VERSION);
+
+    let usage = TokenUsage {
+        input_tokens: 1500,
+        output_tokens: 200,
+        cache_read_tokens: 400,
+        cache_creation_tokens: 50,
+        ..TokenUsage::default()
+    };
+    let expected = CostCalculator::calculate_for_app("codex", &usage, &pricing, Decimal::ONE);
+    #[derive(Debug, PartialEq)]
+    struct StoredCost {
+        input: Option<String>,
+        output: Option<String>,
+        cache_read: Option<String>,
+        cache_creation: Option<String>,
+        total: Option<String>,
+        source: String,
+        origin: Option<String>,
+    }
+    let priced = conn
+        .query_row(
+            "SELECT input_cost_usd, output_cost_usd, cache_read_cost_usd,
+                    cache_creation_cost_usd, total_cost_usd, cost_source, pricing_origin
+             FROM usage_events WHERE event_id = 'v22-priced'",
+            [],
+            |row| {
+                Ok(StoredCost {
+                    input: row.get(0)?,
+                    output: row.get(1)?,
+                    cache_read: row.get(2)?,
+                    cache_creation: row.get(3)?,
+                    total: row.get(4)?,
+                    source: row.get(5)?,
+                    origin: row.get(6)?,
+                })
+            },
+        )
+        .expect("read backfilled event");
+    assert_eq!(
+        priced,
+        StoredCost {
+            input: Some(expected.input_cost.to_string()),
+            output: Some(expected.output_cost.to_string()),
+            cache_read: Some(expected.cache_read_cost.to_string()),
+            cache_creation: Some(expected.cache_creation_cost.to_string()),
+            total: Some(expected.total_cost.to_string()),
+            source: "estimated".to_string(),
+            origin: Some("official".to_string()),
+        }
+    );
+
+    let unpriced: (Option<String>, String, Option<String>) = conn
+        .query_row(
+            "SELECT total_cost_usd, cost_source, pricing_origin
+             FROM usage_events WHERE event_id = 'v22-unpriced'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("read still-unpriced event");
+    assert_eq!(unpriced, (None, "unavailable".to_string(), None));
+
+    let multiplier_total: String = conn
+        .query_row(
+            "SELECT total_cost_usd FROM usage_events WHERE event_id = 'v22-multiplier'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("read multiplier-preserving backfill");
+    let multiplier_expected =
+        CostCalculator::calculate_for_app("codex", &usage, &pricing, Decimal::from(2));
+    assert_eq!(multiplier_total, multiplier_expected.total_cost.to_string());
+
+    let pricing_model_total: String = conn
+        .query_row(
+            "SELECT total_cost_usd FROM usage_events WHERE event_id = 'v22-pricing-model'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("read pricing-model-preserving backfill");
+    let pricing_model_expected = CostCalculator::calculate_for_app(
+        "codex",
+        &TokenUsage {
+            input_tokens: 1000,
+            ..TokenUsage::default()
+        },
+        &pricing,
+        Decimal::ONE,
+    );
+    assert_eq!(
+        pricing_model_total,
+        pricing_model_expected.total_cost.to_string()
+    );
+
+    let user_price: (String, String, Option<String>) = conn
+        .query_row(
+            "SELECT input_cost_usd, total_cost_usd, pricing_origin
+             FROM usage_events WHERE event_id = 'v22-user-price'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("read preserved user-priced event");
+    assert_eq!(
+        user_price,
+        (
+            "8.88".to_string(),
+            "8.88".to_string(),
+            Some("user".to_string())
+        )
+    );
+
+    let existing_cost: (
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        String,
+    ) = conn
+        .query_row(
+            "SELECT input_cost_usd, output_cost_usd, cache_read_cost_usd,
+                    cache_creation_cost_usd, total_cost_usd
+             FROM usage_events WHERE event_id = 'v22-existing-cost'",
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .expect("read pre-costed event");
+    assert_eq!(
+        existing_cost,
+        (
+            Some("0.11".to_string()),
+            Some("0.22".to_string()),
+            Some("0.33".to_string()),
+            Some("0.44".to_string()),
+            "9.99".to_string(),
+        )
+    );
+
+    let zero_token: (Option<String>, String) = conn
+        .query_row(
+            "SELECT total_cost_usd, cost_source
+             FROM usage_events WHERE event_id = 'v22-zero-token'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("read zero-token event");
+    assert_eq!(zero_token, (None, "unavailable".to_string()));
+
+    let update_error = conn
+        .execute(
+            "UPDATE usage_events SET model = model WHERE event_id = 'v22-priced'",
+            [],
+        )
+        .expect_err("usage_events update trigger must be restored");
+    assert!(
+        update_error
+            .to_string()
+            .contains("usage_events are immutable"),
+        "unexpected immutable update error: {update_error}"
+    );
+}
+
+#[test]
+fn schema_migration_v22_to_v23_preserves_rates_and_makes_them_nullable() {
+    let db = Database::memory().expect("create current in-memory database");
+    let conn = db.conn.lock().expect("lock in-memory database");
+    conn.execute_batch(
+        "DROP TABLE provider_model_pricing;
+         CREATE TABLE provider_model_pricing (
+            provider_id TEXT NOT NULL,
+            model_id TEXT NOT NULL,
+            display_name TEXT NOT NULL DEFAULT '',
+            input_cost_per_million TEXT NOT NULL,
+            output_cost_per_million TEXT NOT NULL,
+            cache_read_cost_per_million TEXT NOT NULL DEFAULT '0',
+            cache_creation_cost_per_million TEXT NOT NULL DEFAULT '0',
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            PRIMARY KEY (provider_id, model_id),
+            FOREIGN KEY (provider_id) REFERENCES usage_providers(id) ON DELETE CASCADE
+         );
+         INSERT INTO provider_model_pricing (
+            provider_id, model_id, display_name,
+            input_cost_per_million, output_cost_per_million,
+            cache_read_cost_per_million, cache_creation_cost_per_million,
+            created_at, updated_at
+         ) VALUES (
+            'system-openai-api', 'preserved-model', 'Preserved Model',
+            '1.25', '10', '0.125', '2.5', 123, 456
+         );
+         PRAGMA user_version = 22;",
+    )
+    .expect("build v22 provider pricing fixture");
+
+    Database::apply_schema_migrations_on_conn(&conn).expect("migrate v22 to v23");
+
+    assert_eq!(Database::get_user_version(&conn).unwrap(), SCHEMA_VERSION);
+    let preserved: (
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        i64,
+        i64,
+    ) = conn
+        .query_row(
+            "SELECT provider_id, model_id, display_name,
+                    input_cost_per_million, output_cost_per_million,
+                    cache_read_cost_per_million, cache_creation_cost_per_million,
+                    created_at, updated_at
+             FROM provider_model_pricing WHERE model_id = 'preserved-model'",
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                    row.get(8)?,
+                ))
+            },
+        )
+        .expect("read migrated custom price");
+    assert_eq!(
+        preserved,
+        (
+            "system-openai-api".to_string(),
+            "preserved-model".to_string(),
+            "Preserved Model".to_string(),
+            "1.25".to_string(),
+            "10".to_string(),
+            "0.125".to_string(),
+            "2.5".to_string(),
+            123,
+            456,
+        )
+    );
+    for column in [
+        "input_cost_per_million",
+        "output_cost_per_million",
+        "cache_read_cost_per_million",
+        "cache_creation_cost_per_million",
+    ] {
+        let info = get_column_info(&conn, "provider_model_pricing", column);
+        assert_eq!(info.notnull, 0, "{column} should be nullable");
+        assert_eq!(info.default, None, "{column} should not default to zero");
+    }
+}
+
+#[test]
 fn schema_migration_rejects_future_version() {
     let conn = Connection::open_in_memory().expect("open memory db");
     Database::create_tables_on_conn(&conn).expect("create tables");
@@ -2669,10 +3082,6 @@ fn schema_migration_adds_missing_columns_for_providers() {
         ("providers", "meta"),
         ("providers", "is_current"),
         ("provider_endpoints", "added_at"),
-        ("mcp_servers", "enabled_gemini"),
-        ("prompts", "updated_at"),
-        ("skills", "installed_at"),
-        ("skill_repos", "enabled"),
     ] {
         assert!(
             Database::has_column(&conn, table, column).expect("check column"),
@@ -2707,55 +3116,12 @@ fn schema_migration_aligns_column_defaults_and_types() {
     assert_eq!(is_current.r#type, "BOOLEAN");
     assert_eq!(is_current.notnull, 1);
     assert_eq!(normalize_default(&is_current.default).as_deref(), Some("0"));
-
-    let tags = get_column_info(&conn, "mcp_servers", "tags");
-    assert_eq!(tags.r#type, "TEXT");
-    assert_eq!(tags.notnull, 1);
-    assert_eq!(normalize_default(&tags.default).as_deref(), Some("[]"));
-
-    let enabled = get_column_info(&conn, "prompts", "enabled");
-    assert_eq!(enabled.r#type, "BOOLEAN");
-    assert_eq!(enabled.notnull, 1);
-    assert_eq!(normalize_default(&enabled.default).as_deref(), Some("1"));
-
-    let installed_at = get_column_info(&conn, "skills", "installed_at");
-    assert_eq!(installed_at.r#type, "INTEGER");
-    assert_eq!(installed_at.notnull, 1);
-    assert_eq!(
-        normalize_default(&installed_at.default).as_deref(),
-        Some("0")
-    );
-
-    let branch = get_column_info(&conn, "skill_repos", "branch");
-    assert_eq!(branch.r#type, "TEXT");
-    assert_eq!(normalize_default(&branch.default).as_deref(), Some("main"));
-
-    let skill_repo_enabled = get_column_info(&conn, "skill_repos", "enabled");
-    assert_eq!(skill_repo_enabled.r#type, "BOOLEAN");
-    assert_eq!(skill_repo_enabled.notnull, 1);
-    assert_eq!(
-        normalize_default(&skill_repo_enabled.default).as_deref(),
-        Some("1")
-    );
 }
 
 #[test]
 fn schema_create_tables_include_pricing_model_columns() {
     let conn = Connection::open_in_memory().expect("open memory db");
     Database::create_tables_on_conn(&conn).expect("create tables");
-
-    let multiplier = get_column_info(&conn, "proxy_config", "default_cost_multiplier");
-    assert_eq!(multiplier.r#type, "TEXT");
-    assert_eq!(multiplier.notnull, 1);
-    assert_eq!(normalize_default(&multiplier.default).as_deref(), Some("1"));
-
-    let pricing_source = get_column_info(&conn, "proxy_config", "pricing_model_source");
-    assert_eq!(pricing_source.r#type, "TEXT");
-    assert_eq!(pricing_source.notnull, 1);
-    assert_eq!(
-        normalize_default(&pricing_source.default).as_deref(),
-        Some("response")
-    );
 
     let request_model = get_column_info(&conn, "proxy_request_logs", "request_model");
     assert_eq!(request_model.r#type, "TEXT");
@@ -2917,109 +3283,6 @@ fn migration_v10_to_v11_rebuilds_rollups_with_request_model_dimension() {
 }
 
 #[test]
-fn schema_create_tables_repairs_dev_global_profile_marker() {
-    let conn = Connection::open_in_memory().expect("open memory db");
-
-    // 模拟跑过未发布开发版的库：user_version 已是 12（迁移不会再跑），
-    // 但 current 标记还是全局 key（现按应用分组）
-    conn.execute_batch(
-        r#"
-        CREATE TABLE profiles (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            payload TEXT NOT NULL,
-            sort_order INTEGER,
-            created_at INTEGER,
-            updated_at INTEGER
-        );
-        INSERT INTO profiles (id, name, payload) VALUES ('p1', 'Project A', '{}');
-        CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT);
-        INSERT INTO settings (key, value) VALUES ('current_profile_id', 'p1');
-        "#,
-    )
-    .expect("seed dev v12 shape");
-    Database::set_user_version(&conn, 12).expect("set user_version=12");
-
-    Database::create_tables_on_conn(&conn).expect("create tables should repair marker");
-
-    // 全局 current 标记改名为 claude 组标记，旧 key 删除
-    let claude_marker: String = conn
-        .query_row(
-            "SELECT value FROM settings WHERE key = 'current_profile_id_claude'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("scoped current marker");
-    assert_eq!(claude_marker, "p1");
-    let old_marker: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM settings WHERE key = 'current_profile_id'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("count old marker");
-    assert_eq!(old_marker, 0);
-
-    // 修复必须幂等：再跑一遍不应破坏已迁移的标记
-    Database::create_tables_on_conn(&conn).expect("repair is idempotent");
-    let claude_marker: String = conn
-        .query_row(
-            "SELECT value FROM settings WHERE key = 'current_profile_id_claude'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("scoped current marker survives");
-    assert_eq!(claude_marker, "p1");
-}
-
-#[test]
-fn schema_create_tables_repairs_legacy_proxy_config_singleton_to_per_app() {
-    let conn = Connection::open_in_memory().expect("open memory db");
-
-    // 模拟测试版 v2：user_version=2，但 proxy_config 仍是单例结构（无 app_type）
-    Database::set_user_version(&conn, 2).expect("set user_version");
-    conn.execute_batch(
-        r#"
-        CREATE TABLE proxy_config (
-            id INTEGER PRIMARY KEY,
-            enabled INTEGER NOT NULL DEFAULT 0,
-            listen_address TEXT NOT NULL DEFAULT '127.0.0.1',
-            listen_port INTEGER NOT NULL DEFAULT 5000,
-            max_retries INTEGER NOT NULL DEFAULT 3,
-            request_timeout INTEGER NOT NULL DEFAULT 300,
-            enable_logging INTEGER NOT NULL DEFAULT 1,
-            target_app TEXT NOT NULL DEFAULT 'claude',
-            created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-        );
-        INSERT INTO proxy_config (id, enabled) VALUES (1, 1);
-        "#,
-    )
-    .expect("seed legacy proxy_config");
-
-    Database::create_tables_on_conn(&conn).expect("create tables should repair proxy_config");
-
-    assert!(
-        Database::has_column(&conn, "proxy_config", "app_type").expect("check app_type"),
-        "proxy_config should be migrated to per-app structure"
-    );
-
-    let count: i32 = conn
-        .query_row("SELECT COUNT(*) FROM proxy_config", [], |r| r.get(0))
-        .expect("count rows");
-    assert_eq!(count, 3, "per-app proxy_config should have 3 rows");
-
-    // 新结构下应能按 app_type 查询
-    let _: i32 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM proxy_config WHERE app_type = 'claude'",
-            [],
-            |r| r.get(0),
-        )
-        .expect("query by app_type");
-}
-
-#[test]
 fn migration_from_v3_8_schema_v1_to_current_schema_v3() {
     let conn = Connection::open_in_memory().expect("open memory db");
     conn.execute("PRAGMA foreign_keys = ON;", [])
@@ -3053,12 +3316,6 @@ fn migration_from_v3_8_schema_v1_to_current_schema_v3() {
         ],
     )
     .expect("seed provider");
-
-    conn.execute(
-        "INSERT INTO skills (key, installed, installed_at) VALUES (?1, ?2, ?3)",
-        params!["claude:demo-skill", 1, 1700000000i64],
-    )
-    .expect("seed legacy skill");
 
     // 按应用启动流程：先 create_tables（补齐新增表），再 apply_schema_migrations（按 user_version 迁移）
     Database::create_tables_on_conn(&conn).expect("create tables");
@@ -3102,53 +3359,6 @@ fn migration_from_v3_8_schema_v1_to_current_schema_v3() {
         .expect("read cost_multiplier");
     assert_eq!(cost_multiplier, "1.0");
 
-    // v2 -> v3：skills 表重建为统一结构，并设置 pending 标记（后续由启动时扫描文件系统重建数据）
-    assert!(
-        Database::has_column(&conn, "skills", "enabled_claude").expect("check skills v3 column"),
-        "skills table should be migrated to v3 structure"
-    );
-    let skills_count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM skills", [], |r| r.get(0))
-        .expect("count skills");
-    assert_eq!(skills_count, 0, "skills table should be rebuilt empty");
-
-    let pending: Option<String> = conn
-        .query_row(
-            "SELECT value FROM settings WHERE key = 'skills_ssot_migration_pending'",
-            [],
-            |r| r.get(0),
-        )
-        .ok();
-    assert!(
-        matches!(pending.as_deref(), Some("true") | Some("1")),
-        "skills_ssot_migration_pending should be set after v2->v3 migration"
-    );
-    let snapshot: Option<String> = conn
-        .query_row(
-            "SELECT value FROM settings WHERE key = 'skills_ssot_migration_snapshot'",
-            [],
-            |r| r.get(0),
-        )
-        .ok();
-    let snapshot = snapshot.expect("skills migration snapshot should be recorded");
-    let snapshot_rows: serde_json::Value =
-        serde_json::from_str(&snapshot).expect("parse skills migration snapshot");
-    assert!(
-        snapshot_rows
-            .as_array()
-            .is_some_and(|rows| rows.iter().any(|row| {
-                row.get("directory").and_then(|v| v.as_str()) == Some("demo-skill")
-                    && row.get("app_type").and_then(|v| v.as_str()) == Some("claude")
-            })),
-        "skills migration snapshot should preserve legacy app mapping"
-    );
-
-    // v3.9+ 新增：proxy_config 三行 seed 必须存在（否则 UI 会查不到默认值）
-    let proxy_rows: i64 = conn
-        .query_row("SELECT COUNT(*) FROM proxy_config", [], |r| r.get(0))
-        .expect("count proxy_config rows");
-    assert_eq!(proxy_rows, 3);
-
     // model_pricing 应具备默认数据（迁移时会 seed）
     let pricing_rows: i64 = conn
         .query_row("SELECT COUNT(*) FROM model_pricing", [], |r| r.get(0))
@@ -3167,7 +3377,6 @@ fn schema_dry_run_does_not_write_to_disk() {
         apps,
         mcp: Default::default(),
         prompts: Default::default(),
-        skills: Default::default(),
         common_config_snippets: Default::default(),
         claude_common_config_snippet: None,
     };
@@ -3217,7 +3426,6 @@ fn dry_run_validates_schema_compatibility() {
         apps,
         mcp: Default::default(),
         prompts: Default::default(),
-        skills: Default::default(),
         common_config_snippets: Default::default(),
         claude_common_config_snippet: None,
     };

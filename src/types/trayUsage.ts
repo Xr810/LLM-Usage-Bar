@@ -57,6 +57,8 @@ export interface TrayProviderUsageView {
 export interface TrayProviderRecentUsageView {
   startAt: number;
   endAt: number;
+  /** Tokens for the local day — same window as `todayCostUsd`. */
+  todayTokens: number;
   totalTokens: number;
   todayCostUsd: string | null;
   totalCostUsd: string | null;
