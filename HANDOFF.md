@@ -57,7 +57,7 @@
 | 线 | 分支 / 位置 | 状态 | 需要行动? |
 | --- | --- | --- | --- |
 | 主线 | `main` = `f3aadadec` | 绿,v23,与 origin 同步 | 否 |
-| 用量按模型/Agent 分类 | `claude/usage-model-agent-classification-03acf1`,worktree `.claude/worktrees/usage-model-agent-classification-03acf1` | 功能完成、测试全绿、**已本地提交**(`80d791725`)、未推送;**基点过时,跑不起来** | **是 → §4** |
+| 用量按模型/Agent 分类 | **✅ 已搬上 main(2026-08-07,提交 `e23894168`)** | Codex(max)在隔离 worktree 移植,Claude 逐 hunk 复核并独立重跑全套验证(Rust 1039/0、tsc、prettier、59+9 前端测试全绿) | 旧分支 `claude/usage-model-agent-classification-03acf1` 及其 worktree 已作废,可删(需 `-D`);目视验证仍欠 → P4 |
 | 红绿灯燃烧速度投影 | `claude/traffic-light-logic-redesign-3fbc8e`,worktree `.claude/worktrees/traffic-light-logic-redesign-3fbc8e` | 功能完成、已提交已推送(`45898d3ba`);**基点过时,装上即崩,已回滚**;签名脚本修复已补提交并推送(`5ed753e08`) | **是 → §5** |
 | 2026-08-07 checkpoint 文档 | `claude/llm-usage-monitoring-app-4a9554`(= main 的内容 + 1 个 docs 提交 `67676ef9e`) | 纯文档分支,内容已并入本文 | 可删分支和 worktree |
 | 本合并任务 | `claude/consolidate-error-issues-4d8721` | 即本文件所在分支 | 合并进 main 让后续 agent 能看到 |
@@ -106,10 +106,12 @@
 
 ## 3. 待办问题清单(按优先级)
 
-### P1 — 把「分类」线搬上 main(§4 有完整步骤)
+### ~~P1 — 把「分类」线搬上 main~~ ✅ 已完成(2026-08-07,提交 `e23894168`)
 
-功能做完、2428 个 Rust 测试 + 65 个前端测试全绿,但基于 55 个提交前的旧基点,
-在 v23 面前跑不起来。改动**未推送**,只存在于本地提交 `80d791725`。
+`80d791725` 已移植到 main。移植中的语义决定:去重 SQL 与 main 现有谓词逐字
+一致(独立比对 543 字节);无归属桶改为**无条件**排最后(原实现只在平局时);
+新测试 helper 补上了 main 新增的 `UsageEvent.pricing_origin`;manifest 重锚了
+12 条 `lineNumber`。§4 的搬迁指南保留作历史参考,语义约定一节仍是有效契约。
 
 ### P2 — 把「红绿灯」线搬上 main(§5 有完整步骤)
 
