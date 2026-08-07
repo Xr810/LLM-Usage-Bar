@@ -608,6 +608,130 @@ pub struct ProviderMonitoringDashboardView {
     pub warnings: Vec<String>,
 }
 
+/// One concrete model, scoped to a single Provider account.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelUsageRow {
+    pub model: String,
+    pub provider_id: String,
+    pub provider_name: String,
+    pub product_group_id: String,
+    pub billing_kind: BillingKind,
+    pub event_count: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_creation_tokens: u64,
+    pub total_tokens: u64,
+    pub total_cost_usd: Option<String>,
+    pub cost_source_counts: CostSourceCounts,
+    pub first_occurred_at: i64,
+    pub last_occurred_at: i64,
+}
+
+/// One concrete model, merged across every Provider account that served it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelTotalsRow {
+    pub model: String,
+    pub provider_ids: Vec<String>,
+    pub event_count: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_creation_tokens: u64,
+    pub total_tokens: u64,
+    pub total_cost_usd: Option<String>,
+    pub cost_source_counts: CostSourceCounts,
+    pub first_occurred_at: i64,
+    pub last_occurred_at: i64,
+}
+
+/// One product/plan group (the "Claude Pro" / "Codex Pro" level).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelProductGroupView {
+    pub product_group_id: String,
+    pub billing_kind: BillingKind,
+    pub provider_ids: Vec<String>,
+    pub provider_names: Vec<String>,
+    pub event_count: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_creation_tokens: u64,
+    pub total_tokens: u64,
+    pub total_cost_usd: Option<String>,
+    pub cost_source_counts: CostSourceCounts,
+    pub models: Vec<ModelUsageRow>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelUsageDashboardView {
+    pub start_at: i64,
+    pub end_at: i64,
+    pub total_tokens: u64,
+    pub total_event_count: u64,
+    pub total_cost_usd: Option<String>,
+    pub product_groups: Vec<ModelProductGroupView>,
+    pub models: Vec<ModelTotalsRow>,
+    pub warnings: Vec<String>,
+}
+
+/// One Provider account's contribution inside a single Agent.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentProviderUsageRow {
+    pub provider_id: String,
+    pub provider_name: String,
+    pub product_group_id: String,
+    pub billing_kind: BillingKind,
+    pub event_count: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_creation_tokens: u64,
+    pub total_tokens: u64,
+    pub total_cost_usd: Option<String>,
+    pub cost_source_counts: CostSourceCounts,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentUsageRow {
+    /// None is the "no agent owner" bucket (usage_events.agent_module_id IS NULL).
+    pub agent_module_id: Option<String>,
+    /// None for the unassigned bucket, and for an agent id with no surviving agent_modules row.
+    pub agent_name: Option<String>,
+    pub archived: bool,
+    pub visible: bool,
+    pub event_count: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_creation_tokens: u64,
+    pub total_tokens: u64,
+    pub total_cost_usd: Option<String>,
+    pub cost_source_counts: CostSourceCounts,
+    pub first_occurred_at: i64,
+    pub last_occurred_at: i64,
+    pub providers: Vec<AgentProviderUsageRow>,
+    pub models: Vec<ModelTotalsRow>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentUsageBreakdownView {
+    pub start_at: i64,
+    pub end_at: i64,
+    pub total_tokens: u64,
+    pub total_event_count: u64,
+    pub total_cost_usd: Option<String>,
+    pub agents: Vec<AgentUsageRow>,
+    pub warnings: Vec<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

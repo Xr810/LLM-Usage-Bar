@@ -5,7 +5,9 @@ import type {
   AgentProviderBindingInput,
   AgentProviderBindingView,
   AgentProxySetupInfo,
+  AgentUsageBreakdownView,
   LocalBindingKeyReveal,
+  ModelUsageDashboardView,
   ProviderSessionSyncResult,
   ProviderMonitoringDashboardView,
   QuotaRefreshResult,
@@ -159,6 +161,16 @@ export const usageDashboardApi = {
     endAt: number,
   ): Promise<ProviderMonitoringDashboardView> =>
     invoke("get_provider_usage_dashboard", { startAt, endAt }),
+  getModelDashboard: (
+    startAt: number,
+    endAt: number,
+  ): Promise<ModelUsageDashboardView> =>
+    invoke("get_model_usage_dashboard", { startAt, endAt }),
+  getAgentBreakdown: (
+    startAt: number,
+    endAt: number,
+  ): Promise<AgentUsageBreakdownView> =>
+    invoke("get_agent_usage_breakdown", { startAt, endAt }),
   getEvents: (
     agentModuleId: string,
     providerId: string | undefined,

@@ -1266,6 +1266,8 @@ pub fn run() {
             commands::get_usage_dashboard,
             commands::get_usage_events,
             commands::get_provider_usage_dashboard,
+            commands::get_model_usage_dashboard,
+            commands::get_agent_usage_breakdown,
             commands::get_provider_usage_activity,
             commands::get_provider_usage_events,
             commands::refresh_provider_quota,

@@ -251,6 +251,116 @@ export interface ProviderMonitoringDashboardView {
   warnings: string[];
 }
 
+/** One concrete model, scoped to a single Provider account. */
+export interface ModelUsageRow {
+  model: string;
+  providerId: string;
+  providerName: string;
+  productGroupId: string;
+  billingKind: BillingKind;
+  eventCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  totalTokens: number;
+  totalCostUsd: string | null;
+  costSourceCounts: CostSourceCounts;
+  firstOccurredAt: number;
+  lastOccurredAt: number;
+}
+
+/** One concrete model, merged across every Provider account that served it. */
+export interface ModelTotalsRow {
+  model: string;
+  providerIds: string[];
+  eventCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  totalTokens: number;
+  totalCostUsd: string | null;
+  costSourceCounts: CostSourceCounts;
+  firstOccurredAt: number;
+  lastOccurredAt: number;
+}
+
+/** A product/plan group — the "Claude Pro" / "ChatGPT Pro" level. */
+export interface ModelProductGroupView {
+  productGroupId: string;
+  billingKind: BillingKind;
+  providerIds: string[];
+  providerNames: string[];
+  eventCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  totalTokens: number;
+  totalCostUsd: string | null;
+  costSourceCounts: CostSourceCounts;
+  models: ModelUsageRow[];
+}
+
+export interface ModelUsageDashboardView {
+  startAt: number;
+  endAt: number;
+  totalTokens: number;
+  totalEventCount: number;
+  totalCostUsd: string | null;
+  productGroups: ModelProductGroupView[];
+  models: ModelTotalsRow[];
+  warnings: string[];
+}
+
+/** One Provider account's contribution inside a single Agent. */
+export interface AgentProviderUsageRow {
+  providerId: string;
+  providerName: string;
+  productGroupId: string;
+  billingKind: BillingKind;
+  eventCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  totalTokens: number;
+  totalCostUsd: string | null;
+  costSourceCounts: CostSourceCounts;
+}
+
+export interface AgentUsageRow {
+  /** `null` is the bucket for events that carry no Agent owner. */
+  agentModuleId: string | null;
+  /** `null` for the unassigned bucket and for Agents whose module row is gone. */
+  agentName: string | null;
+  archived: boolean;
+  visible: boolean;
+  eventCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  totalTokens: number;
+  totalCostUsd: string | null;
+  costSourceCounts: CostSourceCounts;
+  firstOccurredAt: number;
+  lastOccurredAt: number;
+  providers: AgentProviderUsageRow[];
+  models: ModelTotalsRow[];
+}
+
+export interface AgentUsageBreakdownView {
+  startAt: number;
+  endAt: number;
+  totalTokens: number;
+  totalEventCount: number;
+  totalCostUsd: string | null;
+  agents: AgentUsageRow[];
+  warnings: string[];
+}
+
 export interface UsageEvent {
   eventId: string;
   source: TokenSource;

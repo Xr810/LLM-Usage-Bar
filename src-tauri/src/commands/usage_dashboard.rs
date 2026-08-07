@@ -4,10 +4,12 @@ use crate::database::AgentModuleDeleteOutcome;
 use crate::error::AppError;
 use crate::services::SystemProviderConnectionTestResult;
 use crate::store::AppState;
+use crate::usage::aggregation::{aggregate_agent_usage, aggregate_model_usage};
 use crate::usage::dashboard::UsageDashboardService;
 use crate::usage::domain::{
     AgentModuleInput, AgentModuleView, AgentProviderBindingInput, AgentProviderBindingView,
-    LocalBindingKeyReveal, ProviderMonitoringDashboardView, RouteBinding, SystemProviderAuthKind,
+    AgentUsageBreakdownView, LocalBindingKeyReveal, ModelUsageDashboardView,
+    ProviderMonitoringDashboardView, RouteBinding, SystemProviderAuthKind,
     UnassignedUsageDiagnostics, UsageDashboardView, UsageEventPage, UsageProviderInput,
     UsageProviderView,
 };
@@ -287,6 +289,24 @@ pub fn get_provider_usage_dashboard(
     end_at: i64,
 ) -> Result<ProviderMonitoringDashboardView, AppError> {
     get_provider_usage_dashboard_test_hook(&state, start_at, end_at)
+}
+
+#[tauri::command]
+pub fn get_model_usage_dashboard(
+    state: State<'_, AppState>,
+    start_at: i64,
+    end_at: i64,
+) -> Result<ModelUsageDashboardView, AppError> {
+    get_model_usage_dashboard_test_hook(&state, start_at, end_at)
+}
+
+#[tauri::command]
+pub fn get_agent_usage_breakdown(
+    state: State<'_, AppState>,
+    start_at: i64,
+    end_at: i64,
+) -> Result<AgentUsageBreakdownView, AppError> {
+    get_agent_usage_breakdown_test_hook(&state, start_at, end_at)
 }
 
 #[tauri::command]
@@ -952,6 +972,22 @@ pub fn get_provider_usage_dashboard_test_hook(
     end_at: i64,
 ) -> Result<ProviderMonitoringDashboardView, AppError> {
     UsageDashboardService::new(&state.db).get_provider_dashboard(start_at, end_at)
+}
+
+pub fn get_model_usage_dashboard_test_hook(
+    state: &AppState,
+    start_at: i64,
+    end_at: i64,
+) -> Result<ModelUsageDashboardView, AppError> {
+    aggregate_model_usage(&state.db, start_at, end_at)
+}
+
+pub fn get_agent_usage_breakdown_test_hook(
+    state: &AppState,
+    start_at: i64,
+    end_at: i64,
+) -> Result<AgentUsageBreakdownView, AppError> {
+    aggregate_agent_usage(&state.db, start_at, end_at)
 }
 
 pub fn get_usage_events_test_hook(

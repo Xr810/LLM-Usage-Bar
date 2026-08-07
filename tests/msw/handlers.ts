@@ -861,6 +861,273 @@ const dashboardGroupsForAgent = (agentModuleId: string, endAt: number) => {
   }
 };
 
+const noCostCounts = { upstream: 0, estimated: 0, unavailable: 0 };
+
+/**
+ * Model breakdown fixture. Opus is deliberately served by both a
+ * subscription and a metered account so the merged "By model" list has a
+ * row spanning two Providers.
+ */
+const modelUsageDashboardFixture = (startAt: number, endAt: number) => {
+  const leaf = (
+    model: string,
+    providerId: string,
+    providerName: string,
+    productGroupId: string,
+    billingKind: "subscription" | "metered",
+    totalTokens: number,
+    eventCount: number,
+    totalCostUsd: string | null,
+  ) => ({
+    model,
+    providerId,
+    providerName,
+    productGroupId,
+    billingKind,
+    eventCount,
+    inputTokens: totalTokens / 2,
+    outputTokens: totalTokens / 4,
+    cacheReadTokens: totalTokens / 4,
+    cacheCreationTokens: 0,
+    totalTokens,
+    totalCostUsd,
+    costSourceCounts: {
+      ...noCostCounts,
+      upstream: totalCostUsd == null ? 0 : eventCount,
+      unavailable: totalCostUsd == null ? eventCount : 0,
+    },
+    firstOccurredAt: startAt,
+    lastOccurredAt: endAt,
+  });
+
+  const claudeModels = [
+    leaf(
+      "claude-opus-5",
+      "system-claude-subscription",
+      "Claude Pro/Max",
+      "claude-subscription",
+      "subscription",
+      8_000,
+      40,
+      "4.00",
+    ),
+    leaf(
+      "claude-sonnet-5",
+      "system-claude-subscription",
+      "Claude Pro/Max",
+      "claude-subscription",
+      "subscription",
+      2_000,
+      20,
+      "0.50",
+    ),
+  ];
+  const anthropicModels = [
+    leaf(
+      "claude-opus-5",
+      "anthropic-api",
+      "Anthropic API",
+      "anthropic-api",
+      "metered",
+      3_000,
+      10,
+      "1.50",
+    ),
+  ];
+  const chatgptModels = [
+    leaf(
+      "gpt-5.6-sol",
+      "system-chatgpt-subscription",
+      "ChatGPT Plus/Pro",
+      "chatgpt-subscription",
+      "subscription",
+      4_000,
+      25,
+      null,
+    ),
+  ];
+
+  const group = (
+    productGroupId: string,
+    billingKind: "subscription" | "metered",
+    providerIds: string[],
+    providerNames: string[],
+    models: ReturnType<typeof leaf>[],
+  ) => ({
+    productGroupId,
+    billingKind,
+    providerIds,
+    providerNames,
+    eventCount: models.reduce((sum, row) => sum + row.eventCount, 0),
+    inputTokens: models.reduce((sum, row) => sum + row.inputTokens, 0),
+    outputTokens: models.reduce((sum, row) => sum + row.outputTokens, 0),
+    cacheReadTokens: models.reduce((sum, row) => sum + row.cacheReadTokens, 0),
+    cacheCreationTokens: 0,
+    totalTokens: models.reduce((sum, row) => sum + row.totalTokens, 0),
+    totalCostUsd: models.some((row) => row.totalCostUsd != null)
+      ? models
+          .reduce((sum, row) => sum + Number(row.totalCostUsd ?? 0), 0)
+          .toFixed(2)
+      : null,
+    costSourceCounts: noCostCounts,
+    models,
+  });
+
+  return {
+    startAt,
+    endAt,
+    totalTokens: 17_000,
+    totalEventCount: 95,
+    totalCostUsd: "6.00",
+    productGroups: [
+      group(
+        "claude-subscription",
+        "subscription",
+        ["system-claude-subscription"],
+        ["Claude Pro/Max"],
+        claudeModels,
+      ),
+      group(
+        "chatgpt-subscription",
+        "subscription",
+        ["system-chatgpt-subscription"],
+        ["ChatGPT Plus/Pro"],
+        chatgptModels,
+      ),
+      group(
+        "anthropic-api",
+        "metered",
+        ["anthropic-api"],
+        ["Anthropic API"],
+        anthropicModels,
+      ),
+    ],
+    models: [
+      {
+        model: "claude-opus-5",
+        providerIds: ["anthropic-api", "system-claude-subscription"],
+        eventCount: 50,
+        inputTokens: 5_500,
+        outputTokens: 2_750,
+        cacheReadTokens: 2_750,
+        cacheCreationTokens: 0,
+        totalTokens: 11_000,
+        totalCostUsd: "5.50",
+        costSourceCounts: { upstream: 50, estimated: 0, unavailable: 0 },
+        firstOccurredAt: startAt,
+        lastOccurredAt: endAt,
+      },
+      {
+        model: "gpt-5.6-sol",
+        providerIds: ["system-chatgpt-subscription"],
+        eventCount: 25,
+        inputTokens: 2_000,
+        outputTokens: 1_000,
+        cacheReadTokens: 1_000,
+        cacheCreationTokens: 0,
+        totalTokens: 4_000,
+        totalCostUsd: null,
+        costSourceCounts: { upstream: 0, estimated: 0, unavailable: 25 },
+        firstOccurredAt: startAt,
+        lastOccurredAt: endAt,
+      },
+      {
+        model: "claude-sonnet-5",
+        providerIds: ["system-claude-subscription"],
+        eventCount: 20,
+        inputTokens: 1_000,
+        outputTokens: 500,
+        cacheReadTokens: 500,
+        cacheCreationTokens: 0,
+        totalTokens: 2_000,
+        totalCostUsd: "0.50",
+        costSourceCounts: { upstream: 20, estimated: 0, unavailable: 0 },
+        firstOccurredAt: startAt,
+        lastOccurredAt: endAt,
+      },
+    ],
+    warnings: [],
+  };
+};
+
+/** Agent breakdown fixture, including the no-owner bucket sorted last. */
+const agentUsageBreakdownFixture = (startAt: number, endAt: number) => {
+  const agent = (
+    agentModuleId: string | null,
+    agentName: string | null,
+    totalTokens: number,
+    eventCount: number,
+    totalCostUsd: string | null,
+    archived = false,
+  ) => ({
+    agentModuleId,
+    agentName,
+    archived,
+    visible: agentModuleId != null && !archived,
+    eventCount,
+    inputTokens: totalTokens / 2,
+    outputTokens: totalTokens / 4,
+    cacheReadTokens: totalTokens / 4,
+    cacheCreationTokens: 0,
+    totalTokens,
+    totalCostUsd,
+    costSourceCounts: {
+      ...noCostCounts,
+      upstream: totalCostUsd == null ? 0 : eventCount,
+      unavailable: totalCostUsd == null ? eventCount : 0,
+    },
+    firstOccurredAt: startAt,
+    lastOccurredAt: endAt,
+    providers: [
+      {
+        providerId: "system-claude-subscription",
+        providerName: "Claude Pro/Max",
+        productGroupId: "claude-subscription",
+        billingKind: "subscription" as const,
+        eventCount,
+        inputTokens: totalTokens / 2,
+        outputTokens: totalTokens / 4,
+        cacheReadTokens: totalTokens / 4,
+        cacheCreationTokens: 0,
+        totalTokens,
+        totalCostUsd,
+        costSourceCounts: noCostCounts,
+      },
+    ],
+    models: [
+      {
+        model: "claude-opus-5",
+        providerIds: ["system-claude-subscription"],
+        eventCount,
+        inputTokens: totalTokens / 2,
+        outputTokens: totalTokens / 4,
+        cacheReadTokens: totalTokens / 4,
+        cacheCreationTokens: 0,
+        totalTokens,
+        totalCostUsd,
+        costSourceCounts: noCostCounts,
+        firstOccurredAt: startAt,
+        lastOccurredAt: endAt,
+      },
+    ],
+  });
+
+  return {
+    startAt,
+    endAt,
+    totalTokens: 17_000,
+    totalEventCount: 95,
+    totalCostUsd: "6.00",
+    agents: [
+      agent("claude-code", "Claude Code", 10_000, 60, "4.50"),
+      agent("codex", "Codex", 5_000, 25, "1.50"),
+      agent("legacy-agent", "Retired Agent", 1_500, 6, "0.00", true),
+      agent(null, null, 500, 4, null),
+    ],
+    warnings: [],
+  };
+};
+
 export const handlers = [
   http.post(`${TAURI_ENDPOINT}/get_tray_usage_snapshot`, () =>
     success(trayUsageSnapshotFixture),
@@ -1505,6 +1772,36 @@ export const handlers = [
                 ),
           ),
       });
+    },
+  ),
+  http.post(
+    `${TAURI_ENDPOINT}/get_model_usage_dashboard`,
+    async ({ request }) => {
+      const { startAt, endAt } = await withJson<{
+        startAt: number;
+        endAt: number;
+      }>(request);
+      if (typeof startAt !== "number" || typeof endAt !== "number") {
+        return HttpResponse.json("invalid_model_dashboard_request", {
+          status: 400,
+        });
+      }
+      return success(modelUsageDashboardFixture(startAt, endAt));
+    },
+  ),
+  http.post(
+    `${TAURI_ENDPOINT}/get_agent_usage_breakdown`,
+    async ({ request }) => {
+      const { startAt, endAt } = await withJson<{
+        startAt: number;
+        endAt: number;
+      }>(request);
+      if (typeof startAt !== "number" || typeof endAt !== "number") {
+        return HttpResponse.json("invalid_agent_breakdown_request", {
+          status: 400,
+        });
+      }
+      return success(agentUsageBreakdownFixture(startAt, endAt));
     },
   ),
   http.post(

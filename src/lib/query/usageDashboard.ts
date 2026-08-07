@@ -32,6 +32,15 @@ export const usageDashboardKeys = {
   dashboards: () => [...usageDashboardKeys.all, "dashboard"] as const,
   providerDashboard: (startAt: number, endAt: number) =>
     [...usageDashboardKeys.dashboards(), "providers", startAt, endAt] as const,
+  modelDashboard: (startAt: number, endAt: number) =>
+    [...usageDashboardKeys.dashboards(), "models", startAt, endAt] as const,
+  agentBreakdown: (startAt: number, endAt: number) =>
+    [
+      ...usageDashboardKeys.dashboards(),
+      "agent-breakdown",
+      startAt,
+      endAt,
+    ] as const,
   dashboard: (agentModuleId: string, startAt: number, endAt: number) =>
     [
       ...usageDashboardKeys.dashboards(),
@@ -172,6 +181,37 @@ export function useProviderUsageDashboard(startAt: number, endAt: number) {
     queryFn: () => usageDashboardApi.getProviderDashboard(startAt, endAt),
     placeholderData: keepPreviousData,
     enabled: startAt < endAt,
+  });
+}
+
+/**
+ * Model breakdown. `enabled` is left to the caller so the query only fires
+ * while the "By model" tab is mounted.
+ */
+export function useModelUsageDashboard(
+  startAt: number,
+  endAt: number,
+  enabled = true,
+) {
+  return useQuery({
+    queryKey: usageDashboardKeys.modelDashboard(startAt, endAt),
+    queryFn: () => usageDashboardApi.getModelDashboard(startAt, endAt),
+    placeholderData: keepPreviousData,
+    enabled: enabled && startAt < endAt,
+  });
+}
+
+/** Agent breakdown across every Agent, not the single-Agent dashboard. */
+export function useAgentUsageBreakdown(
+  startAt: number,
+  endAt: number,
+  enabled = true,
+) {
+  return useQuery({
+    queryKey: usageDashboardKeys.agentBreakdown(startAt, endAt),
+    queryFn: () => usageDashboardApi.getAgentBreakdown(startAt, endAt),
+    placeholderData: keepPreviousData,
+    enabled: enabled && startAt < endAt,
   });
 }
 
