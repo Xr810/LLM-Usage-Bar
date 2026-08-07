@@ -1,7 +1,7 @@
 # LLM Usage Bar — 全局交接文档(合并版)
 
 最后核实:2026-08-07(所有事实当天用 git / gh / sqlite3 逐条验证过,不是抄旧文档)
-最后更新:2026-08-07 下午 —— 小项修复已执行,见 §3 各条目内的 ✅ 标记
+最后更新:2026-08-07 傍晚 —— Claude 重置时间线告一段落,见 §9(新增,下周继续)
 
 > **这是唯一的交接文档。** 它取代并吸收了以下分散文档,那些文件不要再单独更新:
 >
@@ -18,23 +18,27 @@
 
 ## 0. 开工前必做的三步(两次翻车都是因为跳过了这里)
 
-1. **基线就是 `main`。** 2026-08-07 起本地 `main` = `origin/main` = `f3aadadec`
-   (“Refocus on quota and spend… (#17)”),`SCHEMA_VERSION = 23`。
-   之前"本地 main 落后 55 个提交"的问题**已经解决**,不要再从别的分支拉线。
+1. **基线就是 `main`。** 2026-08-07 傍晚实测:本地 `main` = `origin/main` =
+   `d21d3d682`,`SCHEMA_VERSION = 24`。之前"本地 main 落后 55 个提交"的问题
+   **已经解决**,不要再从别的分支拉线。
 
    ```bash
    git fetch origin && git log --oneline -1 origin/main
    ```
 
-2. **动数据库/想本地跑 app 之前,先对版本。** 生产库当前 v23:
+   > 别照抄这里的哈希 —— 上面这条命令的输出才算数。同时注意 §9.5:
+   > 本机有 28 个提交未推远端,`git log --all --not --remotes=origin` 能列出来。
+   > 未合并的活分支见 §9.2(`claude/quota-reset-latch`)。
+
+2. **动数据库/想本地跑 app 之前,先对版本。** 生产库 2026-08-07 傍晚实测 v24:
 
    ```bash
    sqlite3 ~/.llm-usage-bar/llm-usage-bar.db "PRAGMA user_version;"
    ```
 
-   分支的 `SCHEMA_VERSION`(`src-tauri/src/database/mod.rs:56`)必须 ≥ 库版本,
-   否则 app 启动即崩:`authoritative database schema v23 is outside supported range …`。
-   新迁移一律从 main 的版本号往上编(2026-08-07 起 main 是 v24,下一个是 v25)。
+   分支的 `SCHEMA_VERSION`(`src-tauri/src/database/mod.rs:57`)必须 ≥ 库版本,
+   否则 app 启动即崩:`authoritative database schema v24 is outside supported range …`。
+   新迁移一律从 main 的版本号往上编,**下一个是 v25**。
 
 3. **读完本文件再动手。** 8 月的两条 feature 线全栽在同一个坑
    (基点过时 → 迁移编号错 → 装上就崩),第二次翻车时答案已经写在交接文档里了。
@@ -295,3 +299,185 @@ max 混判的真 bug(改为各自判定取最差)。
 - `AGENTS.md` —— 包装器与 Kimi 委派规则
 - `docs/usage-dashboard-acceptance.md` —— 验收 runbook(PR #6 时代,流程仍可参考)
 - 其余 `docs/superpowers/plans/*` 与 `design-qa.md` 为历史实施记录,只作考古用
+
+---
+
+## 9. Claude 订阅额度的「重置时间」线(2026-08-07 傍晚,未完待续)
+
+起因:用户发现 Claude 的订阅额度不显示重置时间,而 Codex 的显示正常。
+
+### 9.1 根因(全部实测,非推断)
+
+不是「拿不到」,是「**保不住**」。Claude 的额度由两个本地源拼成:
+
+| 源 | 文件 | 百分比 | 重置时间 | 刷新 |
+| --- | --- | --- | --- | --- |
+| Claude Desktop | `~/Library/Application Support/Claude/plan-usage-history.json` | ✅ | ❌ **永远没有** | 每 15 分钟,全自动 |
+| Claude Code statusline 桥 | `~/.llm-usage-bar/runtime/claude-statusline-quota.json` | ✅ | ✅ | 仅终端 TUI 渲染时 |
+
+`collect_local_quota_from_paths_at` 按「谁的 `observed_at` 新用谁」选源,且刻意
+禁止跨源拼接。于是每 15 分钟自动刷新的 Desktop **必然反超**偶发的 statusline,
+重置时间随之消失。实测存活 **9 分钟**:
+
+```
+14:50:10  reset=2026-08-07T10:00:00+00:00   ← statusline(14:49:35)赢
+14:59:34  reset=同上
+          --- Desktop 采样 15:01:26 落地 ---
+15:04:40  reset=(空)  fh 跳到 18%          ← Desktop 反超
+```
+
+生产库佐证:`quota_snapshots` 里 `system-claude-subscription` 自 2026-07-30 建库
+起 **989 条,0 条**带过重置时间。不是回归,是从来没通过。
+
+**桌面版为什么零出口**(四条通道逐一排除,别再重查):
+
+- `statusLine` 命令只在终端 TUI 的 React 渲染树里 spawn(`nRT` 是个用
+  `ix.useRef` / zustand selector 的 hook)。桌面版 UI 不挂载那棵树 →
+  命令永不执行。实测:桌面版 session 存储实时在写,statusline 缓存 13h40m 未动。
+- hooks 在桌面版**能跑**(用户的 `dcg` PreToolUse 钩子正常拦截),但公共 payload
+  只有 `session_id / transcript_path / cwd / prompt_id / permission_mode /
+  agent_id / agent_type / effort`,**不带额度**。
+- OTel 20 个 `claude_code.*` 指标只有 `cost.usage` / `token.usage`,无额度窗口。
+- session transcript 不记额度:扫 8 个会话 5,079 行,结构化命中 **0**
+  (关键词命中全是对话正文里打的字,别被 `grep -c` 骗了)。
+- Claude Desktop 自己的 Local Storage / IndexedDB / Session Storage 搜
+  `resets_at`、`five_hour` 全 0;`plan-usage-history.json` 1421 个样本的字段
+  union 就是 `{t, org, u:{fh, sd}}`,**没有重置字段这个概念**。
+
+额度只活在进程内存里:`BLu(e)` 直接读 `anthropic-ratelimit-unified-*` **响应头**,
+`~/.claude` 下无任何文件持久化它。
+
+### 9.2 已完成并提交:重置时刻锁存
+
+分支 `claude/quota-reset-latch`(**未推远端、未合 main、未开 PR**):
+
+```
+4e7f8fa5a  feat(usage): latch Claude's quota reset instant so it survives the Desktop source
+4b2802eb5  fix(test): exclude nested .claude worktrees from vitest collection
+```
+
+思路:重置时刻是**固定墙钟**,不随用量变化,所以不必跟着百分比走。锁存在
+`~/.llm-usage-bar/runtime/claude-quota-reset-latch.json`(0600 / 独立 flock /
+**无迁移,schema 仍 v24**),Desktop 赢时由锁存供重置时间。
+
+**同源判据(踩过坑,别改回去)**:两源无共同账号标识,所以跨源携带必须有正证据。
+两个窗口漂移速度差一个量级 —— 实测 14:01→15:46,`fh` 5%→35%,`sd` 63%→66%。
+Desktop 每 15 分钟才采一次,所以:
+
+- **7 天窗口定身份**(容差 2 点),两个无关账号在这个数上撞车很难;
+- **5 小时窗口只否决**:较旧读数高于较新读数 → 单账号窗口内不可能;
+- 任一矛盾 → 否决整趟**并清空全部锁存**(身份是两源之间的性质);
+- 百分比跌破锁存时的值 → 窗口已滚过 → 丢弃锁存。
+
+> **这条最初写错过。** 第一版用「两源百分比近似相等」当判据,34 条单元测试全绿,
+> 一碰真实数据就崩:Desktop 滞后 15 分钟本身就能差 6 点,被判成异账号,不但锁不上
+> 还**主动擦掉**已有锁存。合成数据的时间戳是随手编的,测不出这个。
+
+验证:`cargo test` 1079 通过、`clippy -D warnings` 干净、`cargo fmt` 干净、
+`vitest` 333 通过、`tsc` 干净;外加一次针对**真实文件**的临时探针(用完已删):
+statusline 缓存拿掉、只剩 Desktop 时,重置时刻仍解析得出。
+
+前端同时改了:有百分比但无重置时间时,仪表盘不再整行塌掉(会跳高度)、托盘不再
+渲染 `Resets —`;`formatResetTime` 新增 `unreported` 区分「源不提供」与「即将重置」。
+4 个语言包各加 `usageDashboard.resetTimeUnknown` / `trayUsage.resetTimeUnknown`。
+
+**构建产物已生成但未安装**:`release/tauri-target/release/bundle/macos/LLM Usage Bar.app`
+(3.16.5,已签名 `valid on disk`,含 `claude-quota-reset-latch` 字符串)。
+`/Applications` 里仍是旧构建。装的时候:
+
+```bash
+cp -R "/Applications/LLM Usage Bar.app" "/Applications/LLM Usage Bar.app.bak-v24" \
+  && osascript -e 'quit app "LLM Usage Bar"' \
+  && rsync -a --delete "/Users/max/LLM Usage Bar/release/tauri-target/release/bundle/macos/LLM Usage Bar.app/" "/Applications/LLM Usage Bar.app/" \
+  && open -a "LLM Usage Bar"
+```
+
+schema 仍 v24,新旧构建都能开同一个库,可回退(和上次 v23→v24 那种一步到位不同)。
+
+**验收顺序**(第三步才是真正的验收点):
+
+1. 装上打开 → 应显示「未提供重置时间」,而不是整行消失
+2. 开一次终端 `claude` 发句话 → 重置时间出现
+3. **等 15 分钟以上再看 → 应该还在**(旧行为是 9 分钟后消失)
+
+### 9.3 下周要做的:`/usage` PTY 探测(用户已拍板,尚未实现)
+
+参考 [steipete/CodexBar](https://github.com/steipete/CodexBar)([docs/claude.md](https://github.com/steipete/CodexBar/blob/main/docs/claude.md))。
+它读 Claude 用五条路,与本项目相关的是两条:
+
+- **首选 `GET https://api.anthropic.com/api/oauth/usage`**,带
+  `Authorization: Bearer <token>` + `anthropic-beta: oauth-2025-04-20`,token 取自
+  `~/.claude/.credentials.json` 或 Keychain `Claude Code-credentials`,需
+  `user:profile` scope。直接返回两个窗口含重置时间。
+- **兜底 CLI PTY**:起 `claude`、发 `/usage`、剥 ANSI 解析面板。
+
+**用户选了 PTY 路线(方案 B),明确不走 OAuth 接口** —— 因为那会让本 app 从
+「零网络、纯读本地文件」变成「拿用户 OAuth token 打未公开接口」,是定位变更。
+(CodexBar 这么做属通行做法的证据,但不构成 Anthropic 许可的证明。)
+
+**关键实测结论**:`/usage` **完全免费**。同屏显示
+`Total cost: $0.0000` / `Total duration (API): 0s` /
+`Usage: 0 input, 0 output, 0 cache read, 0 cache write`,却拿到:
+
+```
+Current session
+███████████████████████████▌  55% used
+Resets 6pm (Asia/Singapore)
+Current week (all models)
+█████████████████████████████████▌  67% used
+Resets Aug 11 at 6pm (Asia/Singapore)
+```
+
+与锁存里存的值**逐位相同**,是来自 Claude Code 自身面板的独立交叉验证。
+
+> **本轮曾给出过一个错误结论:「必须真发一次消息才能拿到额度」。** 那次探针只把
+> TUI 起起来干等 30 秒,**从头到尾没发过 `/usage`**。由此测出的「一次极简 turn
+> 要 50,122 input token」是真的,但它回答的是「发一句话多少钱」,不是「取额度多少钱」
+> —— 后者是 0。别再拿那个 5 万的数字论证「取数太贵」。
+
+**实现要点与已踩的坑**:
+
+- 命令:`claude --mcp-config <空配置> --strict-mcp-config`,
+  env `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1`。空 MCP 配置内容 `{"mcpServers":{}}`。
+- **不要传 `--allowed-tools ""`** —— 传了空字符串那次面板不渲染。已验证:
+  换成不传即正常。(曾误判成「新目录信任提示拦截」,**实测全新目录照样出面板**,
+  信任提示不是问题。)
+- PTY 必须给窗口尺寸(`TIOCSWINSZ`,实测 45×130 可用),否则 TUI 不布局;
+  stdin 不能接 `/dev/null`,否则子进程立刻 EOF 退出(`script -q /dev/null claude`
+  这种写法起不来,前两次探针就是这样白跑的)。
+- 时序:启动约 12–14 秒后再发 `/usage`,面板在其后数秒内渲染完;总预算
+  ≤45 秒并强制 kill(`SIGTERM` 再 `SIGKILL`)。实测无残留进程,
+  且因继承了 `CLAUDE_CODE_CHILD_SESSION` 标记连 transcript 都不落盘。
+- **`/usage` 不填 statusline 读的那个 store**(缓存 mtime 不变),所以桥抓不到,
+  必须自己解析屏幕文字。
+- 解析目标:`Current session` / `Current week (all models)` 两个表头下的
+  `NN% used` 与 `Resets <文本>`。**难点是重置文本**:`6pm (Asia/Singapore)` 与
+  `Aug 11 at 6pm (Asia/Singapore)` 是人类可读格式,要转成绝对时刻,依赖时区与
+  「今天的 6pm 是否已过」的判断。CLI 版本变了格式可能变。
+- 建议接法:探测产出的东西与 statusline 观测同形(百分比 + 重置时刻),直接复用
+  现有 §9.2 的锁存与同源判据链路,不要另起一套。探测**不要**在 5 分钟轮询里同步跑
+  (要起进程、约 20 秒),应按需触发 + 限流,失败时静默降级到锁存。
+- 实现档次:纯后端 Rust(PTY、进程生命周期、超时兜底、ANSI 剥离、时区换算),
+  按本机约定该派 Codex,建议 `max` 或 `ultra` + 后台。**注意 `~/.codex/config.toml`
+  的 `service_tier` 是 `default` 而非 `priority`,要 Fast 必须显式传
+  `--service-tier priority`。**
+
+### 9.4 顺带修掉的既有 bug
+
+- **`vitest.config.ts` 排除漏洞**(已提交 `4b2802eb5`):排除列表写的是
+  `**/.worktrees/**`,但 agent 分支的 worktree 在 `.claude/worktrees/`,路径不匹配。
+  嵌套 worktree 自带 node_modules → 加载第二份 React → 每个 render 都死在
+  null dispatcher → `npx vitest run` 平白多出 **41 个假失败**。已补
+  `**/.claude/worktrees/**`。
+- **`productIdentityCompatibilityManifest.json` 钉死行号**:往 `en.json` 插 key
+  会推移行号,导致 `productIdentity.test.ts` 失败。修法是**按内容重新锚定**
+  (找 `context` 原文所在行,就近取),不要加固定偏移量 —— 那样原来钉错了会静默烂掉。
+  本次 12 条各 +1。
+- **`.claude/worktrees/consolidate-error-issues-4d8721` 已删**(§P5 遗留的漏网):
+  删前核实工作区干净、`main..该分支` 为空、两者同指 `d21d3d682`;用
+  `git worktree remove` + `git branch -d`,元数据一并清理。
+
+### 9.5 状态提醒
+
+`git log --all --not --remotes=origin` 显示 **28 个提交未推远端** —— 不只是本轮这
+两个,`main` 本身就领先 `origin/main` 一大截。这些只存在于这台机器上。
