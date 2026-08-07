@@ -129,12 +129,13 @@ minor/patch(见 P5),Dependabot 下个周期会重建一个不含 major 的小 PR
 大概率不再牵涉 `node-pty`。若重建的 PR 仍要求放行某个传递依赖的构建脚本,
 那依旧是供应链决策 —— **问用户,不要默默加允许列表**。
 
-### P4 — 目视验证欠账
+### P4 — 目视验证 ⏳ 只剩最后一眼(2026-08-07)
 
-「分类」线的三个 Tab(Providers / Models / Agents)**从未被人眼确认过**
-(五次尝试都被 schema 崩溃或 harness 杀进程挡住)。搬上 main 之后必须补:
-实际渲染、暗色/亮色、窄窗口。正确姿势:
-先 `osascript -e 'quit app "LLM Usage Bar"'`,再在 worktree 前台跑 `pnpm dev`。
+新版已通过 `script/build_and_run.sh` 构建、签名、安装并正常运行;生产库已
+迁移 v23→v24(迁移前备份 `db_backup_20260807_134610.db`),日志健康,
+session 同步正常。**剩下的只是用户亲眼扫一遍**:三个 Tab(Providers /
+Models / Agents)的渲染、新红绿灯与 pace 详情、暗色/亮色、窄窗口。
+测试全绿但像素没人看过 —— 发现视觉问题记回本文件。
 
 ### P5 — 低优先级 / 观察项
 
