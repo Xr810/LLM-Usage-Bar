@@ -117,16 +117,12 @@
 `script/build_and_run.sh` 的 +120 行签名修复已提交为 `5ed753e08` 并推送到
 `origin/claude/traffic-light-logic-redesign-3fbc8e`,丢失风险解除。
 
-### P3 — PR #18:`node-pty` 构建脚本放行(需要用户决策)
+### ~~P3 — PR #18:`node-pty` 构建脚本放行~~ ✅ 已解决(2026-08-07,用户拍板)
 
-在**修好的** base 上依然失败,是它自己的问题,不是株连。失败在 Install 一步:
-
-```
-[ERR_PNPM_IGNORED_BUILDS] Ignored build scripts: node-pty@1.1.0
-```
-
-`package.json` 没有 `pnpm.onlyBuiltDependencies` 允许列表;`node-pty` 是传递依赖。
-把它加进允许列表 = 允许它跑 postinstall 脚本,是**供应链决策,不要替用户默默加**。
+用户选择**关闭 #18**而非放行 `node-pty` 的 postinstall。分组策略已限为
+minor/patch(见 P5),Dependabot 下个周期会重建一个不含 major 的小 PR,
+大概率不再牵涉 `node-pty`。若重建的 PR 仍要求放行某个传递依赖的构建脚本,
+那依旧是供应链决策 —— **问用户,不要默默加允许列表**。
 
 ### P4 — 目视验证欠账
 
