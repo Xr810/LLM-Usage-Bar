@@ -117,12 +117,18 @@ export function TraySubscriptionSection({
                     t,
                   );
                   const rhythmNote = rhythmExplanation(window, t);
-                  const resetLabel = reset.pending
-                    ? reset.text
-                    : t("trayUsage.resets", {
-                        time: reset.text,
-                        defaultValue: "Resets {{time}}",
-                      });
+                  // A source that never carries a reset time says so, rather
+                  // than rendering the placeholder into "Resets —".
+                  const resetLabel = reset.unreported
+                    ? t("trayUsage.resetTimeUnknown", {
+                        defaultValue: "Reset time not reported",
+                      })
+                    : reset.pending
+                      ? reset.text
+                      : t("trayUsage.resets", {
+                          time: reset.text,
+                          defaultValue: "Resets {{time}}",
+                        });
                   return (
                     // Two lines per window instead of three: the reset time
                     // rides beside the window label, leaving label+value, bar.

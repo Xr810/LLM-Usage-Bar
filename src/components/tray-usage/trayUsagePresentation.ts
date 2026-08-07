@@ -113,20 +113,30 @@ export function formatTokenCount(value: number, _locale: string): string {
   }).format(value);
 }
 
+/**
+ * `unreported` separates "this source never carries a reset time" from "the
+ * window resets soon". Both used to collapse into the `—` placeholder, which
+ * then read as a sentence: "Resets —". Naming the state lets the caller pick
+ * copy that explains itself instead.
+ */
 export function formatResetTime(
   value: string | null,
   now: Date,
   locale: string,
   pendingText = "Pending refresh",
-): { text: string; pending: boolean } {
-  if (value == null) return { text: PLACEHOLDER, pending: false };
+): { text: string; pending: boolean; unreported: boolean } {
+  if (value == null) {
+    return { text: PLACEHOLDER, pending: false, unreported: true };
+  }
   const timestamp = Date.parse(value);
   if (!Number.isFinite(timestamp)) {
-    return { text: PLACEHOLDER, pending: false };
+    return { text: PLACEHOLDER, pending: false, unreported: true };
   }
 
   const remainingMs = timestamp - now.getTime();
-  if (remainingMs <= 0) return { text: pendingText, pending: true };
+  if (remainingMs <= 0) {
+    return { text: pendingText, pending: true, unreported: false };
+  }
 
   const minute = 60_000;
   const hour = 60 * minute;
@@ -137,12 +147,14 @@ export function formatResetTime(
     return {
       text: formatter.format(Math.ceil(remainingMs / day), "day"),
       pending: false,
+      unreported: false,
     };
   }
   if (remainingMs >= hour) {
     return {
       text: formatter.format(Math.ceil(remainingMs / hour), "hour"),
       pending: false,
+      unreported: false,
     };
   }
   return {
@@ -151,6 +163,7 @@ export function formatResetTime(
       "minute",
     ),
     pending: false,
+    unreported: false,
   };
 }
 
