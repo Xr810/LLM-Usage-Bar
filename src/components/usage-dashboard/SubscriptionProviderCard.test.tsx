@@ -78,6 +78,8 @@ function subscriptionUsage(): ProviderUsageView {
       fiveHourResetsAt: "2026-07-14T01:00:00.000Z",
       sevenDayUtilizationPercent: null,
       sevenDayResetsAt: null,
+      fiveHourPace: { status: "green" },
+      sevenDayPace: { status: "unknown" },
       manualResetsRemaining: null,
     },
     quotaFetchState: null,
@@ -286,14 +288,15 @@ describe("SubscriptionProviderCard localized reset countdown", () => {
   });
 
   it.each([
-    { used: "1", remaining: 99, toneClass: "bg-success" },
-    { used: "50", remaining: 50, toneClass: "bg-warning" },
-    { used: "81", remaining: 19, toneClass: "bg-danger" },
+    { status: "green" as const, toneClass: "bg-success" },
+    { status: "yellow" as const, toneClass: "bg-warning" },
+    { status: "red" as const, toneClass: "bg-danger" },
   ])(
-    "fills the quota bar to $remaining% remaining with the matching status color",
-    ({ used, remaining, toneClass }) => {
+    "colours the quota bar from the backend $status verdict",
+    ({ status, toneClass }) => {
       const usage = subscriptionUsage();
-      usage.quota!.fiveHourUtilizationPercent = used;
+      usage.quota!.fiveHourUtilizationPercent = "50";
+      usage.quota!.fiveHourPace.status = status;
 
       render(
         <SubscriptionProviderCard
@@ -304,15 +307,36 @@ describe("SubscriptionProviderCard localized reset countdown", () => {
       );
 
       const meter = screen.getByRole("progressbar", { name: "5-hour window" });
-      expect(meter).toHaveAttribute("aria-valuenow", String(remaining));
-      expect(meter.firstElementChild).toHaveStyle({ width: `${remaining}%` });
+      // The fill still tracks remaining quota; only the tone follows the verdict.
+      expect(meter).toHaveAttribute("aria-valuenow", "50");
+      expect(meter.firstElementChild).toHaveStyle({ width: "50%" });
       expect(meter.firstElementChild).toHaveClass(toneClass);
     },
   );
 
-  it("uses custom remaining thresholds for the quota color", () => {
+  it("keeps a nearly-spent window green when the backend says the reset is imminent", () => {
+    const usage = subscriptionUsage();
+    usage.quota!.fiveHourUtilizationPercent = "81";
+    usage.quota!.fiveHourPace.status = "green";
+
+    render(
+      <SubscriptionProviderCard
+        usage={usage}
+        onRefreshQuota={vi.fn()}
+        onSyncSessions={vi.fn()}
+      />,
+    );
+
+    const meter = screen.getByRole("progressbar", { name: "5-hour window" });
+    expect(meter).toHaveAttribute("aria-valuenow", "19");
+    // 19% left would be danger under the static bands; the pace verdict wins.
+    expect(meter.firstElementChild).toHaveClass("bg-success");
+  });
+
+  it("falls back to the remaining-percent thresholds when no verdict came through", () => {
     const usage = subscriptionUsage();
     usage.quota!.fiveHourUtilizationPercent = "45";
+    usage.quota!.fiveHourPace.status = "unknown";
 
     render(
       <SubscriptionProviderCard

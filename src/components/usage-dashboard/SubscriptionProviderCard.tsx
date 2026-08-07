@@ -6,9 +6,13 @@ import { ProviderIcon } from "@/components/ProviderIcon";
 import { ManualResetCredits } from "@/components/ManualResetCredits";
 import { cn } from "@/lib/utils";
 import { relativeTimeAgo } from "@/lib/relativeTime";
-import type { ProviderUsageView } from "@/types/usageDashboard";
+import type {
+  ProviderUsageView,
+  QuotaWindowPaceView,
+} from "@/types/usageDashboard";
 import { useTranslation } from "react-i18next";
 import { QuotaMeter } from "./QuotaMeter";
+import { QuotaPaceDetails } from "./QuotaPaceDetails";
 import { providerDisplayName } from "../tray-usage/trayUsagePresentation";
 import {
   DEFAULT_REMAINING_THRESHOLDS,
@@ -17,6 +21,7 @@ import {
   parsePercentValue,
   type RemainingThresholds,
   toneFromRemainingPercent,
+  toneFromStatus,
 } from "./usagePresentation";
 
 interface Props {
@@ -96,7 +101,9 @@ export function SubscriptionProviderCard({
     label: string,
     value: string | null | undefined,
     reset: string | null | undefined,
+    pace: QuotaWindowPaceView | undefined,
   ) => {
+    const status = pace?.status;
     const relative = reset ? relativeReset(reset) : null;
     const relativeLabel = relative
       ? relative.unit === "days"
@@ -134,7 +141,14 @@ export function SubscriptionProviderCard({
         label={label}
         meterLabel={label}
         fillPercent={remaining}
-        tone={toneFromRemainingPercent(remaining, remainingThresholds)}
+        // The backend projects the burn rate against the reset clock, which
+        // this side cannot reproduce — it never sees the rate history. Only
+        // fall back to the static bands when no verdict came through.
+        tone={
+          status && status !== "unknown"
+            ? toneFromStatus(status)
+            : toneFromRemainingPercent(remaining, remainingThresholds)
+        }
         valueText={
           remaining == null
             ? unavailableText
@@ -145,19 +159,22 @@ export function SubscriptionProviderCard({
         }
         footer={
           absoluteReset ? (
-            // The exact timestamp is long and rarely what you want at a glance;
-            // lead with "in 2h" and keep the absolute time on hover.
-            <span title={absoluteReset}>
-              {relativeLabel
-                ? t("usageDashboard.resetsIn", {
-                    value: relativeLabel,
-                    defaultValue: `in ${relativeLabel}`,
-                  })
-                : t("usageDashboard.resetsAt", {
-                    value: absoluteReset,
-                    defaultValue: `Resets ${absoluteReset}`,
-                  })}
-            </span>
+            <>
+              {/* The exact timestamp is long and rarely what you want at a
+                  glance; lead with "in 2h" and keep it on hover. */}
+              <span title={absoluteReset}>
+                {relativeLabel
+                  ? t("usageDashboard.resetsIn", {
+                      value: relativeLabel,
+                      defaultValue: `in ${relativeLabel}`,
+                    })
+                  : t("usageDashboard.resetsAt", {
+                      value: absoluteReset,
+                      defaultValue: `Resets ${absoluteReset}`,
+                    })}
+              </span>
+              <QuotaPaceDetails pace={pace} resetsAt={reset} />
+            </>
           ) : undefined
         }
       />
@@ -297,6 +314,7 @@ export function SubscriptionProviderCard({
           t("usageDashboard.fiveHourWindow", { defaultValue: "5-hour window" }),
           quota?.fiveHourUtilizationPercent,
           quota?.fiveHourResetsAt,
+          quota?.fiveHourPace,
         )}
         {quotaWindow(
           t("usageDashboard.sevenDayWindow", {
@@ -304,6 +322,7 @@ export function SubscriptionProviderCard({
           }),
           quota?.sevenDayUtilizationPercent,
           quota?.sevenDayResetsAt,
+          quota?.sevenDayPace,
         )}
       </div>
 

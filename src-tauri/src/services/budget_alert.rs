@@ -256,7 +256,7 @@ pub fn ensure_permission(app: &tauri::AppHandle) {
 mod tests {
     use super::*;
     use crate::usage::domain::BillingKind;
-    use crate::usage::status::{CostQuality, UsageStatus};
+    use crate::usage::status::{CostQuality, PaceBasis, UsageStatus};
     use crate::usage::tray_snapshot::{
         TrayAgentUsageView, TrayApiBudgetView, TrayMeteredUsageView, TrayProviderRecentUsageView,
         TrayProviderUsageView, TrayUsageSnapshot,
@@ -273,6 +273,12 @@ mod tests {
             cost_quality: CostQuality::Complete,
             status: UsageStatus::Red,
             warning_reason: None,
+            burn_rate_usd_per_hour: None,
+            projected_exhaust_at: None,
+            headroom_ratio: None,
+            pace_basis: PaceBasis::Static,
+            rhythm_adjustment: None,
+            flat_status: None,
         };
         snapshot
     }
@@ -304,6 +310,8 @@ mod tests {
                 budget_consumed_percent: consumed_percent.map(str::to_string),
                 total_tokens: 0,
                 cost_quality: CostQuality::Complete,
+                rhythm_adjustment: None,
+                flat_status: None,
             }),
         }
     }

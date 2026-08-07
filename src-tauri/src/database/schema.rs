@@ -385,6 +385,11 @@ impl Database {
                         Self::migrate_v22_to_v23(conn)?;
                         Self::set_user_version(conn, 23)?;
                     }
+                    23 => {
+                        log::info!("迁移数据库从 v23 到 v24（添加用量灯预测与结果日志）");
+                        Self::validate_schema_v23_complete(conn)?;
+                        crate::usage::usage_light_prediction_migration::migrate_v23_to_v24(conn)?;
+                    }
                     _ => {
                         return Err(AppError::Database(format!(
                             "未知的数据库版本 {version}，无法迁移到 {SCHEMA_VERSION}"
@@ -415,8 +420,11 @@ impl Database {
             if version >= 22 {
                 crate::usage::cost_backfill_migration::validate_schema_v22_complete(conn)?;
             }
-            if version == 23 {
+            if version >= 23 {
                 Self::validate_schema_v23_complete(conn)?;
+            }
+            if version == 24 {
+                crate::usage::usage_light_prediction_migration::validate_schema_v24_complete(conn)?;
             }
             Ok(())
         })();

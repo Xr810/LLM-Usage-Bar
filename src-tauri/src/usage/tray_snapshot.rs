@@ -5,10 +5,17 @@ use super::aggregation::{
 use super::domain::{
     BillingKind, ManualResetCreditView, QuotaStatusView, UsageProviderView, UsageTrendBucketView,
 };
+use super::rhythm::{cached_metered_profile, RhythmProfile, DAILY_BUDGET_WINDOW_KIND};
 use super::status::{
-    classify_metered, classify_subscription_with_thresholds, worst_status, CostQuality,
-    SourceClassification, SubscriptionThresholds, UsageStatus,
+    classify_metered, worst_status, CostQuality, PaceBasis, PaceInput, PaceMeasurement,
+    SourceClassification, SubscriptionThresholds, UsageStatus, MIN_RATE_SPAN_SECONDS,
 };
+#[cfg(test)]
+use super::subscription_pace::quota_rate_from_snapshots;
+use super::subscription_pace::{
+    classify_subscription_windows, FIVE_HOUR_WINDOW_KIND, SEVEN_DAY_WINDOW_KIND,
+};
+use super::usage_light_prediction::{record_live_prediction, SHARED_DAILY_BUDGET_PROVIDER_ID};
 use crate::database::Database;
 use crate::error::AppError;
 use crate::settings::{ApiBudgetConfig, ApiBudgetMode};
@@ -18,6 +25,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 const ROLLING_30_DAYS_SECONDS: i64 = 30 * 86_400;
+const METERED_RATE_LOOKBACK_SECONDS: i64 = 3_600;
 const INVALID_RESET_TIMESTAMP: &str = "invalid_reset_timestamp";
 const RESET_PENDING_REFRESH: &str = "reset_pending_refresh";
 
@@ -70,6 +78,22 @@ pub struct TrayApiBudgetView {
     pub cost_quality: CostQuality,
     pub status: UsageStatus,
     pub warning_reason: Option<String>,
+    #[serde(default)]
+    pub burn_rate_usd_per_hour: Option<String>,
+    #[serde(default)]
+    pub projected_exhaust_at: Option<String>,
+    #[serde(default)]
+    pub headroom_ratio: Option<String>,
+    #[serde(default)]
+    pub pace_basis: PaceBasis,
+    /// Weighted remaining time divided by raw remaining seconds.
+    #[serde(default)]
+    pub rhythm_adjustment: Option<String>,
+    /// Verdict the same inputs would have produced without the rhythm
+    /// profile. Lets the UI show an explanation only when the rhythm
+    /// actually moved the colour. `None` when no profile applied.
+    #[serde(default)]
+    pub flat_status: Option<UsageStatus>,
 }
 
 impl Default for TrayApiBudgetView {
@@ -83,6 +107,12 @@ impl Default for TrayApiBudgetView {
             cost_quality: CostQuality::Complete,
             status: UsageStatus::Unknown,
             warning_reason: Some("daily_budget_missing".to_string()),
+            burn_rate_usd_per_hour: None,
+            projected_exhaust_at: None,
+            headroom_ratio: None,
+            pace_basis: PaceBasis::Static,
+            rhythm_adjustment: None,
+            flat_status: None,
         }
     }
 }
@@ -136,6 +166,26 @@ pub struct TrayQuotaWindowView {
     pub resets_at: Option<String>,
     pub status: UsageStatus,
     pub unavailable_reason: Option<String>,
+    /// Measured burn rate in quota-percent per hour, if one could be determined.
+    #[serde(default)]
+    pub burn_rate_percent_per_hour: Option<String>,
+    /// RFC3339 instant at which the window is projected to hit zero, if finite.
+    #[serde(default)]
+    pub projected_exhaust_at: Option<String>,
+    /// timeToExhaust / timeToReset, if computable.
+    #[serde(default)]
+    pub headroom_ratio: Option<String>,
+    /// Which tier produced the verdict.
+    #[serde(default)]
+    pub pace_basis: PaceBasis,
+    /// Weighted remaining time divided by raw remaining seconds.
+    #[serde(default)]
+    pub rhythm_adjustment: Option<String>,
+    /// Verdict the same inputs would have produced without the rhythm
+    /// profile. Lets the UI show an explanation only when the rhythm
+    /// actually moved the colour. `None` when no profile applied.
+    #[serde(default)]
+    pub flat_status: Option<UsageStatus>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -157,6 +207,14 @@ pub struct TrayMeteredUsageView {
     pub budget_consumed_percent: Option<String>,
     pub total_tokens: u64,
     pub cost_quality: CostQuality,
+    /// Weighted remaining time divided by raw remaining seconds.
+    #[serde(default)]
+    pub rhythm_adjustment: Option<String>,
+    /// Verdict the same inputs would have produced without the rhythm
+    /// profile. Lets the UI show an explanation only when the rhythm
+    /// actually moved the colour. `None` when no profile applied.
+    #[serde(default)]
+    pub flat_status: Option<UsageStatus>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -260,10 +318,7 @@ impl TrayUsageProjector {
                 .cmp(&(right.name.to_lowercase(), right.id.as_str()))
         });
         let settings = crate::settings::get_settings();
-        let thresholds = SubscriptionThresholds {
-            warning_remaining_percent: settings.usage_warning_remaining_percent,
-            critical_remaining_percent: settings.usage_critical_remaining_percent,
-        };
+        let thresholds = SubscriptionThresholds::from(&settings);
         let api_budget_config =
             budget_config_override.unwrap_or_else(|| settings.api_budget_config());
         let projected_providers = self.project_providers(
@@ -273,7 +328,47 @@ impl TrayUsageProjector {
             thresholds,
             api_budget_config.mode,
         )?;
-        let api_budget = project_api_budget(&projected_providers, &api_budget_config);
+        let metered_provider_ids = providers
+            .iter()
+            .filter(|provider| provider.billing_kind == BillingKind::Metered)
+            .map(|provider| provider.id.as_str())
+            .collect::<Vec<_>>();
+        let shared_measurement = if api_budget_config.mode == ApiBudgetMode::Shared {
+            self.measured_metered_rate(metered_provider_ids.iter().copied(), windows)?
+        } else {
+            None
+        };
+        let shared_rhythm_profile = if api_budget_config.mode == ApiBudgetMode::Shared
+            && api_budget_config.shared_daily_budget_usd.is_some()
+        {
+            self.metered_rhythm_profile(
+                SHARED_DAILY_BUDGET_PROVIDER_ID,
+                &metered_provider_ids,
+                generated_at,
+            )
+        } else {
+            None
+        };
+        let (api_budget, api_budget_classification) = project_api_budget(
+            &projected_providers,
+            &api_budget_config,
+            windows,
+            generated_at,
+            thresholds,
+            shared_measurement,
+            shared_rhythm_profile,
+        );
+        if api_budget_config.mode == ApiBudgetMode::Shared
+            && api_budget_config.shared_daily_budget_usd.is_some()
+        {
+            self.record_prediction_best_effort(
+                SHARED_DAILY_BUDGET_PROVIDER_ID,
+                DAILY_BUDGET_WINDOW_KIND,
+                windows.next_local_midnight_at,
+                generated_at,
+                &api_budget_classification,
+            );
+        }
         let status = worst_status(
             projected_providers
                 .iter()
@@ -365,8 +460,51 @@ impl TrayUsageProjector {
                         let provider_budget = (api_budget_mode == ApiBudgetMode::PerProvider)
                             .then_some(provider.daily_budget_usd.as_deref())
                             .flatten();
-                        let (metered, classification) =
-                            self.project_metered(provider_budget, &today, &rolling_30_day)?;
+                        let measurement = if provider_budget.is_some() {
+                            self.measured_metered_rate(
+                                std::iter::once(provider.id.as_str()),
+                                windows,
+                            )?
+                        } else {
+                            None
+                        };
+                        let rhythm_profile = if provider_budget.is_some() {
+                            self.metered_rhythm_profile(
+                                &provider.id,
+                                &[provider.id.as_str()],
+                                now_timestamp,
+                            )
+                        } else {
+                            None
+                        };
+                        let (measured_rate_per_second, measured_intervals) = measurement
+                            .map(|value| (Some(value.rate_per_second), value.intervals))
+                            .unwrap_or_default();
+                        let (metered, classification) = self.project_metered(
+                            provider_budget,
+                            &today,
+                            &rolling_30_day,
+                            PaceInput {
+                                now_timestamp,
+                                reset_timestamp: Some(windows.next_local_midnight_at),
+                                window_length_seconds: windows
+                                    .next_local_midnight_at
+                                    .checked_sub(windows.today_start_at),
+                                measured_rate_per_second,
+                                measured_intervals,
+                                rhythm_profile,
+                            },
+                            thresholds,
+                        )?;
+                        if provider_budget.is_some() {
+                            self.record_prediction_best_effort(
+                                &provider.id,
+                                DAILY_BUDGET_WINDOW_KIND,
+                                windows.next_local_midnight_at,
+                                now_timestamp,
+                                &classification,
+                            );
+                        }
                         Ok(TrayProviderUsageView {
                             provider_id: provider.id.clone(),
                             provider_name: provider.name.clone(),
@@ -384,7 +522,7 @@ impl TrayUsageProjector {
             .collect::<Result<Vec<_>, AppError>>()
     }
 
-    fn project_subscription(
+    pub(crate) fn project_subscription(
         &self,
         provider: &UsageProviderView,
         now_timestamp: i64,
@@ -395,35 +533,56 @@ impl TrayUsageProjector {
         } else {
             None
         };
-        let five_hour_used = snapshot
+        let five_hour_resets_at = snapshot
             .as_ref()
-            .and_then(|snapshot| snapshot.five_hour_utilization_percent.as_deref());
-        let seven_day_used = snapshot
+            .and_then(|snapshot| snapshot.five_hour_resets_at.as_deref());
+        let seven_day_resets_at = snapshot
             .as_ref()
-            .and_then(|snapshot| snapshot.seven_day_utilization_percent.as_deref());
+            .and_then(|snapshot| snapshot.seven_day_resets_at.as_deref());
+        let [five_hour_classification, seven_day_classification] = classify_subscription_windows(
+            &self.db,
+            &provider.id,
+            snapshot.as_ref(),
+            now_timestamp,
+            thresholds,
+        )?;
+        for (kind, reset, classification) in [
+            (
+                FIVE_HOUR_WINDOW_KIND,
+                five_hour_resets_at,
+                &five_hour_classification,
+            ),
+            (
+                SEVEN_DAY_WINDOW_KIND,
+                seven_day_resets_at,
+                &seven_day_classification,
+            ),
+        ] {
+            if let Some(reset_timestamp) = reset.and_then(parse_reset_timestamp) {
+                self.record_prediction_best_effort(
+                    &provider.id,
+                    kind,
+                    reset_timestamp,
+                    now_timestamp,
+                    classification,
+                );
+            }
+        }
+        let five_hour_window = subscription_window(
+            FIVE_HOUR_WINDOW_KIND,
+            five_hour_resets_at,
+            now_timestamp,
+            &five_hour_classification,
+        );
+        let seven_day_window = subscription_window(
+            SEVEN_DAY_WINDOW_KIND,
+            seven_day_resets_at,
+            now_timestamp,
+            &seven_day_classification,
+        );
         let classification =
-            classify_subscription_with_thresholds(five_hour_used, seven_day_used, thresholds);
-        let windows = [
-            (
-                "five_hour",
-                five_hour_used,
-                snapshot
-                    .as_ref()
-                    .and_then(|snapshot| snapshot.five_hour_resets_at.as_deref()),
-            ),
-            (
-                "seven_day",
-                seven_day_used,
-                snapshot
-                    .as_ref()
-                    .and_then(|snapshot| snapshot.seven_day_resets_at.as_deref()),
-            ),
-        ]
-        .into_iter()
-        .map(|(kind, used, resets_at)| {
-            subscription_window(kind, used, resets_at, now_timestamp, thresholds)
-        })
-        .collect();
+            roll_up_subscription_windows([five_hour_classification, seven_day_classification]);
+        let windows = vec![five_hour_window, seven_day_window];
         let quota_status = snapshot.as_ref().map(QuotaStatusView::from_snapshot);
 
         Ok((
@@ -452,11 +611,19 @@ impl TrayUsageProjector {
         daily_budget_usd: Option<&str>,
         today: &ProviderRangeAggregate,
         rolling_30_day: &ProviderRangeAggregate,
+        pace: PaceInput,
+        thresholds: SubscriptionThresholds,
     ) -> Result<(TrayMeteredUsageView, SourceClassification), AppError> {
         let quality = cost_quality(today);
         let today_cost_usd = display_cost(today);
         let rolling_30_day_cost_usd = display_cost(rolling_30_day);
-        let classification = classify_metered(today_cost_usd.as_deref(), daily_budget_usd, quality);
+        let classification = classify_metered(
+            today_cost_usd.as_deref(),
+            daily_budget_usd,
+            quality,
+            pace,
+            thresholds,
+        );
         let total_tokens = checked_total_tokens(rolling_30_day)?;
 
         Ok((
@@ -467,16 +634,105 @@ impl TrayUsageProjector {
                 budget_consumed_percent: classification.consumed_percent.clone(),
                 total_tokens,
                 cost_quality: quality,
+                rhythm_adjustment: classification.rhythm_adjustment_string(),
+                flat_status: classification.flat_status,
             },
             classification,
         ))
+    }
+
+    fn measured_metered_rate<'a>(
+        &self,
+        provider_ids: impl IntoIterator<Item = &'a str>,
+        windows: TrayUsageWindows,
+    ) -> Result<Option<PaceMeasurement>, AppError> {
+        let Some(unclamped_start) = windows.end_at.checked_sub(METERED_RATE_LOOKBACK_SECONDS)
+        else {
+            return Ok(None);
+        };
+        let start_at = unclamped_start.max(windows.today_start_at);
+        let Some(span_seconds) = windows.end_at.checked_sub(start_at) else {
+            return Ok(None);
+        };
+        if span_seconds < MIN_RATE_SPAN_SECONDS {
+            return Ok(None);
+        }
+
+        let mut total = Decimal::ZERO;
+        let mut saw_provider = false;
+        let mut saw_known_cost = false;
+        for provider_id in provider_ids {
+            saw_provider = true;
+            let aggregate =
+                aggregate_provider_account_range(&self.db, provider_id, start_at, windows.end_at)?;
+            if let Some(cost) = aggregate_cost_for_rate(&aggregate) {
+                let Some(next) = total.checked_add(cost) else {
+                    return Ok(None);
+                };
+                total = next;
+                saw_known_cost = true;
+            }
+        }
+        if saw_provider && !saw_known_cost {
+            return Ok(None);
+        }
+        Ok(total
+            .checked_div(Decimal::from(span_seconds))
+            .map(|rate_per_second| PaceMeasurement {
+                rate_per_second,
+                intervals: vec![(start_at, windows.end_at)],
+            }))
+    }
+
+    fn metered_rhythm_profile(
+        &self,
+        cache_provider_id: &str,
+        provider_ids: &[&str],
+        now_timestamp: i64,
+    ) -> Option<Arc<RhythmProfile>> {
+        match cached_metered_profile(&self.db, cache_provider_id, provider_ids, now_timestamp) {
+            Ok(profile) => profile,
+            Err(error) => {
+                log::warn!(
+                    "Failed to build metered rhythm profile for {cache_provider_id}; using flat pace: {error}"
+                );
+                None
+            }
+        }
+    }
+
+    fn record_prediction_best_effort(
+        &self,
+        provider_id: &str,
+        window_kind: &str,
+        window_resets_at: i64,
+        predicted_at: i64,
+        classification: &SourceClassification,
+    ) {
+        if let Err(error) = record_live_prediction(
+            &self.db,
+            provider_id,
+            window_kind,
+            window_resets_at,
+            predicted_at,
+            classification,
+        ) {
+            log::warn!(
+                "Failed to record usage-light prediction for {provider_id}/{window_kind}: {error}"
+            );
+        }
     }
 }
 
 fn project_api_budget(
     providers: &[TrayProviderUsageView],
     config: &ApiBudgetConfig,
-) -> TrayApiBudgetView {
+    windows: TrayUsageWindows,
+    now_timestamp: i64,
+    thresholds: SubscriptionThresholds,
+    measurement: Option<PaceMeasurement>,
+    rhythm_profile: Option<Arc<RhythmProfile>>,
+) -> (TrayApiBudgetView, SourceClassification) {
     let metered = providers
         .iter()
         .filter_map(|provider| provider.metered.as_ref().map(|usage| (provider, usage)))
@@ -525,10 +781,24 @@ fn project_api_budget(
         CostQuality::Complete
     };
     let classification = if config.mode == ApiBudgetMode::Shared {
+        let (measured_rate_per_second, measured_intervals) = measurement
+            .map(|value| (Some(value.rate_per_second), value.intervals))
+            .unwrap_or_default();
         classify_metered(
             today_cost_usd.as_deref(),
             config.shared_daily_budget_usd.as_deref(),
             cost_quality,
+            PaceInput {
+                now_timestamp,
+                reset_timestamp: Some(windows.next_local_midnight_at),
+                window_length_seconds: windows
+                    .next_local_midnight_at
+                    .checked_sub(windows.today_start_at),
+                measured_rate_per_second,
+                measured_intervals,
+                rhythm_profile,
+            },
+            thresholds,
         )
     } else {
         SourceClassification {
@@ -537,57 +807,137 @@ fn project_api_budget(
             remaining_percent: None,
             consumed_percent: None,
             reason: None,
+            burn_rate_per_second: None,
+            projected_exhaust_at: None,
+            headroom_ratio: None,
+            pace_basis: PaceBasis::Static,
+            rhythm_adjustment: None,
+            flat_status: None,
         }
     };
+    let burn_rate_usd_per_hour = classification.burn_rate_per_hour();
+    let projected_exhaust_at = classification.projected_exhaust_at_rfc3339();
+    let headroom_ratio = classification
+        .headroom_ratio
+        .map(|value| value.normalize().to_string());
 
-    TrayApiBudgetView {
+    let view = TrayApiBudgetView {
         mode: config.mode,
         provider_count: metered.len(),
         today_cost_usd,
         daily_budget_usd: (config.mode == ApiBudgetMode::Shared)
             .then(|| config.shared_daily_budget_usd.clone())
             .flatten(),
-        budget_consumed_percent: classification.consumed_percent,
+        budget_consumed_percent: classification.consumed_percent.clone(),
         cost_quality,
         status: classification.status,
         warning_reason: classification.reason.map(str::to_string),
-    }
+        burn_rate_usd_per_hour,
+        projected_exhaust_at,
+        headroom_ratio,
+        pace_basis: classification.pace_basis,
+        rhythm_adjustment: classification.rhythm_adjustment_string(),
+        flat_status: classification.flat_status,
+    };
+    (view, classification)
 }
 
 fn subscription_window(
     kind: &str,
-    used_percent: Option<&str>,
     resets_at: Option<&str>,
     now_timestamp: i64,
-    thresholds: SubscriptionThresholds,
+    classification: &SourceClassification,
 ) -> TrayQuotaWindowView {
-    let classification = classify_subscription_with_thresholds(used_percent, None, thresholds);
-    let (resets_at, reset_reason) = canonical_reset(resets_at, now_timestamp);
+    let (resets_at, _, reset_reason) = canonical_reset(resets_at, now_timestamp);
     TrayQuotaWindowView {
         kind: kind.to_string(),
-        used_percent: classification.used_percent,
-        remaining_percent: classification.remaining_percent,
+        used_percent: classification.used_percent.clone(),
+        remaining_percent: classification.remaining_percent.clone(),
         resets_at,
         status: classification.status,
         unavailable_reason: classification.reason.or(reset_reason).map(str::to_string),
+        burn_rate_percent_per_hour: classification.burn_rate_per_hour(),
+        projected_exhaust_at: classification.projected_exhaust_at_rfc3339(),
+        headroom_ratio: classification.headroom_ratio_string(),
+        pace_basis: classification.pace_basis,
+        flat_status: classification.flat_status,
+        rhythm_adjustment: classification.rhythm_adjustment_string(),
     }
+}
+
+fn parse_reset_timestamp(raw: &str) -> Option<i64> {
+    DateTime::parse_from_rfc3339(raw)
+        .ok()
+        .map(|value| value.timestamp())
 }
 
 fn canonical_reset(
     raw: Option<&str>,
     now_timestamp: i64,
-) -> (Option<String>, Option<&'static str>) {
+) -> (Option<String>, Option<i64>, Option<&'static str>) {
     let Some(raw) = raw else {
-        return (None, None);
+        return (None, None, None);
     };
     let Ok(parsed) = DateTime::parse_from_rfc3339(raw) else {
-        return (None, Some(INVALID_RESET_TIMESTAMP));
+        return (None, None, Some(INVALID_RESET_TIMESTAMP));
     };
     let reason = (parsed.timestamp() < now_timestamp).then_some(RESET_PENDING_REFRESH);
     let canonical = parsed
         .with_timezone(&Utc)
         .to_rfc3339_opts(SecondsFormat::AutoSi, true);
-    (Some(canonical), reason)
+    (Some(canonical), Some(parsed.timestamp()), reason)
+}
+
+fn aggregate_cost_for_rate(aggregate: &ProviderRangeAggregate) -> Option<Decimal> {
+    if aggregate.event_count == 0 {
+        Some(Decimal::ZERO)
+    } else {
+        aggregate
+            .total_cost_usd
+            .as_deref()
+            .and_then(|value| Decimal::from_str_exact(value.trim()).ok())
+            .filter(|value| *value >= Decimal::ZERO)
+    }
+}
+
+fn roll_up_subscription_windows(
+    classifications: [SourceClassification; 2],
+) -> SourceClassification {
+    let [mut selected, candidate] = classifications;
+    let selected_rank = status_rank(selected.status);
+    let candidate_rank = status_rank(candidate.status);
+    let candidate_has_lower_remaining = if selected_rank == candidate_rank {
+        match (
+            parsed_remaining_percent(&selected),
+            parsed_remaining_percent(&candidate),
+        ) {
+            (Some(current), Some(next)) => next < current,
+            (None, Some(_)) => true,
+            _ => false,
+        }
+    } else {
+        false
+    };
+    if candidate_rank > selected_rank || candidate_has_lower_remaining {
+        selected = candidate;
+    }
+    selected
+}
+
+fn parsed_remaining_percent(classification: &SourceClassification) -> Option<Decimal> {
+    classification
+        .remaining_percent
+        .as_deref()
+        .and_then(|value| Decimal::from_str_exact(value.trim()).ok())
+}
+
+fn status_rank(status: UsageStatus) -> u8 {
+    match status {
+        UsageStatus::Unknown => 0,
+        UsageStatus::Green => 1,
+        UsageStatus::Yellow => 2,
+        UsageStatus::Red => 3,
+    }
 }
 
 fn display_cost(aggregate: &ProviderRangeAggregate) -> Option<String> {
@@ -634,7 +984,7 @@ mod tests {
     use crate::usage::domain::{
         BillingKind, CostSource, QuotaSnapshot, TokenSource, UsageEvent, UsageProviderInput,
     };
-    use crate::usage::status::{CostQuality, UsageStatus};
+    use crate::usage::status::{classify_subscription_window, CostQuality, UsageStatus};
     use chrono::{Datelike, FixedOffset, LocalResult, NaiveDate, TimeZone};
     use rusqlite::params;
     use serde_json::json;
@@ -809,6 +1159,157 @@ mod tests {
     }
 
     #[test]
+    fn quota_rate_drops_the_pair_that_straddles_a_reset() {
+        let now = 10_000;
+        let snapshots = vec![
+            quota_snapshot(
+                "sub",
+                now - 1_200,
+                Some("90"),
+                Some("reset-a"),
+                None,
+                None,
+                json!({}),
+            ),
+            quota_snapshot(
+                "sub",
+                now - 900,
+                Some("95"),
+                Some("reset-a"),
+                None,
+                None,
+                json!({}),
+            ),
+            quota_snapshot(
+                "sub",
+                now - 600,
+                Some("5"),
+                Some("reset-b"),
+                None,
+                None,
+                json!({}),
+            ),
+            quota_snapshot(
+                "sub",
+                now - 300,
+                Some("7"),
+                Some("reset-b"),
+                None,
+                None,
+                json!({}),
+            ),
+            quota_snapshot(
+                "sub",
+                now,
+                Some("9"),
+                Some("reset-b"),
+                None,
+                None,
+                json!({}),
+            ),
+        ];
+
+        assert_eq!(
+            quota_rate_from_snapshots(&snapshots, FIVE_HOUR_WINDOW_KIND, now),
+            Some(Decimal::new(1, 2)),
+        );
+    }
+
+    #[test]
+    fn insufficient_measured_span_falls_back_to_window_average() {
+        let db = clean_projector_database();
+        let now = 2_000_000_000;
+        let reset = DateTime::from_timestamp(now + 3_600, 0)
+            .unwrap()
+            .to_rfc3339();
+        db.save_usage_provider(&provider(
+            "subscription",
+            BillingKind::Subscription,
+            Some("fixture"),
+        ))
+        .unwrap();
+        for (fetched_at, used) in [(now - 180, "10"), (now, "20")] {
+            db.append_quota_success(&quota_snapshot(
+                "subscription",
+                fetched_at,
+                Some(used),
+                Some(&reset),
+                None,
+                None,
+                json!({}),
+            ))
+            .unwrap();
+        }
+        let provider = db
+            .list_usage_providers()
+            .unwrap()
+            .into_iter()
+            .find(|provider| provider.id == "subscription")
+            .unwrap();
+
+        let (subscription, _) = TrayUsageProjector::new(db)
+            .project_subscription(&provider, now, SubscriptionThresholds::default())
+            .unwrap();
+
+        assert_eq!(subscription.windows[0].pace_basis, PaceBasis::WindowAverage);
+        let burn_rate = subscription.windows[0]
+            .burn_rate_percent_per_hour
+            .as_deref()
+            .and_then(|value| Decimal::from_str_exact(value).ok())
+            .unwrap();
+        assert!(burn_rate >= Decimal::new(4_999, 3));
+        assert!(burn_rate <= Decimal::new(5_001, 3));
+    }
+
+    #[test]
+    fn subscription_rollup_uses_the_worst_window_and_its_remaining_percent() {
+        let db = clean_projector_database();
+        let now = 2_000_000_000;
+        let five_hour_reset = DateTime::from_timestamp(now + 3_600, 0)
+            .unwrap()
+            .to_rfc3339();
+        let seven_day_reset = DateTime::from_timestamp(now + 4 * DAY_SECONDS, 0)
+            .unwrap()
+            .to_rfc3339();
+        db.save_usage_provider(&provider(
+            "subscription",
+            BillingKind::Subscription,
+            Some("fixture"),
+        ))
+        .unwrap();
+        for (fetched_at, five_hour_used, seven_day_used) in
+            [(now - MIN_RATE_SPAN_SECONDS, "20", "50"), (now, "20", "60")]
+        {
+            db.append_quota_success(&quota_snapshot(
+                "subscription",
+                fetched_at,
+                Some(five_hour_used),
+                Some(&five_hour_reset),
+                Some(seven_day_used),
+                Some(&seven_day_reset),
+                json!({}),
+            ))
+            .unwrap();
+        }
+        let provider = db
+            .list_usage_providers()
+            .unwrap()
+            .into_iter()
+            .find(|provider| provider.id == "subscription")
+            .unwrap();
+
+        let (subscription, classification) = TrayUsageProjector::new(db)
+            .project_subscription(&provider, now, SubscriptionThresholds::default())
+            .unwrap();
+
+        assert_eq!(subscription.windows[0].status, UsageStatus::Green);
+        assert_eq!(subscription.windows[1].status, UsageStatus::Red);
+        assert_eq!(classification.status, UsageStatus::Red);
+        assert_eq!(classification.used_percent.as_deref(), Some("60"));
+        assert_eq!(classification.remaining_percent.as_deref(), Some("40"));
+    }
+
+    #[test]
     fn projector_lists_enabled_providers_in_dao_order_and_aggregates_by_account() {
         let db = clean_projector_database();
         let now = Local.timestamp_opt(2_000_000_000, 0).single().unwrap();
@@ -972,7 +1473,7 @@ mod tests {
         );
 
         let subscription = find_provider(&snapshot, "codex", "a-subscription");
-        assert_eq!(subscription.status, UsageStatus::Red);
+        assert_eq!(subscription.status, UsageStatus::Yellow);
         let subscription_quota = subscription.subscription.as_ref().unwrap();
         assert_eq!(subscription_quota.plan_label, None);
         assert_eq!(subscription_quota.manual_resets_remaining, Some(3));
@@ -1194,7 +1695,7 @@ mod tests {
         assert_eq!(unavailable.metered.as_ref().unwrap().today_cost_usd, None);
 
         let partial_low = find_provider(&snapshot, "codex", "c-partial-low");
-        assert_eq!(partial_low.status, UsageStatus::Unknown);
+        assert_eq!(partial_low.status, UsageStatus::Red);
         assert_eq!(partial_low.warning_reason.as_deref(), Some("partial_cost"));
         assert_eq!(
             partial_low.metered.as_ref().unwrap().cost_quality,
@@ -1207,7 +1708,7 @@ mod tests {
         assert_eq!(partial_high.metered.as_ref().unwrap().total_tokens, 12);
 
         let estimated = find_provider(&snapshot, "codex", "e-estimated");
-        assert_eq!(estimated.status, UsageStatus::Yellow);
+        assert_eq!(estimated.status, UsageStatus::Red);
         assert_eq!(
             estimated.metered.as_ref().unwrap().cost_quality,
             CostQuality::Estimated,
@@ -1322,16 +1823,24 @@ mod tests {
         let exact_now_reset = chrono::DateTime::from_timestamp(now.timestamp(), 0)
             .unwrap()
             .to_rfc3339();
-        let (canonical_exact_now, exact_now_reason) =
+        let (canonical_exact_now, exact_now_timestamp, exact_now_reason) =
             canonical_reset(Some(&exact_now_reset), now.timestamp());
         assert!(canonical_exact_now.is_some());
+        assert_eq!(exact_now_timestamp, Some(now.timestamp()));
         assert_eq!(exact_now_reason, None);
+        let invalid_classification = classify_subscription_window(
+            Some("invalid-percent-secret-sentinel"),
+            PaceInput {
+                now_timestamp: now.timestamp(),
+                ..PaceInput::default()
+            },
+            SubscriptionThresholds::default(),
+        );
         let invalid_usage_with_past_reset = subscription_window(
             "fixture",
-            Some("invalid-percent-secret-sentinel"),
             Some(&past_reset),
             now.timestamp(),
-            SubscriptionThresholds::default(),
+            &invalid_classification,
         );
         assert_eq!(
             invalid_usage_with_past_reset.unavailable_reason.as_deref(),
@@ -1594,6 +2103,12 @@ mod tests {
                             resets_at: Some("2026-07-16T13:00:00Z".to_string()),
                             status: UsageStatus::Yellow,
                             unavailable_reason: None,
+                            burn_rate_percent_per_hour: None,
+                            projected_exhaust_at: None,
+                            headroom_ratio: None,
+                            pace_basis: PaceBasis::Static,
+                            rhythm_adjustment: None,
+                            flat_status: None,
                         }],
                         manual_resets_remaining: None,
                         manual_reset_credits: Vec::new(),
@@ -1605,6 +2120,8 @@ mod tests {
                         budget_consumed_percent: Some("50".to_string()),
                         total_tokens: 42,
                         cost_quality: CostQuality::Partial,
+                        rhythm_adjustment: None,
+                        flat_status: None,
                     }),
                 }],
             }],
@@ -1654,7 +2171,13 @@ mod tests {
                     "budgetConsumedPercent": null,
                     "costQuality": "complete",
                     "status": "unknown",
-                    "warningReason": "daily_budget_missing"
+                    "warningReason": "daily_budget_missing",
+                    "burnRateUsdPerHour": null,
+                    "projectedExhaustAt": null,
+                    "headroomRatio": null,
+                    "paceBasis": "static",
+                    "flatStatus": null,
+                    "rhythmAdjustment": null
                 },
                 "agents": [{
                     "agentModuleId": "codex",
@@ -1677,7 +2200,13 @@ mod tests {
                                 "remainingPercent": "50",
                                 "resetsAt": "2026-07-16T13:00:00Z",
                                 "status": "yellow",
-                                "unavailableReason": null
+                                "unavailableReason": null,
+                                "burnRatePercentPerHour": null,
+                                "projectedExhaustAt": null,
+                                "headroomRatio": null,
+                                "paceBasis": "static",
+                                "flatStatus": null,
+                                "rhythmAdjustment": null
                             }],
                             "manualResetsRemaining": null
                         },
@@ -1687,7 +2216,9 @@ mod tests {
                             "dailyBudgetUsd": "10",
                             "budgetConsumedPercent": "50",
                             "totalTokens": 42,
-                            "costQuality": "partial"
+                            "costQuality": "partial",
+                            "flatStatus": null,
+                            "rhythmAdjustment": null
                         }
                     }]
                 }]

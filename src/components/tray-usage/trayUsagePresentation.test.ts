@@ -14,6 +14,7 @@ import {
   hasUsableUsd,
   providerIconName,
   quotaUnavailableReasonLabel,
+  rhythmExplanation,
   statusLabel,
   type TrayUsageTranslate,
 } from "./trayUsagePresentation";
@@ -175,4 +176,56 @@ describe("tray usage presentation labels", () => {
       expect(quotaUnavailableReasonLabel(reason, t)).toBeNull();
     },
   );
+});
+
+describe("rhythmExplanation", () => {
+  const t = ((_key: string, options?: { defaultValue?: string }) =>
+    options?.defaultValue ?? _key) as never;
+
+  it("stays silent when the rhythm did not change the colour", () => {
+    expect(
+      rhythmExplanation(
+        { status: "green", flatStatus: "green", rhythmAdjustment: "0.3" },
+        t,
+      ),
+    ).toBeNull();
+  });
+
+  it("stays silent when no profile was applied", () => {
+    expect(
+      rhythmExplanation(
+        { status: "green", flatStatus: null, rhythmAdjustment: null },
+        t,
+      ),
+    ).toBeNull();
+  });
+
+  it("explains a verdict the rhythm relaxed", () => {
+    expect(
+      rhythmExplanation(
+        { status: "green", flatStatus: "red", rhythmAdjustment: "0.3" },
+        t,
+      ),
+    ).toBe("You are usually quiet at this hour, so this should hold");
+  });
+
+  it("explains a verdict the rhythm escalated", () => {
+    expect(
+      rhythmExplanation(
+        { status: "red", flatStatus: "green", rhythmAdjustment: "4" },
+        t,
+      ),
+    ).toBe("You usually burn hard at this hour");
+  });
+
+  it("stays silent on an unusable adjustment", () => {
+    for (const rhythmAdjustment of [null, "", "abc", "0", "-1"]) {
+      expect(
+        rhythmExplanation(
+          { status: "green", flatStatus: "red", rhythmAdjustment },
+          t,
+        ),
+      ).toBeNull();
+    }
+  });
 });

@@ -249,3 +249,41 @@ export function providerIconName(preset: string | null): string | undefined {
   const { icon } = inferIconForPreset(preset);
   return icon;
 }
+
+/**
+ * One-line explanation of why the rhythm profile moved this window's colour.
+ *
+ * Deliberately silent unless the rhythm actually changed the verdict: a note
+ * on every row would be noise, and the point of this line is to answer the
+ * one question the colour provokes — "why is 19% left green?". `flatStatus`
+ * is what the same inputs would have produced without the profile, so a
+ * difference is the precise definition of "the rhythm mattered here".
+ */
+export function rhythmExplanation(
+  window: {
+    status: TrayUsageStatus;
+    flatStatus?: TrayUsageStatus | null;
+    rhythmAdjustment?: string | null;
+  },
+  t: TrayUsageTranslate,
+): string | null {
+  const { status, flatStatus, rhythmAdjustment } = window;
+  if (flatStatus == null || flatStatus === status) return null;
+
+  const adjustment = Number(rhythmAdjustment);
+  if (!Number.isFinite(adjustment) || adjustment <= 0) return null;
+  if (adjustment === 1) return null;
+
+  return adjustment < 1
+    ? String(
+        t("trayUsage.rhythmQuieter", {
+          defaultValue:
+            "You are usually quiet at this hour, so this should hold",
+        }),
+      )
+    : String(
+        t("trayUsage.rhythmBusier", {
+          defaultValue: "You usually burn hard at this hour",
+        }),
+      );
+}

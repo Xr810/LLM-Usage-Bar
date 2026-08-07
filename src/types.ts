@@ -353,7 +353,8 @@ export interface Settings {
   // User has confirmed the usage query first-run notice
   usageConfirmed?: boolean;
   usageDashboardRefreshIntervalMs?: number;
-  // Remaining quota thresholds used by subscription bars and tray status.
+  // Static remaining-quota thresholds. Only used as the fallback, for
+  // Providers that report no reset time and so cannot be projected.
   usageWarningRemainingPercent?: number;
   usageCriticalRemainingPercent?: number;
   // API Providers share one daily budget by default. Per-Provider budgets are

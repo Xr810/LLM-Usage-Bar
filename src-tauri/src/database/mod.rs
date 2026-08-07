@@ -47,13 +47,14 @@ use crate::product_identity::current_database_path;
 use rusqlite::{hooks::Action, Connection};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 // DAO 方法通过 impl Database 提供，无需额外导出
 
 /// 当前 Schema 版本号
 /// 每次修改表结构时递增，并在 schema.rs 中添加相应的迁移逻辑
-pub(crate) const SCHEMA_VERSION: i32 = 23;
+pub(crate) const SCHEMA_VERSION: i32 = 24;
 
 /// 安全地序列化 JSON，避免 unwrap panic
 pub(crate) fn to_json_string<T: Serialize>(value: &T) -> Result<String, AppError> {
@@ -80,13 +81,23 @@ pub(crate) use lock_conn;
 pub struct Database {
     pub(crate) conn: Mutex<Connection>,
     pub(crate) usage_source_binding_operation: Mutex<()>,
+    pub(crate) rhythm_cache_identity: u64,
     database_path: Option<PathBuf>,
+}
+
+static NEXT_RHYTHM_CACHE_ID: AtomicU64 = AtomicU64::new(1);
+
+fn next_rhythm_cache_identity() -> u64 {
+    NEXT_RHYTHM_CACHE_ID.fetch_add(1, Ordering::Relaxed)
 }
 
 fn register_db_change_hook(conn: &Connection) -> rusqlite::Result<()> {
     conn.update_hook(Some(
         |action: Action, _database: &str, table: &str, _row_id: i64| match action {
             Action::SQLITE_INSERT | Action::SQLITE_UPDATE | Action::SQLITE_DELETE => {
+                if table == "usage_light_predictions" {
+                    return;
+                }
                 crate::services::webdav_auto_sync::notify_db_changed(table);
                 crate::services::s3_auto_sync::notify_db_changed(table);
             }
@@ -132,6 +143,7 @@ impl Database {
         let db = Self {
             conn: Mutex::new(conn),
             usage_source_binding_operation: Mutex::new(()),
+            rhythm_cache_identity: next_rhythm_cache_identity(),
             database_path: Some(db_path.to_path_buf()),
         };
         db.create_tables()?;
@@ -207,6 +219,7 @@ impl Database {
         let db = Self {
             conn: Mutex::new(conn),
             usage_source_binding_operation: Mutex::new(()),
+            rhythm_cache_identity: next_rhythm_cache_identity(),
             database_path: None,
         };
         db.create_tables()?;

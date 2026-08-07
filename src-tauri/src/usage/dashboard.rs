@@ -5,8 +5,11 @@ use crate::usage::aggregation::{
 };
 use crate::usage::domain::{
     BillingKind, CostSourceCounts, ProductUsageView, ProviderMonitoringDashboardView,
-    ProviderUsageView, QuotaStatusView, TokenSource, UsageDashboardView, UsageProviderView,
+    ProviderUsageView, QuotaSnapshot, QuotaStatusView, TokenSource, UsageDashboardView,
+    UsageProviderView,
 };
+use crate::usage::status::SubscriptionThresholds;
+use crate::usage::subscription_pace::classify_subscription_windows;
 use rusqlite::params;
 use rust_decimal::Decimal;
 use std::collections::{BTreeMap, BTreeSet};
@@ -15,6 +18,8 @@ use std::str::FromStr;
 pub struct UsageDashboardService<'a> {
     db: &'a Database,
     shared_provider_ids: BTreeSet<String>,
+    subscription_thresholds: SubscriptionThresholds,
+    pace_now_timestamp: Option<i64>,
 }
 
 #[derive(Default)]
@@ -36,7 +41,19 @@ impl<'a> UsageDashboardService<'a> {
         Self {
             db,
             shared_provider_ids: BTreeSet::new(),
+            subscription_thresholds: SubscriptionThresholds::default(),
+            pace_now_timestamp: None,
         }
+    }
+
+    pub fn with_subscription_thresholds(mut self, thresholds: SubscriptionThresholds) -> Self {
+        self.subscription_thresholds = thresholds;
+        self
+    }
+
+    pub fn with_pace_now_timestamp(mut self, now_timestamp: i64) -> Self {
+        self.pace_now_timestamp = Some(now_timestamp);
+        self
     }
 
     pub fn with_shared_provider_ids(
@@ -81,7 +98,16 @@ impl<'a> UsageDashboardService<'a> {
             let aggregate =
                 aggregate_provider_account_range(self.db, &provider.id, start_at, end_at)?;
             let (snapshot, quota_fetch_state) = self.db.latest_quota_status(&provider.id)?;
-            let quota = snapshot.as_ref().map(QuotaStatusView::from_snapshot);
+            let quota = snapshot
+                .as_ref()
+                .map(|snapshot| {
+                    self.quota_status_with_pace(
+                        &provider.id,
+                        snapshot,
+                        self.pace_now_timestamp.unwrap_or(end_at),
+                    )
+                })
+                .transpose()?;
             rows.push(ProviderUsageView {
                 provider: provider.clone(),
                 shared_account: false,
@@ -274,7 +300,16 @@ impl<'a> UsageDashboardService<'a> {
         let (quota, quota_fetch_state) =
             if provider.billing_kind == BillingKind::Subscription && include_quota {
                 let (snapshot, fetch_state) = self.db.latest_quota_status(&provider.id)?;
-                let quota = snapshot.as_ref().map(QuotaStatusView::from_snapshot);
+                let quota = snapshot
+                    .as_ref()
+                    .map(|snapshot| {
+                        self.quota_status_with_pace(
+                            &provider.id,
+                            snapshot,
+                            self.pace_now_timestamp.unwrap_or(end_at),
+                        )
+                    })
+                    .transpose()?;
                 (quota, fetch_state)
             } else {
                 (None, None)
@@ -293,6 +328,24 @@ impl<'a> UsageDashboardService<'a> {
             quota,
             quota_fetch_state,
         })
+    }
+
+    fn quota_status_with_pace(
+        &self,
+        provider_id: &str,
+        snapshot: &QuotaSnapshot,
+        now_timestamp: i64,
+    ) -> Result<QuotaStatusView, AppError> {
+        let [five_hour, seven_day] = classify_subscription_windows(
+            self.db,
+            provider_id,
+            Some(snapshot),
+            now_timestamp,
+            self.subscription_thresholds,
+        )?;
+        Ok(QuotaStatusView::from_snapshot_with_pace(
+            snapshot, &five_hour, &seven_day,
+        ))
     }
 
     fn event_product_groups(
@@ -396,9 +449,14 @@ mod tests {
         AgentProviderBindingInput, BillingKind, CostSource, QuotaSnapshot, TokenSource, UsageEvent,
         UsageEventLink, UsageProviderInput,
     };
+    use crate::usage::status::{
+        classify_subscription_with_thresholds, SubscriptionThresholds, UsageStatus,
+    };
+    use crate::usage::tray_snapshot::TrayUsageProjector;
     use rusqlite::params;
     use rust_decimal::Decimal;
     use serde_json::json;
+    use std::sync::Arc;
 
     fn database_without_system_bindings() -> Database {
         let db = Database::memory().unwrap();
@@ -467,6 +525,168 @@ mod tests {
             legacy_request_id: None,
             created_at: occurred_at,
         }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn quota_snapshot(
+        snapshot_id: &str,
+        provider_id: &str,
+        fetched_at: i64,
+        five_hour_used: &str,
+        five_hour_resets_at: Option<&str>,
+        seven_day_used: &str,
+        seven_day_resets_at: Option<&str>,
+    ) -> QuotaSnapshot {
+        QuotaSnapshot {
+            snapshot_id: snapshot_id.to_string(),
+            provider_id: provider_id.to_string(),
+            fetched_at,
+            five_hour_utilization_percent: Some(five_hour_used.to_string()),
+            five_hour_resets_at: five_hour_resets_at.map(str::to_string),
+            seven_day_utilization_percent: Some(seven_day_used.to_string()),
+            seven_day_resets_at: seven_day_resets_at.map(str::to_string),
+            manual_resets_remaining: None,
+            raw_payload: json!({}),
+            created_at: fetched_at,
+        }
+    }
+
+    #[test]
+    fn dashboard_quota_statuses_match_tray_pace_projection() {
+        let db = Arc::new(database_without_system_bindings());
+        let now = 2_000_000_000;
+        let five_hour_reset = chrono::DateTime::from_timestamp(now + 3_600, 0)
+            .unwrap()
+            .to_rfc3339();
+        let seven_day_reset = chrono::DateTime::from_timestamp(now + 4 * 86_400, 0)
+            .unwrap()
+            .to_rfc3339();
+        db.save_usage_provider(&provider(
+            "paced-subscription",
+            BillingKind::Subscription,
+            "product",
+        ))
+        .unwrap();
+        for (snapshot_id, fetched_at, five_hour_used, seven_day_used) in [
+            ("paced-earlier", now - 600, "20", "50"),
+            ("paced-current", now, "20", "60"),
+        ] {
+            db.append_quota_success(&quota_snapshot(
+                snapshot_id,
+                "paced-subscription",
+                fetched_at,
+                five_hour_used,
+                Some(&five_hour_reset),
+                seven_day_used,
+                Some(&seven_day_reset),
+            ))
+            .unwrap();
+        }
+
+        let thresholds = SubscriptionThresholds::default();
+        let dashboard = UsageDashboardService::new(db.as_ref())
+            .with_subscription_thresholds(thresholds)
+            .with_pace_now_timestamp(now)
+            .get_provider_dashboard(now - 7_200, now - 3_600)
+            .unwrap();
+        let dashboard_quota = dashboard
+            .providers
+            .iter()
+            .find(|usage| usage.provider.id == "paced-subscription")
+            .and_then(|usage| usage.quota.as_ref())
+            .unwrap();
+        let provider = db
+            .list_usage_providers()
+            .unwrap()
+            .into_iter()
+            .find(|provider| provider.id == "paced-subscription")
+            .unwrap();
+        let (tray_subscription, _) = TrayUsageProjector::new(db.clone())
+            .project_subscription(&provider, now, thresholds)
+            .unwrap();
+        let tray_five_hour = tray_subscription
+            .windows
+            .iter()
+            .find(|window| window.kind == "five_hour")
+            .unwrap();
+        let tray_seven_day = tray_subscription
+            .windows
+            .iter()
+            .find(|window| window.kind == "seven_day")
+            .unwrap();
+
+        assert_eq!(dashboard_quota.five_hour_pace.status, tray_five_hour.status);
+        assert_eq!(dashboard_quota.seven_day_pace.status, tray_seven_day.status);
+        assert_eq!(dashboard_quota.five_hour_pace.status, UsageStatus::Green);
+        assert_eq!(dashboard_quota.seven_day_pace.status, UsageStatus::Red);
+    }
+
+    #[test]
+    fn dashboard_quota_without_reset_timestamps_uses_static_statuses() {
+        let db = database_without_system_bindings();
+        let now = 2_000_000_000;
+        let mut input = provider("static-subscription", BillingKind::Subscription, "product");
+        input.token_sources = vec![TokenSource::SessionLog];
+        db.save_usage_provider(&input).unwrap();
+        db.save_agent_provider_binding(&AgentProviderBindingInput {
+            id: None,
+            agent_module_id: "codex".to_string(),
+            provider_id: "static-subscription".to_string(),
+            enabled: true,
+        })
+        .unwrap();
+        db.append_quota_success(&quota_snapshot(
+            "static-current",
+            "static-subscription",
+            now,
+            "10",
+            None,
+            "85",
+            None,
+        ))
+        .unwrap();
+
+        let thresholds = SubscriptionThresholds::default();
+        let dashboard = UsageDashboardService::new(&db)
+            .with_subscription_thresholds(thresholds)
+            .with_pace_now_timestamp(now)
+            .get_dashboard(now - 3_600, now, "codex")
+            .unwrap();
+        let quota = dashboard.product_groups[0].subscription_providers[0]
+            .quota
+            .as_ref()
+            .unwrap();
+        let expected_five_hour =
+            classify_subscription_with_thresholds(Some("10"), None, thresholds).status;
+        let expected_seven_day =
+            classify_subscription_with_thresholds(Some("85"), None, thresholds).status;
+
+        assert_eq!(quota.five_hour_pace.status, expected_five_hour);
+        assert_eq!(quota.seven_day_pace.status, expected_seven_day);
+        assert_ne!(quota.five_hour_pace.status, UsageStatus::Unknown);
+        assert_ne!(quota.seven_day_pace.status, UsageStatus::Unknown);
+    }
+
+    #[test]
+    fn provider_dashboard_without_quota_snapshot_keeps_quota_none() {
+        let db = database_without_system_bindings();
+        db.save_usage_provider(&provider(
+            "subscription-without-snapshot",
+            BillingKind::Subscription,
+            "product",
+        ))
+        .unwrap();
+
+        let dashboard = UsageDashboardService::new(&db)
+            .get_provider_dashboard(100, 200)
+            .unwrap();
+        let usage = dashboard
+            .providers
+            .iter()
+            .find(|usage| usage.provider.id == "subscription-without-snapshot")
+            .unwrap();
+
+        assert!(usage.quota.is_none());
     }
 
     #[test]

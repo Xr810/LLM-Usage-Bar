@@ -1,4 +1,5 @@
 import type { ManualResetCreditView } from "./quota";
+import type { PaceBasis, TrayUsageStatus } from "./trayUsage";
 
 export type BillingKind = "subscription" | "metered";
 export type TokenSource = "proxy" | "session_log";
@@ -169,6 +170,17 @@ export interface CostSourceCounts {
   unavailable: number;
 }
 
+/** Why a quota window is the colour it is. Mirrors the tray's pace fields. */
+export interface QuotaWindowPaceView {
+  status: TrayUsageStatus;
+  burnRatePercentPerHour?: string | null;
+  projectedExhaustAt?: string | null;
+  headroomRatio?: string | null;
+  paceBasis?: PaceBasis;
+  rhythmAdjustment?: string | null;
+  flatStatus?: TrayUsageStatus | null;
+}
+
 export interface QuotaStatusView {
   snapshotId: string;
   fetchedAt: number;
@@ -179,6 +191,8 @@ export interface QuotaStatusView {
   fiveHourResetsAt: string | null;
   sevenDayUtilizationPercent: string | null;
   sevenDayResetsAt: string | null;
+  fiveHourPace: QuotaWindowPaceView;
+  sevenDayPace: QuotaWindowPaceView;
   manualResetsRemaining: number | null;
   manualResetCredits?: ManualResetCreditView[];
 }

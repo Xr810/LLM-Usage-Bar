@@ -13,7 +13,7 @@ import { DRAG_REGION_ATTR, DRAG_REGION_STYLE, isMac } from "@/lib/platform";
 import { UsageDiagnosticsPanel } from "./UsageDiagnosticsPanel";
 import { UsageProvidersSettings } from "./UsageProvidersSettings";
 import { StartupSettings } from "./StartupSettings";
-import { UsageThresholdSettings } from "./UsageThresholdSettings";
+import { UsageLightInfo } from "./UsageLightInfo";
 
 interface SettingsDialogProps {
   open: boolean;
@@ -181,7 +181,7 @@ export function SettingsPage({
               <div className="mx-auto w-full max-w-3xl px-7 pb-10 pt-5">
                 <TabsContent value="general" className="mt-0">
                   <StartupSettings />
-                  <UsageThresholdSettings />
+                  <UsageLightInfo />
                 </TabsContent>
                 <TabsContent value="providers" className="mt-0">
                   <UsageProvidersSettings

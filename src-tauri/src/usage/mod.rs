@@ -12,12 +12,16 @@ pub(crate) mod module_migration;
 pub(crate) mod provider_pricing_migration;
 pub mod quota;
 pub(crate) mod quota_retry_migration;
+pub(crate) mod rhythm;
 pub mod session;
 pub(crate) mod source_roots;
 pub mod status;
+pub(crate) mod subscription_pace;
 pub(crate) mod system_provider_migration;
 pub(crate) mod system_providers;
 pub mod tray_snapshot;
+pub(crate) mod usage_light_prediction;
+pub(crate) mod usage_light_prediction_migration;
 #[cfg(test)]
 pub(crate) mod watcher_state;
 

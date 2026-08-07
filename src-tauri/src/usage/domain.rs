@@ -1,6 +1,8 @@
 use serde::{de, Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
+use super::status::{PaceBasis, SourceClassification, UsageStatus};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BillingKind {
@@ -500,6 +502,10 @@ pub struct QuotaStatusView {
     pub five_hour_resets_at: Option<String>,
     pub seven_day_utilization_percent: Option<String>,
     pub seven_day_resets_at: Option<String>,
+    #[serde(default)]
+    pub five_hour_pace: QuotaWindowPaceView,
+    #[serde(default)]
+    pub seven_day_pace: QuotaWindowPaceView,
     pub manual_resets_remaining: Option<i64>,
     pub manual_reset_credits: Vec<ManualResetCreditView>,
 }
@@ -528,8 +534,52 @@ impl QuotaStatusView {
             five_hour_resets_at: snapshot.five_hour_resets_at.clone(),
             seven_day_utilization_percent: snapshot.seven_day_utilization_percent.clone(),
             seven_day_resets_at: snapshot.seven_day_resets_at.clone(),
+            five_hour_pace: QuotaWindowPaceView::default(),
+            seven_day_pace: QuotaWindowPaceView::default(),
             manual_resets_remaining: snapshot.manual_resets_remaining,
             manual_reset_credits: manual_reset_credits(&snapshot.raw_payload),
+        }
+    }
+
+    pub(crate) fn from_snapshot_with_pace(
+        snapshot: &QuotaSnapshot,
+        five_hour: &SourceClassification,
+        seven_day: &SourceClassification,
+    ) -> Self {
+        Self {
+            five_hour_pace: QuotaWindowPaceView::from_classification(five_hour),
+            seven_day_pace: QuotaWindowPaceView::from_classification(seven_day),
+            ..Self::from_snapshot(snapshot)
+        }
+    }
+}
+
+/// Why a quota window is the colour it is, for surfaces that want to explain
+/// themselves rather than just show a bar. Mirrors what the tray already
+/// carries; both are projections of the same `SourceClassification`, built
+/// through the same accessors so the two cannot drift.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotaWindowPaceView {
+    pub status: UsageStatus,
+    pub burn_rate_percent_per_hour: Option<String>,
+    pub projected_exhaust_at: Option<String>,
+    pub headroom_ratio: Option<String>,
+    pub pace_basis: PaceBasis,
+    pub rhythm_adjustment: Option<String>,
+    pub flat_status: Option<UsageStatus>,
+}
+
+impl QuotaWindowPaceView {
+    pub(crate) fn from_classification(classification: &SourceClassification) -> Self {
+        Self {
+            status: classification.status,
+            burn_rate_percent_per_hour: classification.burn_rate_per_hour(),
+            projected_exhaust_at: classification.projected_exhaust_at_rfc3339(),
+            headroom_ratio: classification.headroom_ratio_string(),
+            pace_basis: classification.pace_basis,
+            rhythm_adjustment: classification.rhythm_adjustment_string(),
+            flat_status: classification.flat_status,
         }
     }
 }
@@ -928,6 +978,8 @@ mod tests {
 
         assert_eq!(status.manual_resets_remaining, Some(3));
         assert_eq!(status.source_observed_at, Some(1_234));
+        assert_eq!(status.five_hour_pace.status, UsageStatus::Unknown);
+        assert_eq!(status.seven_day_pace.status, UsageStatus::Unknown);
         assert_eq!(status.manual_reset_credits.len(), 2);
         assert_eq!(
             status.manual_reset_credits[0].title.as_deref(),
@@ -937,6 +989,14 @@ mod tests {
             status.manual_reset_credits[1].expires_at,
             "2026-08-01T00:00:00+00:00"
         );
+
+        let mut legacy_payload = serde_json::to_value(&status).unwrap();
+        let legacy_object = legacy_payload.as_object_mut().unwrap();
+        legacy_object.remove("fiveHourPace");
+        legacy_object.remove("sevenDayPace");
+        let legacy_status: QuotaStatusView = serde_json::from_value(legacy_payload).unwrap();
+        assert_eq!(legacy_status.five_hour_pace.status, UsageStatus::Unknown);
+        assert_eq!(legacy_status.seven_day_pace.status, UsageStatus::Unknown);
     }
 
     #[test]

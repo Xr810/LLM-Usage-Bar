@@ -210,8 +210,9 @@ pub fn create_schema_v13_fixture_test_hook(path: &Path) -> Result<(), AppError> 
     // Reviewed for schema v23: the v21 -> v22 step only rewrites cost columns on
     // existing usage_events rows and drops/recreates the immutability trigger;
     // v22 -> v23 only rebuilds provider_model_pricing with nullable rates. Neither
-    // changes the v13 baseline below.
-    if database::SCHEMA_VERSION != 23
+    // changes the v13 baseline below. Reviewed again for schema v24: v23 -> v24
+    // only adds the write-only usage_light_predictions calibration table.
+    if database::SCHEMA_VERSION != 24
         || product_identity::DATABASE_IDENTITY_SOURCE_SCHEMA_VERSION != 13
     {
         return Err(AppError::Database(

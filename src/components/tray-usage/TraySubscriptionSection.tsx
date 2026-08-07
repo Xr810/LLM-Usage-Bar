@@ -9,6 +9,7 @@ import {
   providerDisplayName,
   providerIconName,
   quotaUnavailableReasonLabel,
+  rhythmExplanation,
   type TrayProviderRow,
 } from "./trayUsagePresentation";
 import { TrayUsageProgress, TrayUsageStatusBadge } from "./TrayUsageProgress";
@@ -115,6 +116,7 @@ export function TraySubscriptionSection({
                     window.unavailableReason,
                     t,
                   );
+                  const rhythmNote = rhythmExplanation(window, t);
                   const resetLabel = reset.pending
                     ? reset.text
                     : t("trayUsage.resets", {
@@ -155,6 +157,11 @@ export function TraySubscriptionSection({
                           )}
                           status={window.status}
                         />
+                      ) : null}
+                      {rhythmNote ? (
+                        <p className="text-[11px] leading-tight text-muted-foreground/80">
+                          {rhythmNote}
+                        </p>
                       ) : null}
                     </div>
                   );

@@ -15,6 +15,7 @@ use crate::usage::domain::{
 };
 use crate::usage::quota::QuotaRefreshResult;
 use crate::usage::session::ProviderSessionSyncResult;
+use crate::usage::status::SubscriptionThresholds;
 use crate::usage::system_providers::{CHATGPT_SUBSCRIPTION_ID, CLAUDE_SUBSCRIPTION_ID};
 use crate::usage::tray_snapshot::TrayUsageSnapshot;
 use chrono::{DateTime, Local};
@@ -959,7 +960,7 @@ pub async fn get_usage_dashboard_test_hook(
     let shared_provider_ids = effective_agents_by_provider
         .into_iter()
         .filter_map(|(provider_id, agent_ids)| (agent_ids.len() > 1).then_some(provider_id));
-    let mut dashboard = UsageDashboardService::new(&state.db)
+    let mut dashboard = usage_dashboard_service(state)
         .with_shared_provider_ids(shared_provider_ids)
         .get_dashboard(start_at, end_at, agent_module_id)?;
     hydrate_dashboard_provider_bindings(&mut dashboard, &bindings_by_provider);
@@ -971,7 +972,14 @@ pub fn get_provider_usage_dashboard_test_hook(
     start_at: i64,
     end_at: i64,
 ) -> Result<ProviderMonitoringDashboardView, AppError> {
-    UsageDashboardService::new(&state.db).get_provider_dashboard(start_at, end_at)
+    usage_dashboard_service(state).get_provider_dashboard(start_at, end_at)
+}
+
+fn usage_dashboard_service(state: &AppState) -> UsageDashboardService<'_> {
+    let settings = crate::settings::get_settings();
+    UsageDashboardService::new(&state.db)
+        .with_subscription_thresholds(SubscriptionThresholds::from(&settings))
+        .with_pace_now_timestamp(Local::now().timestamp())
 }
 
 pub fn get_model_usage_dashboard_test_hook(

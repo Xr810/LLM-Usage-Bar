@@ -25,15 +25,28 @@ APP_NAME="LLM Usage Bar"
 PROCESS_NAME="llm-usage-bar"
 BUNDLE_ID="com.llmusagebar.desktop"
 SIGNING_IDENTITY="${LLM_USAGE_BAR_SIGNING_IDENTITY:-LLM Usage Bar Local Development Signing 2026}"
+SIGNING_IDENTITY_PINNED="${LLM_USAGE_BAR_SIGNING_IDENTITY+x}"
+# Used only when the preferred identity's private key turns out to be
+# unreachable; see require_signing_identity. Named explicitly rather than
+# "whatever is in the login keychain" so the fallback stays auditable.
+FALLBACK_SIGNING_IDENTITY="LLM Usage Bar Local Development"
 EXPECTED_SIGNING_IDENTITY_SHA1="${LLM_USAGE_BAR_SIGNING_IDENTITY_SHA1:-}"
 EXPECTED_SIGNING_ROOT_AUTHORITY="${LLM_USAGE_BAR_SIGNING_ROOT_AUTHORITY:-}"
 EXPECTED_SIGNING_ROOT_SHA1="${LLM_USAGE_BAR_SIGNING_ROOT_SHA1:-}"
-DEFAULT_SIGNING_KEYCHAIN="${HOME}/Library/Keychains/login.keychain-db"
+LOGIN_SIGNING_KEYCHAIN="${HOME}/Library/Keychains/login.keychain-db"
+DEFAULT_SIGNING_KEYCHAIN="$LOGIN_SIGNING_KEYCHAIN"
 DEDICATED_SIGNING_KEYCHAIN="${HOME}/Library/Keychains/llm-usage-bar-signing.keychain-db"
-if [[ -f "$DEDICATED_SIGNING_KEYCHAIN" ]]; then
+# Prefer the dedicated keychain only when this script can actually open it.
+# Choosing it on file existence alone means codesign later blocks on a GUI
+# unlock prompt for a password the build has no way to supply — which reads as
+# a hung build, not a configuration problem. Pin LLM_USAGE_BAR_SIGNING_KEYCHAIN
+# to use it interactively after unlocking it yourself.
+if [[ -f "$DEDICATED_SIGNING_KEYCHAIN" \
+  && "${LLM_USAGE_BAR_SIGNING_KEYCHAIN_PASSWORD+x}" == "x" ]]; then
   DEFAULT_SIGNING_KEYCHAIN="$DEDICATED_SIGNING_KEYCHAIN"
 fi
 SIGNING_KEYCHAIN="${LLM_USAGE_BAR_SIGNING_KEYCHAIN:-$DEFAULT_SIGNING_KEYCHAIN}"
+SIGNING_KEYCHAIN_PINNED="${LLM_USAGE_BAR_SIGNING_KEYCHAIN+x}"
 RESOLVED_SIGNING_IDENTITY_SHA1=""
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -63,6 +76,78 @@ stop_running_app() {
   exit 1
 }
 
+# `security find-identity -v` reports a certificate as a valid identity without
+# ever reaching for its private key, so a locked keychain sails through the name
+# check and the build only dies six minutes later inside codesign. Sign a
+# throwaway Mach-O to find out now, before the compile.
+#
+# Bounded by a watchdog: codesign against a locked keychain does not fail fast,
+# it raises a GUI unlock dialog and waits. An unattended build must treat that
+# as "cannot sign" rather than hanging, and must not leave a prompt sitting in
+# front of whoever happens to be at the machine.
+SIGNING_PROBE_TIMEOUT_SECONDS=5
+
+signing_identity_can_sign() {
+  local identity_hash="$1"
+  local keychain="$2"
+  local probe
+  local probe_pid
+  local waited=0
+  local status=0
+
+  probe="$(/usr/bin/mktemp -t llm-usage-bar-signing-probe)" || return 1
+  if ! /bin/cp /usr/bin/true "$probe" 2>/dev/null; then
+    /bin/rm -f -- "$probe"
+    return 1
+  fi
+
+  /usr/bin/codesign --force --sign "$identity_hash" \
+    --keychain "$keychain" "$probe" >/dev/null 2>&1 &
+  probe_pid=$!
+  while /bin/kill -0 "$probe_pid" 2>/dev/null; do
+    if (( waited >= SIGNING_PROBE_TIMEOUT_SECONDS * 10 )); then
+      /bin/kill -TERM "$probe_pid" 2>/dev/null || true
+      sleep 0.2
+      /bin/kill -KILL "$probe_pid" 2>/dev/null || true
+      wait "$probe_pid" 2>/dev/null || true
+      /bin/rm -f -- "$probe"
+      return 1
+    fi
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  wait "$probe_pid" 2>/dev/null || status=1
+  /bin/rm -f -- "$probe"
+  return "$status"
+}
+
+resolve_signing_identity() {
+  local wanted_identity="$1"
+  local keychain="$2"
+  local identities
+  local identity_hash
+  local identity_name
+  local match_count=0
+  local matched_hash=""
+
+  [[ -f "$keychain" ]] || return 1
+  identities="$(/usr/bin/security find-identity -p codesigning -v "$keychain" 2>/dev/null)" || return 1
+  while IFS= read -r identity_line; do
+    if [[ "$identity_line" =~ ^[[:space:]]*[0-9]+\)[[:space:]]+([[:xdigit:]]+)[[:space:]]+\"([^\"]+)\"[[:space:]]*$ ]]; then
+      identity_hash="${BASH_REMATCH[1]}"
+      identity_name="${BASH_REMATCH[2]}"
+      [[ "$identity_name" == "$wanted_identity" ]] || continue
+      match_count=$((match_count + 1))
+      matched_hash="$identity_hash"
+    fi
+  done <<<"$identities"
+
+  [[ "$match_count" -eq 1 ]] || return 1
+  signing_identity_can_sign "$matched_hash" "$keychain" || return 1
+  RESOLVED_SIGNING_IDENTITY_SHA1="$matched_hash"
+  return 0
+}
+
 require_signing_identity() {
   local identities
   local identity_hash
@@ -70,6 +155,25 @@ require_signing_identity() {
   local match_count=0
   local matched_hash=""
   local matched_name=""
+
+  # Preferred identity first; fall back only when its key is genuinely out of
+  # reach and the caller pinned neither the identity nor the keychain.
+  if resolve_signing_identity "$SIGNING_IDENTITY" "$SIGNING_KEYCHAIN"; then
+    return 0
+  fi
+  if [[ "$SIGNING_IDENTITY_PINNED" != "x" && "$SIGNING_KEYCHAIN_PINNED" != "x" \
+    && "$SIGNING_IDENTITY" != "$FALLBACK_SIGNING_IDENTITY" ]] \
+    && resolve_signing_identity "$FALLBACK_SIGNING_IDENTITY" "$LOGIN_SIGNING_KEYCHAIN"; then
+    echo "WARNING: cannot sign with '$SIGNING_IDENTITY' from $SIGNING_KEYCHAIN --" >&2
+    echo "WARNING: it is absent there, or its private key is unreachable." >&2
+    echo "WARNING: Falling back to '$FALLBACK_SIGNING_IDENTITY' in" >&2
+    echo "WARNING: $LOGIN_SIGNING_KEYCHAIN. The build IS signed, but with a" >&2
+    echo "WARNING: different identity than the default -- set" >&2
+    echo "WARNING: LLM_USAGE_BAR_SIGNING_IDENTITY to silence this." >&2
+    SIGNING_IDENTITY="$FALLBACK_SIGNING_IDENTITY"
+    SIGNING_KEYCHAIN="$LOGIN_SIGNING_KEYCHAIN"
+    return 0
+  fi
 
   if [[ ! -f "$SIGNING_KEYCHAIN" ]]; then
     echo "Signing keychain not found: $SIGNING_KEYCHAIN" >&2
@@ -102,6 +206,20 @@ require_signing_identity() {
     echo "Expected exactly one trusted code-signing identity named: $SIGNING_IDENTITY" >&2
     echo "Found $match_count matching identities in $SIGNING_KEYCHAIN." >&2
     echo "Unlock the keychain or set LLM_USAGE_BAR_SIGNING_IDENTITY explicitly." >&2
+    exit 1
+  fi
+
+  # Exactly one certificate by that name, yet resolve_signing_identity already
+  # declined it: the private key is unreachable, not the certificate missing.
+  if ! signing_identity_can_sign "$matched_hash" "$SIGNING_KEYCHAIN"; then
+    echo "Found '$SIGNING_IDENTITY' in $SIGNING_KEYCHAIN, but codesign cannot" >&2
+    echo "use its private key — the keychain is locked." >&2
+    echo "Either unlock it:" >&2
+    echo "  security unlock-keychain $SIGNING_KEYCHAIN" >&2
+    echo "or build with an identity you can actually reach:" >&2
+    echo "  LLM_USAGE_BAR_SIGNING_IDENTITY=\"$FALLBACK_SIGNING_IDENTITY\" \\" >&2
+    echo "  LLM_USAGE_BAR_SIGNING_KEYCHAIN=\"$LOGIN_SIGNING_KEYCHAIN\" \\" >&2
+    echo "  pnpm build:local:mac" >&2
     exit 1
   fi
 

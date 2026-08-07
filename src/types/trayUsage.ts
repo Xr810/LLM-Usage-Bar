@@ -2,6 +2,8 @@ import type { ManualResetCreditView } from "./quota";
 
 export type TrayUsageStatus = "green" | "yellow" | "red" | "unknown";
 
+export type PaceBasis = "measured" | "window_average" | "static" | "idle";
+
 export type TrayCostQuality =
   "complete" | "estimated" | "partial" | "unavailable";
 
@@ -32,6 +34,12 @@ export interface TrayApiBudgetView {
   costQuality: TrayCostQuality;
   status: TrayUsageStatus;
   warningReason: string | null;
+  burnRateUsdPerHour?: string | null;
+  projectedExhaustAt?: string | null;
+  headroomRatio?: string | null;
+  paceBasis?: PaceBasis;
+  rhythmAdjustment?: string | null;
+  flatStatus?: TrayUsageStatus | null;
 }
 
 export interface TrayAgentUsageView {
@@ -91,6 +99,12 @@ export interface TrayQuotaWindowView {
   resetsAt: string | null;
   status: TrayUsageStatus;
   unavailableReason: string | null;
+  burnRatePercentPerHour?: string | null;
+  projectedExhaustAt?: string | null;
+  headroomRatio?: string | null;
+  paceBasis?: PaceBasis;
+  rhythmAdjustment?: string | null;
+  flatStatus?: TrayUsageStatus | null;
 }
 
 export interface TraySubscriptionUsageView {
@@ -107,6 +121,8 @@ export interface TrayMeteredUsageView {
   budgetConsumedPercent: string | null;
   totalTokens: number;
   costQuality: TrayCostQuality;
+  rhythmAdjustment?: string | null;
+  flatStatus?: TrayUsageStatus | null;
 }
 
 export type MainWindowDestination =

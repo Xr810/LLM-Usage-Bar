@@ -30,8 +30,8 @@ vi.mock("@/components/settings/StartupSettings", () => ({
   StartupSettings: () => <div>Startup settings content</div>,
 }));
 
-vi.mock("@/components/settings/UsageThresholdSettings", () => ({
-  UsageThresholdSettings: () => <div>Usage threshold settings content</div>,
+vi.mock("@/components/settings/UsageLightInfo", () => ({
+  UsageLightInfo: () => <div>Usage light info content</div>,
 }));
 
 vi.mock("@/components/ui/dialog", () => ({

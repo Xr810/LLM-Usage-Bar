@@ -136,13 +136,18 @@ struct SchemaObjectIdentity {
 const SYNC_SKIP_TABLES: &[&str] = &[
     "proxy_request_logs",
     "usage_daily_rollups",
+    "usage_light_predictions",
     "agent_credential_operations",
     "provider_credential_operations",
 ];
 
 /// Tables whose local data is preserved (restored from local snapshot) during WebDAV import.
 /// Device-local usage history is restored after sync imports.
-const SYNC_PRESERVE_TABLES: &[&str] = &["proxy_request_logs", "usage_daily_rollups"];
+const SYNC_PRESERVE_TABLES: &[&str] = &[
+    "proxy_request_logs",
+    "usage_daily_rollups",
+    "usage_light_predictions",
+];
 
 fn normalized_secret_key(key: &str) -> String {
     key.chars()

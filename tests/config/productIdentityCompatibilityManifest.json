@@ -415,7 +415,7 @@
   },
   {
     "file": "src-tauri/src/database/backup.rs",
-    "lineNumber": 1521,
+    "lineNumber": 1526,
     "columnNumber": 42,
     "matchedText": "CC_SWITCH",
     "context": "LLM_USAGE_BAR_SQL_EXPORT_HEADER | LEGACY_CC_SWITCH_SQL_EXPORT_HEADER",
@@ -424,7 +424,7 @@
   },
   {
     "file": "src-tauri/src/database/backup.rs",
-    "lineNumber": 1528,
+    "lineNumber": 1533,
     "columnNumber": 27,
     "matchedText": "CC Switch",
     "context": "\"仅支持导入由 LLM Usage Bar 或旧版 CC Switch 导出的 SQL 备份文件。\",",
@@ -433,7 +433,7 @@
   },
   {
     "file": "src-tauri/src/database/backup.rs",
-    "lineNumber": 1529,
+    "lineNumber": 1534,
     "columnNumber": 55,
     "matchedText": "CC Switch",
     "context": "\"Only SQL backups exported by LLM Usage Bar or legacy CC Switch are supported.\",",
@@ -442,7 +442,7 @@
   },
   {
     "file": "src-tauri/src/database/backup.rs",
-    "lineNumber": 2080,
+    "lineNumber": 2085,
     "columnNumber": 38,
     "matchedText": "CC_SWITCH",
     "context": "redact_url_secrets, Database, LEGACY_CC_SWITCH_SQL_EXPORT_HEADER,",
@@ -451,7 +451,7 @@
   },
   {
     "file": "src-tauri/src/database/backup.rs",
-    "lineNumber": 3594,
+    "lineNumber": 3599,
     "columnNumber": 44,
     "matchedText": "CC_SWITCH",
     "context": "assert!(!sql.starts_with(&format!(\"{LEGACY_CC_SWITCH_SQL_EXPORT_HEADER}\\n\")));",
@@ -460,7 +460,7 @@
   },
   {
     "file": "src-tauri/src/database/backup.rs",
-    "lineNumber": 3800,
+    "lineNumber": 3805,
     "columnNumber": 31,
     "matchedText": "CC_SWITCH",
     "context": "let legacy = format!(\"{LEGACY_CC_SWITCH_SQL_EXPORT_HEADER}\\nBEGIN TRANSACTION;\");",
@@ -469,7 +469,7 @@
   },
   {
     "file": "src-tauri/src/database/backup.rs",
-    "lineNumber": 3802,
+    "lineNumber": 3807,
     "columnNumber": 18,
     "matchedText": "CC_SWITCH",
     "context": "format!(\"{LEGACY_CC_SWITCH_SQL_EXPORT_HEADER} with suffix\\nBEGIN TRANSACTION;\");",
@@ -649,7 +649,7 @@
   },
   {
     "file": "src-tauri/src/lib.rs",
-    "lineNumber": 824,
+    "lineNumber": 825,
     "columnNumber": 57,
     "matchedText": "ccswitch",
     "context": "// tauri-plugin-deep-link writes to: ~/.local/share/com.ccswitch.desktop/applications/cc-switch-handler.desktop",
@@ -658,7 +658,7 @@
   },
   {
     "file": "src-tauri/src/lib.rs",
-    "lineNumber": 824,
+    "lineNumber": 825,
     "columnNumber": 87,
     "matchedText": "cc-switch",
     "context": "// tauri-plugin-deep-link writes to: ~/.local/share/com.ccswitch.desktop/applications/cc-switch-handler.desktop",
@@ -667,7 +667,7 @@
   },
   {
     "file": "src-tauri/src/lib.rs",
-    "lineNumber": 829,
+    "lineNumber": 830,
     "columnNumber": 32,
     "matchedText": "cc-switch",
     "context": ".map(|d| !d.join(\"applications/cc-switch-handler.desktop\").exists())",
@@ -1180,7 +1180,7 @@
   },
   {
     "file": "src/i18n/locales/en.json",
-    "lineNumber": 279,
+    "lineNumber": 292,
     "columnNumber": 146,
     "matchedText": "CC Switch",
     "context": "\"importExportHint\": \"Import or export database SQL backups for migration or restore (imports accept backups exported by LLM Usage Bar and legacy CC Switch).\",",
@@ -1189,7 +1189,7 @@
   },
   {
     "file": "src/i18n/locales/en.json",
-    "lineNumber": 284,
+    "lineNumber": 297,
     "columnNumber": 32,
     "matchedText": "cc-switch",
     "context": "\"remoteRootDefault\": \"Default: cc-switch-sync\"",
@@ -1198,7 +1198,7 @@
   },
   {
     "file": "src/i18n/locales/en.json",
-    "lineNumber": 288,
+    "lineNumber": 301,
     "columnNumber": 32,
     "matchedText": "cc-switch",
     "context": "\"remoteRootDefault\": \"Default: cc-switch-sync\"",
@@ -1207,7 +1207,7 @@
   },
   {
     "file": "src/i18n/locales/ja.json",
-    "lineNumber": 279,
+    "lineNumber": 292,
     "columnNumber": 84,
     "matchedText": "CC Switch",
     "context": "\"importExportHint\": \"移行や復元用にデータベースの SQL バックアップをインポート/エクスポートします（LLM Usage Bar または旧版 CC Switch がエクスポートしたバックアップをインポートできます）。\",",
@@ -1216,7 +1216,7 @@
   },
   {
     "file": "src/i18n/locales/ja.json",
-    "lineNumber": 284,
+    "lineNumber": 297,
     "columnNumber": 30,
     "matchedText": "cc-switch",
     "context": "\"remoteRootDefault\": \"デフォルト: cc-switch-sync\"",
@@ -1225,7 +1225,7 @@
   },
   {
     "file": "src/i18n/locales/ja.json",
-    "lineNumber": 288,
+    "lineNumber": 301,
     "columnNumber": 30,
     "matchedText": "cc-switch",
     "context": "\"remoteRootDefault\": \"デフォルト: cc-switch-sync\"",
@@ -1234,7 +1234,7 @@
   },
   {
     "file": "src/i18n/locales/zh-TW.json",
-    "lineNumber": 279,
+    "lineNumber": 292,
     "columnNumber": 59,
     "matchedText": "CC Switch",
     "context": "\"importExportHint\": \"匯入/匯出資料庫 SQL 備份（支援 LLM Usage Bar 和舊版 CC Switch 匯出的備份），便於備份或遷移。\",",
@@ -1243,7 +1243,7 @@
   },
   {
     "file": "src/i18n/locales/zh-TW.json",
-    "lineNumber": 284,
+    "lineNumber": 297,
     "columnNumber": 27,
     "matchedText": "cc-switch",
     "context": "\"remoteRootDefault\": \"預設: cc-switch-sync\"",
@@ -1252,7 +1252,7 @@
   },
   {
     "file": "src/i18n/locales/zh-TW.json",
-    "lineNumber": 288,
+    "lineNumber": 301,
     "columnNumber": 27,
     "matchedText": "cc-switch",
     "context": "\"remoteRootDefault\": \"預設: cc-switch-sync\"",
@@ -1261,7 +1261,7 @@
   },
   {
     "file": "src/i18n/locales/zh.json",
-    "lineNumber": 279,
+    "lineNumber": 292,
     "columnNumber": 59,
     "matchedText": "CC Switch",
     "context": "\"importExportHint\": \"导入/导出数据库 SQL 备份（支持 LLM Usage Bar 和旧版 CC Switch 导出的备份），便于备份或迁移。\",",
@@ -1270,7 +1270,7 @@
   },
   {
     "file": "src/i18n/locales/zh.json",
-    "lineNumber": 284,
+    "lineNumber": 297,
     "columnNumber": 27,
     "matchedText": "cc-switch",
     "context": "\"remoteRootDefault\": \"默认: cc-switch-sync\"",
@@ -1279,7 +1279,7 @@
   },
   {
     "file": "src/i18n/locales/zh.json",
-    "lineNumber": 288,
+    "lineNumber": 301,
     "columnNumber": 27,
     "matchedText": "cc-switch",
     "context": "\"remoteRootDefault\": \"默认: cc-switch-sync\"",

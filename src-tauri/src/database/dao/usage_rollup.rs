@@ -62,6 +62,22 @@ impl Database {
         let cutoff = compute_local_midnight_cutoff(Local::now(), retain_days)?;
         let conn = lock_conn!(self.conn);
 
+        let prediction_cutoff = Local::now()
+            .timestamp()
+            .checked_sub(180 * 86_400)
+            .ok_or_else(|| {
+                AppError::Database("prediction retention cutoff overflow".to_string())
+            })?;
+        let pruned_predictions = crate::usage::usage_light_prediction::prune_resolved_predictions(
+            &conn,
+            prediction_cutoff,
+        )?;
+        if pruned_predictions > 0 {
+            log::info!(
+                "Pruned {pruned_predictions} resolved usage-light predictions older than 180 days"
+            );
+        }
+
         // Check if there are any rows to process
         let count: i64 = conn
             .query_row(

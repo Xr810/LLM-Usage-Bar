@@ -73,6 +73,7 @@ impl Database {
         let raw_payload = to_json_string(&snapshot.raw_payload)?;
         let mut conn = lock_conn!(self.conn);
         let transaction = conn.transaction()?;
+        let previous = latest_snapshot_on_conn(&transaction, &snapshot.provider_id)?;
         transaction.execute(
             "INSERT INTO quota_snapshots (
                 snapshot_id, provider_id, fetched_at, five_hour_utilization_percent,
@@ -110,6 +111,18 @@ impl Database {
         )?;
         let state = fetch_state_on_conn(&transaction, &snapshot.provider_id)?
             .ok_or_else(|| AppError::Database("quota fetch state was not saved".to_string()))?;
+        if let Some(previous) = previous {
+            if let Err(error) = crate::usage::usage_light_prediction::resolve_snapshot_rollovers(
+                &transaction,
+                &previous,
+                snapshot,
+            ) {
+                log::warn!(
+                    "Failed to resolve usage light predictions after quota rollover for {}: {error}",
+                    snapshot.provider_id
+                );
+            }
+        }
         transaction.commit()?;
         Ok(state)
     }
@@ -149,6 +162,25 @@ impl Database {
     ) -> Result<Option<QuotaSnapshot>, AppError> {
         let conn = lock_conn!(self.conn);
         latest_snapshot_on_conn(&conn, provider_id)
+    }
+
+    pub fn quota_snapshots_since(
+        &self,
+        provider_id: &str,
+        since: i64,
+    ) -> Result<Vec<QuotaSnapshot>, AppError> {
+        let conn = lock_conn!(self.conn);
+        let mut statement = conn.prepare(
+            "SELECT snapshot_id, provider_id, fetched_at,
+                    five_hour_utilization_percent, five_hour_resets_at,
+                    seven_day_utilization_percent, seven_day_resets_at,
+                    manual_resets_remaining, raw_payload, created_at
+             FROM quota_snapshots
+             WHERE provider_id = ?1 AND fetched_at >= ?2
+             ORDER BY fetched_at ASC, snapshot_id ASC",
+        )?;
+        let rows = statement.query_map(params![provider_id, since], quota_snapshot_from_row)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(AppError::from)
     }
 
     pub fn get_quota_fetch_state(
@@ -292,6 +324,29 @@ mod tests {
         assert_eq!(
             db.latest_quota_status("sub").unwrap(),
             (Some(current), Some(state))
+        );
+    }
+
+    #[test]
+    fn quota_snapshots_since_filters_and_orders_history_stably() {
+        let db = Database::memory().unwrap();
+        save_provider(&db, "sub");
+        for (id, fetched_at) in [
+            ("later", 300),
+            ("same-b", 200),
+            ("old", 100),
+            ("same-a", 200),
+        ] {
+            db.append_quota_success(&snapshot(id, fetched_at)).unwrap();
+        }
+
+        let snapshots = db.quota_snapshots_since("sub", 200).unwrap();
+        assert_eq!(
+            snapshots
+                .iter()
+                .map(|snapshot| (snapshot.fetched_at, snapshot.snapshot_id.as_str()))
+                .collect::<Vec<_>>(),
+            vec![(200, "same-a"), (200, "same-b"), (300, "later")],
         );
     }
 }
