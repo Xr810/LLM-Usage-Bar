@@ -1,6 +1,7 @@
 # LLM Usage Bar — 全局交接文档(合并版)
 
 最后核实:2026-08-07(所有事实当天用 git / gh / sqlite3 逐条验证过,不是抄旧文档)
+最后更新:2026-08-07 下午 —— 小项修复已执行,见 §3 各条目内的 ✅ 标记
 
 > **这是唯一的交接文档。** 它取代并吸收了以下分散文档,那些文件不要再单独更新:
 >
@@ -57,10 +58,10 @@
 | --- | --- | --- | --- |
 | 主线 | `main` = `f3aadadec` | 绿,v23,与 origin 同步 | 否 |
 | 用量按模型/Agent 分类 | `claude/usage-model-agent-classification-03acf1`,worktree `.claude/worktrees/usage-model-agent-classification-03acf1` | 功能完成、测试全绿、**已本地提交**(`80d791725`)、未推送;**基点过时,跑不起来** | **是 → §4** |
-| 红绿灯燃烧速度投影 | `claude/traffic-light-logic-redesign-3fbc8e`,worktree `.claude/worktrees/traffic-light-logic-redesign-3fbc8e` | 功能完成、已提交已推送(`45898d3ba`);**基点过时,装上即崩,已回滚**;worktree 里还有 **+120 行未提交**的签名脚本修复 | **是 → §5** |
+| 红绿灯燃烧速度投影 | `claude/traffic-light-logic-redesign-3fbc8e`,worktree `.claude/worktrees/traffic-light-logic-redesign-3fbc8e` | 功能完成、已提交已推送(`45898d3ba`);**基点过时,装上即崩,已回滚**;签名脚本修复已补提交并推送(`5ed753e08`) | **是 → §5** |
 | 2026-08-07 checkpoint 文档 | `claude/llm-usage-monitoring-app-4a9554`(= main 的内容 + 1 个 docs 提交 `67676ef9e`) | 纯文档分支,内容已并入本文 | 可删分支和 worktree |
 | 本合并任务 | `claude/consolidate-error-issues-4d8721` | 即本文件所在分支 | 合并进 main 让后续 agent 能看到 |
-| 6 个 `codex/*` 旧线(7 月) | `.worktrees/` 下 6 个 worktree | **全部已完整进入 main**(0 个独有提交),工作区干净 | 可整体清理 |
+| 6 个 `codex/*` 旧线(7 月) | ~~`.worktrees/`~~ | **✅ 已清理(2026-08-07)**:6 个 worktree、6 个分支、3 个失效 bridge worktree 全部移除(删前核实 0 独有提交、工作区干净) | 否 |
 
 > 更正一个旧文档里的错误结论:报告(二)说
 > `claude/llm-usage-monitoring-app-4a9554`"不是 origin/main 的祖先,是另一条线"。
@@ -110,11 +111,11 @@
 功能做完、2428 个 Rust 测试 + 65 个前端测试全绿,但基于 55 个提交前的旧基点,
 在 v23 面前跑不起来。改动**未推送**,只存在于本地提交 `80d791725`。
 
-### P2 — 把「红绿灯」线搬上 main,并抢救未提交的签名脚本修复(§5 有完整步骤)
+### P2 — 把「红绿灯」线搬上 main(§5 有完整步骤)
 
-同样的基点问题。另外该 worktree 里 `script/build_and_run.sh` 有 **+120 行未提交**
-的签名修复(见 §7"签名"),这是唯一副本,worktree 被清理就没了 ——
-先 `git stash` 或单独提交保存。
+同样的基点问题。~~抢救签名脚本修复~~ **✅ 已完成(2026-08-07)**:
+`script/build_and_run.sh` 的 +120 行签名修复已提交为 `5ed753e08` 并推送到
+`origin/claude/traffic-light-logic-redesign-3fbc8e`,丢失风险解除。
 
 ### P3 — PR #18:`node-pty` 构建脚本放行(需要用户决策)
 
@@ -136,17 +137,24 @@
 
 ### P5 — 低优先级 / 观察项
 
-- **合并绿的 #12–#15**(内容零变化,只等合并);顺手落实 Dependabot 分组只含
-  minor/patch 的策略,避免再出巨型混合 PR。
+- **合并绿的 #12–#15**:仍开着 —— agent 侧被权限分类器拦截(`gh pr merge` 属
+  对外操作),留给用户执行:
+  `for n in 12 13 14 15; do gh pr merge $n --squash --delete-branch; done`
+- ~~Dependabot 分组策略~~ **✅ 已落实(2026-08-07)**:两个组各加
+  `update-types: [minor, patch]`(组名未动,避免现有 PR 被重建);major 此后
+  单独成 PR。注意:#18 在下个更新周期可能被 Dependabot 按新规则重建,
+  重建后的 minor/patch 组 PR 未必再碰 `node-pty`,§P3 的决策可能因此消失。
 - **flaky 前端测试**:`UsageDashboardPage.test.tsx` → "queries exact Provider-wide
   ranges…" 全量跑时偶发超时(~6.8s),单跑必过。早于近期改动,CI 未见失败,未查。
 - **`planRenewsAt` 永远为空**:refresh 签发的 `id_token` 疑似只带
   `chatgpt_plan_type` 不带订阅日期;app 有意不持久化 `id_token`,无法回看确认。
   现象:续订 tooltip 不渲染。无害。
 - **2026-08-07 10:17 一次性启动崩溃**,同一 app 10:18 重启即好,独立偶发,未复现。
-- **清理垃圾**:`/Applications/.LLM Usage Bar.broken-v20.app`(坏版本残留);
-  6 个 `.worktrees/` 旧 worktree 及对应 `codex/*` 分支(已确认 0 独有提交、工作区
-  干净);3 个 `claude-codex-bridge-worktrees` 临时 worktree(`git worktree prune`)。
+- ~~清理垃圾~~ **✅ 已完成(2026-08-07)**:坏 app 残留已进废纸篓(Finder 删除,
+  可恢复);6 个 `.worktrees/` 旧 worktree + `codex/*` 分支已删(`git branch -d`
+  逐一确认已并入 main);3 个 bridge worktree 已 prune。
+  仅剩 `claude/llm-usage-monitoring-app-4a9554` 分支/worktree(内容已并入本文,
+  但其提交 `67676ef9e` 未进 main,删除需 `-D` 强删,留给用户决定)。
 
 ---
 
@@ -204,11 +212,10 @@ max 混判的真 bug(改为各自判定取最差)。
 **步骤**:
 
 1. 改动已推送:`origin/claude/traffic-light-logic-redesign-3fbc8e`,提交
-   `45898d3ba`(44 文件 +4339/−543)。
-2. **先抢救 worktree 里未提交的 `script/build_and_run.sh`(+120 行签名修复)**,
-   它不在任何提交里。内容见 §7"签名"。
-3. 从 `main` 拉新分支重放 `45898d3ba`。报告(二)明确建议**重新落一个提交而非
-   rebase**。
+   `45898d3ba`(44 文件 +4339/−543)+ 签名脚本修复 `5ed753e08`(已于
+   2026-08-07 补提交推送,抢救完成)。
+2. 从 `main` 拉新分支重放 `45898d3ba` 和 `5ed753e08`。报告(二)明确建议
+   **重新落一个提交而非 rebase**。
 4. **迁移重编号:v19→v20 改成 v23→v24**,涉及 `database/mod.rs` 的
    `SCHEMA_VERSION`、`schema.rs` 迁移分发、`usage_light_prediction_migration.rs`
    函数名与 `validate_schema_v*_complete`。
@@ -262,8 +269,8 @@ max 混判的真 bug(改为各自判定取最差)。
 - **cfg 陷阱**:开发机 macOS、CI ubuntu。平台门控代码的错误本地不可见,
   只有 CI 能抓(§2 第一条的根因)。
 - **签名**:`~/Library/Keychains/llm-usage-bar-signing.keychain-db` 是独立密码
-  且用户没有密码。`script/build_and_run.sh` 的修复(目前只存在于 traffic-light
-  worktree 未提交改动,见 §3 P2):只在提供了
+  且用户没有密码。`script/build_and_run.sh` 的修复(提交 `5ed753e08`,在
+  traffic-light 分支上,搬迁时一并带上):只在提供了
   `LLM_USAGE_BAR_SIGNING_KEYCHAIN_PASSWORD` 时才用专用钥匙串,否则 login 钥匙串;
   真签探针带 5 秒看门狗(codesign 对锁住的钥匙串会弹 GUI 框无限等待,不会快速
   失败);回落身份 `LLM Usage Bar Local Development`。
