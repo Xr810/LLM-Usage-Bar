@@ -34,7 +34,7 @@
 
    分支的 `SCHEMA_VERSION`(`src-tauri/src/database/mod.rs:56`)必须 ≥ 库版本,
    否则 app 启动即崩:`authoritative database schema v23 is outside supported range …`。
-   新迁移一律从 main 的版本号往上编(当前下一个是 v24)。
+   新迁移一律从 main 的版本号往上编(2026-08-07 起 main 是 v24,下一个是 v25)。
 
 3. **读完本文件再动手。** 8 月的两条 feature 线全栽在同一个坑
    (基点过时 → 迁移编号错 → 装上就崩),第二次翻车时答案已经写在交接文档里了。
@@ -58,7 +58,7 @@
 | --- | --- | --- | --- |
 | 主线 | `main` = `f3aadadec` | 绿,v23,与 origin 同步 | 否 |
 | 用量按模型/Agent 分类 | **✅ 已搬上 main(2026-08-07,提交 `e23894168`)** | Codex(max)在隔离 worktree 移植,Claude 逐 hunk 复核并独立重跑全套验证(Rust 1039/0、tsc、prettier、59+9 前端测试全绿) | 旧分支 `claude/usage-model-agent-classification-03acf1` 及其 worktree 已作废,可删(需 `-D`);目视验证仍欠 → P4 |
-| 红绿灯燃烧速度投影 | `claude/traffic-light-logic-redesign-3fbc8e`,worktree `.claude/worktrees/traffic-light-logic-redesign-3fbc8e` | 功能完成、已提交已推送(`45898d3ba`);**基点过时,装上即崩,已回滚**;签名脚本修复已补提交并推送(`5ed753e08`) | **是 → §5** |
+| 红绿灯燃烧速度投影 | **✅ 已搬上 main(2026-08-07,提交 `bb8514def`,迁移重编号 v23→v24)** | Codex(max)移植 + 签名脚本修复一并带上;Claude 复核(DDL 范围、预测行无机密、阈值为常量)并独立重验(Rust 1066/0、前端 192+9 全绿) | 旧分支 `claude/traffic-light-logic-redesign-3fbc8e` 及 worktree 可删;**注意:新代码 SCHEMA_VERSION=24,装上后旧 3.16.5 打不开升级后的库,须一步到位** |
 | 2026-08-07 checkpoint 文档 | `claude/llm-usage-monitoring-app-4a9554`(= main 的内容 + 1 个 docs 提交 `67676ef9e`) | 纯文档分支,内容已并入本文 | 可删分支和 worktree |
 | 本合并任务 | `claude/consolidate-error-issues-4d8721` | 即本文件所在分支 | 合并进 main 让后续 agent 能看到 |
 | 6 个 `codex/*` 旧线(7 月) | ~~`.worktrees/`~~ | **✅ 已清理(2026-08-07)**:6 个 worktree、6 个分支、3 个失效 bridge worktree 全部移除(删前核实 0 独有提交、工作区干净) | 否 |
@@ -113,11 +113,14 @@
 新测试 helper 补上了 main 新增的 `UsageEvent.pricing_origin`;manifest 重锚了
 12 条 `lineNumber`。§4 的搬迁指南保留作历史参考,语义约定一节仍是有效契约。
 
-### P2 — 把「红绿灯」线搬上 main(§5 有完整步骤)
+### ~~P2 — 把「红绿灯」线搬上 main~~ ✅ 全部完成(2026-08-07,提交 `bb8514def`)
 
-同样的基点问题。~~抢救签名脚本修复~~ **✅ 已完成(2026-08-07)**:
-`script/build_and_run.sh` 的 +120 行签名修复已提交为 `5ed753e08` 并推送到
-`origin/claude/traffic-light-logic-redesign-3fbc8e`,丢失风险解除。
+功能与签名脚本修复(`5ed753e08`)都已在 main。移植中的关键适配:迁移重编号
+v23→v24;WebDAV/S3 后端同步在 main 上仍在,预测表保留排除;`UsageLightInfo`
+改用 main 的 `SettingsSection` 外壳;headroom 阈值(115%/85%)落为编译期常量
+而非 settings.json 可覆盖项。**main 现在是 SCHEMA_VERSION=24**:下一次构建
+安装的 app 首启会把生产库 v23→v24(自动做迁移前备份),之后旧 3.16.5 无法再
+打开该库,构建安装要一步到位。
 
 ### ~~P3 — PR #18:`node-pty` 构建脚本放行~~ ✅ 已解决(2026-08-07,用户拍板)
 
