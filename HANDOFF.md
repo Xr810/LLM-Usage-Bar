@@ -26,9 +26,9 @@
    git fetch origin && git log --oneline -1 origin/main
    ```
 
-   > 别照抄这里的哈希 —— 上面这条命令的输出才算数。同时注意 §9.5:
-   > 本机有 28 个提交未推远端,`git log --all --not --remotes=origin` 能列出来。
-   > 未合并的活分支见 §9.2(`claude/quota-reset-latch`)。
+   > 别照抄这里的哈希 —— 上面这条命令的输出才算数。`main` 与 `origin/main`
+   > 当前一致(0 个未推)。未合并的活分支见 §9.2(`claude/quota-reset-latch`);
+   > 仓库里另有一批没人认领的陈旧本地分支、stash 和老 tag,见 §9.5。
 
 2. **动数据库/想本地跑 app 之前,先对版本。** 生产库 2026-08-07 傍晚实测 v24:
 
@@ -477,7 +477,25 @@ Resets Aug 11 at 6pm (Asia/Singapore)
   删前核实工作区干净、`main..该分支` 为空、两者同指 `d21d3d682`;用
   `git worktree remove` + `git branch -d`,元数据一并清理。
 
-### 9.5 状态提醒
+### 9.5 状态提醒:本机未推远端的东西
 
-`git log --all --not --remotes=origin` 显示 **28 个提交未推远端** —— 不只是本轮这
-两个,`main` 本身就领先 `origin/main` 一大截。这些只存在于这台机器上。
+> 本节修正过一次。初稿写的是「main 领先 origin/main 一大截」,**那是错的** ——
+> `git fetch` 后实测 `git rev-list --count origin/main..main` = **0**,main 早已
+> 推干净。当时只看了 `git log --all --not --remotes=origin` 的总数就下了结论,
+> 没查那些提交挂在哪个 ref 上。
+
+`--all` 会把 stash、旧 tag、陈旧分支全算进去。实际分布(2026-08-07 傍晚实测):
+
+- **`main`:0 个未推**,与 `origin/main` 同为 `d21d3d682`。
+- **本轮分支 `claude/quota-reset-latch`**:3 个提交,见 §9.2。
+- **5 个陈旧本地分支**:`backup/pre-backend-strip-branch`、
+  `codex/full-identity-sync-cache-migration`、`codex/manual-reset-credits`、
+  `codex/remove-provider-ads`(其 origin 侧已 gone)、`feat/frontend-redesign`。
+  没人核实过它们是否还有独有价值 —— 删之前逐个跑
+  `git log --oneline main..<branch>`,别直接 `-D`。
+- **6 个 stash**:5 个是 `claude/llm-usage-monitoring-app-4a9554` 上的后端裁剪
+  WIP(都标着 build red / over-reached),1 个是 main 上的文档备份。
+- **老 tag**(如 `v3.8.3`)带着 CC Switch 上游血统的提交,不在 origin 的分支上。
+
+也就是说:**没有代码因为"忘了推"而处于危险状态**,但仓库里确实堆着一批没人认领的
+本地 ref。要清理的话按上面的顺序逐个核实,不要一把梭。
