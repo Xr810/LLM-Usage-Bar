@@ -118,11 +118,17 @@ export function TraySubscriptionSection({
                   );
                   const rhythmNote = rhythmExplanation(window, t);
                   // A source that never carries a reset time says so, rather
-                  // than rendering the placeholder into "Resets —".
+                  // than rendering the placeholder into "Resets —". But a
+                  // rejected timestamp also arrives as a null reset, and there
+                  // the source did report something — the reason already
+                  // explains it, so claiming nothing was reported alongside it
+                  // would contradict itself.
                   const resetLabel = reset.unreported
-                    ? t("trayUsage.resetTimeUnknown", {
-                        defaultValue: "Reset time not reported",
-                      })
+                    ? unavailableReason
+                      ? null
+                      : t("trayUsage.resetTimeUnknown", {
+                          defaultValue: "Reset time not reported",
+                        })
                     : reset.pending
                       ? reset.text
                       : t("trayUsage.resets", {
@@ -142,7 +148,7 @@ export function TraySubscriptionSection({
                             {resetLabel}
                             {unavailableReason ? (
                               <span className="text-foreground">
-                                {" · "}
+                                {resetLabel ? " · " : null}
                                 {unavailableReason}
                               </span>
                             ) : null}

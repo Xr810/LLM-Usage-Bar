@@ -141,6 +141,11 @@ struct LatchedResetWindow {
     resets_at: i64,
     latched_at: i64,
     utilization_at_latch: f64,
+    /// The Desktop organization whose percentage confirmed this latch. Switching
+    /// organizations replaces the percentages wholesale, so the previous
+    /// organization's reset instant must not ride along.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    desktop_org: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -635,6 +640,12 @@ struct ObservedQuotaTier {
     tier: QuotaTier,
     observed_at_ms: i64,
     resets_at_unix: Option<i64>,
+    /// Who produced this observation: the Claude Desktop organization id, or
+    /// the status-line session key. Both sources can change identity underneath
+    /// us — Desktop when the active organization is switched, the status line
+    /// when a second Claude Code session on another account is also cached —
+    /// and a latched reset is only meaningful for the identity it came from.
+    source_identity: Option<String>,
 }
 
 fn collect_local_quota_from_paths_at(
@@ -689,7 +700,7 @@ fn collect_local_quota_from_paths_at(
         update_reset_latch(
             kind,
             statusline_tier.as_ref(),
-            evidence,
+            &evidence,
             &mut reset_latch,
             now,
         );
@@ -763,10 +774,17 @@ fn collect_local_quota_from_paths_at(
 /// accounts both sit at 0% early in a five-hour window — so the verdict is
 /// taken across every window both sources reported, and one disagreement
 /// rejects the whole pass rather than just that window.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum SameAccountEvidence {
-    /// At least one window agreed and none disagreed.
-    Confirmed,
+    /// One window agreed and none disagreed. Carries the identities that agreed,
+    /// because the evidence is only about *those two*: `read_statusline_observations`
+    /// picks the newest five-hour and the newest weekly window independently, so
+    /// with two Claude Code sessions cached they can come from different accounts.
+    /// Confirming against one session must not authorize latching the other's.
+    Confirmed {
+        statusline_session: Option<String>,
+        desktop_org: Option<String>,
+    },
     /// Some window disagreed: treat the sources as different accounts.
     Contradicted,
     /// Nothing comparable this pass. Neither confirms nor denies, so latches
@@ -794,7 +812,7 @@ fn same_account_evidence(
         Option<ObservedQuotaTier>,
     )],
 ) -> SameAccountEvidence {
-    let mut confirmed = false;
+    let mut confirmed: Option<(Option<String>, Option<String>)> = None;
     for (kind, desktop, statusline) in pairs {
         let (Some(desktop), Some(statusline)) = (desktop, statusline) else {
             continue;
@@ -810,7 +828,10 @@ fn same_account_evidence(
                 if difference > RESET_LATCH_IDENTITY_TOLERANCE {
                     return SameAccountEvidence::Contradicted;
                 }
-                confirmed = true;
+                confirmed = Some((
+                    statusline.source_identity.clone(),
+                    desktop.source_identity.clone(),
+                ));
             }
             QuotaWindowKind::FiveHour => {
                 let (older, newer) = if desktop.observed_at_ms <= statusline.observed_at_ms {
@@ -824,17 +845,19 @@ fn same_account_evidence(
             }
         }
     }
-    if confirmed {
-        SameAccountEvidence::Confirmed
-    } else {
-        SameAccountEvidence::Absent
+    match confirmed {
+        Some((statusline_session, desktop_org)) => SameAccountEvidence::Confirmed {
+            statusline_session,
+            desktop_org,
+        },
+        None => SameAccountEvidence::Absent,
     }
 }
 
 fn update_reset_latch(
     kind: QuotaWindowKind,
     statusline: Option<&ObservedQuotaTier>,
-    evidence: SameAccountEvidence,
+    evidence: &SameAccountEvidence,
     latch: &mut ClaudeQuotaResetLatch,
     now: i64,
 ) {
@@ -842,12 +865,21 @@ fn update_reset_latch(
     match evidence {
         SameAccountEvidence::Contradicted => *window = None,
         SameAccountEvidence::Absent => {}
-        SameAccountEvidence::Confirmed => {
+        SameAccountEvidence::Confirmed {
+            statusline_session,
+            desktop_org,
+        } => {
             // The reset instant is the status line's own; the evidence only
             // decides whether it may later be read alongside a Desktop
             // percentage. So a window the Desktop source never reported can
-            // still latch, on identity established by the other window.
+            // still latch, on identity established by the other window — but
+            // only if it came from the very session that supplied that
+            // evidence, since the two windows are selected independently and
+            // may belong to different accounts.
             let Some(statusline) = statusline else { return };
+            if statusline.source_identity != *statusline_session {
+                return;
+            }
             let Some(resets_at) = statusline.resets_at_unix else {
                 return;
             };
@@ -856,6 +888,7 @@ fn update_reset_latch(
                     resets_at,
                     latched_at: now,
                     utilization_at_latch: statusline.tier.utilization,
+                    desktop_org: desktop_org.clone(),
                 });
             }
         }
@@ -872,6 +905,14 @@ fn attach_latched_reset(
     let Some(latched) = window.as_ref() else {
         return;
     };
+    // Switching the active Claude Desktop organization swaps the percentages
+    // for a different account's, and those can sit above where this latch was
+    // formed — so the staleness check below would happily wave the previous
+    // organization's reset instant through for the rest of a weekly window.
+    if latched.desktop_org != desktop.source_identity {
+        *window = None;
+        return;
+    }
     if latched.resets_at <= now
         || desktop.tier.utilization
             < latched.utilization_at_latch - RESET_LATCH_PERCENTAGE_TOLERANCE
@@ -970,6 +1011,7 @@ fn read_desktop_observations(
             },
             observed_at_ms: sample.t,
             resets_at_unix: None,
+            source_identity: active_org.map(str::to_string),
         });
     }
     if tiers.is_empty() {
@@ -1082,9 +1124,12 @@ fn read_statusline_observations(
         let Some(rate_limits) = session.rate_limits.as_ref() else {
             continue;
         };
-        if let Some(candidate) =
-            cached_window_to_observation(TIER_FIVE_HOUR, rate_limits.five_hour.as_ref(), now)?
-        {
+        if let Some(candidate) = cached_window_to_observation(
+            TIER_FIVE_HOUR,
+            rate_limits.five_hour.as_ref(),
+            &session.session_key,
+            now,
+        )? {
             if five_hour
                 .as_ref()
                 .is_none_or(|current: &ObservedQuotaTier| {
@@ -1094,9 +1139,12 @@ fn read_statusline_observations(
                 five_hour = Some(candidate);
             }
         }
-        if let Some(candidate) =
-            cached_window_to_observation(TIER_SEVEN_DAY, rate_limits.seven_day.as_ref(), now)?
-        {
+        if let Some(candidate) = cached_window_to_observation(
+            TIER_SEVEN_DAY,
+            rate_limits.seven_day.as_ref(),
+            &session.session_key,
+            now,
+        )? {
             if seven_day
                 .as_ref()
                 .is_none_or(|current: &ObservedQuotaTier| {
@@ -1120,6 +1168,7 @@ fn read_statusline_observations(
 fn cached_window_to_observation(
     name: &str,
     window: Option<&CachedWindow>,
+    session_key: &str,
     now: i64,
 ) -> Result<Option<ObservedQuotaTier>, String> {
     let Some(window) = window else {
@@ -1153,6 +1202,7 @@ fn cached_window_to_observation(
         },
         observed_at_ms: window.observed_at.saturating_mul(1_000),
         resets_at_unix: Some(window.resets_at),
+        source_identity: Some(session_key.to_string()),
     }))
 }
 
@@ -1397,7 +1447,76 @@ mod tests {
             resets_at,
             latched_at,
             utilization_at_latch,
+            desktop_org: None,
         }
+    }
+
+    fn write_desktop_history_for_org(
+        path: &Path,
+        observed_at_ms: i64,
+        org: &str,
+        five_hour: Option<f64>,
+        seven_day: Option<f64>,
+    ) {
+        config::write_json_file(
+            path,
+            &json!({
+                "version": 2,
+                "samples": [{
+                    "t": observed_at_ms,
+                    "org": org,
+                    "u": { "fh": five_hour, "sd": seven_day }
+                }]
+            }),
+        )
+        .unwrap();
+    }
+
+    /// Two concurrent Claude Code sessions, each with only one of the two
+    /// windows, so `read_statusline_observations` is forced to take the
+    /// five-hour and the weekly window from different sessions.
+    fn write_two_session_statusline_cache(
+        path: &Path,
+        observed_at: i64,
+        five_hour: (f64, i64),
+        seven_day: (f64, i64),
+    ) {
+        let window = |(used_percentage, resets_at): (f64, i64)| CachedWindow {
+            used_percentage,
+            resets_at,
+            observed_at,
+        };
+        let session = |suffix: char, limits: CachedRateLimits| CachedStatuslineSession {
+            updated_at: observed_at,
+            event_at_ms: observed_at.saturating_mul(1_000),
+            session_key: std::iter::repeat_n(suffix, 64).collect(),
+            claude_version: Some("2.1.220".to_string()),
+            rate_limits: Some(limits),
+        };
+        config::write_json_file(
+            path,
+            &ClaudeStatuslineCache {
+                schema_version: CACHE_SCHEMA_VERSION,
+                updated_at: observed_at,
+                sessions: vec![
+                    session(
+                        'a',
+                        CachedRateLimits {
+                            five_hour: None,
+                            seven_day: Some(window(seven_day)),
+                        },
+                    ),
+                    session(
+                        'b',
+                        CachedRateLimits {
+                            five_hour: Some(window(five_hour)),
+                            seven_day: None,
+                        },
+                    ),
+                ],
+            },
+        )
+        .unwrap();
     }
 
     fn find_tier<'a>(quota: &'a SubscriptionQuota, name: &str) -> &'a QuotaTier {
@@ -2174,6 +2293,85 @@ mod tests {
         assert_eq!(stored["schemaVersion"], json!(1));
         assert_eq!(stored["windows"]["five_hour"]["resetsAt"], json!(20_000));
         assert_eq!(stored["windows"]["seven_day"]["resetsAt"], json!(30_000));
+    }
+
+    #[test]
+    fn a_window_from_another_session_is_not_latched_on_this_ones_evidence() {
+        // read_statusline_observations picks the newest five-hour and the newest
+        // weekly window independently, so with two Claude Code sessions cached
+        // they can come from different accounts. Confirming identity against the
+        // weekly window from one session must not authorize latching the
+        // five-hour reset belonging to the other.
+        let (history_path, statusline_path, latch_path) = temp_quota_paths();
+        write_desktop_history(&history_path, 10_000_000, Some(35.0), Some(66.0));
+        write_two_session_statusline_cache(
+            &statusline_path,
+            10_360,
+            (41.0, 20_000),
+            (66.0, 30_000),
+        );
+
+        collect_local_quota_from_paths_at(
+            Some(&history_path),
+            &statusline_path,
+            &latch_path,
+            10_400,
+        )
+        .unwrap();
+
+        let latch = read_reset_latch(&latch_path).expect("the confirming window still latches");
+        assert_eq!(latch.windows.seven_day.map(|w| w.resets_at), Some(30_000));
+        assert!(
+            latch.windows.five_hour.is_none(),
+            "the five-hour reset came from a different session than the evidence"
+        );
+    }
+
+    #[test]
+    fn switching_the_desktop_organization_drops_the_latch() {
+        // A different organization's percentages can sit above where the latch
+        // was formed, so the staleness check alone would wave the previous
+        // organization's reset instant through for the rest of the window.
+        let (history_path, statusline_path, latch_path) = temp_quota_paths();
+        write_desktop_history_for_org(&history_path, 10_000_000, "org-a", Some(35.0), Some(66.0));
+        write_statusline_cache(
+            &statusline_path,
+            10_360,
+            Some((41.0, 20_000)),
+            Some((66.0, 30_000)),
+        );
+        collect_local_quota_from_paths_at(
+            Some(&history_path),
+            &statusline_path,
+            &latch_path,
+            10_400,
+        )
+        .unwrap();
+        assert_eq!(
+            read_reset_latch(&latch_path)
+                .unwrap()
+                .windows
+                .five_hour
+                .map(|w| w.desktop_org),
+            Some(Some("org-a".to_string()))
+        );
+
+        // Same machine, different active organization, status line long expired.
+        write_desktop_history_for_org(&history_path, 11_000_000, "org-b", Some(50.0), Some(70.0));
+        let quota = collect_local_quota_from_paths_at(
+            Some(&history_path),
+            &statusline_path,
+            &latch_path,
+            11_400,
+        )
+        .unwrap();
+
+        assert_eq!(find_tier(&quota, TIER_FIVE_HOUR).utilization, 50.0);
+        assert_eq!(find_tier(&quota, TIER_FIVE_HOUR).resets_at, None);
+        assert!(
+            !latch_path.exists(),
+            "org-a's reset must not survive onto org-b's percentages"
+        );
     }
 
     #[test]

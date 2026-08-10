@@ -49,18 +49,21 @@
 
 ### 生产环境:健康
 
-- 已安装 app:`/Applications/LLM Usage Bar.app`(3.16.5,能正常打开 v23 库)。
-- 生产库:`~/.llm-usage-bar/llm-usage-bar.db`,v23,65 MB,45k+ 条 `usage_events`,
+- 已安装 app:`/Applications/LLM Usage Bar.app`(3.16.5,v24)。
+  **注意:§9.2 的新构建已生成但尚未安装**,装着的这份不含重置时刻锁存。
+- 生产库:`~/.llm-usage-bar/llm-usage-bar.db`,**v24**,81 MB,47.8k 条 `usage_events`,
   `PRAGMA integrity_check` = ok,数据正常增长。**数据库从未损坏过** ——
   8 月的两次"崩溃"都是版本上限检查拒绝打开旧代码,不是写坏。
-- 备份:`~/.llm-usage-bar/backups/`(v19→v21→v22→v23 各阶段都有)。
+- 备份:`~/.llm-usage-bar/backups/`(v19 起各阶段都有,最新
+  `db_backup_20260810_171554.db`)。
 - 日志:`~/.llm-usage-bar/logs/llm-usage-bar.log`;崩溃日志 `~/.llm-usage-bar/crash.log`。
 
 ### 各条线的状态
 
 | 线 | 分支 / 位置 | 状态 | 需要行动? |
 | --- | --- | --- | --- |
-| 主线 | `main` = `f3aadadec` | 绿,v23,与 origin 同步 | 否 |
+| 主线 | `main` = `d21d3d682` | 绿,**v24**,与 `origin/main` 同步(0 个未推) | 否 |
+| Claude 额度重置时间 | `claude/quota-reset-latch`(已推,PR #23) | 锁存已实现并验证;`/usage` 探测待做 | 见 §9 |
 | 用量按模型/Agent 分类 | **✅ 已搬上 main(2026-08-07,提交 `e23894168`)** | Codex(max)在隔离 worktree 移植,Claude 逐 hunk 复核并独立重跑全套验证(Rust 1039/0、tsc、prettier、59+9 前端测试全绿) | 旧分支 `claude/usage-model-agent-classification-03acf1` 及其 worktree 已作废,可删(需 `-D`);目视验证仍欠 → P4 |
 | 红绿灯燃烧速度投影 | **✅ 已搬上 main(2026-08-07,提交 `bb8514def`,迁移重编号 v23→v24)** | Codex(max)移植 + 签名脚本修复一并带上;Claude 复核(DDL 范围、预测行无机密、阈值为常量)并独立重验(Rust 1066/0、前端 192+9 全绿) | 旧分支 `claude/traffic-light-logic-redesign-3fbc8e` 及 worktree 可删;**注意:新代码 SCHEMA_VERSION=24,装上后旧 3.16.5 打不开升级后的库,须一步到位** |
 | 2026-08-07 checkpoint 文档 | `claude/llm-usage-monitoring-app-4a9554`(= main 的内容 + 1 个 docs 提交 `67676ef9e`) | 纯文档分支,内容已并入本文 | 可删分支和 worktree |
