@@ -2,355 +2,151 @@
 
 # LLM Usage Bar
 
-### Claude Code、Claude Desktop、Codex、Gemini CLI、OpenCode、OpenClaw 和 Hermes Agent 的全方位管理工具
+### 你的 AI 编程工具到底花了多少 —— 订阅额度和 API 花费，都在菜单栏里
 
-[![Version](https://img.shields.io/github/v/release/Xr810/LLM-Usage-Bar?color=blue&label=version)](https://github.com/Xr810/LLM-Usage-Bar/releases)
-[![Platform](https://img.shields.io/badge/platform-macOS-lightgrey.svg)](https://github.com/Xr810/LLM-Usage-Bar/releases)
+[![Platform](https://img.shields.io/badge/platform-macOS%2012%2B-lightgrey.svg)](#安装)
 [![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-orange.svg)](https://tauri.app/)
-[![Downloads](https://img.shields.io/github/downloads/Xr810/LLM-Usage-Bar/total)](https://github.com/Xr810/LLM-Usage-Bar/releases/latest)
-
-<a href="https://www.star-history.com/#Xr810/LLM-Usage-Bar&Date"><picture><source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/badge?repo=Xr810/LLM-Usage-Bar&theme=dark" /><img alt="Star History Rank" src="https://api.star-history.com/badge?repo=Xr810/LLM-Usage-Bar" width="196" height="55" /></picture></a>
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 [English](README.md) | 中文 | [日本語](README_JA.md) | [Deutsch](README_DE.md) | [更新日志](CHANGELOG.md)
 
 </div>
 
-## 为什么选择 LLM Usage Bar？
+## 它做什么
 
-现代 AI 编程依赖于 Claude Code、Claude Desktop、Codex、Gemini CLI、OpenCode、OpenClaw 和 Hermes 等工具——但每个工具都有自己的配置格式。切换 API 供应商意味着手动编辑 JSON、TOML 或 `.env` 文件，而在多个工具之间缺乏一个统一管理 MCP, SKILLS 的方式。
+同时用 Claude Code 和 Codex 的话，用量是散在几个永远对不上的地方的：Claude 订阅有五小时窗口和每周窗口，Codex 有自己的 OAuth 额度，另外还有一堆按 token 计费的 API key。每个都有自己的页面、自己的重置时钟，没有一个共同的总数。
 
-**LLM Usage Bar** 为你提供一个桌面应用来管理所有支持的 AI 工具。无需手动编辑配置文件，你将获得一个可视化界面，一键将供应商导入应用，一键在不同的供应商之间进行切换，内置 50+ 供应商预设、统一的 MCP, SKILLS 管理以及系统托盘即时切换功能——所有操作都基于可靠的 SQLite 数据库和原子写入机制，保护你的配置不被损坏。
+LLM Usage Bar 在本地把这些全读出来，在菜单栏给出一个答案：**还剩多少，以及你消耗得有多快。**
 
-- **一个应用，七个工具** — 在单一界面中管理 Claude Code、Claude Desktop、Codex、Gemini CLI、OpenCode、OpenClaw 和 Hermes
-- **告别手动编辑** — 50+ 供应商预设，包括 AWS Bedrock、NVIDIA NIM 和社区中转服务；一键即可切换
-- **统一 MCP, SKILLS 管理** — 一个面板管理 Claude、Codex、Gemini、OpenCode 和 Hermes 的 MCP, SKILLS, 支持双向同步
-- **系统托盘快速切换** — 从托盘菜单即时切换供应商，无需打开完整应用
-- **云同步** — 通过 Dropbox、OneDrive、iCloud 或 WebDAV 服务器在不同设备之间同步供应商数据
-- **macOS 原生** — 基于 Tauri 2 构建，支持 macOS 12 及以上
-- **小工具** - 内置了多种小工具来解决首次安装登录确认、禁止签名、插件拓展同步等多种功能
+它不代理你的请求，不管理你的 CLI 配置，也不需要注册账号。它读的是你的工具本来就写在磁盘上的会话日志和额度文件，以及用你自己提供的 key 去调供应商的账单接口。
 
-## 界面预览
+## 它跟踪两类东西
 
-|                  主界面                   |                  添加供应商                  |
-| :---------------------------------------: | :------------------------------------------: |
-| ![主界面](assets/screenshots/main-zh.png) | ![添加供应商](assets/screenshots/add-zh.png) |
+**订阅额度** —— 你已经付过钱的那些按百分比计的窗口。
 
-## 功能特性
+- **Claude** —— 五小时和每周两个窗口，来自 Claude Desktop 的本地套餐历史和 Claude Code 的状态栏桥接。重置时刻会被锁存，因此不管哪个数据源最后刷新它都不会丢，并且始终绑定在提供它的那个账号上。
+- **Codex** —— 用你已有的 OAuth 会话查询额度。
+- **Coding Plan** —— Kimi For Coding、智谱 GLM（个人版与团队版）、MiniMax、火山方舟。带用量重置次数的套餐会显示还剩几次以及各自的过期时间。
 
-[完整更新日志](CHANGELOG.md) | [发布说明](docs/release-notes/v3.16.1-zh.md)
+**API 花费** —— 真金白银，按 key 算。
 
-### 供应商管理
+- 给一个 Provider 配置一列**具名 API key**，每把 key 各自报告自己的日花费、月花费、剩余预算，以及数字是什么时候抓取的。有两把以上 key 的 Provider 还会显示合计。
+- 花费来自供应商自己的账单接口。目前接好的是 OpenRouter；其他预设需要先接上各自的接口才会有数字。
+- 可以给单个 Provider 设日预算，也可以设一个总的 API 预算，超速了菜单栏会告诉你。
 
-- **7 个支持工具，50+ 预设** — Claude Code、Claude Desktop、Codex、Gemini CLI、OpenCode、OpenClaw、Hermes；复制 key 即可一键导入
-- **通用供应商** — 一份配置同步到 Claude Code、Codex 和 Gemini CLI
-- 一键切换、系统托盘快速访问、拖拽排序、导入导出
+## 用量红绿灯
 
-### 代理与故障转移
+菜单栏只给一个指示，而不是丢给你一个要自己解读的数字。它把当前的燃烧速度投影到重置时钟剩下的时间上：
 
-- **本地代理热切换** — 格式转换、自动故障转移、熔断器、供应商健康监控和整流器
-- **应用级代理接管** — 独立为 Claude、Codex 或 Gemini 配置代理，具体到单个供应商
+- **健康** —— 按这个速度，窗口结束时还有富余
+- **警告** —— 按这个速度，会在重置前用完
+- **危急** —— 已经越过那个点了
 
-### MCP、Prompts 与 Skills
+打开弹窗能看到判断依据：实测的速度、投影的结果、以及距离窗口翻篇还有多久。
 
-- **统一 MCP 面板** — 管理 Claude、Codex、Gemini、OpenCode 和 Hermes 的 MCP 服务器，双向同步
-- **Prompts** — Markdown 编辑器，跨应用同步（CLAUDE.md / AGENTS.md / GEMINI.md），回填保护
-- **Skills** — 从 GitHub 仓库或 ZIP 文件一键安装，自定义仓库管理，支持软连接和文件复制
+## 数字从哪来
 
-### 用量与成本追踪
+| 来源                         | 提供什么                    | 怎么拿到的                                           |
+| ---------------------------- | --------------------------- | ---------------------------------------------------- |
+| Claude Code / Codex 会话日志 | token、模型、每次请求的成本 | 从 CLI 本地写的 JSONL 文件导入                       |
+| Claude Desktop 套餐历史      | 五小时和每周的百分比        | 本地 JSON，由该 app 自己刷新                         |
+| Claude Code 状态栏           | 百分比**以及**重置时刻      | 本地缓存，在会话渲染状态栏时写入                     |
+| Codex OAuth                  | 订阅额度                    | 用你已有的 OAuth 会话签名请求                        |
+| Coding Plan 接口             | 套餐额度与剩余重置次数      | Kimi、GLM、MiniMax 用 API key；火山方舟用 AK/SK 签名 |
+| 供应商账单接口               | 每把 key 的花费与额度上限   | 用你保存的 key 直接调用                              |
 
-- **用量仪表盘** — 跨供应商追踪支出、请求数和 Token 用量，趋势图表、详细请求日志和自定义模型定价
+没有本地代理，也不拦截任何请求。工具没写到磁盘上、接口也不报告的东西，这个 app 就是不知道。
 
-### 会话管理器与工作区
+## 分类视图
 
-- 浏览、搜索和恢复支持的会话来源
-- **工作区编辑器**（OpenClaw）— 编辑 Agent 文件（AGENTS.md、SOUL.md 等），支持 Markdown 预览
+三个 Tab 共用同一个时间范围 —— 今天、7 天、30 天或一年：
 
-### 系统与平台
+- **Providers** —— 每个 Provider 的花费与 token，配 12 个月的每日活跃热力图和按小时/按天的趋势图
+- **Models** —— 钱到底花在哪些模型上
+- **Agents** —— 是哪个工具花的；可以显式绑定 Agent 与 Provider，处理那些否则无法归属的流量
 
-- **云同步** — 自定义配置目录（Dropbox、OneDrive、iCloud、坚果云、NAS）及 WebDAV 服务器同步
-- 深色 / 浅色 / 跟随系统主题、开机自启、通过 Release 页面手动更新、原子写入、自动备份、国际化（简中/繁中/英/日）
+每一次请求都可以展开查看，成本按你掌控的定价重算：可以刷新官方价目表，也可以为任一模型在某个 Provider 下单独覆盖价格。
+
+## 安装
+
+目前还没有发布任何 release，需要自己构建 —— 要求 macOS 12 及以上：
+
+```bash
+pnpm install && pnpm build:local:mac
+```
+
+这会构建并签名，产物在 `release/tauri-target/release/bundle/macos/LLM Usage Bar.app`，然后停下。去掉 `--build-only`（即直接跑 `./script/build_and_run.sh`）则会顺带装进 `/Applications` 并启动，还带一道校验 —— 新包起不来就自动恢复上一个版本。
+
+> **升级是单向的。** app 首次启动会把数据库向前迁移，迁移前自动备份。一旦迁移完成，旧版本就再也打不开它了 —— 版本上限会直接拒绝，而不是冒险去写。装之前想清楚。
+
+## 数据都在本地
+
+| 路径                                | 内容                                         |
+| ----------------------------------- | -------------------------------------------- |
+| `~/.llm-usage-bar/llm-usage-bar.db` | SQLite —— 用量事件、Provider、定价、额度快照 |
+| `~/.llm-usage-bar/settings.json`    | 设备级 UI 偏好                               |
+| `~/.llm-usage-bar/backups/`         | 迁移前自动备份，默认保留最近 10 份           |
+| `~/.llm-usage-bar/logs/`            | 应用日志                                     |
+
+API key 存在 macOS 钥匙串里，**不进数据库，也不进日志**。花费数字从不写入日志文件。
+
+可选的同步 —— 数据库可以放在自定义配置目录（iCloud、Dropbox、OneDrive、NAS），也可以推到 WebDAV 或 S3 兼容存储。默认关闭。
 
 ## 常见问题
 
 <details>
-<summary><strong>LLM Usage Bar 支持哪些 AI 工具？</strong></summary>
+<summary><strong>我需要改变使用 Claude Code 或 Codex 的方式吗？</strong></summary>
 
-LLM Usage Bar 支持七个工具：**Claude Code**、**Claude Desktop**、**Codex**、**Gemini CLI**、**OpenCode**、**OpenClaw** 和 **Hermes**。每个工具都有专属的供应商预设和配置管理。
-
-</details>
-
-<details>
-<summary><strong>切换供应商后需要重启终端吗？</strong></summary>
-
-大多数工具需要重启终端或 CLI 工具才能使更改生效。例外的是 **Claude Code**，它目前支持供应商数据的热切换，无需重启。
+不需要。这个 app 读的是那些工具本来就在写的文件，不代理、不注入、不改写任何东西。就算你把它卸载了，你的 CLI 也不受影响。
 
 </details>
 
 <details>
-<summary><strong>切换供应商之后我的插件配置怎么不见了？</strong></summary>
+<summary><strong>为什么某个 Provider 没有花费数字？</strong></summary>
 
-LLM Usage Bar 使用“通用配置片段”功能，在不同的供应商之间传递 Key 和请求地址之外的通用数据，您可以在“编辑供应商”菜单的“通用配置面板”里，点击“从当前供应商提取”，把所有的通用数据提取到通用配置中，之后在新建“供应商”的时候，只要勾选“应用通用配置”（默认勾选），就会把插件等数据写入到新的供应商配置中。您的所有配置项都会保存在运行本软件的时候，第一次导入的默认供应商里面，不会丢失。
-
-</details>
-
-<details>
-<summary><strong>macOS 安装</strong></summary>
-
-LLM Usage Bar macOS 版本已通过 Apple 代码签名和公证，可直接下载安装，无需额外操作。推荐使用 `.dmg` 安装包。
+因为花费来自供应商自己的账单接口，只有接好接口的预设才报得出来。目前接好的是 OpenRouter（`GET /api/v1/key`，作用域就是发起调用的那把 key）。其他供应商需要先把各自的接口接上。一个既没有接口、会话日志里也归不到它头上的 Provider，显示为空是正常的。
 
 </details>
 
 <details>
-<summary><strong>为什么总有一个正在激活中的供应商无法删除？</strong></summary>
+<summary><strong>为什么某把 key 的数字被标注成「属于已替换的凭据」？</strong></summary>
 
-本软件的设计原则是“最小侵入性”，即使卸载本软件，也不会影响应用的正常使用。
-
-所以系统总会保留一个正在激活中的配置，因为如果将所有配置全部删除，该应用将无法正常使用。如果你不经常使用某个对应的应用，可以在设置中关掉该应用的显示。如果你想切换回官方登录，可以参考下条。
+因为事实如此。替换一把 key 并不会把旧 key 已经产生的花费追溯性地转移过来，所以这些数字会被明确标出，而不是悄悄并进当前的合计里。
 
 </details>
 
 <details>
-<summary><strong>如何切换回官方登录？</strong></summary>
+<summary><strong>Claude 显示了百分比，却没有重置时间，为什么？</strong></summary>
 
-可以在预设供应商里面添加一个官方供应商。切换过去之后，执行一遍 Log out / Log in 流程，之后便可以在官方供应商和第三方供应商之间随意切换。CodeX 可以在不同官方供应商之间进行切换，方便多个 Plus 或者 Team 账号之间切换。
+Claude 的两个本地数据源里只有一个带重置时刻 —— Claude Code 的状态栏桥接，它只在终端会话渲染状态栏时写入。Claude Desktop 的套餐历史有百分比，但从来不带重置时刻。app 见到一次就会把它锁存下来，一直用到它过期为止；但如果那个桥接从没跑过，就没有东西可锁存 —— 这时它会明说，而不是显示一个占位符。
 
 </details>
 
 <details>
-<summary><strong>我的数据存储在哪里？</strong></summary>
+<summary><strong>能跟踪在另一台机器上使用的订阅吗？</strong></summary>
 
-- **数据库**：`~/.llm-usage-bar/llm-usage-bar.db`（SQLite — 供应商、MCP、提示词、技能）
-- **本地设置**：`~/.llm-usage-bar/settings.json`（设备级 UI 偏好设置）
-- **备份**：`~/.llm-usage-bar/backups/`（自动轮换，保留最近 10 个）
-- **SKILLS**：`~/.llm-usage-bar/skills/`（默认通过软链接连接到对应应用）
-- **技能备份**：`~/.llm-usage-bar/skill-backups/`（卸载前自动创建，保留最近 20 个）
+不能。所有数据都来自本机的本地文件，以及作用域限定在单把 key 的接口。别处用的 key 对按 key 计的接口是不可见的，另一台机器的会话日志也不在这里，无从导入。
+
+</details>
+
+<details>
+<summary><strong>界面支持哪些语言？</strong></summary>
+
+English、简体中文、繁體中文、日本語。
 
 </details>
 
 ## 文档
 
-如需了解各项功能的详细使用方法，请查阅 **[用户手册](docs/user-manual/zh/README.md)** — 涵盖供应商管理、MCP/Prompts/Skills、代理与故障转移等全部功能。
+- [更新日志](CHANGELOG.md)
+- [贡献指南](CONTRIBUTING.md) · [安全策略](SECURITY.md) · [支持](SUPPORT.md)
 
-## 快速开始
+> `docs/user-manual/` 讲的仍然是已经移除的 Provider 切换、代理、MCP、Prompts 与 Skills 功能 —— 在重写之前不从这里链接。
 
-### 基本使用
+## 技术栈
 
-1. **添加供应商**：点击"添加供应商" → 选择预设或创建自定义配置
-2. **切换供应商**：
-   - 主界面：选择供应商 → 点击"启用"
-   - 系统托盘：直接点击供应商名称（立即生效）
-3. **生效方式**：重启终端或对应的 CLI 工具以应用更改（CLaude Code 无需重启）
-4. **恢复官方登录**：添加"官方登录"预设，重启 CLI 工具后按照其登录/OAuth 流程操作
+[Tauri 2](https://tauri.app/) · Rust · React 19 · TypeScript · SQLite
 
-### MCP、Prompts、Skills 与会话
+## 许可证
 
-- **MCP**：点击"MCP"按钮 → 通过模板或自定义配置添加服务器 → 切换各应用同步开关
-- **Prompts**：点击"Prompts" → 使用 Markdown 编辑器创建预设 → 激活后同步到 live 文件
-- **Skills**：点击"Skills" → 浏览 GitHub 仓库 → 一键安装到支持的应用
-- **会话**：点击"Sessions" → 浏览、搜索和恢复支持的会话来源
-
-> **注意**：首次启动可以手动导入现有 CLI 工具配置作为默认供应商。
-
-## 下载安装
-
-LLM Usage Bar 支持 **macOS 12 (Monterey) 及以上版本**。请从 [Releases](https://github.com/Xr810/LLM-Usage-Bar/releases) 页面下载 `LLM-Usage-Bar-v{版本号}-macOS.dmg`（推荐）或 `.zip`。
-
-应用已完成 Apple 代码签名和公证。当前未启用应用内托管更新，请通过 Release 页面手动更新。
-
-兼容说明：LLM Usage Bar 不会修改原版 Legacy CC Switch 的数据目录 `~/.cc-switch`。
-
-<details>
-<summary><strong>架构总览</strong></summary>
-
-### 设计原则
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    前端 (React + TS)                         │
-│  ┌─────────────┐  ┌──────────────┐  ┌──────────────────┐    │
-│  │ Components  │  │    Hooks     │  │  TanStack Query  │    │
-│  │   （UI）     │──│ （业务逻辑）   │──│   （缓存/同步）    │    │
-│  └─────────────┘  └──────────────┘  └──────────────────┘    │
-└────────────────────────┬────────────────────────────────────┘
-                         │ Tauri IPC
-┌────────────────────────▼────────────────────────────────────┐
-│                  后端 (Tauri + Rust)                         │
-│  ┌─────────────┐  ┌──────────────┐  ┌──────────────────┐    │
-│  │  Commands   │  │   Services   │  │  Models/Config   │    │
-│  │ （API 层）   │──│  （业务层）    │──│    （数据）       │    │
-│  └─────────────┘  └──────────────┘  └──────────────────┘    │
-└─────────────────────────────────────────────────────────────┘
-```
-
-**核心设计模式**
-
-- **SSOT**（单一事实源）：所有数据存储在 `~/.llm-usage-bar/llm-usage-bar.db`（SQLite）
-- **双层存储**：SQLite 存储可同步数据，JSON 存储设备级设置
-- **双向同步**：切换时写入 live 文件，编辑当前供应商时从 live 回填
-- **原子写入**：临时文件 + 重命名模式防止配置损坏
-- **并发安全**：Mutex 保护的数据库连接避免竞态条件
-- **分层架构**：清晰分离（Commands → Services → DAO → Database）
-
-**核心组件**
-
-- **ProviderService**：供应商增删改查、切换、回填、排序
-- **McpService**：MCP 服务器管理、导入导出、live 文件同步
-- **ProxyService**：本地 Proxy 模式，支持热切换和格式转换
-- **SessionManager**：全应用会话历史浏览
-- **ConfigService**：配置导入导出、备份轮换
-- **SpeedtestService**：API 端点延迟测量
-
-</details>
-
-<details>
-<summary><strong>开发指南</strong></summary>
-
-### 环境要求
-
-- Node.js 18+
-- pnpm 8+
-- Rust 1.85+
-- Tauri CLI 2.8+
-
-### 开发命令
-
-```bash
-# 安装依赖
-pnpm install
-
-# 开发模式（热重载）
-pnpm dev
-
-# 类型检查
-pnpm typecheck
-
-# 代码格式化
-pnpm format
-
-# 检查代码格式
-pnpm format:check
-
-# 运行前端单元测试
-pnpm test:unit
-
-# 监听模式运行测试（推荐开发时使用）
-pnpm test:unit:watch
-
-# 构建应用
-pnpm build
-
-# 构建调试版本
-pnpm tauri build --debug
-```
-
-### Rust 后端开发
-
-```bash
-
-# 格式化 Rust 代码
-pnpm rust -- fmt --manifest-path src-tauri/Cargo.toml
-
-# 运行 clippy 检查
-pnpm rust -- clippy --manifest-path src-tauri/Cargo.toml
-
-# 运行后端测试
-pnpm rust -- test --manifest-path src-tauri/Cargo.toml
-
-# 运行特定测试
-pnpm rust -- test --manifest-path src-tauri/Cargo.toml test_name
-
-# 运行带测试 hooks 的测试
-pnpm rust -- test --manifest-path src-tauri/Cargo.toml --features test-hooks
-```
-
-### 测试说明
-
-**前端测试**：
-
-- 使用 **vitest** 作为测试框架
-- 使用 **MSW (Mock Service Worker)** 模拟 Tauri API 调用
-- 使用 **@testing-library/react** 进行组件测试
-
-**运行测试**：
-
-```bash
-# 运行所有测试
-pnpm test:unit
-
-# 监听模式（自动重跑）
-pnpm test:unit:watch
-
-# 带覆盖率报告
-pnpm test:unit --coverage
-```
-
-### 技术栈
-
-**前端**：React 18 · TypeScript · Vite · TailwindCSS 3.4 · TanStack Query v5 · react-i18next · react-hook-form · zod · shadcn/ui · @dnd-kit
-
-**后端**：Tauri 2.8 · Rust · serde · tokio · thiserror · tauri-plugin-updater/process/dialog/store/log
-
-**测试**：vitest · MSW · @testing-library/react
-
-</details>
-
-<details>
-<summary><strong>项目结构</strong></summary>
-
-```
-├── src/                        # 前端 (React + TypeScript)
-│   ├── components/
-│   │   ├── providers/          # 供应商管理
-│   │   ├── mcp/                # MCP 面板
-│   │   ├── prompts/            # Prompts 管理
-│   │   ├── skills/             # Skills 管理
-│   │   ├── sessions/           # 会话管理器
-│   │   ├── proxy/              # Proxy 模式面板
-│   │   ├── openclaw/           # OpenClaw 配置面板
-│   │   ├── settings/           # 设置（终端/备份/关于）
-│   │   ├── deeplink/           # Deep Link 导入
-│   │   ├── env/                # 环境变量管理
-│   │   ├── universal/          # 跨应用配置
-│   │   ├── usage/              # 用量统计
-│   │   └── ui/                 # shadcn/ui 组件库
-│   ├── hooks/                  # 自定义 hooks（业务逻辑）
-│   ├── lib/
-│   │   ├── api/                # Tauri API 封装（类型安全）
-│   │   └── query/              # TanStack Query 配置
-│   ├── locales/                # 翻译 (zh/zh-TW/en/ja)
-│   ├── config/                 # 预设 (providers/mcp)
-│   └── types/                  # TypeScript 类型定义
-├── src-tauri/                  # 后端 (Rust)
-│   └── src/
-│       ├── commands/           # Tauri 命令层（按领域）
-│       ├── services/           # 业务逻辑层
-│       ├── database/           # SQLite DAO 层
-│       ├── proxy/              # Proxy 模块
-│       ├── session_manager/    # 会话管理
-│       ├── deeplink/           # Deep Link 处理
-│       └── mcp/                # MCP 同步模块
-├── tests/                      # 前端测试
-└── assets/                     # 截图 & 合作商资源
-```
-
-</details>
-
-## 贡献
-
-欢迎提交 Issue 反馈问题和建议！
-
-提交 PR 前请确保：
-
-- 通过类型检查：`pnpm typecheck`
-- 通过格式检查：`pnpm format:check`
-- 通过单元测试：`pnpm test:unit`
-
-新功能开发前，欢迎先开 Issue 讨论实现方案，不适合项目的功能性 PR 有可能会被关闭。
-
-## Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=Xr810/LLM-Usage-Bar&type=Date)](https://www.star-history.com/#Xr810/LLM-Usage-Bar&Date)
-
-## License
-
-MIT © Jason Young
+[MIT](LICENSE)

@@ -2,353 +2,151 @@
 
 # LLM Usage Bar
 
-### The All-in-One Manager for Claude Code, Claude Desktop, Codex, Gemini CLI, OpenCode, OpenClaw & Hermes Agent
+### See what your AI coding tools are actually costing you — subscription quota and API spend, in one menu bar
 
-[![Version](https://img.shields.io/github/v/release/Xr810/LLM-Usage-Bar?color=blue&label=version)](https://github.com/Xr810/LLM-Usage-Bar/releases)
-[![Platform](https://img.shields.io/badge/platform-macOS-lightgrey.svg)](https://github.com/Xr810/LLM-Usage-Bar/releases)
+[![Platform](https://img.shields.io/badge/platform-macOS%2012%2B-lightgrey.svg)](#install)
 [![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-orange.svg)](https://tauri.app/)
-[![Downloads](https://img.shields.io/github/downloads/Xr810/LLM-Usage-Bar/total)](https://github.com/Xr810/LLM-Usage-Bar/releases/latest)
-
-<a href="https://www.star-history.com/#Xr810/LLM-Usage-Bar&Date"><picture><source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/badge?repo=Xr810/LLM-Usage-Bar&theme=dark" /><img alt="Star History Rank" src="https://api.star-history.com/badge?repo=Xr810/LLM-Usage-Bar" width="196" height="55" /></picture></a>
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 English | [中文](README_ZH.md) | [日本語](README_JA.md) | [Deutsch](README_DE.md) | [Changelog](CHANGELOG.md)
 
 </div>
 
-## Why LLM Usage Bar?
+## What it does
 
-Modern AI-powered coding relies on tools like Claude Code, Claude Desktop, Codex, Gemini CLI, OpenCode, OpenClaw, and Hermes — but each has its own configuration format. Switching API providers means manually editing JSON, TOML, or `.env` files, and there is no unified way to manage MCP and Skills across multiple tools.
+If you code with Claude Code and Codex, your usage is split across places that never add up: a five-hour window and a weekly window on the Claude subscription, an OAuth quota on Codex, and a separate pile of API keys billed by the token. Each has its own page, its own reset clock, and no shared total.
 
-**LLM Usage Bar** gives you a single desktop app to manage all supported AI tools. Instead of editing config files by hand, you get a visual interface to import providers with one click, switch between them instantly, with 50+ built-in provider presets, unified MCP and Skills management, and system tray quick switching — all backed by a reliable SQLite database with atomic writes that protect your configs from corruption.
+LLM Usage Bar reads all of it locally and puts one answer in the menu bar: **how much is left, and how fast you are going through it.**
 
-- **One App, Seven Tools** — Manage Claude Code, Claude Desktop, Codex, Gemini CLI, OpenCode, OpenClaw, and Hermes from a single interface
-- **No More Manual Editing** — 50+ provider presets including AWS Bedrock, NVIDIA NIM, and community relays; just pick and switch
-- **Unified MCP & Skills Management** — One panel to manage MCP servers and Skills across Claude, Codex, Gemini, OpenCode, and Hermes with bidirectional sync
-- **System Tray Quick Switch** — Switch providers instantly from the tray menu, no need to open the full app
-- **Cloud Sync** — Sync provider data across devices via Dropbox, OneDrive, iCloud, or WebDAV servers
-- **macOS Native** — Native desktop app for macOS 12 and later, built with Tauri 2
-- **Built-in Utilities** — Includes various utilities for first-launch login confirmation, signature bypass, plugin extension sync, and more
+It does not proxy your requests, does not manage your CLI configuration, and does not need an account. It reads the session logs and quota files your tools already write to disk, and calls provider billing endpoints with keys you supply.
 
-## Screenshots
+## Two things it tracks
 
-|                  Main Interface                   |                  Add Provider                  |
-| :-----------------------------------------------: | :--------------------------------------------: |
-| ![Main Interface](assets/screenshots/main-en.png) | ![Add Provider](assets/screenshots/add-en.png) |
+**Subscription quota** — the percentage-based windows on plans you already pay for.
 
-## Features
+- **Claude** — both the five-hour and weekly windows, read from Claude Desktop's local plan history and Claude Code's status-line bridge. The reset instant is latched so it survives whichever source refreshes last, and stays bound to the account that supplied it.
+- **Codex** — quota from your existing OAuth session.
+- **Coding plans** — Kimi For Coding, Zhipu GLM (personal and team), MiniMax, and Volcano Ark. Plans that grant usage-limit resets show how many are left and when they expire.
 
-[Full Changelog](CHANGELOG.md) | [Release Notes](docs/release-notes/v3.16.1-en.md)
+**API spend** — money, per key.
 
-### Provider Management
+- Give a Provider a list of **named API keys** and each one reports its own daily and monthly spend, remaining budget, and when the figures were last fetched. Providers with more than one key also show a combined total.
+- Spend is read from the provider's own billing endpoint. OpenRouter is wired up today; other presets need their own endpoint before they report anything.
+- Set a daily budget per Provider, or an overall API budget, and the bar tells you when you are outrunning it.
 
-- **7 supported tools, 50+ presets** — Claude Code, Claude Desktop, Codex, Gemini CLI, OpenCode, OpenClaw, Hermes; copy your key and import with one click
-- **Universal providers** — One config syncs to Claude Code, Codex, and Gemini CLI
-- One-click switching, system tray quick access, drag-and-drop sorting, import/export
+## The usage light
 
-### Proxy & Failover
+The menu bar shows one indicator, not a number you have to interpret. It projects your current burn rate against the time left on the reset clock:
 
-- **Local proxy with hot-switching** — Format conversion, auto-failover, circuit breaker, provider health monitoring, and request rectifier
-- **App-level takeover** — Independently proxy Claude, Codex, or Gemini, down to individual providers
+- **Healthy** — at this pace you finish the window with room to spare
+- **Warning** — you are on track to run out before the reset
+- **Critical** — you are past that point
 
-### MCP, Prompts & Skills
+Open the popover for the detail behind the call: the pace it measured, what it projects, and how long until the window rolls over.
 
-- **Unified MCP panel** — Manage MCP servers across Claude, Codex, Gemini, OpenCode, and Hermes with bidirectional sync
-- **Prompts** — Markdown editor with cross-app sync (CLAUDE.md / AGENTS.md / GEMINI.md) and backfill protection
-- **Skills** — One-click install from GitHub repos or ZIP files, custom repository management, with symlink and file copy support
+## Where the numbers come from
 
-### Usage & Cost Tracking
+| Source                           | What it provides                      | How                                                           |
+| -------------------------------- | ------------------------------------- | ------------------------------------------------------------- |
+| Claude Code / Codex session logs | Tokens, models, per-request cost      | Imported from the JSONL files the CLIs write locally          |
+| Claude Desktop plan history      | Five-hour and weekly percentages      | Local JSON, refreshed by the app itself                       |
+| Claude Code status line          | Percentages **and** the reset instant | Local cache, written while a session renders its status line  |
+| Codex OAuth                      | Subscription quota                    | Request signed with your existing OAuth session               |
+| Coding-plan endpoints            | Plan quota and remaining resets       | Kimi, GLM, MiniMax by API key; Volcano Ark by AK/SK signature |
+| Provider billing endpoints       | Per-key spend and limits              | Direct call with the key you saved                            |
 
-- **Usage dashboard** — Track spending, requests, and tokens with trend charts, detailed request logs, and custom per-model pricing
+There is no local proxy and no request interception. Anything a tool does not write to disk, and no endpoint reports, the app does not know.
 
-### Session Manager & Workspace
+## Breakdowns
 
-- Browse, search, and restore conversation history across supported session sources
-- **Workspace editor** (OpenClaw) — Edit agent files (AGENTS.md, SOUL.md, etc.) with Markdown preview
+Three tabs over the same time range — today, 7 days, 30 days, or a year:
 
-### System & Platform
+- **Providers** — spend and tokens per Provider, with a 12-month daily activity heatmap and an hourly or daily trend chart
+- **Models** — which models the money actually went to
+- **Agents** — which tool spent it, with explicit Agent-to-Provider bindings for traffic that would otherwise be unattributed
 
-- **Cloud sync** — Custom config directory (Dropbox, OneDrive, iCloud, NAS) and WebDAV server sync
-- Dark / Light / System theme, auto-launch, manual Release updates, atomic writes, auto-backups, i18n (zh/zh-TW/en/ja)
+Every request is inspectable, and cost is recomputed from pricing you control: refresh the official price list, or override any model's rate per Provider.
+
+## Install
+
+There are no published releases yet. Build it yourself — macOS 12 or later:
+
+```bash
+pnpm install && pnpm build:local:mac
+```
+
+That builds and signs the app at `release/tauri-target/release/bundle/macos/LLM Usage Bar.app` and stops. Drop `--build-only` — run `./script/build_and_run.sh` — to also install it to `/Applications` and launch it, with a verification pass that restores the previous app if the new bundle fails to start.
+
+> **One-way upgrade.** The app migrates its database forward on first launch and takes an automatic backup first. Once migrated, an older build can no longer open it — the version ceiling refuses rather than risking the data. Install deliberately.
+
+## Your data stays local
+
+| Path                                | Contents                                                   |
+| ----------------------------------- | ---------------------------------------------------------- |
+| `~/.llm-usage-bar/llm-usage-bar.db` | SQLite — usage events, providers, pricing, quota snapshots |
+| `~/.llm-usage-bar/settings.json`    | Device-level UI preferences                                |
+| `~/.llm-usage-bar/backups/`         | Automatic pre-migration backups, 10 most recent by default |
+| `~/.llm-usage-bar/logs/`            | Application log                                            |
+
+API keys are stored in the macOS Keychain, never in the database and never in the logs. Spend figures are never written to the log file.
+
+Optional sync — the database can be kept in a custom config directory (iCloud, Dropbox, OneDrive, NAS) or pushed to WebDAV or S3-compatible storage. Off by default.
 
 ## FAQ
 
 <details>
-<summary><strong>Which AI tools does LLM Usage Bar support?</strong></summary>
+<summary><strong>Do I need to change how I run Claude Code or Codex?</strong></summary>
 
-LLM Usage Bar supports seven tools: **Claude Code**, **Claude Desktop**, **Codex**, **Gemini CLI**, **OpenCode**, **OpenClaw**, and **Hermes**. Each tool has dedicated provider presets and configuration management.
-
-</details>
-
-<details>
-<summary><strong>Do I need to restart the terminal after switching providers?</strong></summary>
-
-For most tools, yes — restart your terminal or the CLI tool for changes to take effect. The exception is **Claude Code**, which currently supports hot-switching of provider data without a restart.
+No. The app reads files those tools already write. Nothing is proxied, injected, or rewritten. If you uninstall it, your CLIs are unaffected.
 
 </details>
 
 <details>
-<summary><strong>My plugin configuration disappeared after switching providers — what happened?</strong></summary>
+<summary><strong>Why does a Provider show no spend?</strong></summary>
 
-LLM Usage Bar provides a "Shared Config Snippet" feature to pass common data (beyond API keys and endpoints) between providers. Go to "Edit Provider" → "Shared Config Panel" → click "Extract from Current Provider" to save all common data. When creating a new provider, check "Write Shared Config" (enabled by default) to include plugin data in the new provider. All your configuration items are preserved in the default provider imported when you first launched the app.
-
-</details>
-
-<details>
-<summary><strong>macOS installation</strong></summary>
-
-LLM Usage Bar for macOS is code-signed and notarized by Apple. You can download and install it directly — no extra steps needed. We recommend using the `.dmg` installer.
+Because spend comes from the provider's own billing endpoint, and only presets wired to one can report it. OpenRouter is wired up (`GET /api/v1/key`, which is scoped to the key that authenticates the call). Others need their endpoint added first. A Provider with no endpoint and no session-log attribution will legitimately show nothing.
 
 </details>
 
 <details>
-<summary><strong>Why can't I delete the currently active provider?</strong></summary>
+<summary><strong>Why is a key's total flagged as belonging to a replaced credential?</strong></summary>
 
-LLM Usage Bar follows a "minimal intrusion" design principle — even if you uninstall the app, your CLI tools will continue to work normally. The system always keeps one active configuration, because deleting all configurations would make the corresponding CLI tool unusable. If you rarely use a specific CLI tool, you can hide it in Settings. To switch back to official login, see the next question.
-
-</details>
-
-<details>
-<summary><strong>How do I switch back to official login?</strong></summary>
-
-Add an official provider from the preset list. After switching to it, run the Log out / Log in flow, and then you can freely switch between the official provider and third-party providers. Codex supports switching between different official providers, making it easy to switch between multiple Plus or Team accounts.
+Because it does. Replacing a key does not retroactively reassign the spend the old one accrued, so those figures are called out rather than folded silently into the current total.
 
 </details>
 
 <details>
-<summary><strong>Where is my data stored?</strong></summary>
+<summary><strong>Claude shows a percentage but no reset time. Why?</strong></summary>
 
-- **Database**: `~/.llm-usage-bar/llm-usage-bar.db` (SQLite — providers, MCP, prompts, skills)
-- **Local settings**: `~/.llm-usage-bar/settings.json` (device-level UI preferences)
-- **Backups**: `~/.llm-usage-bar/backups/` (auto-rotated, keeps 10 most recent)
-- **Skills**: `~/.llm-usage-bar/skills/` (symlinked to corresponding apps by default)
-- **Skill Backups**: `~/.llm-usage-bar/skill-backups/` (created automatically before uninstall, keeps 20 most recent)
+Only one of Claude's two local sources carries a reset instant — the Claude Code status-line bridge, which writes while a terminal session renders its status line. Claude Desktop's plan history has the percentages but never the reset. The app latches the reset once it sees one and keeps serving it until it passes, but if the bridge has never run there is nothing to latch, and the app says so instead of showing a placeholder.
+
+</details>
+
+<details>
+<summary><strong>Can it track a subscription used on another machine?</strong></summary>
+
+No. Everything is read from this machine's local files and from key-scoped endpoints. A key used elsewhere is invisible to a per-key endpoint, and another machine's session logs are not here to import.
+
+</details>
+
+<details>
+<summary><strong>Which languages does the interface support?</strong></summary>
+
+English, 简体中文, 繁體中文, and 日本語.
 
 </details>
 
 ## Documentation
 
-For detailed guides on every feature, check out the **[User Manual](docs/user-manual/en/README.md)** — covering provider management, MCP/Prompts/Skills, proxy & failover, and more.
+- [Changelog](CHANGELOG.md)
+- [Contributing](CONTRIBUTING.md) · [Security policy](SECURITY.md) · [Support](SUPPORT.md)
 
-## Quick Start
+> `docs/user-manual/` still describes the provider-switching, proxy, MCP, prompts and skills features that were removed — it is not linked here until it has been rewritten.
 
-### Basic Usage
+## Built with
 
-1. **Add Provider**: Click "Add Provider" → Choose a preset or create custom configuration
-2. **Switch Provider**:
-   - Main UI: Select provider → Click "Enable"
-   - System Tray: Click provider name directly (instant effect)
-3. **Takes Effect**: Restart your terminal or the corresponding CLI tool to apply changes (Claude Code does not require a restart)
-4. **Back to Official**: Add an "Official Login" preset, restart the CLI tool, then follow its login/OAuth flow
-
-### MCP, Prompts, Skills & Sessions
-
-- **MCP**: Click the "MCP" button → Add servers via templates or custom config → Toggle per-app sync
-- **Prompts**: Click "Prompts" → Create presets with Markdown editor → Activate to sync to live files
-- **Skills**: Click "Skills" → Browse GitHub repos → One-click install to supported apps
-- **Sessions**: Click "Sessions" → Browse, search, and restore conversation history across supported session sources
-
-> **Note**: On first launch, you can manually import existing CLI tool configs as the default provider.
-
-## Download & Installation
-
-LLM Usage Bar supports **macOS 12 (Monterey) and later**. Download `LLM-Usage-Bar-v{version}-macOS.dmg` (recommended) or `.zip` from the [Releases](https://github.com/Xr810/LLM-Usage-Bar/releases) page.
-
-The app is code-signed and notarized. Managed in-app updates are currently unavailable; use the Release page for updates.
-
-Compatibility note: LLM Usage Bar does not modify the original Legacy CC Switch data directory at `~/.cc-switch`.
-
-<details>
-<summary><strong>Architecture Overview</strong></summary>
-
-### Design Principles
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Frontend (React + TS)                    │
-│  ┌─────────────┐  ┌──────────────┐  ┌──────────────────┐    │
-│  │ Components  │  │    Hooks     │  │  TanStack Query  │    │
-│  │   (UI)      │──│ (Bus. Logic) │──│   (Cache/Sync)   │    │
-│  └─────────────┘  └──────────────┘  └──────────────────┘    │
-└────────────────────────┬────────────────────────────────────┘
-                         │ Tauri IPC
-┌────────────────────────▼────────────────────────────────────┐
-│                  Backend (Tauri + Rust)                     │
-│  ┌─────────────┐  ┌──────────────┐  ┌──────────────────┐    │
-│  │  Commands   │  │   Services   │  │  Models/Config   │    │
-│  │ (API Layer) │──│ (Bus. Layer) │──│     (Data)       │    │
-│  └─────────────┘  └──────────────┘  └──────────────────┘    │
-└─────────────────────────────────────────────────────────────┘
-```
-
-**Core Design Patterns**
-
-- **SSOT** (Single Source of Truth): All data stored in `~/.llm-usage-bar/llm-usage-bar.db` (SQLite)
-- **Dual-layer Storage**: SQLite for syncable data, JSON for device-level settings
-- **Dual-way Sync**: Write to live files on switch, backfill from live when editing active provider
-- **Atomic Writes**: Temp file + rename pattern prevents config corruption
-- **Concurrency Safe**: Mutex-protected database connection avoids race conditions
-- **Layered Architecture**: Clear separation (Commands → Services → DAO → Database)
-
-**Key Components**
-
-- **ProviderService**: Provider CRUD, switching, backfill, sorting
-- **McpService**: MCP server management, import/export, live file sync
-- **ProxyService**: Local proxy mode with hot-switching and format conversion
-- **SessionManager**: Conversation history browsing across supported session sources
-- **ConfigService**: Config import/export, backup rotation
-- **SpeedtestService**: API endpoint latency measurement
-
-</details>
-
-<details>
-<summary><strong>Development Guide</strong></summary>
-
-### Environment Requirements
-
-- Node.js 18+
-- pnpm 8+
-- Rust 1.85+
-- Tauri CLI 2.8+
-
-### Development Commands
-
-```bash
-# Install dependencies
-pnpm install
-
-# Dev mode (hot reload)
-pnpm dev
-
-# Type check
-pnpm typecheck
-
-# Format code
-pnpm format
-
-# Check code format
-pnpm format:check
-
-# Run frontend unit tests
-pnpm test:unit
-
-# Run tests in watch mode (recommended for development)
-pnpm test:unit:watch
-
-# Build application
-pnpm build
-
-# Build debug version
-pnpm tauri build --debug
-```
-
-### Rust Backend Development
-
-```bash
-
-# Format Rust code
-pnpm rust -- fmt --manifest-path src-tauri/Cargo.toml
-
-# Run clippy checks
-pnpm rust -- clippy --manifest-path src-tauri/Cargo.toml
-
-# Run backend tests
-pnpm rust -- test --manifest-path src-tauri/Cargo.toml
-
-# Run specific tests
-pnpm rust -- test --manifest-path src-tauri/Cargo.toml test_name
-
-# Run tests with test-hooks feature
-pnpm rust -- test --manifest-path src-tauri/Cargo.toml --features test-hooks
-```
-
-### Testing Guide
-
-**Frontend Testing**:
-
-- Uses **vitest** as test framework
-- Uses **MSW (Mock Service Worker)** to mock Tauri API calls
-- Uses **@testing-library/react** for component testing
-
-**Running Tests**:
-
-```bash
-# Run all tests
-pnpm test:unit
-
-# Watch mode (auto re-run)
-pnpm test:unit:watch
-
-# With coverage report
-pnpm test:unit --coverage
-```
-
-### Tech Stack
-
-**Frontend**: React 18 · TypeScript · Vite · TailwindCSS 3.4 · TanStack Query v5 · react-i18next · react-hook-form · zod · shadcn/ui · @dnd-kit
-
-**Backend**: Tauri 2.8 · Rust · serde · tokio · thiserror · tauri-plugin-updater/process/dialog/store/log
-
-**Testing**: vitest · MSW · @testing-library/react
-
-</details>
-
-<details>
-<summary><strong>Project Structure</strong></summary>
-
-```
-├── src/                        # Frontend (React + TypeScript)
-│   ├── components/
-│   │   ├── providers/          # Provider management
-│   │   ├── mcp/                # MCP panel
-│   │   ├── prompts/            # Prompts management
-│   │   ├── skills/             # Skills management
-│   │   ├── sessions/           # Session Manager
-│   │   ├── proxy/              # Proxy mode panel
-│   │   ├── openclaw/           # OpenClaw config panels
-│   │   ├── settings/           # Settings (Terminal/Backup/About)
-│   │   ├── deeplink/           # Deep Link import
-│   │   ├── env/                # Environment variable management
-│   │   ├── universal/          # Cross-app configuration
-│   │   ├── usage/              # Usage statistics
-│   │   └── ui/                 # shadcn/ui component library
-│   ├── hooks/                  # Custom hooks (business logic)
-│   ├── lib/
-│   │   ├── api/                # Tauri API wrapper (type-safe)
-│   │   └── query/              # TanStack Query config
-│   ├── locales/                # Translations (zh/zh-TW/en/ja)
-│   ├── config/                 # Presets (providers/mcp)
-│   └── types/                  # TypeScript definitions
-├── src-tauri/                  # Backend (Rust)
-│   └── src/
-│       ├── commands/           # Tauri command layer (by domain)
-│       ├── services/           # Business logic layer
-│       ├── database/           # SQLite DAO layer
-│       ├── proxy/              # Proxy module
-│       ├── session_manager/    # Session management
-│       ├── deeplink/           # Deep Link handling
-│       └── mcp/                # MCP sync module
-├── tests/                      # Frontend tests
-└── assets/                     # Screenshots & partner resources
-```
-
-</details>
-
-## Contributing
-
-Issues and suggestions are welcome!
-
-Before submitting PRs, please ensure:
-
-- Pass type check: `pnpm typecheck`
-- Pass format check: `pnpm format:check`
-- Pass unit tests: `pnpm test:unit`
-
-For new features, please open an issue for discussion before submitting a PR. PRs for features that are not a good fit for the project may be closed.
-
-## Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=Xr810/LLM-Usage-Bar&type=Date)](https://www.star-history.com/#Xr810/LLM-Usage-Bar&Date)
+[Tauri 2](https://tauri.app/) · Rust · React 19 · TypeScript · SQLite
 
 ## License
 
-MIT © Jason Young
+[MIT](LICENSE)
