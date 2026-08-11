@@ -153,6 +153,35 @@ describe("SubscriptionProviderCard localized reset countdown", () => {
     ).toBeInTheDocument();
   });
 
+  it("says the reset time is missing rather than dropping the caption row", () => {
+    // Claude's local history reports percentages with no reset instant. The
+    // caption used to render only when a reset existed, so the line vanished
+    // with no explanation and the card changed height between refreshes.
+    const usage = subscriptionUsage();
+    usage.quota!.fiveHourUtilizationPercent = "16";
+    usage.quota!.fiveHourResetsAt = null;
+    usage.quota!.sevenDayUtilizationPercent = "64";
+    usage.quota!.sevenDayResetsAt = null;
+
+    render(
+      <SubscriptionProviderCard
+        usage={usage}
+        layout="compact"
+        onRefreshQuota={vi.fn()}
+        onSyncSessions={vi.fn()}
+      />,
+    );
+
+    // Both windows still have a figure, so neither may fall back to the
+    // "window unavailable" caption — that would misreport live data as absent.
+    expect(screen.getAllByText("Reset time not reported")).toHaveLength(2);
+    expect(
+      screen.queryByText(
+        "This subscription does not provide this quota window",
+      ),
+    ).not.toBeInTheDocument();
+  });
+
   it("keeps the window label readable when that window is unavailable", () => {
     // The unavailable copy is a sentence, not a figure. Putting it in the
     // right-aligned value slot starved the label down to "5 …" in the real app.

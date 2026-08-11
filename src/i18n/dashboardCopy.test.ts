@@ -180,6 +180,8 @@ const requiredKeys = [
   "usageDashboard.editProvider",
   "usageDashboard.disableProvider",
   "usageDashboard.enableProvider",
+  "usageDashboard.resetTimeUnknown",
+  "trayUsage.resetTimeUnknown",
 ] as const;
 
 function readKey(locale: object, path: string): unknown {

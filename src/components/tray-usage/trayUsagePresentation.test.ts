@@ -100,24 +100,32 @@ describe("tray usage time formatting", () => {
       "Pending refresh",
     );
 
-    expect(result).toEqual({ text: "Pending refresh", pending: true });
+    expect(result).toEqual({
+      text: "Pending refresh",
+      pending: true,
+      unreported: false,
+    });
     expect(result.text).not.toContain("-");
   });
 
   it("formats future reset duration with the locale relative-time formatter", () => {
     expect(
       formatResetTime("2026-07-15T22:30:00Z", now, "en-US", "Pending refresh"),
-    ).toEqual({ text: "in 2 hours", pending: false });
+    ).toEqual({ text: "in 2 hours", pending: false, unreported: false });
   });
 
-  it("returns a safe placeholder for invalid or absent reset values", () => {
+  it("marks invalid or absent reset values as unreported, not as a countdown", () => {
+    // A source that carries no reset time is a different fact from a window
+    // that resets soon; callers need to tell them apart to pick copy.
     expect(formatResetTime("invalid", now, "en-US")).toEqual({
       text: "—",
       pending: false,
+      unreported: true,
     });
     expect(formatResetTime(null, now, "en-US")).toEqual({
       text: "—",
       pending: false,
+      unreported: true,
     });
   });
 

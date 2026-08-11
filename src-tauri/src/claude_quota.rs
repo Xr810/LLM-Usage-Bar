@@ -22,16 +22,23 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const CACHE_SCHEMA_VERSION: u8 = 5;
 const CACHE_FILE_NAME: &str = "claude-statusline-quota.json";
 const CACHE_LOCK_FILE_NAME: &str = "claude-statusline-quota.lock";
+const RESET_LATCH_SCHEMA_VERSION: u8 = 1;
+const RESET_LATCH_FILE_NAME: &str = "claude-quota-reset-latch.json";
+const RESET_LATCH_LOCK_FILE_NAME: &str = "claude-quota-reset-latch.lock";
 #[cfg(any(target_os = "macos", test))]
 const DESKTOP_HISTORY_FILE_NAME: &str = "plan-usage-history.json";
 const MAX_STATUSLINE_INPUT_BYTES: u64 = 1_048_576;
 const MAX_STATUSLINE_CACHE_BYTES: u64 = 256 * 1_024;
+const MAX_RESET_LATCH_BYTES: u64 = 256 * 1_024;
 const MAX_DESKTOP_HISTORY_BYTES: u64 = 4 * 1_048_576;
 const MAX_DESKTOP_HISTORY_SAMPLES: usize = 20_000;
 const MAX_CACHED_STATUSLINE_SESSIONS: usize = 32;
 const MAX_CLI_ACCOUNT_BYTES: u64 = 4 * 1_048_576;
 const MAX_CLAUDE_VERSION_CHARS: usize = 64;
 const MAX_CACHE_AGE_SECONDS: i64 = 15 * 60;
+const RESET_LATCH_PERCENTAGE_TOLERANCE: f64 = 1.0;
+const RESET_LATCH_IDENTITY_TOLERANCE: f64 = 2.0;
+const RESET_LATCH_OBSERVATION_TOLERANCE_MS: u64 = 15 * 60 * 1_000;
 const CACHE_LOCK_TIMEOUT: Duration = Duration::from_millis(250);
 const CACHE_LOCK_RETRY_DELAY: Duration = Duration::from_millis(10);
 
@@ -112,6 +119,64 @@ struct CachedWindow {
     observed_at: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClaudeQuotaResetLatch {
+    schema_version: u8,
+    windows: LatchedResetWindows,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LatchedResetWindows {
+    #[serde(rename = "five_hour", skip_serializing_if = "Option::is_none")]
+    five_hour: Option<LatchedResetWindow>,
+    #[serde(rename = "seven_day", skip_serializing_if = "Option::is_none")]
+    seven_day: Option<LatchedResetWindow>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LatchedResetWindow {
+    resets_at: i64,
+    latched_at: i64,
+    utilization_at_latch: f64,
+    /// The Desktop organization whose percentage confirmed this latch. Switching
+    /// organizations replaces the percentages wholesale, so the previous
+    /// organization's reset instant must not ride along.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    desktop_org: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum QuotaWindowKind {
+    FiveHour,
+    SevenDay,
+}
+
+impl QuotaWindowKind {
+    fn name(self) -> &'static str {
+        match self {
+            Self::FiveHour => TIER_FIVE_HOUR,
+            Self::SevenDay => TIER_SEVEN_DAY,
+        }
+    }
+
+    fn latch(self, windows: &LatchedResetWindows) -> Option<&LatchedResetWindow> {
+        match self {
+            Self::FiveHour => windows.five_hour.as_ref(),
+            Self::SevenDay => windows.seven_day.as_ref(),
+        }
+    }
+
+    fn latch_mut(self, windows: &mut LatchedResetWindows) -> &mut Option<LatchedResetWindow> {
+        match self {
+            Self::FiveHour => &mut windows.five_hour,
+            Self::SevenDay => &mut windows.seven_day,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct DesktopPlanUsageHistory {
     version: u64,
@@ -152,6 +217,7 @@ pub(crate) fn collect_local_quota() -> Result<SubscriptionQuota, String> {
     collect_local_quota_from_paths_at(
         desktop_history_path().as_deref(),
         &statusline_cache_path(),
+        &reset_latch_path(),
         now,
     )
 }
@@ -200,6 +266,13 @@ fn statusline_cache_path() -> PathBuf {
         .join(".llm-usage-bar")
         .join("runtime")
         .join(CACHE_FILE_NAME)
+}
+
+fn reset_latch_path() -> PathBuf {
+    config::get_home_dir()
+        .join(".llm-usage-bar")
+        .join("runtime")
+        .join(RESET_LATCH_FILE_NAME)
 }
 
 #[cfg(target_os = "macos")]
@@ -260,7 +333,7 @@ fn ingest_statusline_with_event_time(
     let payload: StatuslinePayload = serde_json::from_slice(&bytes)
         .map_err(|error| AppError::Config(format!("invalid Claude status-line JSON: {error}")))?;
     let session_key = statusline_session_key(payload.session_id.as_deref())?;
-    let _cache_lock = acquire_statusline_cache_lock(cache_path)?;
+    let _cache_lock = acquire_cache_lock(cache_path, CACHE_LOCK_FILE_NAME)?;
     let mut cache = read_cache(cache_path)
         .ok()
         .filter(|cache| cache.schema_version == CACHE_SCHEMA_VERSION)
@@ -392,15 +465,15 @@ fn statusline_session_key(session_id: Option<&str>) -> Result<String, AppError> 
     Ok(hex::encode(Sha256::digest(session_id.as_bytes())))
 }
 
-struct StatuslineCacheLock(File);
+struct QuotaCacheLock(File);
 
-impl Drop for StatuslineCacheLock {
+impl Drop for QuotaCacheLock {
     fn drop(&mut self) {
         let _ = FileExt::unlock(&self.0);
     }
 }
 
-fn acquire_statusline_cache_lock(cache_path: &Path) -> Result<StatuslineCacheLock, AppError> {
+fn acquire_cache_lock(cache_path: &Path, lock_file_name: &str) -> Result<QuotaCacheLock, AppError> {
     let parent = cache_path.parent().ok_or_else(|| {
         AppError::InvalidInput("Claude quota cache has no parent directory".to_string())
     })?;
@@ -408,7 +481,7 @@ fn acquire_statusline_cache_lock(cache_path: &Path) -> Result<StatuslineCacheLoc
         context: "create Claude quota cache directory".to_string(),
         source,
     })?;
-    let lock_path = cache_path.with_file_name(CACHE_LOCK_FILE_NAME);
+    let lock_path = cache_path.with_file_name(lock_file_name);
     // The lock file is only an advisory flock target; its contents are never
     // read or written, so it must not be truncated out from under a holder.
     let file = OpenOptions::new()
@@ -442,7 +515,7 @@ fn acquire_statusline_cache_lock(cache_path: &Path) -> Result<StatuslineCacheLoc
         }
     }
     restrict_cache_permissions(&lock_path)?;
-    Ok(StatuslineCacheLock(file))
+    Ok(QuotaCacheLock(file))
 }
 
 fn prune_statusline_sessions(cache: &mut ClaudeStatuslineCache, now: i64) {
@@ -480,6 +553,51 @@ fn persist_statusline_cache(
         .map_err(|_| AppError::Message("write Claude quota cache failed".to_string()))?;
     restrict_cache_permissions(cache_path)?;
     Ok(())
+}
+
+fn empty_reset_latch() -> ClaudeQuotaResetLatch {
+    ClaudeQuotaResetLatch {
+        schema_version: RESET_LATCH_SCHEMA_VERSION,
+        windows: LatchedResetWindows::default(),
+    }
+}
+
+fn prune_reset_latch(latch: &mut ClaudeQuotaResetLatch, now: i64) {
+    for kind in [QuotaWindowKind::FiveHour, QuotaWindowKind::SevenDay] {
+        let window = kind.latch_mut(&mut latch.windows);
+        if window
+            .as_ref()
+            .is_some_and(|window| window.resets_at <= now)
+        {
+            *window = None;
+        }
+    }
+}
+
+fn persist_reset_latch(
+    latch_path: &Path,
+    latch: &mut ClaudeQuotaResetLatch,
+    now: i64,
+) -> Result<(), AppError> {
+    prune_reset_latch(latch, now);
+    if latch.windows.five_hour.is_none() && latch.windows.seven_day.is_none() {
+        return remove_reset_latch(latch_path);
+    }
+    config::write_json_file(latch_path, latch)
+        .map_err(|_| AppError::Message("write Claude quota reset latch failed".to_string()))?;
+    restrict_cache_permissions(latch_path)?;
+    Ok(())
+}
+
+fn remove_reset_latch(path: &Path) -> Result<(), AppError> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(AppError::IoContext {
+            context: "remove Claude quota reset latch".to_string(),
+            source,
+        }),
+    }
 }
 
 fn remove_statusline_cache(path: &Path) -> Result<(), AppError> {
@@ -521,51 +639,92 @@ fn validate_statusline_window(
 struct ObservedQuotaTier {
     tier: QuotaTier,
     observed_at_ms: i64,
+    resets_at_unix: Option<i64>,
+    /// Who produced this observation: the Claude Desktop organization id, or
+    /// the status-line session key. Both sources can change identity underneath
+    /// us — Desktop when the active organization is switched, the status line
+    /// when a second Claude Code session on another account is also cached —
+    /// and a latched reset is only meaningful for the identity it came from.
+    source_identity: Option<String>,
 }
 
 fn collect_local_quota_from_paths_at(
     desktop_path: Option<&Path>,
     statusline_path: &Path,
+    latch_path: &Path,
     now: i64,
 ) -> Result<SubscriptionQuota, String> {
     let desktop = desktop_path
         .map(|path| read_desktop_observations(path, now))
         .unwrap_or_else(|| Err("Claude Desktop local history is unavailable".to_string()));
     let statusline = read_statusline_observations(statusline_path, now);
+    // Reset metadata is supplemental. If its separate lock or file cannot be
+    // used, quota collection must continue with the two percentage sources.
+    let latch_lock = acquire_cache_lock(latch_path, RESET_LATCH_LOCK_FILE_NAME).ok();
+    let mut reset_latch = if latch_lock.is_some() {
+        read_reset_latch(latch_path).unwrap_or_else(|_| empty_reset_latch())
+    } else {
+        empty_reset_latch()
+    };
+    prune_reset_latch(&mut reset_latch, now);
 
     let mut tiers = Vec::new();
     // The card-level timestamp is conservative: every displayed window is at
     // least this fresh, even when their newest samples were observed at
     // different times.
     let mut observed_at_ms = None;
-    for name in [TIER_FIVE_HOUR, TIER_SEVEN_DAY] {
-        let desktop_tier = desktop
-            .as_ref()
-            .ok()
-            .and_then(|values| values.iter().find(|value| value.tier.name == name))
-            .cloned();
-        let statusline_tier = statusline
-            .as_ref()
-            .ok()
-            .and_then(|values| values.iter().find(|value| value.tier.name == name))
-            .cloned();
+    let kinds = [QuotaWindowKind::FiveHour, QuotaWindowKind::SevenDay];
+    let observed: Vec<(
+        QuotaWindowKind,
+        Option<ObservedQuotaTier>,
+        Option<ObservedQuotaTier>,
+    )> = kinds
+        .iter()
+        .map(|kind| {
+            let name = kind.name();
+            let pick = |source: &Result<Vec<ObservedQuotaTier>, String>| {
+                source
+                    .as_ref()
+                    .ok()
+                    .and_then(|values| values.iter().find(|value| value.tier.name == name))
+                    .cloned()
+            };
+            (*kind, pick(&desktop), pick(&statusline))
+        })
+        .collect();
+    // One verdict for the whole pass, decided before any window is latched:
+    // identity is a property of the two sources, not of one window.
+    let evidence = same_account_evidence(&observed);
+
+    for (kind, desktop_tier, statusline_tier) in observed {
+        update_reset_latch(
+            kind,
+            statusline_tier.as_ref(),
+            &evidence,
+            &mut reset_latch,
+            now,
+        );
 
         let selected = match (desktop_tier, statusline_tier) {
             (Some(desktop), Some(statusline))
                 if desktop.observed_at_ms > statusline.observed_at_ms =>
             {
                 // Claude Desktop and Claude Code do not expose a common
-                // account identifier. Never splice a reset timestamp from one
-                // source onto a percentage from the other.
-                Some(desktop)
+                // account identifier. A reset timestamp may cross sources only
+                // through a latch formed from same-pass percentage and time
+                // agreement above.
+                Some((desktop, true))
             }
-            (Some(_), Some(statusline)) => Some(statusline),
-            (Some(desktop), None) => Some(desktop),
-            (None, Some(statusline)) => Some(statusline),
+            (Some(_), Some(statusline)) => Some((statusline, false)),
+            (Some(desktop), None) => Some((desktop, true)),
+            (None, Some(statusline)) => Some((statusline, false)),
             (None, None) => None,
         };
 
-        if let Some(selected) = selected {
+        if let Some((mut selected, selected_desktop)) = selected {
+            if selected_desktop && selected.tier.resets_at.is_none() {
+                attach_latched_reset(kind, &mut selected, &mut reset_latch, now);
+            }
             observed_at_ms = Some(
                 observed_at_ms
                     .unwrap_or(i64::MAX)
@@ -573,6 +732,11 @@ fn collect_local_quota_from_paths_at(
             );
             tiers.push(selected.tier);
         }
+    }
+
+    if latch_lock.is_some() {
+        // A latch failure must never suppress otherwise valid percentages.
+        let _ = persist_reset_latch(latch_path, &mut reset_latch, now);
     }
 
     if tiers.is_empty() {
@@ -600,6 +764,169 @@ fn collect_local_quota_from_paths_at(
         error: None,
         queried_at: observed_at_ms,
     })
+}
+
+/// Whether this pass showed the two local sources describe the same account.
+///
+/// Claude Desktop and Claude Code expose no common account identifier, so a
+/// reset instant may only cross from one to the other when their percentages
+/// agree. Agreement on a single window is weak evidence — two unrelated
+/// accounts both sit at 0% early in a five-hour window — so the verdict is
+/// taken across every window both sources reported, and one disagreement
+/// rejects the whole pass rather than just that window.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SameAccountEvidence {
+    /// One window agreed and none disagreed. Carries the identities that agreed,
+    /// because the evidence is only about *those two*: `read_statusline_observations`
+    /// picks the newest five-hour and the newest weekly window independently, so
+    /// with two Claude Code sessions cached they can come from different accounts.
+    /// Confirming against one session must not authorize latching the other's.
+    Confirmed {
+        statusline_session: Option<String>,
+        desktop_org: Option<String>,
+    },
+    /// Some window disagreed: treat the sources as different accounts.
+    Contradicted,
+    /// Nothing comparable this pass. Neither confirms nor denies, so latches
+    /// from earlier passes stand.
+    Absent,
+}
+
+/// The two sources are never sampled together — Claude Desktop writes every 15
+/// minutes while the status line is live — so the windows carry very different
+/// amounts of identity information. Measured on a real account over one
+/// afternoon, the five-hour figure climbed 5% to 35% while the weekly figure
+/// moved 63% to 66%. Within one 15-minute sampling gap that is around six
+/// points of honest drift on the fast window against under half a point on the
+/// slow one.
+///
+/// So the weekly window decides identity, where near-equality is both fair to
+/// ask and hard for two unrelated accounts to satisfy. The five-hour window
+/// only ever vetoes: it is too noisy to confirm anything, but an *older*
+/// reading above a newer one is impossible for a single account, since
+/// utilization climbs until the window resets.
+fn same_account_evidence(
+    pairs: &[(
+        QuotaWindowKind,
+        Option<ObservedQuotaTier>,
+        Option<ObservedQuotaTier>,
+    )],
+) -> SameAccountEvidence {
+    let mut confirmed: Option<(Option<String>, Option<String>)> = None;
+    for (kind, desktop, statusline) in pairs {
+        let (Some(desktop), Some(statusline)) = (desktop, statusline) else {
+            continue;
+        };
+        if desktop.observed_at_ms.abs_diff(statusline.observed_at_ms)
+            > RESET_LATCH_OBSERVATION_TOLERANCE_MS
+        {
+            continue;
+        }
+        let difference = (desktop.tier.utilization - statusline.tier.utilization).abs();
+        match kind {
+            QuotaWindowKind::SevenDay => {
+                if difference > RESET_LATCH_IDENTITY_TOLERANCE {
+                    return SameAccountEvidence::Contradicted;
+                }
+                confirmed = Some((
+                    statusline.source_identity.clone(),
+                    desktop.source_identity.clone(),
+                ));
+            }
+            QuotaWindowKind::FiveHour => {
+                let (older, newer) = if desktop.observed_at_ms <= statusline.observed_at_ms {
+                    (desktop.tier.utilization, statusline.tier.utilization)
+                } else {
+                    (statusline.tier.utilization, desktop.tier.utilization)
+                };
+                if older > newer + RESET_LATCH_PERCENTAGE_TOLERANCE {
+                    return SameAccountEvidence::Contradicted;
+                }
+            }
+        }
+    }
+    match confirmed {
+        Some((statusline_session, desktop_org)) => SameAccountEvidence::Confirmed {
+            statusline_session,
+            desktop_org,
+        },
+        None => SameAccountEvidence::Absent,
+    }
+}
+
+fn update_reset_latch(
+    kind: QuotaWindowKind,
+    statusline: Option<&ObservedQuotaTier>,
+    evidence: &SameAccountEvidence,
+    latch: &mut ClaudeQuotaResetLatch,
+    now: i64,
+) {
+    let window = kind.latch_mut(&mut latch.windows);
+    match evidence {
+        SameAccountEvidence::Contradicted => *window = None,
+        SameAccountEvidence::Absent => {}
+        SameAccountEvidence::Confirmed {
+            statusline_session,
+            desktop_org,
+        } => {
+            // The reset instant is the status line's own; the evidence only
+            // decides whether it may later be read alongside a Desktop
+            // percentage. So a window the Desktop source never reported can
+            // still latch, on identity established by the other window — but
+            // only if it came from the very session that supplied that
+            // evidence, since the two windows are selected independently and
+            // may belong to different accounts.
+            let Some(statusline) = statusline else { return };
+            if statusline.source_identity != *statusline_session {
+                return;
+            }
+            let Some(resets_at) = statusline.resets_at_unix else {
+                return;
+            };
+            if resets_at > now {
+                *window = Some(LatchedResetWindow {
+                    resets_at,
+                    latched_at: now,
+                    utilization_at_latch: statusline.tier.utilization,
+                    desktop_org: desktop_org.clone(),
+                });
+            }
+        }
+    }
+}
+
+fn attach_latched_reset(
+    kind: QuotaWindowKind,
+    desktop: &mut ObservedQuotaTier,
+    latch: &mut ClaudeQuotaResetLatch,
+    now: i64,
+) {
+    let window = kind.latch_mut(&mut latch.windows);
+    let Some(latched) = window.as_ref() else {
+        return;
+    };
+    // Switching the active Claude Desktop organization swaps the percentages
+    // for a different account's, and those can sit above where this latch was
+    // formed — so the staleness check below would happily wave the previous
+    // organization's reset instant through for the rest of a weekly window.
+    if latched.desktop_org != desktop.source_identity {
+        *window = None;
+        return;
+    }
+    if latched.resets_at <= now
+        || desktop.tier.utilization
+            < latched.utilization_at_latch - RESET_LATCH_PERCENTAGE_TOLERANCE
+    {
+        *window = None;
+        return;
+    }
+    let Some(resets_at) = chrono::DateTime::from_timestamp(latched.resets_at, 0)
+        .map(|timestamp| timestamp.to_rfc3339())
+    else {
+        *window = None;
+        return;
+    };
+    desktop.tier.resets_at = Some(resets_at);
 }
 
 fn read_desktop_observations(
@@ -683,6 +1010,8 @@ fn read_desktop_observations(
                 max_value_usd: None,
             },
             observed_at_ms: sample.t,
+            resets_at_unix: None,
+            source_identity: active_org.map(str::to_string),
         });
     }
     if tiers.is_empty() {
@@ -795,9 +1124,12 @@ fn read_statusline_observations(
         let Some(rate_limits) = session.rate_limits.as_ref() else {
             continue;
         };
-        if let Some(candidate) =
-            cached_window_to_observation(TIER_FIVE_HOUR, rate_limits.five_hour.as_ref(), now)?
-        {
+        if let Some(candidate) = cached_window_to_observation(
+            TIER_FIVE_HOUR,
+            rate_limits.five_hour.as_ref(),
+            &session.session_key,
+            now,
+        )? {
             if five_hour
                 .as_ref()
                 .is_none_or(|current: &ObservedQuotaTier| {
@@ -807,9 +1139,12 @@ fn read_statusline_observations(
                 five_hour = Some(candidate);
             }
         }
-        if let Some(candidate) =
-            cached_window_to_observation(TIER_SEVEN_DAY, rate_limits.seven_day.as_ref(), now)?
-        {
+        if let Some(candidate) = cached_window_to_observation(
+            TIER_SEVEN_DAY,
+            rate_limits.seven_day.as_ref(),
+            &session.session_key,
+            now,
+        )? {
             if seven_day
                 .as_ref()
                 .is_none_or(|current: &ObservedQuotaTier| {
@@ -833,6 +1168,7 @@ fn read_statusline_observations(
 fn cached_window_to_observation(
     name: &str,
     window: Option<&CachedWindow>,
+    session_key: &str,
     now: i64,
 ) -> Result<Option<ObservedQuotaTier>, String> {
     let Some(window) = window else {
@@ -865,6 +1201,8 @@ fn cached_window_to_observation(
             max_value_usd: None,
         },
         observed_at_ms: window.observed_at.saturating_mul(1_000),
+        resets_at_unix: Some(window.resets_at),
+        source_identity: Some(session_key.to_string()),
     }))
 }
 
@@ -895,6 +1233,62 @@ fn read_cache(path: &Path) -> Result<ClaudeStatuslineCache, CacheReadError> {
     }
     serde_json::from_slice(&bytes)
         .map_err(|error| CacheReadError::Invalid(format!("invalid Claude quota cache: {error}")))
+}
+
+fn read_reset_latch(path: &Path) -> Result<ClaudeQuotaResetLatch, CacheReadError> {
+    let file = File::open(path).map_err(|error| {
+        if error.kind() == io::ErrorKind::NotFound {
+            CacheReadError::Missing
+        } else {
+            CacheReadError::Invalid("failed to read Claude quota reset latch".to_string())
+        }
+    })?;
+    let mut bytes = Vec::new();
+    file.take(MAX_RESET_LATCH_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| {
+            CacheReadError::Invalid("failed to read Claude quota reset latch".to_string())
+        })?;
+    if bytes.len() as u64 > MAX_RESET_LATCH_BYTES {
+        return Err(CacheReadError::Invalid(
+            "Claude quota reset latch exceeds 256 KiB".to_string(),
+        ));
+    }
+    let latch: ClaudeQuotaResetLatch = serde_json::from_slice(&bytes)
+        .map_err(|_| CacheReadError::Invalid("invalid Claude quota reset latch".to_string()))?;
+    validate_reset_latch(&latch)?;
+    Ok(latch)
+}
+
+fn validate_reset_latch(latch: &ClaudeQuotaResetLatch) -> Result<(), CacheReadError> {
+    if latch.schema_version != RESET_LATCH_SCHEMA_VERSION {
+        return Err(CacheReadError::Invalid(
+            "unsupported Claude quota reset latch schema".to_string(),
+        ));
+    }
+    for kind in [QuotaWindowKind::FiveHour, QuotaWindowKind::SevenDay] {
+        let Some(window) = kind.latch(&latch.windows) else {
+            continue;
+        };
+        if window.resets_at <= 0
+            || window.latched_at <= 0
+            || chrono::DateTime::from_timestamp(window.resets_at, 0).is_none()
+        {
+            return Err(CacheReadError::Invalid(format!(
+                "invalid Claude {} reset latch timestamp",
+                kind.name()
+            )));
+        }
+        if !window.utilization_at_latch.is_finite()
+            || !(0.0..=100.0).contains(&window.utilization_at_latch)
+        {
+            return Err(CacheReadError::Invalid(format!(
+                "invalid Claude {} reset latch percentage",
+                kind.name()
+            )));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -953,6 +1347,180 @@ mod tests {
                 Uuid::new_v4()
             ))
             .join(DESKTOP_HISTORY_FILE_NAME)
+    }
+
+    fn temp_latch_path() -> PathBuf {
+        std::env::temp_dir()
+            .join(format!(
+                "llm-usage-bar-claude-reset-latch-{}",
+                Uuid::new_v4()
+            ))
+            .join(RESET_LATCH_FILE_NAME)
+    }
+
+    fn temp_quota_paths() -> (PathBuf, PathBuf, PathBuf) {
+        let directory = std::env::temp_dir().join(format!(
+            "llm-usage-bar-claude-local-quota-{}",
+            Uuid::new_v4()
+        ));
+        (
+            directory.join(DESKTOP_HISTORY_FILE_NAME),
+            directory.join(CACHE_FILE_NAME),
+            directory.join(RESET_LATCH_FILE_NAME),
+        )
+    }
+
+    fn write_desktop_history(
+        path: &Path,
+        observed_at_ms: i64,
+        five_hour: Option<f64>,
+        seven_day: Option<f64>,
+    ) {
+        config::write_json_file(
+            path,
+            &json!({
+                "version": 2,
+                "samples": [{
+                    "t": observed_at_ms,
+                    "u": {
+                        "fh": five_hour,
+                        "sd": seven_day
+                    }
+                }]
+            }),
+        )
+        .unwrap();
+    }
+
+    fn write_statusline_cache(
+        path: &Path,
+        observed_at: i64,
+        five_hour: Option<(f64, i64)>,
+        seven_day: Option<(f64, i64)>,
+    ) {
+        let cached_window = |(used_percentage, resets_at)| CachedWindow {
+            used_percentage,
+            resets_at,
+            observed_at,
+        };
+        let cache = ClaudeStatuslineCache {
+            schema_version: CACHE_SCHEMA_VERSION,
+            updated_at: observed_at,
+            sessions: vec![CachedStatuslineSession {
+                updated_at: observed_at,
+                event_at_ms: observed_at.saturating_mul(1_000),
+                session_key: statusline_session_key(Some("latch-test-session")).unwrap(),
+                claude_version: None,
+                rate_limits: Some(CachedRateLimits {
+                    five_hour: five_hour.map(cached_window),
+                    seven_day: seven_day.map(cached_window),
+                }),
+            }],
+        };
+        config::write_json_file(path, &cache).unwrap();
+    }
+
+    fn write_reset_latch(
+        path: &Path,
+        five_hour: Option<LatchedResetWindow>,
+        seven_day: Option<LatchedResetWindow>,
+    ) {
+        config::write_json_file(
+            path,
+            &ClaudeQuotaResetLatch {
+                schema_version: RESET_LATCH_SCHEMA_VERSION,
+                windows: LatchedResetWindows {
+                    five_hour,
+                    seven_day,
+                },
+            },
+        )
+        .unwrap();
+    }
+
+    fn reset_window(
+        resets_at: i64,
+        latched_at: i64,
+        utilization_at_latch: f64,
+    ) -> LatchedResetWindow {
+        LatchedResetWindow {
+            resets_at,
+            latched_at,
+            utilization_at_latch,
+            desktop_org: None,
+        }
+    }
+
+    fn write_desktop_history_for_org(
+        path: &Path,
+        observed_at_ms: i64,
+        org: &str,
+        five_hour: Option<f64>,
+        seven_day: Option<f64>,
+    ) {
+        config::write_json_file(
+            path,
+            &json!({
+                "version": 2,
+                "samples": [{
+                    "t": observed_at_ms,
+                    "org": org,
+                    "u": { "fh": five_hour, "sd": seven_day }
+                }]
+            }),
+        )
+        .unwrap();
+    }
+
+    /// Two concurrent Claude Code sessions, each with only one of the two
+    /// windows, so `read_statusline_observations` is forced to take the
+    /// five-hour and the weekly window from different sessions.
+    fn write_two_session_statusline_cache(
+        path: &Path,
+        observed_at: i64,
+        five_hour: (f64, i64),
+        seven_day: (f64, i64),
+    ) {
+        let window = |(used_percentage, resets_at): (f64, i64)| CachedWindow {
+            used_percentage,
+            resets_at,
+            observed_at,
+        };
+        let session = |suffix: char, limits: CachedRateLimits| CachedStatuslineSession {
+            updated_at: observed_at,
+            event_at_ms: observed_at.saturating_mul(1_000),
+            session_key: std::iter::repeat_n(suffix, 64).collect(),
+            claude_version: Some("2.1.220".to_string()),
+            rate_limits: Some(limits),
+        };
+        config::write_json_file(
+            path,
+            &ClaudeStatuslineCache {
+                schema_version: CACHE_SCHEMA_VERSION,
+                updated_at: observed_at,
+                sessions: vec![
+                    session(
+                        'a',
+                        CachedRateLimits {
+                            five_hour: None,
+                            seven_day: Some(window(seven_day)),
+                        },
+                    ),
+                    session(
+                        'b',
+                        CachedRateLimits {
+                            five_hour: Some(window(five_hour)),
+                            seven_day: None,
+                        },
+                    ),
+                ],
+            },
+        )
+        .unwrap();
+    }
+
+    fn find_tier<'a>(quota: &'a SubscriptionQuota, name: &str) -> &'a QuotaTier {
+        quota.tiers.iter().find(|tier| tier.name == name).unwrap()
     }
 
     #[test]
@@ -1533,9 +2101,13 @@ mod tests {
         .unwrap();
         let missing_statusline = temp_cache_path();
 
-        let quota =
-            collect_local_quota_from_paths_at(Some(&history_path), &missing_statusline, 10_000)
-                .unwrap();
+        let quota = collect_local_quota_from_paths_at(
+            Some(&history_path),
+            &missing_statusline,
+            &temp_latch_path(),
+            10_000,
+        )
+        .unwrap();
         assert_eq!(quota.queried_at, Some(9_900_000));
         assert_eq!(quota.tiers.len(), 2);
         assert_eq!(quota.tiers[0].name, TIER_FIVE_HOUR);
@@ -1576,9 +2148,13 @@ mod tests {
         )
         .unwrap();
 
-        let quota =
-            collect_local_quota_from_paths_at(Some(&history_path), &temp_cache_path(), 10_000)
-                .unwrap();
+        let quota = collect_local_quota_from_paths_at(
+            Some(&history_path),
+            &temp_cache_path(),
+            &temp_latch_path(),
+            10_000,
+        )
+        .unwrap();
         assert_eq!(quota.queried_at, Some(9_900_000));
         assert_eq!(quota.tiers.len(), 2);
         assert_eq!(quota.tiers[0].name, TIER_FIVE_HOUR);
@@ -1604,9 +2180,13 @@ mod tests {
         )
         .unwrap();
 
-        let quota =
-            collect_local_quota_from_paths_at(Some(&history_path), &temp_cache_path(), 10_000)
-                .unwrap();
+        let quota = collect_local_quota_from_paths_at(
+            Some(&history_path),
+            &temp_cache_path(),
+            &temp_latch_path(),
+            10_000,
+        )
+        .unwrap();
         assert_eq!(quota.tiers[0].utilization, 7.0);
         assert_eq!(quota.tiers[1].utilization, 8.0);
     }
@@ -1651,9 +2231,13 @@ mod tests {
         };
         config::write_json_file(&statusline_path, &cache).unwrap();
 
-        let quota =
-            collect_local_quota_from_paths_at(Some(&history_path), &statusline_path, 11_100)
-                .unwrap();
+        let quota = collect_local_quota_from_paths_at(
+            Some(&history_path),
+            &statusline_path,
+            &temp_latch_path(),
+            11_100,
+        )
+        .unwrap();
         let five_hour = quota
             .tiers
             .iter()
@@ -1672,6 +2256,498 @@ mod tests {
         assert_eq!(seven_day.utilization, 35.0);
         assert_eq!(seven_day.resets_at, None);
         assert_eq!(quota.queried_at, Some(11_000_000));
+    }
+
+    #[test]
+    fn reset_latch_is_written_when_sources_agree_within_tolerance() {
+        let (history_path, statusline_path, latch_path) = temp_quota_paths();
+        write_desktop_history(&history_path, 10_000_000, Some(16.0), Some(64.0));
+        write_statusline_cache(
+            &statusline_path,
+            10_020,
+            Some((16.8, 20_000)),
+            Some((64.0, 30_000)),
+        );
+
+        collect_local_quota_from_paths_at(
+            Some(&history_path),
+            &statusline_path,
+            &latch_path,
+            10_030,
+        )
+        .unwrap();
+
+        let latch = read_reset_latch(&latch_path).unwrap();
+        assert_eq!(latch.schema_version, RESET_LATCH_SCHEMA_VERSION);
+        assert_eq!(
+            latch.windows.five_hour,
+            Some(reset_window(20_000, 10_030, 16.8))
+        );
+        // The weekly window supplied the identity evidence, so it latches too.
+        assert_eq!(
+            latch.windows.seven_day,
+            Some(reset_window(30_000, 10_030, 64.0))
+        );
+        let stored: serde_json::Value =
+            serde_json::from_slice(&fs::read(&latch_path).unwrap()).unwrap();
+        assert_eq!(stored["schemaVersion"], json!(1));
+        assert_eq!(stored["windows"]["five_hour"]["resetsAt"], json!(20_000));
+        assert_eq!(stored["windows"]["seven_day"]["resetsAt"], json!(30_000));
+    }
+
+    #[test]
+    fn a_window_from_another_session_is_not_latched_on_this_ones_evidence() {
+        // read_statusline_observations picks the newest five-hour and the newest
+        // weekly window independently, so with two Claude Code sessions cached
+        // they can come from different accounts. Confirming identity against the
+        // weekly window from one session must not authorize latching the
+        // five-hour reset belonging to the other.
+        let (history_path, statusline_path, latch_path) = temp_quota_paths();
+        write_desktop_history(&history_path, 10_000_000, Some(35.0), Some(66.0));
+        write_two_session_statusline_cache(
+            &statusline_path,
+            10_360,
+            (41.0, 20_000),
+            (66.0, 30_000),
+        );
+
+        collect_local_quota_from_paths_at(
+            Some(&history_path),
+            &statusline_path,
+            &latch_path,
+            10_400,
+        )
+        .unwrap();
+
+        let latch = read_reset_latch(&latch_path).expect("the confirming window still latches");
+        assert_eq!(latch.windows.seven_day.map(|w| w.resets_at), Some(30_000));
+        assert!(
+            latch.windows.five_hour.is_none(),
+            "the five-hour reset came from a different session than the evidence"
+        );
+    }
+
+    #[test]
+    fn switching_the_desktop_organization_drops_the_latch() {
+        // A different organization's percentages can sit above where the latch
+        // was formed, so the staleness check alone would wave the previous
+        // organization's reset instant through for the rest of the window.
+        let (history_path, statusline_path, latch_path) = temp_quota_paths();
+        write_desktop_history_for_org(&history_path, 10_000_000, "org-a", Some(35.0), Some(66.0));
+        write_statusline_cache(
+            &statusline_path,
+            10_360,
+            Some((41.0, 20_000)),
+            Some((66.0, 30_000)),
+        );
+        collect_local_quota_from_paths_at(
+            Some(&history_path),
+            &statusline_path,
+            &latch_path,
+            10_400,
+        )
+        .unwrap();
+        assert_eq!(
+            read_reset_latch(&latch_path)
+                .unwrap()
+                .windows
+                .five_hour
+                .map(|w| w.desktop_org),
+            Some(Some("org-a".to_string()))
+        );
+
+        // Same machine, different active organization, status line long expired.
+        write_desktop_history_for_org(&history_path, 11_000_000, "org-b", Some(50.0), Some(70.0));
+        let quota = collect_local_quota_from_paths_at(
+            Some(&history_path),
+            &statusline_path,
+            &latch_path,
+            11_400,
+        )
+        .unwrap();
+
+        assert_eq!(find_tier(&quota, TIER_FIVE_HOUR).utilization, 50.0);
+        assert_eq!(find_tier(&quota, TIER_FIVE_HOUR).resets_at, None);
+        assert!(
+            !latch_path.exists(),
+            "org-a's reset must not survive onto org-b's percentages"
+        );
+    }
+
+    #[test]
+    fn a_lagging_desktop_sample_is_drift_not_a_different_account() {
+        // Regression for a rule that looked right against synthetic data and
+        // failed on the real thing: Desktop samples every 15 minutes, so its
+        // five-hour figure trails a live status line by several points during
+        // active use. Demanding near-equality there read honest lag as proof of
+        // a second account, which not only refused to latch but wiped the
+        // existing latch on every pass.
+        let (history_path, statusline_path, latch_path) = temp_quota_paths();
+        write_desktop_history(&history_path, 10_000_000, Some(35.0), Some(66.0));
+        write_statusline_cache(
+            &statusline_path,
+            10_360,
+            Some((41.0, 20_000)),
+            Some((66.0, 30_000)),
+        );
+
+        collect_local_quota_from_paths_at(
+            Some(&history_path),
+            &statusline_path,
+            &latch_path,
+            10_400,
+        )
+        .unwrap();
+
+        let latch = read_reset_latch(&latch_path).expect("six points of lag must still latch");
+        assert_eq!(latch.windows.five_hour.map(|w| w.resets_at), Some(20_000));
+    }
+
+    #[test]
+    fn a_five_hour_figure_that_went_backwards_still_vetoes() {
+        // The fast window cannot confirm identity, but it can still rule one
+        // out: an older reading above a newer one is impossible while a window
+        // is climbing, so the weekly window's agreement must not override it.
+        let (history_path, statusline_path, latch_path) = temp_quota_paths();
+        write_desktop_history(&history_path, 10_000_000, Some(80.0), Some(66.0));
+        write_statusline_cache(
+            &statusline_path,
+            10_360,
+            Some((20.0, 20_000)),
+            Some((66.0, 30_000)),
+        );
+
+        collect_local_quota_from_paths_at(
+            Some(&history_path),
+            &statusline_path,
+            &latch_path,
+            10_400,
+        )
+        .unwrap();
+
+        assert!(
+            !latch_path.exists(),
+            "a backwards five-hour figure must veto the pass"
+        );
+    }
+
+    #[test]
+    fn a_disagreeing_window_clears_every_latch_not_just_its_own() {
+        // Disagreement says the two sources are different accounts. That is a
+        // fact about the pair, so every window's latch becomes untrustworthy —
+        // including one this pass had no other reason to doubt.
+        let (history_path, statusline_path, latch_path) = temp_quota_paths();
+        write_desktop_history(&history_path, 10_050_000, Some(20.0), Some(64.0));
+        write_statusline_cache(
+            &statusline_path,
+            10_000,
+            Some((18.9, 20_000)),
+            Some((30.0, 30_000)),
+        );
+        write_reset_latch(
+            &latch_path,
+            Some(reset_window(20_000, 9_000, 18.9)),
+            Some(reset_window(30_000, 9_000, 40.0)),
+        );
+
+        let quota = collect_local_quota_from_paths_at(
+            Some(&history_path),
+            &statusline_path,
+            &latch_path,
+            10_100,
+        )
+        .unwrap();
+
+        assert_eq!(find_tier(&quota, TIER_FIVE_HOUR).resets_at, None);
+        assert!(
+            !latch_path.exists(),
+            "clearing both windows must delete the latch file"
+        );
+    }
+
+    #[test]
+    fn one_agreeing_window_cannot_launder_a_disagreement_on_the_other() {
+        // Two unrelated accounts both sit at 0% early in a five-hour window, so
+        // that window alone proves nothing. The weekly window disagreeing is
+        // what settles it, and it must veto the whole pass.
+        let (history_path, statusline_path, latch_path) = temp_quota_paths();
+        write_desktop_history(&history_path, 10_050_000, Some(0.0), Some(64.0));
+        write_statusline_cache(
+            &statusline_path,
+            10_000,
+            Some((0.0, 20_000)),
+            Some((30.0, 30_000)),
+        );
+
+        collect_local_quota_from_paths_at(
+            Some(&history_path),
+            &statusline_path,
+            &latch_path,
+            10_100,
+        )
+        .unwrap();
+
+        assert!(
+            !latch_path.exists(),
+            "a contradicted pass must not latch the window that happened to match"
+        );
+    }
+
+    #[test]
+    fn reset_latch_is_untouched_without_a_desktop_window_observation() {
+        let (history_path, statusline_path, latch_path) = temp_quota_paths();
+        write_desktop_history(&history_path, 10_050_000, None, Some(40.0));
+        write_statusline_cache(&statusline_path, 10_000, Some((10.0, 20_000)), None);
+        let existing = reset_window(20_000, 9_000, 10.0);
+        write_reset_latch(&latch_path, Some(existing.clone()), None);
+
+        collect_local_quota_from_paths_at(
+            Some(&history_path),
+            &statusline_path,
+            &latch_path,
+            10_100,
+        )
+        .unwrap();
+
+        let latch = read_reset_latch(&latch_path).unwrap();
+        assert_eq!(latch.windows.five_hour, Some(existing));
+    }
+
+    #[test]
+    fn future_reset_latch_is_attached_when_desktop_wins() {
+        let (history_path, statusline_path, latch_path) = temp_quota_paths();
+        write_desktop_history(&history_path, 10_050_000, Some(17.0), None);
+        write_reset_latch(&latch_path, Some(reset_window(20_000, 9_000, 16.0)), None);
+
+        let quota = collect_local_quota_from_paths_at(
+            Some(&history_path),
+            &statusline_path,
+            &latch_path,
+            10_100,
+        )
+        .unwrap();
+
+        assert_eq!(
+            find_tier(&quota, TIER_FIVE_HOUR).resets_at.as_deref(),
+            Some("1970-01-01T05:33:20+00:00")
+        );
+    }
+
+    #[test]
+    fn reset_latch_is_dropped_when_desktop_utilization_rolls_over() {
+        let (history_path, statusline_path, latch_path) = temp_quota_paths();
+        write_desktop_history(&history_path, 10_050_000, Some(14.9), None);
+        write_reset_latch(&latch_path, Some(reset_window(20_000, 9_000, 16.0)), None);
+
+        let quota = collect_local_quota_from_paths_at(
+            Some(&history_path),
+            &statusline_path,
+            &latch_path,
+            10_100,
+        )
+        .unwrap();
+
+        assert_eq!(find_tier(&quota, TIER_FIVE_HOUR).resets_at, None);
+        assert!(!latch_path.exists());
+    }
+
+    #[test]
+    fn expired_reset_latch_window_is_removed() {
+        let (history_path, statusline_path, latch_path) = temp_quota_paths();
+        write_desktop_history(&history_path, 9_950_000, Some(20.0), Some(40.0));
+        let active_seven_day = reset_window(20_000, 9_000, 40.0);
+        write_reset_latch(
+            &latch_path,
+            Some(reset_window(10_000, 9_000, 20.0)),
+            Some(active_seven_day.clone()),
+        );
+
+        let quota = collect_local_quota_from_paths_at(
+            Some(&history_path),
+            &statusline_path,
+            &latch_path,
+            10_000,
+        )
+        .unwrap();
+
+        assert_eq!(find_tier(&quota, TIER_FIVE_HOUR).resets_at, None);
+        assert!(find_tier(&quota, TIER_SEVEN_DAY).resets_at.is_some());
+        let latch = read_reset_latch(&latch_path).unwrap();
+        assert!(latch.windows.five_hour.is_none());
+        assert_eq!(latch.windows.seven_day, Some(active_seven_day));
+    }
+
+    #[test]
+    fn reset_latch_file_is_deleted_when_its_last_window_expires() {
+        let (history_path, statusline_path, latch_path) = temp_quota_paths();
+        write_desktop_history(&history_path, 9_950_000, Some(20.0), None);
+        write_reset_latch(&latch_path, Some(reset_window(10_000, 9_000, 20.0)), None);
+
+        let quota = collect_local_quota_from_paths_at(
+            Some(&history_path),
+            &statusline_path,
+            &latch_path,
+            10_000,
+        )
+        .unwrap();
+
+        assert_eq!(find_tier(&quota, TIER_FIVE_HOUR).resets_at, None);
+        assert!(!latch_path.exists());
+    }
+
+    #[test]
+    fn unusable_reset_latch_files_behave_as_no_latch() {
+        let cases = [
+            ("corrupt", b"not json".to_vec()),
+            ("oversized", vec![b' '; MAX_RESET_LATCH_BYTES as usize + 1]),
+            (
+                "wrong-schema",
+                serde_json::to_vec(&json!({
+                    "schemaVersion": RESET_LATCH_SCHEMA_VERSION + 1,
+                    "windows": {}
+                }))
+                .unwrap(),
+            ),
+            (
+                "invalid-reset-time",
+                serde_json::to_vec(&json!({
+                    "schemaVersion": RESET_LATCH_SCHEMA_VERSION,
+                    "windows": {
+                        "five_hour": {
+                            "resetsAt": 0,
+                            "latchedAt": 9_000,
+                            "utilizationAtLatch": 20.0
+                        }
+                    }
+                }))
+                .unwrap(),
+            ),
+            (
+                "invalid-latched-time",
+                serde_json::to_vec(&json!({
+                    "schemaVersion": RESET_LATCH_SCHEMA_VERSION,
+                    "windows": {
+                        "five_hour": {
+                            "resetsAt": 20_000,
+                            "latchedAt": -1,
+                            "utilizationAtLatch": 20.0
+                        }
+                    }
+                }))
+                .unwrap(),
+            ),
+            (
+                "invalid-percentage",
+                serde_json::to_vec(&json!({
+                    "schemaVersion": RESET_LATCH_SCHEMA_VERSION,
+                    "windows": {
+                        "five_hour": {
+                            "resetsAt": 20_000,
+                            "latchedAt": 9_000,
+                            "utilizationAtLatch": 101.0
+                        }
+                    }
+                }))
+                .unwrap(),
+            ),
+        ];
+
+        for (case, contents) in cases {
+            let (history_path, statusline_path, latch_path) = temp_quota_paths();
+            write_desktop_history(&history_path, 9_950_000, Some(20.0), None);
+            fs::create_dir_all(latch_path.parent().unwrap()).unwrap();
+            fs::write(&latch_path, contents).unwrap();
+
+            let quota = collect_local_quota_from_paths_at(
+                Some(&history_path),
+                &statusline_path,
+                &latch_path,
+                10_000,
+            )
+            .unwrap_or_else(|error| panic!("{case} latch blocked quota collection: {error}"));
+
+            assert_eq!(find_tier(&quota, TIER_FIVE_HOUR).resets_at, None, "{case}");
+        }
+    }
+
+    #[test]
+    fn reset_latch_file_and_lock_are_created_with_private_permissions() {
+        let (history_path, statusline_path, latch_path) = temp_quota_paths();
+        write_desktop_history(&history_path, 10_000_000, Some(16.0), Some(64.0));
+        write_statusline_cache(
+            &statusline_path,
+            10_020,
+            Some((16.0, 20_000)),
+            Some((64.0, 30_000)),
+        );
+
+        collect_local_quota_from_paths_at(
+            Some(&history_path),
+            &statusline_path,
+            &latch_path,
+            10_030,
+        )
+        .unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            assert_eq!(
+                fs::metadata(&latch_path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+            let lock_path = latch_path.with_file_name(RESET_LATCH_LOCK_FILE_NAME);
+            assert_eq!(
+                fs::metadata(lock_path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+            assert!(!latch_path.with_file_name(CACHE_LOCK_FILE_NAME).exists());
+        }
+    }
+
+    #[test]
+    fn reset_latch_survives_statusline_then_desktop_source_switch() {
+        let (history_path, statusline_path, latch_path) = temp_quota_paths();
+        write_desktop_history(&history_path, 10_000_000, Some(16.0), Some(64.0));
+        write_statusline_cache(
+            &statusline_path,
+            10_020,
+            Some((16.4, 20_000)),
+            Some((64.0, 30_000)),
+        );
+
+        let statusline_quota = collect_local_quota_from_paths_at(
+            Some(&history_path),
+            &statusline_path,
+            &latch_path,
+            10_030,
+        )
+        .unwrap();
+        let reset = find_tier(&statusline_quota, TIER_FIVE_HOUR)
+            .resets_at
+            .clone();
+        assert_eq!(reset.as_deref(), Some("1970-01-01T05:33:20+00:00"));
+        assert!(read_reset_latch(&latch_path)
+            .unwrap()
+            .windows
+            .five_hour
+            .is_some());
+
+        // The status-line sample is now stale, while Desktop has advanced and
+        // supplies the selected percentage. The fixed reset remains attached.
+        write_desktop_history(&history_path, 11_000_000, Some(18.0), Some(65.0));
+        let desktop_quota = collect_local_quota_from_paths_at(
+            Some(&history_path),
+            &statusline_path,
+            &latch_path,
+            11_010,
+        )
+        .unwrap();
+
+        let five_hour = find_tier(&desktop_quota, TIER_FIVE_HOUR);
+        assert_eq!(five_hour.utilization, 18.0);
+        assert_eq!(five_hour.resets_at, reset);
     }
 
     #[test]
@@ -1712,9 +2788,13 @@ mod tests {
         )
         .unwrap();
 
-        let error =
-            collect_local_quota_from_paths_at(Some(&history_path), &temp_cache_path(), 10_000)
-                .unwrap_err();
+        let error = collect_local_quota_from_paths_at(
+            Some(&history_path),
+            &temp_cache_path(),
+            &temp_latch_path(),
+            10_000,
+        )
+        .unwrap_err();
         assert!(error.contains("invalid Claude five_hour"));
     }
     #[test]

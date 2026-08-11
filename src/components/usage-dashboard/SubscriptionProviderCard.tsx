@@ -175,6 +175,15 @@ export function SubscriptionProviderCard({
               </span>
               <QuotaPaceDetails pace={pace} resetsAt={reset} />
             </>
+          ) : remaining != null ? (
+            // A window with a live percentage but no reset time used to drop
+            // the whole caption row, so the line vanished with no explanation
+            // and the card changed height. Say what is missing instead. A
+            // window with no data at all keeps its own caption: QuotaMeter
+            // falls back to `valueText` there.
+            t("usageDashboard.resetTimeUnknown", {
+              defaultValue: "Reset time not reported",
+            })
           ) : undefined
         }
       />

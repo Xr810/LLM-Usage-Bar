@@ -117,12 +117,24 @@ export function TraySubscriptionSection({
                     t,
                   );
                   const rhythmNote = rhythmExplanation(window, t);
-                  const resetLabel = reset.pending
-                    ? reset.text
-                    : t("trayUsage.resets", {
-                        time: reset.text,
-                        defaultValue: "Resets {{time}}",
-                      });
+                  // A source that never carries a reset time says so, rather
+                  // than rendering the placeholder into "Resets —". But a
+                  // rejected timestamp also arrives as a null reset, and there
+                  // the source did report something — the reason already
+                  // explains it, so claiming nothing was reported alongside it
+                  // would contradict itself.
+                  const resetLabel = reset.unreported
+                    ? unavailableReason
+                      ? null
+                      : t("trayUsage.resetTimeUnknown", {
+                          defaultValue: "Reset time not reported",
+                        })
+                    : reset.pending
+                      ? reset.text
+                      : t("trayUsage.resets", {
+                          time: reset.text,
+                          defaultValue: "Resets {{time}}",
+                        });
                   return (
                     // Two lines per window instead of three: the reset time
                     // rides beside the window label, leaving label+value, bar.
@@ -136,7 +148,7 @@ export function TraySubscriptionSection({
                             {resetLabel}
                             {unavailableReason ? (
                               <span className="text-foreground">
-                                {" · "}
+                                {resetLabel ? " · " : null}
                                 {unavailableReason}
                               </span>
                             ) : null}
