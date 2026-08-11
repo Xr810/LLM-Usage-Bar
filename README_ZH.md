@@ -147,6 +147,8 @@ English、简体中文、繁體中文、日本語。
 
 [Tauri 2](https://tauri.app/) · Rust · React 19 · TypeScript · SQLite
 
+项目正在以可回退的分阶段方式迁移到 Swift 原生 macOS 应用；当前进度和边界见 [Swift 原生迁移路线](docs/native-swift-migration.md)。在原生版本达到功能与数据兼容之前，Tauri 版本仍是正式应用。
+
 ## 许可证
 
 [MIT](LICENSE)
