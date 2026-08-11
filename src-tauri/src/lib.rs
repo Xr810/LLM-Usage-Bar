@@ -51,9 +51,9 @@ pub use usage::domain::{
     AgentProxyRouteSetup, AgentProxySetupInfo, ArchivedAgentUsageSummary, BillingKind,
     BindingCredentialStatus, CostSource, CostSourceCounts, InvalidUsageLinkSummary,
     ProductUsageView, ProviderUsageView, QuotaFetchState, QuotaSnapshot, QuotaStatusView,
-    RouteBinding, TokenSource, UnassignedUsageDiagnostics, UnassignedUsageGroup,
-    UsageDashboardView, UsageEvent, UsageEventLink, UsageEventPage, UsageProviderInput,
-    UsageProviderView, UsageSourceBinding,
+    RouteBinding, SystemProviderKeyUsageView, TokenSource, UnassignedUsageDiagnostics,
+    UnassignedUsageGroup, UsageDashboardView, UsageEvent, UsageEventLink, UsageEventPage,
+    UsageProviderInput, UsageProviderView, UsageSourceBinding,
 };
 
 use std::path::Path;
@@ -211,8 +211,12 @@ pub fn create_schema_v13_fixture_test_hook(path: &Path) -> Result<(), AppError> 
     // existing usage_events rows and drops/recreates the immutability trigger;
     // v22 -> v23 only rebuilds provider_model_pricing with nullable rates. Neither
     // changes the v13 baseline below. Reviewed again for schema v24: v23 -> v24
-    // only adds the write-only usage_light_predictions calibration table.
-    if database::SCHEMA_VERSION != 24
+    // only adds the write-only usage_light_predictions calibration table. Reviewed
+    // for schema v25: v24 -> v25 only adds provider_key_usage_snapshots. Reviewed
+    // for schema v26: v25 -> v26 adds provider_api_keys and re-keys the snapshot
+    // and credential-journal tables onto it — all tables introduced well after
+    // v13, so the baseline below is untouched.
+    if database::SCHEMA_VERSION != 26
         || product_identity::DATABASE_IDENTITY_SOURCE_SCHEMA_VERSION != 13
     {
         return Err(AppError::Database(
@@ -1047,6 +1051,13 @@ pub fn run() {
                 log::warn!("official pricing scheduler was already started");
             }
 
+            if !app
+                .state::<AppState>()
+                .start_provider_key_usage_scheduler()
+            {
+                log::warn!("provider key usage scheduler was already started");
+            }
+
             let tray_publisher_app = app.handle().clone();
             let tray_publisher: services::tray_usage_scheduler::TraySnapshotPublisher =
                 Arc::new(move |snapshot| {
@@ -1249,10 +1260,15 @@ pub fn run() {
             commands::set_agent_provider_binding_api_key,
             commands::replace_agent_provider_binding_api_key,
             commands::clear_agent_provider_binding_api_key,
+            commands::list_provider_api_keys,
+            commands::create_provider_api_key,
+            commands::rename_provider_api_key,
+            commands::delete_provider_api_key,
             commands::set_system_provider_api_key,
             commands::replace_system_provider_api_key,
             commands::clear_system_provider_api_key,
             commands::test_system_provider_connection,
+            commands::refresh_system_provider_key_usage,
             commands::list_system_provider_models,
             commands::reveal_agent_provider_local_key,
             commands::rotate_agent_provider_local_key,
@@ -1507,10 +1523,15 @@ pub async fn cleanup_before_exit(app_handle: &tauri::AppHandle) {
             state.take_quota_scheduler(),
             state.take_midnight_scheduler(),
             state.take_official_pricing_scheduler(),
+            state.take_provider_key_usage_scheduler(),
         )
     });
-    if let Some((quota_scheduler, midnight_scheduler, official_pricing_scheduler)) =
-        cleanup_resources
+    if let Some((
+        quota_scheduler,
+        midnight_scheduler,
+        official_pricing_scheduler,
+        provider_key_usage_scheduler,
+    )) = cleanup_resources
     {
         if let Some(scheduler) = quota_scheduler {
             scheduler.stop().await;
@@ -1519,6 +1540,9 @@ pub async fn cleanup_before_exit(app_handle: &tauri::AppHandle) {
             scheduler.stop().await;
         }
         if let Some(scheduler) = official_pricing_scheduler {
+            scheduler.stop().await;
+        }
+        if let Some(scheduler) = provider_key_usage_scheduler {
             scheduler.stop().await;
         }
     }

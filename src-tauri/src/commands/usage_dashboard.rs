@@ -2,16 +2,16 @@ use crate::commands::CodexOAuthState;
 use crate::credentials::SecretString;
 use crate::database::AgentModuleDeleteOutcome;
 use crate::error::AppError;
-use crate::services::SystemProviderConnectionTestResult;
+use crate::services::{SystemProviderConnectionService, SystemProviderConnectionTestResult};
 use crate::store::AppState;
 use crate::usage::aggregation::{aggregate_agent_usage, aggregate_model_usage};
 use crate::usage::dashboard::UsageDashboardService;
 use crate::usage::domain::{
     AgentModuleInput, AgentModuleView, AgentProviderBindingInput, AgentProviderBindingView,
-    AgentUsageBreakdownView, LocalBindingKeyReveal, ModelUsageDashboardView,
+    AgentUsageBreakdownView, LocalBindingKeyReveal, ModelUsageDashboardView, ProviderApiKeyView,
     ProviderMonitoringDashboardView, RouteBinding, SystemProviderAuthKind,
-    UnassignedUsageDiagnostics, UsageDashboardView, UsageEventPage, UsageProviderInput,
-    UsageProviderView,
+    SystemProviderKeyUsageView, UnassignedUsageDiagnostics, UsageDashboardView, UsageEventPage,
+    UsageProviderInput, UsageProviderView,
 };
 use crate::usage::quota::QuotaRefreshResult;
 use crate::usage::session::ProviderSessionSyncResult;
@@ -162,50 +162,94 @@ pub async fn clear_agent_provider_binding_api_key(
 }
 
 #[tauri::command]
-pub async fn set_system_provider_api_key(
+pub async fn list_provider_api_keys(
     state: State<'_, AppState>,
     provider_id: String,
+) -> Result<Vec<ProviderApiKeyView>, AppError> {
+    list_provider_api_keys_test_hook(&state, &provider_id).await
+}
+
+#[tauri::command]
+pub async fn create_provider_api_key(
+    state: State<'_, AppState>,
+    provider_id: String,
+    label: String,
+) -> Result<ProviderApiKeyView, AppError> {
+    create_provider_api_key_test_hook(&state, &provider_id, &label).await
+}
+
+#[tauri::command]
+pub async fn rename_provider_api_key(
+    state: State<'_, AppState>,
+    key_id: String,
+    label: String,
+) -> Result<ProviderApiKeyView, AppError> {
+    rename_provider_api_key_test_hook(&state, &key_id, &label).await
+}
+
+#[tauri::command]
+pub async fn delete_provider_api_key(
+    state: State<'_, AppState>,
+    key_id: String,
+    expected_version: u64,
+) -> Result<(), AppError> {
+    delete_provider_api_key_test_hook(&state, &key_id, expected_version).await
+}
+
+#[tauri::command]
+pub async fn set_system_provider_api_key(
+    state: State<'_, AppState>,
+    key_id: String,
     expected_version: u64,
     api_key: SecretString,
-) -> Result<UsageProviderView, AppError> {
-    set_system_provider_api_key_test_hook(&state, &provider_id, expected_version, api_key).await
+) -> Result<ProviderApiKeyView, AppError> {
+    set_system_provider_api_key_test_hook(&state, &key_id, expected_version, api_key).await
 }
 
 #[tauri::command]
 pub async fn replace_system_provider_api_key(
     state: State<'_, AppState>,
-    provider_id: String,
+    key_id: String,
     expected_version: u64,
     api_key: SecretString,
-) -> Result<UsageProviderView, AppError> {
-    replace_system_provider_api_key_test_hook(&state, &provider_id, expected_version, api_key).await
+) -> Result<ProviderApiKeyView, AppError> {
+    replace_system_provider_api_key_test_hook(&state, &key_id, expected_version, api_key).await
 }
 
 #[tauri::command]
 pub async fn clear_system_provider_api_key(
     state: State<'_, AppState>,
-    provider_id: String,
+    key_id: String,
     expected_version: u64,
-) -> Result<UsageProviderView, AppError> {
-    clear_system_provider_api_key_test_hook(&state, &provider_id, expected_version).await
+) -> Result<ProviderApiKeyView, AppError> {
+    clear_system_provider_api_key_test_hook(&state, &key_id, expected_version).await
 }
 
 #[tauri::command]
 pub async fn test_system_provider_connection(
     state: State<'_, AppState>,
-    provider_id: String,
+    key_id: String,
     expected_version: u64,
 ) -> Result<SystemProviderConnectionTestResult, AppError> {
-    test_system_provider_connection_test_hook(&state, &provider_id, expected_version).await
+    test_system_provider_connection_test_hook(&state, &key_id, expected_version).await
+}
+
+#[tauri::command]
+pub async fn refresh_system_provider_key_usage(
+    state: State<'_, AppState>,
+    key_id: String,
+    expected_version: u64,
+) -> Result<SystemProviderKeyUsageView, AppError> {
+    refresh_system_provider_key_usage_test_hook(&state, &key_id, expected_version).await
 }
 
 #[tauri::command]
 pub async fn list_system_provider_models(
     state: State<'_, AppState>,
-    provider_id: String,
+    key_id: String,
     expected_version: u64,
 ) -> Result<Vec<String>, AppError> {
-    list_system_provider_models_test_hook(&state, &provider_id, expected_version).await
+    list_system_provider_models_test_hook(&state, &key_id, expected_version).await
 }
 
 #[tauri::command]
@@ -701,15 +745,105 @@ pub async fn clear_agent_provider_binding_api_key_test_hook(
     Ok(view)
 }
 
-pub async fn set_system_provider_api_key_test_hook(
+fn ensure_provider_api_key_auth(state: &AppState, provider_id: &str) -> Result<(), AppError> {
+    state
+        .db
+        .list_usage_providers()?
+        .into_iter()
+        .find(|provider| provider.id == provider_id)
+        .filter(|provider| {
+            provider.system_auth_kind == Some(SystemProviderAuthKind::ProviderApiKey)
+        })
+        .map(|_| ())
+        .ok_or_else(|| AppError::Message("unsupported_auth".to_string()))
+}
+
+pub async fn list_provider_api_keys_test_hook(
     state: &AppState,
     provider_id: &str,
-    expected_version: u64,
-    api_key: SecretString,
-) -> Result<UsageProviderView, AppError> {
+) -> Result<Vec<ProviderApiKeyView>, AppError> {
+    ensure_provider_api_key_auth(state, provider_id)?;
+    let keys = state.db.list_provider_api_keys(provider_id)?;
+    let mut views = Vec::with_capacity(keys.len());
+    for key in keys {
+        views.push(
+            state
+                .binding_credential_service
+                .provider_key_view(&key.id)
+                .await?,
+        );
+    }
+    Ok(views)
+}
+
+pub async fn create_provider_api_key_test_hook(
+    state: &AppState,
+    provider_id: &str,
+    label: &str,
+) -> Result<ProviderApiKeyView, AppError> {
+    ensure_provider_api_key_auth(state, provider_id)?;
+    let key_id = state.db.create_provider_api_key(provider_id, label)?;
     let view = state
         .binding_credential_service
-        .set_provider_api_key(provider_id, expected_version, api_key)
+        .provider_key_view(&key_id)
+        .await?;
+    crate::usage_events::notify_dashboard_invalidated();
+    Ok(view)
+}
+
+pub async fn rename_provider_api_key_test_hook(
+    state: &AppState,
+    key_id: &str,
+    label: &str,
+) -> Result<ProviderApiKeyView, AppError> {
+    let key = state
+        .db
+        .provider_api_key(key_id)?
+        .ok_or_else(|| AppError::Message("unsupported_auth".to_string()))?;
+    ensure_provider_api_key_auth(state, &key.provider_id)?;
+    state.db.rename_provider_api_key(key_id, label)?;
+    let view = state
+        .binding_credential_service
+        .provider_key_view(key_id)
+        .await?;
+    crate::usage_events::notify_dashboard_invalidated();
+    Ok(view)
+}
+
+pub async fn delete_provider_api_key_test_hook(
+    state: &AppState,
+    key_id: &str,
+    expected_version: u64,
+) -> Result<(), AppError> {
+    let key = state
+        .db
+        .provider_api_key(key_id)?
+        .ok_or_else(|| AppError::Message("unsupported_auth".to_string()))?;
+    ensure_provider_api_key_auth(state, &key.provider_id)?;
+
+    let delete_version = if key.fingerprint.is_some() || key.credential_slot.is_some() {
+        state
+            .binding_credential_service
+            .clear_provider_api_key(key_id, expected_version)
+            .await?
+            .credential_version
+    } else {
+        expected_version
+    };
+    state.db.delete_provider_api_key(key_id, delete_version)?;
+    crate::usage_events::notify_dashboard_invalidated();
+    Ok(())
+}
+
+pub async fn set_system_provider_api_key_test_hook(
+    state: &AppState,
+    key_id: &str,
+    expected_version: u64,
+    api_key: SecretString,
+) -> Result<ProviderApiKeyView, AppError> {
+    let view = state
+        .binding_credential_service
+        .set_provider_api_key(key_id, expected_version, api_key)
         .await?;
     crate::usage_events::notify_dashboard_invalidated();
     Ok(view)
@@ -717,13 +851,13 @@ pub async fn set_system_provider_api_key_test_hook(
 
 pub async fn replace_system_provider_api_key_test_hook(
     state: &AppState,
-    provider_id: &str,
+    key_id: &str,
     expected_version: u64,
     api_key: SecretString,
-) -> Result<UsageProviderView, AppError> {
+) -> Result<ProviderApiKeyView, AppError> {
     let view = state
         .binding_credential_service
-        .replace_provider_api_key(provider_id, expected_version, api_key)
+        .replace_provider_api_key(key_id, expected_version, api_key)
         .await?;
     crate::usage_events::notify_dashboard_invalidated();
     Ok(view)
@@ -731,12 +865,12 @@ pub async fn replace_system_provider_api_key_test_hook(
 
 pub async fn clear_system_provider_api_key_test_hook(
     state: &AppState,
-    provider_id: &str,
+    key_id: &str,
     expected_version: u64,
-) -> Result<UsageProviderView, AppError> {
+) -> Result<ProviderApiKeyView, AppError> {
     let view = state
         .binding_credential_service
-        .clear_provider_api_key(provider_id, expected_version)
+        .clear_provider_api_key(key_id, expected_version)
         .await?;
     crate::usage_events::notify_dashboard_invalidated();
     Ok(view)
@@ -744,25 +878,48 @@ pub async fn clear_system_provider_api_key_test_hook(
 
 pub async fn test_system_provider_connection_test_hook(
     state: &AppState,
-    provider_id: &str,
+    key_id: &str,
     expected_version: u64,
 ) -> Result<SystemProviderConnectionTestResult, AppError> {
     let result = state
         .system_provider_connection_service
-        .test(provider_id, expected_version)
+        .test(key_id, expected_version)
         .await?;
     crate::usage_events::notify_dashboard_invalidated();
     Ok(result)
 }
 
+pub async fn refresh_system_provider_key_usage_test_hook(
+    state: &AppState,
+    key_id: &str,
+    expected_version: u64,
+) -> Result<SystemProviderKeyUsageView, AppError> {
+    refresh_system_provider_key_usage_with_service_test_hook(
+        &state.system_provider_connection_service,
+        key_id,
+        expected_version,
+    )
+    .await
+}
+
+async fn refresh_system_provider_key_usage_with_service_test_hook(
+    service: &SystemProviderConnectionService,
+    key_id: &str,
+    expected_version: u64,
+) -> Result<SystemProviderKeyUsageView, AppError> {
+    let view = service.refresh_key_usage(key_id, expected_version).await?;
+    crate::usage_events::notify_dashboard_invalidated();
+    Ok(view)
+}
+
 pub async fn list_system_provider_models_test_hook(
     state: &AppState,
-    provider_id: &str,
+    key_id: &str,
     expected_version: u64,
 ) -> Result<Vec<String>, AppError> {
     state
         .system_provider_connection_service
-        .list_models(provider_id, expected_version)
+        .list_models(key_id, expected_version)
         .await
 }
 
@@ -1117,10 +1274,18 @@ fn require_active_agent(state: &AppState, agent_module_id: &str) -> Result<(), A
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::credentials::{CredentialStore, CredentialStoreError, SecretString};
+    use crate::credentials::{
+        BindingCredentialService, CredentialStore, CredentialStoreError, SecretString,
+    };
     use crate::database::Database;
     use crate::services::subscription::{
         CredentialStatus, QuotaTier, SubscriptionQuota, TIER_FIVE_HOUR, TIER_SEVEN_DAY,
+    };
+    use crate::services::system_provider_connection::{
+        ModelListClientError, SystemProviderConnectionClient, SystemProviderConnectionFuture,
+        SystemProviderConnectionRequest, SystemProviderKeyUsageClientError,
+        SystemProviderKeyUsageClientResponse, SystemProviderKeyUsageFuture,
+        SystemProviderModelListFuture,
     };
     use crate::usage::domain::{
         AgentModuleInput, AgentProviderBindingInput, BillingKind, BindingCredentialStatus,
@@ -1131,8 +1296,10 @@ mod tests {
     use crate::usage::system_providers::MANAGED_CODEX_QUOTA_SOURCE;
     use chrono::{Local, TimeZone};
     use futures::future::BoxFuture;
+    use rust_decimal::Decimal;
     use serde_json::json;
-    use std::collections::HashMap;
+    use std::collections::{HashMap, VecDeque};
+    use std::str::FromStr;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
@@ -1169,6 +1336,58 @@ mod tests {
             }
             self.items.lock().unwrap().remove(slot);
             Ok(())
+        }
+    }
+
+    struct KeyUsageClient {
+        results: Mutex<
+            VecDeque<
+                Result<SystemProviderKeyUsageClientResponse, SystemProviderKeyUsageClientError>,
+            >,
+        >,
+        calls: AtomicUsize,
+    }
+
+    impl KeyUsageClient {
+        fn new(
+            results: Vec<
+                Result<SystemProviderKeyUsageClientResponse, SystemProviderKeyUsageClientError>,
+            >,
+        ) -> Self {
+            Self {
+                results: Mutex::new(results.into()),
+                calls: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl SystemProviderConnectionClient for KeyUsageClient {
+        fn get(
+            &self,
+            _request: SystemProviderConnectionRequest,
+        ) -> SystemProviderConnectionFuture<'_> {
+            Box::pin(async { Err(AppError::Message("unexpected_connection_test".to_string())) })
+        }
+
+        fn list_model_ids(
+            &self,
+            _request: SystemProviderConnectionRequest,
+        ) -> SystemProviderModelListFuture<'_> {
+            Box::pin(async { Err(ModelListClientError::ConnectionFailed) })
+        }
+
+        fn fetch_key_usage(
+            &self,
+            _request: SystemProviderConnectionRequest,
+        ) -> SystemProviderKeyUsageFuture<'_> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let result = self
+                .results
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("queued key usage response");
+            Box::pin(async move { result })
         }
     }
 
@@ -1590,10 +1809,161 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn refresh_system_provider_key_usage_command_persists_and_returns_view() {
+        let db = Arc::new(Database::memory().unwrap());
+        let credentials = Arc::new(BindingCredentialService::new(
+            db.clone(),
+            Arc::new(MemoryCredentialStore::default()),
+        ));
+        let key_id = db
+            .create_provider_api_key("system-openrouter-api", "Usage key")
+            .unwrap();
+        credentials
+            .set_provider_api_key(
+                &key_id,
+                0,
+                SecretString::new("command-key-usage-secret".to_string()),
+            )
+            .await
+            .unwrap();
+        let client = Arc::new(KeyUsageClient::new(vec![Ok(
+            SystemProviderKeyUsageClientResponse {
+                status: 200,
+                usage_total_usd: Some(Decimal::from_str("12.3400").unwrap()),
+                usage_daily_usd: Some(Decimal::from_str("0.5").unwrap()),
+                usage_weekly_usd: Some(Decimal::from_str("2.75").unwrap()),
+                usage_monthly_usd: Some(Decimal::from_str("8.25").unwrap()),
+                limit_usd: None,
+                limit_remaining_usd: None,
+                is_free_tier: Some(false),
+            },
+        )]));
+        let service = SystemProviderConnectionService::new(db.clone(), credentials, client.clone());
+
+        let view = refresh_system_provider_key_usage_with_service_test_hook(&service, &key_id, 1)
+            .await
+            .unwrap();
+
+        assert_eq!(view.usage_total_usd.as_deref(), Some("12.34"));
+        assert_eq!(view.usage_daily_usd.as_deref(), Some("0.5"));
+        assert_eq!(view.usage_weekly_usd.as_deref(), Some("2.75"));
+        assert_eq!(view.usage_monthly_usd.as_deref(), Some("8.25"));
+        assert_eq!(view.limit_usd, None);
+        assert_eq!(view.limit_remaining_usd, None);
+        assert_eq!(view.is_free_tier, Some(false));
+        assert_eq!(view.credential_version, 1);
+        assert!(!view.stale);
+        assert!(view.fetched_at > 0);
+        assert_eq!(client.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            db.conn
+                .lock()
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM provider_key_usage_snapshots
+                     WHERE key_id = ?1",
+                    [&key_id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            1
+        );
+        let surfaced = db
+            .list_usage_providers()
+            .unwrap()
+            .into_iter()
+            .find(|provider| provider.id == "system-openrouter-api")
+            .unwrap()
+            .api_keys
+            .into_iter()
+            .find(|key| key.id == key_id)
+            .unwrap()
+            .key_usage;
+        assert_eq!(surfaced, Some(view));
+    }
+
+    #[tokio::test]
+    async fn refresh_system_provider_key_usage_command_rejects_version_mismatch() {
+        let db = Arc::new(Database::memory().unwrap());
+        let credentials = Arc::new(BindingCredentialService::new(
+            db.clone(),
+            Arc::new(MemoryCredentialStore::default()),
+        ));
+        let key_id = db
+            .create_provider_api_key("system-openrouter-api", "Usage key")
+            .unwrap();
+        credentials
+            .set_provider_api_key(
+                &key_id,
+                0,
+                SecretString::new("command-version-conflict-secret".to_string()),
+            )
+            .await
+            .unwrap();
+        let client = Arc::new(KeyUsageClient::new(Vec::new()));
+        let service = SystemProviderConnectionService::new(db.clone(), credentials, client.clone());
+
+        assert_eq!(
+            refresh_system_provider_key_usage_with_service_test_hook(&service, &key_id, 0,)
+                .await
+                .unwrap_err()
+                .to_string(),
+            "credential_conflict"
+        );
+        assert_eq!(client.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            db.conn
+                .lock()
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM provider_key_usage_snapshots",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_system_provider_key_usage_command_rejects_unsupported_preset() {
+        let db = Arc::new(Database::memory().unwrap());
+        let credentials = Arc::new(BindingCredentialService::new(
+            db.clone(),
+            Arc::new(MemoryCredentialStore::default()),
+        ));
+        let key_id = db
+            .create_provider_api_key("system-openai-api", "Unsupported usage key")
+            .unwrap();
+        credentials
+            .set_provider_api_key(
+                &key_id,
+                0,
+                SecretString::new("unsupported-key-usage-secret".to_string()),
+            )
+            .await
+            .unwrap();
+        let client = Arc::new(KeyUsageClient::new(Vec::new()));
+        let service = SystemProviderConnectionService::new(db, credentials, client.clone());
+
+        assert_eq!(
+            refresh_system_provider_key_usage_with_service_test_hook(&service, &key_id, 1,)
+                .await
+                .unwrap_err()
+                .to_string(),
+            "unsupported_auth"
+        );
+        assert_eq!(client.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
     async fn system_provider_commands_separate_shared_and_local_key_lifecycles() {
         let db = Arc::new(Database::memory().unwrap());
         let state =
             AppState::new_with_credential_store(db, Arc::new(MemoryCredentialStore::default()));
+        let key = create_provider_api_key_test_hook(&state, "system-openai-api", "Command key")
+            .await
+            .unwrap();
         let binding = save_agent_provider_binding_test_hook(
             &state,
             AgentProviderBindingInput {
@@ -1621,15 +1991,15 @@ mod tests {
 
         let provider = set_system_provider_api_key_test_hook(
             &state,
-            "system-openai-api",
+            &key.id,
             0,
             SecretString::new("openai-command-upstream-sentinel".to_string()),
         )
         .await
         .unwrap();
-        assert_eq!(provider.upstream_credential_version, 1);
+        assert_eq!(provider.credential_version, 1);
         assert_eq!(
-            provider.upstream_credential_status,
+            provider.credential_status,
             BindingCredentialStatus::Configured
         );
         let public_json =
@@ -1654,17 +2024,108 @@ mod tests {
             "credential_conflict"
         );
 
-        let cleared = clear_system_provider_api_key_test_hook(
+        let cleared =
+            clear_system_provider_api_key_test_hook(&state, &key.id, provider.credential_version)
+                .await
+                .unwrap();
+        assert_eq!(cleared.credential_version, 2);
+        assert_eq!(cleared.credential_status, BindingCredentialStatus::Missing);
+    }
+
+    #[tokio::test]
+    async fn provider_key_management_commands_create_list_rename_and_delete_live_keys() {
+        let db = Arc::new(Database::memory().unwrap());
+        let store = Arc::new(MemoryCredentialStore::default());
+        let state = AppState::new_with_credential_store(db.clone(), store.clone());
+
+        let created = create_provider_api_key_test_hook(&state, "system-openrouter-api", "Primary")
+            .await
+            .unwrap();
+        assert_eq!(created.label, "Primary");
+        assert_eq!(created.credential_status, BindingCredentialStatus::Missing);
+        assert_eq!(
+            create_provider_api_key_test_hook(&state, "system-openrouter-api", "Primary")
+                .await
+                .unwrap_err()
+                .to_string(),
+            "duplicate_label"
+        );
+        assert_eq!(
+            list_provider_api_keys_test_hook(&state, "system-openrouter-api")
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|key| key.id)
+                .collect::<Vec<_>>(),
+            vec![created.id.clone()]
+        );
+
+        let renamed = rename_provider_api_key_test_hook(&state, &created.id, "Renamed")
+            .await
+            .unwrap();
+        assert_eq!(renamed.label, "Renamed");
+        let configured = set_system_provider_api_key_test_hook(
             &state,
-            "system-openai-api",
-            provider.upstream_credential_version,
+            &created.id,
+            renamed.credential_version,
+            SecretString::new("provider-key-delete-live-secret".to_string()),
         )
         .await
         .unwrap();
-        assert_eq!(cleared.upstream_credential_version, 2);
+        assert_eq!(store.item_count(), 1);
+
+        delete_provider_api_key_test_hook(&state, &created.id, configured.credential_version)
+            .await
+            .unwrap();
+
+        assert!(db.provider_api_key(&created.id).unwrap().is_none());
+        assert_eq!(store.item_count(), 0);
+        assert_eq!(store.delete_attempt_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn provider_key_delete_keeps_the_row_when_keychain_clear_fails() {
+        let db = Arc::new(Database::memory().unwrap());
+        let store = Arc::new(MemoryCredentialStore::default());
+        let state = AppState::new_with_credential_store(db.clone(), store.clone());
+        let key = create_provider_api_key_test_hook(&state, "system-openrouter-api", "Primary")
+            .await
+            .unwrap();
+        let configured = set_system_provider_api_key_test_hook(
+            &state,
+            &key.id,
+            0,
+            SecretString::new("provider-key-delete-failure-secret".to_string()),
+        )
+        .await
+        .unwrap();
+        store.fail_next_deletes(1);
+
         assert_eq!(
-            cleared.upstream_credential_status,
-            BindingCredentialStatus::Missing
+            delete_provider_api_key_test_hook(&state, &key.id, configured.credential_version)
+                .await
+                .unwrap_err()
+                .to_string(),
+            "credential_conflict"
+        );
+
+        let retained = db.provider_api_key(&key.id).unwrap().unwrap();
+        assert_eq!(retained.credential_version, 2);
+        assert!(retained.fingerprint.is_none());
+        assert!(retained.credential_slot.is_none());
+        assert_eq!(store.item_count(), 1);
+        assert_eq!(store.delete_attempt_count(), 1);
+        assert_eq!(
+            db.conn
+                .lock()
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM provider_credential_operations WHERE key_id = ?1",
+                    [&key.id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            1
         );
     }
 

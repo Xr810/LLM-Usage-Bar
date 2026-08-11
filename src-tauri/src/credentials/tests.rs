@@ -955,30 +955,34 @@ async fn credential_failures_log_only_generic_messages() {
 
 fn private_provider_credential_state(
     db: &Database,
-    provider_id: &str,
+    key_id: &str,
 ) -> (Option<Vec<u8>>, Option<String>, i64) {
     db.conn
         .lock()
         .unwrap()
         .query_row(
             "SELECT api_key_fingerprint, credential_slot, credential_version
-             FROM provider_api_credentials WHERE provider_id = ?1",
-            [provider_id],
+             FROM provider_api_keys WHERE id = ?1",
+            [key_id],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .unwrap()
 }
 
-fn provider_credential_journal_count(db: &Database, provider_id: &str) -> i64 {
+fn provider_credential_journal_count(db: &Database, key_id: &str) -> i64 {
     db.conn
         .lock()
         .unwrap()
         .query_row(
-            "SELECT COUNT(*) FROM provider_credential_operations WHERE provider_id = ?1",
-            [provider_id],
+            "SELECT COUNT(*) FROM provider_credential_operations WHERE key_id = ?1",
+            [key_id],
             |row| row.get(0),
         )
         .unwrap()
+}
+
+fn create_provider_key(db: &Database, provider_id: &str) -> String {
+    db.create_provider_api_key(provider_id, "Test key").unwrap()
 }
 
 fn all_binding_credential_state(db: &Database) -> Vec<(String, String, String, bool, i64)> {
@@ -1009,63 +1013,93 @@ async fn provider_credential_set_replace_clear_is_versioned_and_redacted() {
     let db = Arc::new(Database::memory().unwrap());
     let store = Arc::new(MemoryCredentialStore::default());
     let service = BindingCredentialService::new(db.clone(), store.clone());
+    let key_id = create_provider_key(&db, "system-openrouter-api");
     let first_key = "provider-first-secret-sentinel";
     let second_key = "provider-second-secret-sentinel";
 
     let configured = service
-        .set_provider_api_key(
-            "system-openrouter-api",
-            0,
-            SecretString::new(first_key.to_string()),
-        )
+        .set_provider_api_key(&key_id, 0, SecretString::new(first_key.to_string()))
         .await
         .unwrap();
-    assert_eq!(configured.upstream_credential_version, 1);
+    assert_eq!(configured.credential_version, 1);
     assert_eq!(
-        configured.upstream_credential_status,
+        configured.credential_status,
         BindingCredentialStatus::Configured
     );
-    assert!(configured.can_clear_upstream_credential);
+    assert!(configured.can_clear_credential);
     let serialized = serde_json::to_string(&configured).unwrap();
     assert!(!serialized.contains(first_key));
-    let first_slot = private_provider_credential_state(&db, "system-openrouter-api")
-        .1
+    let first_slot = private_provider_credential_state(&db, &key_id).1.unwrap();
+    {
+        let conn = db.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO provider_key_usage_snapshots (
+                key_id, credential_version, usage_total_usd,
+                fetched_at, created_at, updated_at
+             ) VALUES (?1, 1, '1.5', 10, 10, 10)",
+            [&key_id],
+        )
         .unwrap();
+    }
 
     let replaced = service
-        .replace_provider_api_key(
-            "system-openrouter-api",
-            1,
-            SecretString::new(second_key.to_string()),
-        )
+        .replace_provider_api_key(&key_id, 1, SecretString::new(second_key.to_string()))
         .await
         .unwrap();
-    assert_eq!(replaced.upstream_credential_version, 2);
-    let second_slot = private_provider_credential_state(&db, "system-openrouter-api")
-        .1
-        .unwrap();
-    assert_ne!(first_slot, second_slot);
-    assert_eq!(store.item_count(), 1);
-
-    let cleared = service
-        .clear_provider_api_key("system-openrouter-api", 2)
-        .await
-        .unwrap();
-    assert_eq!(cleared.upstream_credential_version, 3);
+    assert_eq!(replaced.credential_version, 2);
+    assert_eq!(replaced.key_usage, None);
     assert_eq!(
-        cleared.upstream_credential_status,
-        BindingCredentialStatus::Missing
-    );
-    assert!(!cleared.can_clear_upstream_credential);
-    assert_eq!(
-        private_provider_credential_state(&db, "system-openrouter-api"),
-        (None, None, 3)
-    );
-    assert_eq!(
-        provider_credential_journal_count(&db, "system-openrouter-api"),
+        db.conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM provider_key_usage_snapshots
+                 WHERE key_id = ?1",
+                [&key_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
         0
     );
+    let second_slot = private_provider_credential_state(&db, &key_id).1.unwrap();
+    assert_ne!(first_slot, second_slot);
+    assert_eq!(store.item_count(), 1);
+    {
+        let conn = db.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO provider_key_usage_snapshots (
+                key_id, credential_version, usage_total_usd,
+                fetched_at, created_at, updated_at
+             ) VALUES (?1, 2, '2.5', 20, 20, 20)",
+            [&key_id],
+        )
+        .unwrap();
+    }
+
+    let cleared = service.clear_provider_api_key(&key_id, 2).await.unwrap();
+    assert_eq!(cleared.credential_version, 3);
+    assert_eq!(cleared.key_usage, None);
+    assert_eq!(cleared.credential_status, BindingCredentialStatus::Missing);
+    assert!(!cleared.can_clear_credential);
+    assert_eq!(
+        private_provider_credential_state(&db, &key_id),
+        (None, None, 3)
+    );
+    assert_eq!(provider_credential_journal_count(&db, &key_id), 0);
     assert_eq!(store.item_count(), 0);
+    assert_eq!(
+        db.conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM provider_key_usage_snapshots
+                 WHERE key_id = ?1",
+                [&key_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        0
+    );
 }
 
 #[tokio::test]
@@ -1080,15 +1114,16 @@ async fn provider_credential_accepts_the_built_in_api_catalog_only() {
         .collect::<Vec<_>>();
     assert_eq!(api_definitions.len(), 18);
     for definition in api_definitions {
+        let key_id = create_provider_key(&db, definition.id);
         let configured = service
             .set_provider_api_key(
-                definition.id,
+                &key_id,
                 0,
                 secret(&format!("{}-provider-key", definition.preset_key)),
             )
             .await
             .unwrap();
-        assert_eq!(configured.upstream_credential_version, 1);
+        assert_eq!(configured.credential_version, 1);
     }
 
     for rejected in [
@@ -1113,19 +1148,17 @@ async fn provider_credential_rotation_never_changes_binding_generations_or_selec
     let store = Arc::new(MemoryCredentialStore::default());
     let service = BindingCredentialService::new(db.clone(), store);
     let bindings_before = all_binding_credential_state(&db);
+    let key_id = create_provider_key(&db, "system-openrouter-api");
 
     service
-        .set_provider_api_key("system-openrouter-api", 0, secret("provider-rotation-one"))
+        .set_provider_api_key(&key_id, 0, secret("provider-rotation-one"))
         .await
         .unwrap();
     service
-        .replace_provider_api_key("system-openrouter-api", 1, secret("provider-rotation-two"))
+        .replace_provider_api_key(&key_id, 1, secret("provider-rotation-two"))
         .await
         .unwrap();
-    service
-        .clear_provider_api_key("system-openrouter-api", 2)
-        .await
-        .unwrap();
+    service.clear_provider_api_key(&key_id, 2).await.unwrap();
 
     assert_eq!(all_binding_credential_state(&db), bindings_before);
 }
@@ -1136,50 +1169,42 @@ async fn provider_credential_store_failure_and_concurrent_mutations_fail_closed(
     let store = Arc::new(MemoryCredentialStore::default());
     store.fail_put_after_write();
     let service = Arc::new(BindingCredentialService::new(db.clone(), store.clone()));
+    let key_id = create_provider_key(&db, "system-openrouter-api");
 
     assert_eq!(
         service
-            .set_provider_api_key("system-openrouter-api", 0, secret("provider-store-failure"),)
+            .set_provider_api_key(&key_id, 0, secret("provider-store-failure"),)
             .await
             .unwrap_err()
             .to_string(),
         "credential_unavailable"
     );
     assert_eq!(
-        private_provider_credential_state(&db, "system-openrouter-api"),
+        private_provider_credential_state(&db, &key_id),
         (None, None, 0)
     );
-    assert_eq!(
-        provider_credential_journal_count(&db, "system-openrouter-api"),
-        0
-    );
+    assert_eq!(provider_credential_journal_count(&db, &key_id), 0);
     assert_eq!(store.item_count(), 0);
 
     service
-        .set_provider_api_key(
-            "system-openrouter-api",
-            0,
-            secret("provider-concurrent-original"),
-        )
+        .set_provider_api_key(&key_id, 0, secret("provider-concurrent-original"))
         .await
         .unwrap();
     let replacing = service.clone();
     let clearing = service.clone();
+    let replacing_key_id = key_id.clone();
+    let clearing_key_id = key_id.clone();
     let (replace_result, clear_result) = tokio::join!(
         async move {
             replacing
                 .replace_provider_api_key(
-                    "system-openrouter-api",
+                    &replacing_key_id,
                     1,
                     secret("provider-concurrent-replacement"),
                 )
                 .await
         },
-        async move {
-            clearing
-                .clear_provider_api_key("system-openrouter-api", 1)
-                .await
-        }
+        async move { clearing.clear_provider_api_key(&clearing_key_id, 1).await }
     );
     assert_eq!(
         usize::from(replace_result.is_ok()) + usize::from(clear_result.is_ok()),
@@ -1187,23 +1212,18 @@ async fn provider_credential_store_failure_and_concurrent_mutations_fail_closed(
     );
     let loser = replace_result.err().or_else(|| clear_result.err()).unwrap();
     assert_eq!(loser.to_string(), "credential_conflict");
-    assert_eq!(
-        private_provider_credential_state(&db, "system-openrouter-api").2,
-        2
-    );
-    assert_eq!(
-        provider_credential_journal_count(&db, "system-openrouter-api"),
-        0
-    );
+    assert_eq!(private_provider_credential_state(&db, &key_id).2, 2);
+    assert_eq!(provider_credential_journal_count(&db, &key_id), 0);
 }
 
 #[tokio::test]
 async fn provider_credential_startup_reconciliation_removes_unpublished_staging_items() {
     let db = Arc::new(Database::memory().unwrap());
     let store = Arc::new(MemoryCredentialStore::default());
+    let key_id = create_provider_key(&db, "system-openrouter-api");
     let reservation = db
         .reserve_provider_credential_operation(
-            "system-openrouter-api",
+            &key_id,
             0,
             CredentialMutationKind::Set,
             Some(&[0x81_u8; 32]),
@@ -1216,13 +1236,10 @@ async fn provider_credential_startup_reconciliation_removes_unpublished_staging_
 
     let service = BindingCredentialService::new(db.clone(), store.clone());
     service.reconcile_startup().await.unwrap();
-    assert_eq!(
-        provider_credential_journal_count(&db, "system-openrouter-api"),
-        0
-    );
+    assert_eq!(provider_credential_journal_count(&db, &key_id), 0);
     assert_eq!(store.item_count(), 0);
     assert_eq!(
-        private_provider_credential_state(&db, "system-openrouter-api"),
+        private_provider_credential_state(&db, &key_id),
         (None, None, 0)
     );
 }
@@ -1232,17 +1249,12 @@ async fn provider_credential_missing_or_mismatched_protected_items_are_unavailab
     let db = Arc::new(Database::memory().unwrap());
     let store = Arc::new(MemoryCredentialStore::default());
     let service = BindingCredentialService::new(db.clone(), store.clone());
+    let key_id = create_provider_key(&db, "system-openrouter-api");
     service
-        .set_provider_api_key(
-            "system-openrouter-api",
-            0,
-            secret("provider-protected-status"),
-        )
+        .set_provider_api_key(&key_id, 0, secret("provider-protected-status"))
         .await
         .unwrap();
-    let slot = private_provider_credential_state(&db, "system-openrouter-api")
-        .1
-        .unwrap();
+    let slot = private_provider_credential_state(&db, &key_id).1.unwrap();
 
     store.remove(&slot);
     let missing = service
@@ -1252,11 +1264,16 @@ async fn provider_credential_missing_or_mismatched_protected_items_are_unavailab
         .into_iter()
         .find(|provider| provider.id == "system-openrouter-api")
         .unwrap();
+    let missing_key = missing
+        .api_keys
+        .iter()
+        .find(|key| key.id == key_id)
+        .unwrap();
     assert_eq!(
-        missing.upstream_credential_status,
+        missing_key.credential_status,
         BindingCredentialStatus::Unavailable
     );
-    assert!(missing.can_clear_upstream_credential);
+    assert!(missing_key.can_clear_credential);
 
     store.replace_for_test(&slot, b"different-provider-protected-value");
     let mismatched = service
@@ -1267,7 +1284,12 @@ async fn provider_credential_missing_or_mismatched_protected_items_are_unavailab
         .find(|provider| provider.id == "system-openrouter-api")
         .unwrap();
     assert_eq!(
-        mismatched.upstream_credential_status,
+        mismatched
+            .api_keys
+            .iter()
+            .find(|key| key.id == key_id)
+            .unwrap()
+            .credential_status,
         BindingCredentialStatus::Unavailable
     );
 }
@@ -1278,9 +1300,11 @@ async fn provider_credential_duplicate_publish_cleans_only_its_staging_generatio
     let store = Arc::new(MemoryCredentialStore::default());
     let service = BindingCredentialService::new(db.clone(), store.clone());
     let duplicate = "provider-duplicate-secret-sentinel";
+    let openrouter_key_id = create_provider_key(&db, "system-openrouter-api");
+    let openai_key_id = create_provider_key(&db, "system-openai-api");
     service
         .set_provider_api_key(
-            "system-openrouter-api",
+            &openrouter_key_id,
             0,
             SecretString::new(duplicate.to_string()),
         )
@@ -1289,24 +1313,17 @@ async fn provider_credential_duplicate_publish_cleans_only_its_staging_generatio
 
     assert_eq!(
         service
-            .set_provider_api_key(
-                "system-openai-api",
-                0,
-                SecretString::new(duplicate.to_string()),
-            )
+            .set_provider_api_key(&openai_key_id, 0, SecretString::new(duplicate.to_string()),)
             .await
             .unwrap_err()
             .to_string(),
         "credential_conflict"
     );
     assert_eq!(
-        private_provider_credential_state(&db, "system-openai-api"),
+        private_provider_credential_state(&db, &openai_key_id),
         (None, None, 0)
     );
-    assert_eq!(
-        provider_credential_journal_count(&db, "system-openai-api"),
-        0
-    );
+    assert_eq!(provider_credential_journal_count(&db, &openai_key_id), 0);
     assert_eq!(store.item_count(), 1);
 }
 
@@ -1315,13 +1332,14 @@ async fn provider_credential_startup_reconciliation_finishes_published_operation
     let db = Arc::new(Database::memory().unwrap());
     let store = Arc::new(MemoryCredentialStore::default());
     let raw_key = b"provider-published-before-crash";
+    let key_id = create_provider_key(&db, "system-openrouter-api");
     let mut hasher = Sha256::new();
     hasher.update(b"com.xr810.llm-usage-bar.provider-upstream.v1\0");
     hasher.update(raw_key);
     let fingerprint: [u8; 32] = hasher.finalize().into();
     let reservation = db
         .reserve_provider_credential_operation(
-            "system-openrouter-api",
+            &key_id,
             0,
             CredentialMutationKind::Set,
             Some(&fingerprint),
@@ -1331,17 +1349,11 @@ async fn provider_credential_startup_reconciliation_finishes_published_operation
     store.put(slot, raw_key).unwrap();
     db.publish_provider_credential_operation(&reservation, Some(&fingerprint))
         .unwrap();
-    assert_eq!(
-        provider_credential_journal_count(&db, "system-openrouter-api"),
-        1
-    );
+    assert_eq!(provider_credential_journal_count(&db, &key_id), 1);
 
     let service = BindingCredentialService::new(db.clone(), store.clone());
     service.reconcile_startup().await.unwrap();
-    assert_eq!(
-        provider_credential_journal_count(&db, "system-openrouter-api"),
-        0
-    );
+    assert_eq!(provider_credential_journal_count(&db, &key_id), 0);
     assert_eq!(store.item_count(), 1);
     assert_eq!(
         service
@@ -1351,7 +1363,11 @@ async fn provider_credential_startup_reconciliation_finishes_published_operation
             .into_iter()
             .find(|provider| provider.id == "system-openrouter-api")
             .unwrap()
-            .upstream_credential_status,
+            .api_keys
+            .into_iter()
+            .find(|key| key.id == key_id)
+            .unwrap()
+            .credential_status,
         BindingCredentialStatus::Configured
     );
 }
@@ -1364,12 +1380,9 @@ async fn provider_credential_exports_and_backups_never_contain_raw_keys() {
     let service =
         BindingCredentialService::new(db.clone(), Arc::new(MemoryCredentialStore::default()));
     let raw_key = "provider-backup-raw-sentinel-36f8";
+    let key_id = create_provider_key(&db, "system-openrouter-api");
     let view = service
-        .set_provider_api_key(
-            "system-openrouter-api",
-            0,
-            SecretString::new(raw_key.to_string()),
-        )
+        .set_provider_api_key(&key_id, 0, SecretString::new(raw_key.to_string()))
         .await
         .unwrap();
 
@@ -1392,17 +1405,12 @@ async fn provider_credential_active_slot_is_never_deleted_by_binding_reconciliat
     let pending = direct_binding(&db, "binding-journal-active-provider");
     let store = Arc::new(MemoryCredentialStore::default());
     let service = BindingCredentialService::new(db.clone(), store.clone());
+    let key_id = create_provider_key(&db, "system-openrouter-api");
     service
-        .set_provider_api_key(
-            "system-openrouter-api",
-            0,
-            secret("provider-slot-must-survive"),
-        )
+        .set_provider_api_key(&key_id, 0, secret("provider-slot-must-survive"))
         .await
         .unwrap();
-    let active_slot = private_provider_credential_state(&db, "system-openrouter-api")
-        .1
-        .unwrap();
+    let active_slot = private_provider_credential_state(&db, &key_id).1.unwrap();
     let reservation = db
         .reserve_credential_operation(
             &pending.id,
@@ -1435,7 +1443,11 @@ async fn provider_credential_active_slot_is_never_deleted_by_binding_reconciliat
             .into_iter()
             .find(|provider| provider.id == "system-openrouter-api")
             .unwrap()
-            .upstream_credential_status,
+            .api_keys
+            .into_iter()
+            .find(|key| key.id == key_id)
+            .unwrap()
+            .credential_status,
         BindingCredentialStatus::Configured
     );
 }
@@ -1457,6 +1469,7 @@ async fn local_binding_keys_are_generated_per_agent_and_require_provider_key_to_
     let db = Arc::new(Database::memory().unwrap());
     let store = Arc::new(MemoryCredentialStore::default());
     let service = BindingCredentialService::new(db.clone(), store.clone());
+    let key_id = create_provider_key(&db, "system-openrouter-api");
 
     service.ensure_fixed_api_binding_local_keys().await.unwrap();
     let bindings = service.list_agent_provider_bindings(None).await.unwrap();
@@ -1490,11 +1503,7 @@ async fn local_binding_keys_are_generated_per_agent_and_require_provider_key_to_
     assert_eq!(revealed.len(), 3);
 
     service
-        .set_provider_api_key(
-            "system-openrouter-api",
-            0,
-            secret("openrouter-shared-upstream-key"),
-        )
+        .set_provider_api_key(&key_id, 0, secret("openrouter-shared-upstream-key"))
         .await
         .unwrap();
     let bindings = service.list_agent_provider_bindings(None).await.unwrap();
@@ -1507,10 +1516,7 @@ async fn local_binding_keys_are_generated_per_agent_and_require_provider_key_to_
         }));
     assert_eq!(store.item_count(), 4);
 
-    service
-        .clear_provider_api_key("system-openrouter-api", 1)
-        .await
-        .unwrap();
+    service.clear_provider_api_key(&key_id, 1).await.unwrap();
     let bindings = service.list_agent_provider_bindings(None).await.unwrap();
     assert!(bindings
         .iter()

@@ -1764,11 +1764,11 @@ mod tests {
             )
             .unwrap();
             conn.execute(
-                "INSERT INTO provider_api_credentials (
-                    provider_id, api_key_fingerprint, credential_slot,
+                "INSERT INTO provider_api_keys (
+                    id, provider_id, label, api_key_fingerprint, credential_slot,
                     credential_version, last_test_at, last_test_status,
-                    last_test_error_code, created_at, updated_at
-                 ) VALUES (?1, ?2, ?3, 1, 1, 'failed', ?4, 1, 1)",
+                    last_test_error_code, sort_order, created_at, updated_at
+                 ) VALUES (?1, ?1, 'Default', ?2, ?3, 1, 1, 'failed', ?4, 0, 1, 1)",
                 params![
                     "a-private-subscription",
                     vec![0x42_u8; 32],

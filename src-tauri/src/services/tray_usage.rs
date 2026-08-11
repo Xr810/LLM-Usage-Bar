@@ -420,7 +420,7 @@ impl TrayUsageService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::usage::domain::{BindingCredentialStatus, TokenSource};
+    use crate::usage::domain::TokenSource;
     use crate::usage::tray_snapshot::TrayAgentUsageView;
     use chrono::TimeZone;
     use std::collections::VecDeque;
@@ -505,12 +505,10 @@ mod tests {
             system_auth_kind: None,
             canonical_endpoint: None,
             compatible_agent_module_ids: Vec::new(),
-            upstream_credential_status: BindingCredentialStatus::NotRequired,
-            upstream_credential_version: 0,
-            can_clear_upstream_credential: false,
-            last_connection_test_at: None,
-            last_connection_test_status: None,
+            api_keys: Vec::new(),
             daily_budget_usd: None,
+            supports_key_usage: false,
+            key_usage_total: None,
         }
     }
 
