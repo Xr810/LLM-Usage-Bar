@@ -11,6 +11,7 @@ const SYSTEM_KEY_INDEX: &str = "idx_usage_providers_system_preset_key";
 const PROVIDER_FINGERPRINT_INDEX: &str = "idx_provider_api_credentials_fingerprint";
 const PROVIDER_SLOT_INDEX: &str = "idx_provider_api_credentials_credential_slot";
 const PROVIDER_PENDING_INDEX: &str = "idx_provider_credential_operations_pending_provider";
+const PROVIDER_PENDING_KEY_INDEX: &str = "idx_provider_credential_operations_pending_key";
 
 fn now_timestamp() -> Result<i64, AppError> {
     SystemTime::now()
@@ -295,12 +296,22 @@ pub(crate) fn validate_schema_v17_complete(conn: &Connection) -> Result<(), AppE
             ("updated_at", "INTEGER", 1, None, 0),
         ],
     )?;
+    // This reconciler runs *before* the version loop so a v17+ database can be
+    // opened safely, which means it sees the journal in either shape: keyed on
+    // the Provider (v17..v25) or on the API key (v26+). Pin whichever is
+    // actually present rather than forcing one and rejecting the other.
+    let journal_is_key_scoped = column_exists(conn, "provider_credential_operations", "key_id")?;
+    let journal_owner_column = if journal_is_key_scoped {
+        "key_id"
+    } else {
+        "provider_id"
+    };
     require_table_shape(
         conn,
         "provider_credential_operations",
         &[
             ("operation_id", "TEXT", 1, None, 1),
-            ("provider_id", "TEXT", 1, None, 0),
+            (journal_owner_column, "TEXT", 1, None, 0),
             ("generation", "INTEGER", 1, None, 0),
             ("operation_kind", "TEXT", 1, None, 0),
             ("status", "TEXT", 1, None, 0),
@@ -323,6 +334,7 @@ pub(crate) fn validate_schema_v17_complete(conn: &Connection) -> Result<(), AppE
             "credential_version > 0",
         ],
     )?;
+    let unique_owner_generation = format!("unique ({journal_owner_column}, generation)");
     require_table_sql_fragments(
         conn,
         "provider_credential_operations",
@@ -331,7 +343,7 @@ pub(crate) fn validate_schema_v17_complete(conn: &Connection) -> Result<(), AppE
             "check (generation > 0)",
             "check (operation_kind in ('set','replace','clear'))",
             "check (status in ('pending','committed','cleanup'))",
-            "unique (provider_id, generation)",
+            unique_owner_generation.as_str(),
             "check (operation_kind = 'clear' or staging_slot is not null)",
         ],
     )?;
@@ -343,14 +355,25 @@ pub(crate) fn validate_schema_v17_complete(conn: &Connection) -> Result<(), AppE
         "id",
         "RESTRICT",
     )?;
-    require_foreign_key(
-        conn,
-        "provider_credential_operations",
-        "provider_id",
-        "provider_api_credentials",
-        "provider_id",
-        "RESTRICT",
-    )?;
+    if journal_is_key_scoped {
+        require_foreign_key(
+            conn,
+            "provider_credential_operations",
+            "key_id",
+            "provider_api_keys",
+            "id",
+            "RESTRICT",
+        )?;
+    } else {
+        require_foreign_key(
+            conn,
+            "provider_credential_operations",
+            "provider_id",
+            "provider_api_credentials",
+            "provider_id",
+            "RESTRICT",
+        )?;
+    }
 
     require_index_shape(
         conn,
@@ -382,8 +405,12 @@ pub(crate) fn validate_schema_v17_complete(conn: &Connection) -> Result<(), AppE
     require_index_shape(
         conn,
         "provider_credential_operations",
-        PROVIDER_PENDING_INDEX,
-        &["provider_id"],
+        if journal_is_key_scoped {
+            PROVIDER_PENDING_KEY_INDEX
+        } else {
+            PROVIDER_PENDING_INDEX
+        },
+        &[journal_owner_column],
         true,
         true,
         Some("where status = 'pending'"),
@@ -562,6 +589,17 @@ fn require_column_shape(
         return Err(incomplete(format!("{table}.{column} shape is invalid")));
     }
     Ok(())
+}
+
+fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool, AppError> {
+    let mut statement = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let mut rows = statement.query([])?;
+    while let Some(row) = rows.next()? {
+        if row.get::<_, String>(1)? == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn require_table_sql_fragments(

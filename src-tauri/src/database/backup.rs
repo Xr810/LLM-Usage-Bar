@@ -72,32 +72,24 @@ struct CredentialJournalState {
 
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 struct ProtectedProviderCredentialState {
+    key_id: String,
     provider_id: String,
+    label: String,
     fingerprint: Option<Vec<u8>>,
     credential_slot: Option<String>,
     credential_version: i64,
     last_test_at: Option<i64>,
     last_test_status: Option<String>,
     last_test_error_code: Option<String>,
+    sort_order: i64,
     created_at: i64,
     updated_at: i64,
-}
-
-impl ProtectedProviderCredentialState {
-    fn is_pristine_placeholder(&self) -> bool {
-        self.fingerprint.is_none()
-            && self.credential_slot.is_none()
-            && self.credential_version == 0
-            && self.last_test_at.is_none()
-            && self.last_test_status.is_none()
-            && self.last_test_error_code.is_none()
-    }
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 struct ProviderCredentialJournalState {
     operation_id: String,
-    provider_id: String,
+    key_id: String,
     generation: i64,
     operation_kind: String,
     status: String,
@@ -137,6 +129,8 @@ const SYNC_SKIP_TABLES: &[&str] = &[
     "proxy_request_logs",
     "usage_daily_rollups",
     "usage_light_predictions",
+    "provider_api_keys",
+    "provider_key_usage_snapshots",
     "agent_credential_operations",
     "provider_credential_operations",
 ];
@@ -147,6 +141,8 @@ const SYNC_PRESERVE_TABLES: &[&str] = &[
     "proxy_request_logs",
     "usage_daily_rollups",
     "usage_light_predictions",
+    "provider_api_keys",
+    "provider_key_usage_snapshots",
 ];
 
 fn normalized_secret_key(key: &str) -> String {
@@ -373,12 +369,14 @@ impl Database {
              FROM agent_provider_bindings AS binding
              JOIN usage_providers AS provider ON provider.id = binding.provider_id
              JOIN agent_modules AS agent ON agent.id = binding.agent_module_id
-             LEFT JOIN provider_api_credentials AS provider_credential
-                    ON provider_credential.provider_id = provider.id
              WHERE binding.api_key_fingerprint IS NOT NULL
                 OR binding.credential_slot IS NOT NULL
-                OR provider_credential.api_key_fingerprint IS NOT NULL
-                OR provider_credential.credential_slot IS NOT NULL
+                OR EXISTS (
+                    SELECT 1 FROM provider_api_keys AS provider_key
+                    WHERE provider_key.provider_id = provider.id
+                      AND (provider_key.api_key_fingerprint IS NOT NULL
+                           OR provider_key.credential_slot IS NOT NULL)
+                )
              ORDER BY binding.id",
         )?;
         let rows = statement.query_map([], |row| {
@@ -481,26 +479,29 @@ impl Database {
     fn protected_provider_credential_state(
         conn: &Connection,
     ) -> Result<BTreeSet<ProtectedProviderCredentialState>, AppError> {
-        if !Self::table_exists(conn, "provider_api_credentials")? {
+        if !Self::table_exists(conn, "provider_api_keys")? {
             return Ok(BTreeSet::new());
         }
         let mut statement = conn.prepare(
-            "SELECT provider_id, api_key_fingerprint, credential_slot,
+            "SELECT id, provider_id, label, api_key_fingerprint, credential_slot,
                     credential_version, last_test_at, last_test_status,
-                    last_test_error_code, created_at, updated_at
-             FROM provider_api_credentials ORDER BY provider_id",
+                    last_test_error_code, sort_order, created_at, updated_at
+             FROM provider_api_keys ORDER BY id",
         )?;
         let rows = statement.query_map([], |row| {
             Ok(ProtectedProviderCredentialState {
-                provider_id: row.get(0)?,
-                fingerprint: row.get(1)?,
-                credential_slot: row.get(2)?,
-                credential_version: row.get(3)?,
-                last_test_at: row.get(4)?,
-                last_test_status: row.get(5)?,
-                last_test_error_code: row.get(6)?,
-                created_at: row.get(7)?,
-                updated_at: row.get(8)?,
+                key_id: row.get(0)?,
+                provider_id: row.get(1)?,
+                label: row.get(2)?,
+                fingerprint: row.get(3)?,
+                credential_slot: row.get(4)?,
+                credential_version: row.get(5)?,
+                last_test_at: row.get(6)?,
+                last_test_status: row.get(7)?,
+                last_test_error_code: row.get(8)?,
+                sort_order: row.get(9)?,
+                created_at: row.get(10)?,
+                updated_at: row.get(11)?,
             })
         })?;
         rows.collect::<Result<BTreeSet<_>, _>>()
@@ -514,14 +515,14 @@ impl Database {
             return Ok(BTreeSet::new());
         }
         let mut statement = conn.prepare(
-            "SELECT operation_id, provider_id, generation, operation_kind, status,
+            "SELECT operation_id, key_id, generation, operation_kind, status,
                     staging_slot, previous_slot, created_at, updated_at
              FROM provider_credential_operations ORDER BY operation_id",
         )?;
         let rows = statement.query_map([], |row| {
             Ok(ProviderCredentialJournalState {
                 operation_id: row.get(0)?,
-                provider_id: row.get(1)?,
+                key_id: row.get(1)?,
                 generation: row.get(2)?,
                 operation_kind: row.get(3)?,
                 status: row.get(4)?,
@@ -690,11 +691,7 @@ impl Database {
 
         let current_provider_credentials = Self::protected_provider_credential_state(current)?;
         let incoming_provider_credentials = Self::protected_provider_credential_state(incoming)?;
-        if current_provider_credentials
-            .iter()
-            .filter(|state| !state.is_pristine_placeholder())
-            .any(|state| !incoming_provider_credentials.contains(state))
-        {
+        if !current_provider_credentials.is_subset(&incoming_provider_credentials) {
             return Err(Self::credential_conflict());
         }
 
@@ -767,14 +764,14 @@ impl Database {
         }
         for state in Self::protected_provider_credential_state(local)? {
             match incoming.execute(
-                "UPDATE provider_api_credentials
+                "UPDATE provider_api_keys
                  SET api_key_fingerprint = ?2, credential_slot = ?3,
                      credential_version = ?4, last_test_at = ?5,
                      last_test_status = ?6, last_test_error_code = ?7,
                      created_at = ?8, updated_at = ?9
-                 WHERE provider_id = ?1",
+                 WHERE id = ?1 AND provider_id = ?10",
                 rusqlite::params![
-                    state.provider_id,
+                    state.key_id,
                     state.fingerprint,
                     state.credential_slot,
                     state.credential_version,
@@ -783,6 +780,7 @@ impl Database {
                     state.last_test_error_code,
                     state.created_at,
                     state.updated_at,
+                    state.provider_id,
                 ],
             ) {
                 Ok(1) => {}
@@ -902,18 +900,39 @@ impl Database {
             [],
             |row| row.get(0),
         )?;
-        let provider_secrets: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM provider_api_credentials
-             WHERE api_key_fingerprint IS NOT NULL OR credential_slot IS NOT NULL",
-            [],
-            |row| row.get(0),
-        )?;
+        let provider_key_secrets = if Self::table_exists(conn, "provider_api_keys")? {
+            conn.query_row(
+                "SELECT COUNT(*) FROM provider_api_keys
+                 WHERE api_key_fingerprint IS NOT NULL OR credential_slot IS NOT NULL",
+                [],
+                |row| row.get::<_, i64>(0),
+            )?
+        } else {
+            0
+        };
+        // v26 intentionally retains this table for rollback/data recovery. Its
+        // old slot pointers are retired, but a redacted backup must still prove
+        // that it did not carry them across devices.
+        let retired_provider_secrets = if Self::table_exists(conn, "provider_api_credentials")? {
+            conn.query_row(
+                "SELECT COUNT(*) FROM provider_api_credentials
+                     WHERE api_key_fingerprint IS NOT NULL OR credential_slot IS NOT NULL",
+                [],
+                |row| row.get::<_, i64>(0),
+            )?
+        } else {
+            0
+        };
         let quota_secrets: i64 = conn.query_row(
             "SELECT COUNT(*) FROM usage_providers WHERE quota_config IS NOT NULL",
             [],
             |row| row.get(0),
         )?;
-        if binding_secrets != 0 || provider_secrets != 0 || quota_secrets != 0 {
+        if binding_secrets != 0
+            || provider_key_secrets != 0
+            || retired_provider_secrets != 0
+            || quota_secrets != 0
+        {
             return Err(Self::credential_conflict());
         }
 
@@ -1059,9 +1078,11 @@ impl Database {
         }
 
         let current_bindings = Self::protected_binding_state(local)?;
+        // Unlike the retired one-row-per-Provider table, v26 has no seeded
+        // empty placeholders. An empty key row is user-created local
+        // bookkeeping and must be preserved along with configured keys.
         let current_provider_credentials = Self::protected_provider_credential_state(local)?
             .into_iter()
-            .filter(|state| !state.is_pristine_placeholder())
             .collect::<Vec<_>>();
 
         for state in &current_bindings {
@@ -1106,20 +1127,35 @@ impl Database {
         }
         for state in &current_provider_credentials {
             match incoming.execute(
-                "UPDATE provider_api_credentials
-                 SET api_key_fingerprint = ?2, credential_slot = ?3,
-                     credential_version = ?4, last_test_at = ?5,
-                     last_test_status = ?6, last_test_error_code = ?7,
-                     created_at = ?8, updated_at = ?9
-                 WHERE provider_id = ?1",
+                "INSERT INTO provider_api_keys (
+                     id, provider_id, label, api_key_fingerprint,
+                     credential_slot, credential_version, last_test_at,
+                     last_test_status, last_test_error_code, sort_order,
+                     created_at, updated_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                 ON CONFLICT(id) DO UPDATE SET
+                     label = excluded.label,
+                     api_key_fingerprint = excluded.api_key_fingerprint,
+                     credential_slot = excluded.credential_slot,
+                     credential_version = excluded.credential_version,
+                     last_test_at = excluded.last_test_at,
+                     last_test_status = excluded.last_test_status,
+                     last_test_error_code = excluded.last_test_error_code,
+                     sort_order = excluded.sort_order,
+                     created_at = excluded.created_at,
+                     updated_at = excluded.updated_at
+                 WHERE provider_api_keys.provider_id = excluded.provider_id",
                 rusqlite::params![
+                    state.key_id,
                     state.provider_id,
+                    state.label,
                     state.fingerprint,
                     state.credential_slot,
                     state.credential_version,
                     state.last_test_at,
                     state.last_test_status,
                     state.last_test_error_code,
+                    state.sort_order,
                     state.created_at,
                     state.updated_at,
                 ],
@@ -1339,6 +1375,13 @@ impl Database {
             if Self::table_exists(conn, "provider_api_credentials")? {
                 conn.execute(
                     "UPDATE provider_api_credentials
+                     SET api_key_fingerprint = NULL, credential_slot = NULL",
+                    [],
+                )?;
+            }
+            if Self::table_exists(conn, "provider_api_keys")? {
+                conn.execute(
+                    "UPDATE provider_api_keys
                      SET api_key_fingerprint = NULL, credential_slot = NULL",
                     [],
                 )?;
@@ -2216,20 +2259,30 @@ mod tests {
 
     fn set_provider_credential_state(
         db: &Database,
-        provider_id: &str,
+        key_id: &str,
         fingerprint_byte: u8,
         slot: &str,
         version: i64,
     ) -> Result<(), AppError> {
         let conn = crate::database::lock_conn!(db.conn);
         conn.execute(
-            "UPDATE provider_api_credentials
-             SET api_key_fingerprint = ?2, credential_slot = ?3,
-                 credential_version = ?4, last_test_at = 91,
-                 last_test_status = 'success', last_test_error_code = NULL,
-                 updated_at = 92
-             WHERE provider_id = ?1",
-            params![provider_id, vec![fingerprint_byte; 32], slot, version],
+            "INSERT INTO provider_api_keys (
+                 id, provider_id, label, api_key_fingerprint, credential_slot,
+                 credential_version, last_test_at, last_test_status,
+                 last_test_error_code, sort_order, created_at, updated_at
+             )
+             SELECT ?1, provider.id, provider.name, ?2, ?3, ?4, 91,
+                    'success', NULL, 0, 90, 92
+             FROM usage_providers AS provider WHERE provider.id = ?1
+             ON CONFLICT(id) DO UPDATE SET
+                 api_key_fingerprint = excluded.api_key_fingerprint,
+                 credential_slot = excluded.credential_slot,
+                 credential_version = excluded.credential_version,
+                 last_test_at = excluded.last_test_at,
+                 last_test_status = excluded.last_test_status,
+                 last_test_error_code = excluded.last_test_error_code,
+                 updated_at = excluded.updated_at",
+            params![key_id, vec![fingerprint_byte; 32], slot, version],
         )?;
         Ok(())
     }
@@ -2238,14 +2291,14 @@ mod tests {
 
     fn provider_credential_tuple(
         db: &Database,
-        provider_id: &str,
+        key_id: &str,
     ) -> Result<ProviderCredentialTuple, AppError> {
         let conn = crate::database::lock_conn!(db.conn);
         conn.query_row(
             "SELECT api_key_fingerprint, credential_slot, credential_version,
                     last_test_at, last_test_status
-             FROM provider_api_credentials WHERE provider_id = ?1",
-            [provider_id],
+             FROM provider_api_keys WHERE id = ?1",
+            [key_id],
             |row| {
                 Ok((
                     row.get(0)?,
@@ -2440,7 +2493,7 @@ mod tests {
         assert_eq!(
             backup.query_row(
                 "SELECT api_key_fingerprint, credential_slot
-                 FROM provider_api_credentials WHERE provider_id = 'system-openrouter-api'",
+                 FROM provider_api_keys WHERE id = 'system-openrouter-api'",
                 [],
                 |row| Ok((
                     row.get::<_, Option<Vec<u8>>>(0)?,
@@ -2706,15 +2759,16 @@ mod tests {
     #[test]
     fn sync_export_skips_provider_credential_journal_rows() -> Result<(), AppError> {
         let db = Database::memory()?;
+        let key_id = db.create_provider_api_key("system-openrouter-api", "Journal key")?;
         db.conn.lock().unwrap().execute(
             "INSERT INTO provider_credential_operations (
-                 operation_id, provider_id, generation, operation_kind,
+                 operation_id, key_id, generation, operation_kind,
                  status, staging_slot, previous_slot, created_at, updated_at
              ) VALUES (
-                 'provider-journal-secret-sentinel', 'system-openrouter-api', 1,
+                 'provider-journal-secret-sentinel', ?1, 1,
                  'set', 'pending', 'provider/staging/sentinel', NULL, 1, 1
              )",
-            [],
+            [&key_id],
         )?;
 
         let exported = db.export_sql_string_for_sync()?;
@@ -3144,15 +3198,16 @@ mod tests {
     #[test]
     fn redacted_sql_import_rejects_a_local_provider_credential_journal() -> Result<(), AppError> {
         let local = Database::memory()?;
+        let key_id = local.create_provider_api_key("system-openrouter-api", "Journal key")?;
         local.conn.lock().unwrap().execute(
             "INSERT INTO provider_credential_operations (
-                 operation_id, provider_id, generation, operation_kind,
+                 operation_id, key_id, generation, operation_kind,
                  status, staging_slot, previous_slot, created_at, updated_at
              ) VALUES (
-                 'local-provider-operation', 'system-openrouter-api', 1,
+                 'local-provider-operation', ?1, 1,
                  'set', 'pending', 'provider/staging/local', NULL, 10, 10
              )",
-            [],
+            [&key_id],
         )?;
         let incoming = Database::memory()?;
         insert_import_sentinel(&incoming, "provider-journal-import")?;

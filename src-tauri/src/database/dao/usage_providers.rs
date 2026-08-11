@@ -1,15 +1,20 @@
 use super::agent_provider_bindings::bindings_for_provider_on_conn;
+use super::provider_api_keys::{list_provider_api_keys_on_conn, ProviderApiKeyRow};
+use super::provider_key_usage::provider_key_usage_view_on_conn;
 use crate::database::{lock_conn, to_json_string, Database};
 use crate::error::AppError;
 use crate::usage::budget_migration::canonicalize_daily_budget;
 use crate::usage::domain::{
-    BillingKind, BindingCredentialStatus, RouteBinding, SystemProviderAuthKind, TokenSource,
-    UsageProviderInput, UsageProviderStored, UsageProviderView, UsageSourceBinding,
+    BillingKind, BindingCredentialStatus, ProviderApiKeyView, RouteBinding,
+    SystemProviderKeyUsageView, TokenSource, UsageProviderInput, UsageProviderStored,
+    UsageProviderView, UsageSourceBinding,
 };
 use crate::usage::system_providers::{system_binding_route_protocol, system_provider_definitions};
 use rusqlite::{params, types::Type, OptionalExtension, Row};
+use rust_decimal::Decimal;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
 use url::Url;
 
@@ -80,37 +85,128 @@ const PROVIDER_ORDER_BY: &str = "CASE system_preset_key
     WHEN 'openrouter-api' THEN 4
     ELSE 5 END, CASE WHEN system_preset_key IS NULL THEN id ELSE '' END";
 
-#[derive(Default)]
-struct ProviderCredentialMetadata {
-    fingerprint: Option<Vec<u8>>,
-    credential_slot: Option<String>,
-    credential_version: u64,
-    last_test_at: Option<i64>,
-    last_test_status: Option<String>,
+fn provider_api_key_view(
+    conn: &rusqlite::Connection,
+    key: ProviderApiKeyRow,
+) -> Result<ProviderApiKeyView, AppError> {
+    let credential_status = match (key.fingerprint.as_deref(), key.credential_slot.as_deref()) {
+        (None, None) => BindingCredentialStatus::Missing,
+        (Some(fingerprint), Some(slot))
+            if fingerprint.len() == 32 && !slot.trim().is_empty() && key.credential_version > 0 =>
+        {
+            BindingCredentialStatus::Configured
+        }
+        _ => BindingCredentialStatus::Unavailable,
+    };
+    let key_usage = provider_key_usage_view_on_conn(conn, &key.id, key.credential_version)?;
+    Ok(ProviderApiKeyView {
+        id: key.id,
+        provider_id: key.provider_id,
+        label: key.label,
+        can_clear_credential: key.fingerprint.is_some() && key.credential_slot.is_some(),
+        credential_status,
+        credential_version: key.credential_version,
+        last_connection_test_at: key.last_test_at,
+        last_connection_test_status: key.last_test_status,
+        last_connection_test_error_code: key.last_test_error_code,
+        sort_order: key.sort_order,
+        key_usage,
+    })
 }
 
-fn provider_credential_metadata(
+fn provider_api_key_views(
     conn: &rusqlite::Connection,
     provider_id: &str,
-) -> Result<ProviderCredentialMetadata, AppError> {
-    conn.query_row(
-        "SELECT api_key_fingerprint, credential_slot, credential_version,
-                last_test_at, last_test_status
-         FROM provider_api_credentials WHERE provider_id = ?1",
-        [provider_id],
-        |row| {
-            Ok(ProviderCredentialMetadata {
-                fingerprint: row.get(0)?,
-                credential_slot: row.get(1)?,
-                credential_version: row.get::<_, i64>(2)?.max(0) as u64,
-                last_test_at: row.get(3)?,
-                last_test_status: row.get(4)?,
-            })
-        },
-    )
-    .optional()
-    .map(|metadata| metadata.unwrap_or_default())
-    .map_err(AppError::from)
+) -> Result<Vec<ProviderApiKeyView>, AppError> {
+    list_provider_api_keys_on_conn(conn, provider_id)?
+        .into_iter()
+        .map(|key| provider_api_key_view(conn, key))
+        .collect()
+}
+
+type UsageDecimalField = fn(&SystemProviderKeyUsageView) -> Option<&str>;
+
+fn sum_present_usage_decimals(
+    snapshots: &[&SystemProviderKeyUsageView],
+    field: UsageDecimalField,
+) -> Result<Option<String>, AppError> {
+    let mut total = Decimal::ZERO;
+    let mut found = false;
+    for raw in snapshots.iter().filter_map(|snapshot| field(snapshot)) {
+        let value = Decimal::from_str(raw.trim())
+            .map_err(|_| AppError::Database("invalid provider key usage decimal".to_string()))?;
+        total = total
+            .checked_add(value)
+            .ok_or_else(|| AppError::Database("provider key usage total overflow".to_string()))?;
+        found = true;
+    }
+    Ok(found.then(|| total.normalize().to_string()))
+}
+
+fn sum_all_usage_decimals(
+    snapshots: &[&SystemProviderKeyUsageView],
+    field: UsageDecimalField,
+) -> Result<Option<String>, AppError> {
+    if snapshots.iter().any(|snapshot| field(snapshot).is_none()) {
+        return Ok(None);
+    }
+    sum_present_usage_decimals(snapshots, field)
+}
+
+fn provider_key_usage_total(
+    keys: &[ProviderApiKeyView],
+) -> Result<Option<SystemProviderKeyUsageView>, AppError> {
+    let stale = keys
+        .iter()
+        .filter_map(|key| key.key_usage.as_ref())
+        .any(|snapshot| snapshot.stale);
+    let snapshots = keys
+        .iter()
+        .filter_map(|key| key.key_usage.as_ref())
+        .filter(|snapshot| !snapshot.stale)
+        .collect::<Vec<_>>();
+    if snapshots.is_empty() {
+        return Ok(None);
+    }
+
+    let all_capped = snapshots
+        .iter()
+        .all(|snapshot| snapshot.limit_usd.is_some());
+    let (limit_usd, limit_remaining_usd) = if all_capped {
+        (
+            sum_all_usage_decimals(&snapshots, |snapshot| snapshot.limit_usd.as_deref())?,
+            sum_all_usage_decimals(&snapshots, |snapshot| {
+                snapshot.limit_remaining_usd.as_deref()
+            })?,
+        )
+    } else {
+        (None, None)
+    };
+
+    Ok(Some(SystemProviderKeyUsageView {
+        usage_total_usd: sum_present_usage_decimals(&snapshots, |snapshot| {
+            snapshot.usage_total_usd.as_deref()
+        })?,
+        usage_daily_usd: sum_present_usage_decimals(&snapshots, |snapshot| {
+            snapshot.usage_daily_usd.as_deref()
+        })?,
+        usage_weekly_usd: sum_present_usage_decimals(&snapshots, |snapshot| {
+            snapshot.usage_weekly_usd.as_deref()
+        })?,
+        usage_monthly_usd: sum_present_usage_decimals(&snapshots, |snapshot| {
+            snapshot.usage_monthly_usd.as_deref()
+        })?,
+        limit_usd,
+        limit_remaining_usd,
+        is_free_tier: None,
+        fetched_at: snapshots
+            .iter()
+            .map(|snapshot| snapshot.fetched_at)
+            .min()
+            .expect("non-empty provider key usage snapshots"),
+        credential_version: 0,
+        stale,
+    }))
 }
 
 fn compatible_agent_module_ids(preset_key: Option<&str>) -> Vec<String> {
@@ -229,27 +325,8 @@ fn provider_view(
     let system_auth_kind = system_definition
         .as_ref()
         .map(|definition| definition.auth_kind);
-    let credential_metadata = provider_credential_metadata(conn, &provider.id)?;
-    let is_provider_api_key = system_auth_kind == Some(SystemProviderAuthKind::ProviderApiKey);
-    let credential_configured = is_provider_api_key
-        && credential_metadata
-            .fingerprint
-            .as_ref()
-            .is_some_and(|value| value.len() == 32)
-        && credential_metadata
-            .credential_slot
-            .as_deref()
-            .is_some_and(|slot| !slot.trim().is_empty())
-        && credential_metadata.credential_version > 0;
-    let upstream_credential_status = if is_provider_api_key {
-        if credential_configured {
-            BindingCredentialStatus::Configured
-        } else {
-            BindingCredentialStatus::Missing
-        }
-    } else {
-        BindingCredentialStatus::NotRequired
-    };
+    let api_keys = provider_api_key_views(conn, &provider.id)?;
+    let key_usage_total = provider_key_usage_total(&api_keys)?;
     let canonical_endpoint = provider
         .system_preset_key
         .as_ref()
@@ -283,12 +360,14 @@ fn provider_view(
         compatible_agent_module_ids: compatible_agent_module_ids(
             provider.system_preset_key.as_deref(),
         ),
-        upstream_credential_status,
-        upstream_credential_version: credential_metadata.credential_version,
-        can_clear_upstream_credential: credential_configured,
-        last_connection_test_at: credential_metadata.last_test_at,
-        last_connection_test_status: credential_metadata.last_test_status,
+        api_keys,
         daily_budget_usd,
+        // Only some presets expose a key-scoped spend endpoint, and the UI has
+        // no other way to tell "never fetched" apart from "cannot fetch".
+        supports_key_usage: system_definition
+            .as_ref()
+            .is_some_and(|definition| definition.key_usage_path.is_some()),
+        key_usage_total,
     })
 }
 
@@ -585,6 +664,8 @@ impl Database {
                  UNION ALL
                  SELECT 1 FROM quota_fetch_state WHERE provider_id = ?1
                  UNION ALL
+                 SELECT 1 FROM provider_api_keys WHERE provider_id = ?1
+                 UNION ALL
                  SELECT 1 FROM agent_provider_bindings WHERE provider_id = ?1
              )",
             [id],
@@ -791,8 +872,8 @@ impl Database {
 mod tests {
     use crate::database::Database;
     use crate::usage::domain::{
-        AgentProviderBindingInput, BillingKind, BindingCredentialStatus, SystemProviderAuthKind,
-        TokenSource, UsageProviderInput,
+        AgentProviderBindingInput, BillingKind, SystemProviderAuthKind, TokenSource,
+        UsageProviderInput,
     };
     use crate::usage::system_providers::system_provider_definitions;
     use serde_json::json;
@@ -969,6 +1050,117 @@ mod tests {
     }
 
     #[test]
+    fn provider_view_lists_keys_and_sums_only_fresh_key_usage() {
+        let db = Database::memory().unwrap();
+        {
+            let conn = db.conn.lock().unwrap();
+            for (id, label, fingerprint_byte, version, sort_order) in [
+                ("key-a", "A", 1_u8, 1_i64, 0_i64),
+                ("key-without-snapshot", "No snapshot", 2, 1, 1),
+                ("key-b", "B", 3, 1, 2),
+                ("key-stale", "Stale", 4, 2, 3),
+            ] {
+                conn.execute(
+                    "INSERT INTO provider_api_keys (
+                         id, provider_id, label, api_key_fingerprint,
+                         credential_slot, credential_version, sort_order,
+                         created_at, updated_at
+                     ) VALUES (?1, 'system-openrouter-api', ?2, ?3, ?4, ?5, ?6, 10, 10)",
+                    rusqlite::params![
+                        id,
+                        label,
+                        vec![fingerprint_byte; 32],
+                        format!("provider-key/{id}"),
+                        version,
+                        sort_order,
+                    ],
+                )
+                .unwrap();
+            }
+            conn.execute_batch(
+                "INSERT INTO provider_key_usage_snapshots (
+                    key_id, credential_version, usage_total_usd,
+                    usage_daily_usd, usage_weekly_usd, usage_monthly_usd,
+                    limit_usd, limit_remaining_usd, is_free_tier,
+                    fetched_at, created_at, updated_at
+                 ) VALUES (
+                    'key-a', 1, '1.25', '0.5', '1', '2',
+                    '10', '6', 0, 100, 90, 100
+                 );
+                 INSERT INTO provider_key_usage_snapshots (
+                    key_id, credential_version, usage_total_usd,
+                    usage_daily_usd, usage_weekly_usd, usage_monthly_usd,
+                    limit_usd, limit_remaining_usd, is_free_tier,
+                    fetched_at, created_at, updated_at
+                 ) VALUES (
+                    'key-b', 1, '2.75', '0.75', '3', '4',
+                    '20', '14', 1, 80, 70, 80
+                 );
+                 INSERT INTO provider_key_usage_snapshots (
+                    key_id, credential_version, usage_total_usd,
+                    usage_daily_usd, usage_weekly_usd, usage_monthly_usd,
+                    limit_usd, limit_remaining_usd, is_free_tier,
+                    fetched_at, created_at, updated_at
+                 ) VALUES (
+                    'key-stale', 1, '99', '99', '99', '99',
+                    '99', '99', 0, 50, 40, 50
+                 );",
+            )
+            .unwrap();
+        }
+
+        let provider = || {
+            db.list_usage_providers()
+                .unwrap()
+                .into_iter()
+                .find(|provider| provider.id == "system-openrouter-api")
+                .unwrap()
+        };
+        let first = provider();
+        assert_eq!(
+            first
+                .api_keys
+                .iter()
+                .map(|key| key.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["key-a", "key-without-snapshot", "key-b", "key-stale"]
+        );
+        assert!(first.api_keys[1].key_usage.is_none());
+        assert!(first.api_keys[3]
+            .key_usage
+            .as_ref()
+            .is_some_and(|usage| usage.stale));
+
+        let total = first.key_usage_total.expect("provider key usage total");
+        assert_eq!(total.usage_total_usd.as_deref(), Some("4"));
+        assert_eq!(total.usage_daily_usd.as_deref(), Some("1.25"));
+        assert_eq!(total.usage_weekly_usd.as_deref(), Some("4"));
+        assert_eq!(total.usage_monthly_usd.as_deref(), Some("6"));
+        assert_eq!(total.limit_usd.as_deref(), Some("30"));
+        assert_eq!(total.limit_remaining_usd.as_deref(), Some("20"));
+        assert_eq!(total.is_free_tier, None);
+        assert_eq!(total.fetched_at, 80);
+        assert_eq!(total.credential_version, 0);
+        assert!(total.stale);
+
+        db.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE provider_key_usage_snapshots
+                 SET limit_usd = NULL, limit_remaining_usd = NULL
+                 WHERE key_id = 'key-b'",
+                [],
+            )
+            .unwrap();
+        let mixed_cap = provider()
+            .key_usage_total
+            .expect("fresh snapshots still produce a total");
+        assert_eq!(mixed_cap.limit_usd, None);
+        assert_eq!(mixed_cap.limit_remaining_usd, None);
+    }
+
+    #[test]
     fn provider_save_rejects_switching_a_budgeted_provider_to_subscription() {
         let db = Database::memory().unwrap();
         let mut input = provider("metered", BillingKind::Metered, vec![TokenSource::Proxy]);
@@ -1060,10 +1252,7 @@ mod tests {
             Some(SystemProviderAuthKind::CodexOauth)
         );
         assert_eq!(providers[0].compatible_agent_module_ids, vec!["codex"]);
-        assert_eq!(
-            providers[0].upstream_credential_status,
-            BindingCredentialStatus::NotRequired
-        );
+        assert!(providers[0].api_keys.is_empty());
         assert_eq!(
             providers[4].canonical_endpoint.as_deref(),
             Some("https://openrouter.ai/api/v1")
@@ -1072,12 +1261,8 @@ mod tests {
             providers[4].compatible_agent_module_ids,
             vec!["claude-code", "codex", "opencode", "openclaw", "hermes"]
         );
-        assert_eq!(
-            providers[4].upstream_credential_status,
-            BindingCredentialStatus::Missing
-        );
-        assert_eq!(providers[4].upstream_credential_version, 0);
-        assert!(!providers[4].can_clear_upstream_credential);
+        assert!(providers[4].api_keys.is_empty());
+        assert!(providers[4].key_usage_total.is_none());
 
         let attempted_edit = provider(
             "system-openrouter-api",
@@ -1131,16 +1316,16 @@ mod tests {
             )
             .unwrap();
             conn.execute(
-                "UPDATE provider_api_credentials
-                 SET api_key_fingerprint = ?1,
-                     credential_slot = 'provider/system-openrouter-api/test',
-                     credential_version = 7,
-                     last_test_at = 2222,
-                     last_test_status = 'failed',
-                     last_test_error_code = 'timeout',
-                     created_at = 3333,
-                     updated_at = 4444
-                 WHERE provider_id = 'system-openrouter-api'",
+                "INSERT INTO provider_api_keys (
+                     id, provider_id, label, api_key_fingerprint,
+                     credential_slot, credential_version, last_test_at,
+                     last_test_status, last_test_error_code, sort_order,
+                     created_at, updated_at
+                 ) VALUES (
+                     'reconcile-key', 'system-openrouter-api', 'Reconcile key', ?1,
+                     'provider/system-openrouter-api/test', 7, 2222,
+                     'failed', 'timeout', 0, 3333, 4444
+                 )",
                 [vec![9_u8; 32]],
             )
             .unwrap();
@@ -1182,8 +1367,8 @@ mod tests {
                 "SELECT api_key_fingerprint, credential_slot, credential_version,
                         last_test_at, last_test_status, last_test_error_code,
                         created_at, updated_at
-                 FROM provider_api_credentials
-                 WHERE provider_id = 'system-openrouter-api'",
+                 FROM provider_api_keys
+                 WHERE id = 'reconcile-key'",
                 [],
                 |row| Ok((
                     row.get::<_, Option<Vec<u8>>>(0)?,

@@ -2622,6 +2622,62 @@ fn normalize_default(default: &Option<String>) -> Option<String> {
         .map(|s| s.trim_matches('\'').trim_matches('"').to_string())
 }
 
+/// Tests that rewind `user_version` below v26 must also restore the two table
+/// shapes that v26 rebuilt. Leaving the current key-scoped tables in place
+/// creates an impossible hybrid schema and makes the real v25 -> v26 migration
+/// read columns that did not exist in v25.
+fn restore_provider_credential_tables_to_pre_v26(conn: &Connection) {
+    conn.execute_batch(
+        "DROP TABLE provider_key_usage_snapshots;
+         DROP TABLE provider_credential_operations;
+         DROP TABLE provider_api_keys;
+
+         CREATE TABLE provider_credential_operations (
+             operation_id TEXT NOT NULL PRIMARY KEY CHECK (length(trim(operation_id)) > 0),
+             provider_id TEXT NOT NULL,
+             generation INTEGER NOT NULL CHECK (generation > 0),
+             operation_kind TEXT NOT NULL
+                 CHECK (operation_kind IN ('set','replace','clear')),
+             status TEXT NOT NULL CHECK (status IN ('pending','committed','cleanup')),
+             staging_slot TEXT,
+             previous_slot TEXT,
+             created_at INTEGER NOT NULL,
+             updated_at INTEGER NOT NULL,
+             FOREIGN KEY (provider_id) REFERENCES provider_api_credentials(provider_id)
+                 ON DELETE RESTRICT,
+             UNIQUE (provider_id, generation),
+             CHECK (staging_slot IS NULL OR length(trim(staging_slot)) > 0),
+             CHECK (previous_slot IS NULL OR length(trim(previous_slot)) > 0),
+             CHECK (operation_kind = 'clear' OR staging_slot IS NOT NULL)
+         );
+         CREATE UNIQUE INDEX idx_provider_credential_operations_pending_provider
+             ON provider_credential_operations(provider_id)
+             WHERE status = 'pending';",
+    )
+    .expect("restore the pre-v26 Provider credential tables");
+}
+
+fn create_provider_key_usage_snapshots_v25(conn: &Connection) {
+    conn.execute_batch(
+        "CREATE TABLE provider_key_usage_snapshots (
+             provider_id TEXT NOT NULL PRIMARY KEY
+                 REFERENCES usage_providers(id) ON DELETE RESTRICT,
+             credential_version INTEGER NOT NULL CHECK (credential_version > 0),
+             usage_total_usd TEXT,
+             usage_daily_usd TEXT,
+             usage_weekly_usd TEXT,
+             usage_monthly_usd TEXT,
+             limit_usd TEXT,
+             limit_remaining_usd TEXT,
+             is_free_tier INTEGER,
+             fetched_at INTEGER NOT NULL,
+             created_at INTEGER NOT NULL,
+             updated_at INTEGER NOT NULL
+         );",
+    )
+    .expect("create the v25 Provider usage snapshot table");
+}
+
 #[test]
 fn schema_migration_sets_user_version_when_missing() {
     let conn = Connection::open_in_memory().expect("open memory db");
@@ -2644,6 +2700,7 @@ fn schema_migration_sets_user_version_when_missing() {
 fn schema_migration_v20_to_v21_drops_retired_tables_and_preserves_live_data() {
     let db = Database::memory().expect("create current in-memory database");
     let conn = db.conn.lock().expect("lock in-memory database");
+    restore_provider_credential_tables_to_pre_v26(&conn);
 
     let retired_tables = [
         "mcp_servers",
@@ -2721,6 +2778,7 @@ fn schema_migration_v21_to_v22_backfills_eligible_costs_and_restores_immutabilit
 
     let db = Database::memory().expect("create current in-memory database");
     let conn = db.conn.lock().expect("lock in-memory database");
+    restore_provider_credential_tables_to_pre_v26(&conn);
 
     let pricing =
         ModelPricing::from_strings("3.25", "7.5", "0.55", "4.75").expect("create expected pricing");
@@ -2963,6 +3021,7 @@ fn schema_migration_v21_to_v22_backfills_eligible_costs_and_restores_immutabilit
 fn schema_migration_v22_to_v23_preserves_rates_and_makes_them_nullable() {
     let db = Database::memory().expect("create current in-memory database");
     let conn = db.conn.lock().expect("lock in-memory database");
+    restore_provider_credential_tables_to_pre_v26(&conn);
     conn.execute_batch(
         "DROP TABLE provider_model_pricing;
          CREATE TABLE provider_model_pricing (
@@ -3051,6 +3110,134 @@ fn schema_migration_v22_to_v23_preserves_rates_and_makes_them_nullable() {
         assert_eq!(info.notnull, 0, "{column} should be nullable");
         assert_eq!(info.default, None, "{column} should not default to zero");
     }
+}
+
+#[test]
+fn schema_migration_v24_through_v26_adds_key_scoped_usage_snapshots() {
+    let db = Database::memory().expect("create current in-memory database");
+    let conn = db.conn.lock().expect("lock in-memory database");
+    restore_provider_credential_tables_to_pre_v26(&conn);
+    Database::set_user_version(&conn, 24).expect("mark fixture as schema v24");
+
+    Database::apply_schema_migrations_on_conn(&conn).expect("migrate v24 through current schema");
+
+    assert_eq!(Database::get_user_version(&conn).unwrap(), 26);
+    assert!(Database::table_exists(&conn, "provider_key_usage_snapshots").unwrap());
+    for column in [
+        "key_id",
+        "credential_version",
+        "usage_total_usd",
+        "usage_daily_usd",
+        "usage_weekly_usd",
+        "usage_monthly_usd",
+        "limit_usd",
+        "limit_remaining_usd",
+        "is_free_tier",
+        "fetched_at",
+        "created_at",
+        "updated_at",
+    ] {
+        assert!(
+            Database::has_column(&conn, "provider_key_usage_snapshots", column).unwrap(),
+            "missing provider_key_usage_snapshots.{column}"
+        );
+    }
+    let credential_version =
+        get_column_info(&conn, "provider_key_usage_snapshots", "credential_version");
+    assert_eq!(credential_version.r#type, "INTEGER");
+    assert_eq!(credential_version.notnull, 1);
+    let table_sql = scalar_text(
+        &conn,
+        "SELECT sql FROM sqlite_master
+         WHERE type = 'table' AND name = 'provider_key_usage_snapshots'",
+    );
+    assert!(table_sql.contains("ON DELETE CASCADE"));
+    assert!(table_sql.contains("CHECK (credential_version > 0)"));
+}
+
+#[test]
+fn schema_migration_v25_to_v26_preserves_the_configured_keychain_slot() {
+    let db = Database::memory().expect("create current in-memory database");
+    let conn = db.conn.lock().expect("lock in-memory database");
+    restore_provider_credential_tables_to_pre_v26(&conn);
+    create_provider_key_usage_snapshots_v25(&conn);
+    conn.execute(
+        "UPDATE provider_api_credentials
+         SET api_key_fingerprint = ?2, credential_slot = ?3,
+             credential_version = 7, updated_at = 222
+         WHERE provider_id = ?1",
+        params![
+            "system-openrouter-api",
+            vec![0x26_u8; 32],
+            "legacy-provider-slot-must-not-change",
+        ],
+    )
+    .expect("configure one v25 Provider credential");
+    Database::set_user_version(&conn, 25).expect("mark fixture as schema v25");
+
+    Database::apply_schema_migrations_on_conn(&conn).expect("migrate v25 to v26");
+
+    assert_eq!(Database::get_user_version(&conn).unwrap(), 26);
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM provider_api_keys", [], |row| row
+            .get::<_, i64>(0),)
+            .unwrap(),
+        1,
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT id, provider_id, credential_slot, credential_version
+             FROM provider_api_keys",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            },
+        )
+        .unwrap(),
+        (
+            "system-openrouter-api".to_string(),
+            "system-openrouter-api".to_string(),
+            "legacy-provider-slot-must-not-change".to_string(),
+            7,
+        ),
+    );
+}
+
+#[test]
+fn schema_migration_is_a_no_op_for_an_already_migrated_v26_database() {
+    let db = Database::memory().expect("create current in-memory database");
+    let key = db
+        .create_provider_api_key("system-openrouter-api", "Migration fixture")
+        .expect("create current key row");
+    let conn = db.conn.lock().expect("lock in-memory database");
+    conn.execute(
+        "INSERT INTO provider_key_usage_snapshots (
+            key_id, credential_version, usage_total_usd,
+            fetched_at, created_at, updated_at
+         ) VALUES (?1, 1, '7.25', 123, 120, 123)",
+        [&key],
+    )
+    .expect("seed v26 key usage row");
+
+    Database::apply_schema_migrations_on_conn(&conn).expect("reopen schema v26");
+
+    assert_eq!(Database::get_user_version(&conn).unwrap(), 26);
+    assert_eq!(
+        conn.query_row(
+            "SELECT usage_total_usd, fetched_at
+             FROM provider_key_usage_snapshots
+             WHERE key_id = ?1",
+            [&key],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .unwrap(),
+        ("7.25".to_string(), 123)
+    );
 }
 
 #[test]

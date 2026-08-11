@@ -25,9 +25,13 @@ fn is_constraint_error(error: &rusqlite::Error) -> bool {
     )
 }
 
-fn provider_staging_slot(provider_id: &str, generation: u64) -> String {
+/// Slots are key-scoped so two keys under one Provider can stage concurrently.
+/// Rows migrated from the single-credential model keep their old
+/// `provider/...` slot until the key is next replaced — renaming a live slot
+/// would orphan the secret it points at in the OS keychain.
+fn provider_staging_slot(key_id: &str, generation: u64) -> String {
     format!(
-        "provider/{provider_id}/{generation}/{}",
+        "provider-key/{key_id}/{generation}/{}",
         uuid::Uuid::new_v4()
     )
 }
@@ -40,7 +44,7 @@ pub(crate) struct ProviderCredentialSnapshot {
 
 pub(crate) struct ProviderCredentialOperationReservation {
     pub(crate) operation_id: String,
-    pub(crate) provider_id: String,
+    pub(crate) key_id: String,
     pub(crate) kind: CredentialMutationKind,
     pub(crate) expected_version: u64,
     pub(crate) generation: u64,
@@ -51,7 +55,7 @@ pub(crate) struct ProviderCredentialOperationReservation {
 
 pub(crate) struct ProviderCredentialJournalEntry {
     pub(crate) operation_id: String,
-    pub(crate) provider_id: String,
+    pub(crate) key_id: String,
     pub(crate) kind: CredentialMutationKind,
     pub(crate) status: String,
     pub(crate) generation: u64,
@@ -77,14 +81,14 @@ fn parse_mutation_kind(raw: &str) -> Result<CredentialMutationKind, AppError> {
 impl Database {
     pub(crate) fn provider_credential_snapshot(
         &self,
-        provider_id: &str,
+        key_id: &str,
     ) -> Result<Option<ProviderCredentialSnapshot>, AppError> {
         let conn = lock_conn!(self.conn);
         conn.query_row(
             "SELECT api_key_fingerprint, credential_slot,
                     credential_version
-             FROM provider_api_credentials WHERE provider_id = ?1",
-            [provider_id],
+             FROM provider_api_keys WHERE id = ?1",
+            [key_id],
             |row| {
                 let raw_version = row.get::<_, i64>(2)?;
                 Ok(ProviderCredentialSnapshot {
@@ -101,7 +105,7 @@ impl Database {
 
     pub(crate) fn record_provider_connection_test(
         &self,
-        provider_id: &str,
+        key_id: &str,
         expected_version: u64,
         status: &str,
         error_code: Option<&str>,
@@ -114,11 +118,11 @@ impl Database {
         let tested_at = now_timestamp()?;
         let conn = lock_conn!(self.conn);
         let changed = conn.execute(
-            "UPDATE provider_api_credentials
+            "UPDATE provider_api_keys
              SET last_test_at = ?3, last_test_status = ?4,
                  last_test_error_code = ?5, updated_at = ?3
-             WHERE provider_id = ?1 AND credential_version = ?2",
-            params![provider_id, expected_version, tested_at, status, error_code],
+             WHERE id = ?1 AND credential_version = ?2",
+            params![key_id, expected_version, tested_at, status, error_code],
         )?;
         if changed != 1 {
             return Err(public_error("credential_conflict"));
@@ -128,7 +132,7 @@ impl Database {
 
     pub(crate) fn reserve_provider_credential_operation(
         &self,
-        provider_id: &str,
+        key_id: &str,
         expected_version: u64,
         kind: CredentialMutationKind,
         new_fingerprint: Option<&[u8; 32]>,
@@ -148,19 +152,19 @@ impl Database {
             kind,
             CredentialMutationKind::Set | CredentialMutationKind::Replace
         )
-        .then(|| provider_staging_slot(provider_id, generation));
+        .then(|| provider_staging_slot(key_id, generation));
 
         let mut conn = lock_conn!(self.conn);
         let transaction = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let state = transaction
             .query_row(
-                "SELECT credential.credential_version,
-                        credential.api_key_fingerprint, credential.credential_slot,
+                "SELECT key.credential_version,
+                        key.api_key_fingerprint, key.credential_slot,
                         provider.system_preset_key
-                 FROM provider_api_credentials credential
-                 JOIN usage_providers provider ON provider.id = credential.provider_id
-                 WHERE credential.provider_id = ?1",
-                [provider_id],
+                 FROM provider_api_keys key
+                 JOIN usage_providers provider ON provider.id = key.provider_id
+                 WHERE key.id = ?1",
+                [key_id],
                 |row| {
                     Ok((
                         row.get::<_, i64>(0)?,
@@ -214,12 +218,12 @@ impl Database {
 
         let insert = transaction.execute(
             "INSERT INTO provider_credential_operations (
-                 operation_id, provider_id, generation, operation_kind, status,
+                 operation_id, key_id, generation, operation_kind, status,
                  staging_slot, previous_slot, created_at, updated_at
              ) VALUES (?1, ?2, ?3, ?4, 'pending', ?5, ?6, ?7, ?7)",
             params![
                 operation_id,
-                provider_id,
+                key_id,
                 generation_i64,
                 kind.as_str(),
                 staging_slot,
@@ -237,7 +241,7 @@ impl Database {
         transaction.commit()?;
         Ok(ProviderCredentialOperationReservation {
             operation_id,
-            provider_id: provider_id.to_string(),
+            key_id: key_id.to_string(),
             kind,
             expected_version,
             generation,
@@ -268,19 +272,19 @@ impl Database {
                     .as_deref()
                     .ok_or_else(|| public_error("credential_unavailable"))?;
                 transaction.execute(
-                    "UPDATE provider_api_credentials
+                    "UPDATE provider_api_keys
                      SET api_key_fingerprint = ?2, credential_slot = ?3,
                          credential_version = ?4, updated_at = ?5
-                     WHERE provider_id = ?1 AND credential_version = ?6
+                     WHERE id = ?1 AND credential_version = ?6
                        AND credential_slot IS ?7 AND api_key_fingerprint IS ?8
                        AND EXISTS (
                            SELECT 1 FROM provider_credential_operations
-                           WHERE operation_id = ?9 AND provider_id = ?1
+                           WHERE operation_id = ?9 AND key_id = ?1
                              AND generation = ?4 AND status = 'pending'
                              AND staging_slot = ?3
                        )",
                     params![
-                        reservation.provider_id,
+                        reservation.key_id,
                         fingerprint.as_slice(),
                         staging_slot,
                         generation,
@@ -293,18 +297,18 @@ impl Database {
                 )
             }
             CredentialMutationKind::Clear => transaction.execute(
-                "UPDATE provider_api_credentials
+                "UPDATE provider_api_keys
                  SET api_key_fingerprint = NULL, credential_slot = NULL,
                      credential_version = ?2, updated_at = ?3
-                 WHERE provider_id = ?1 AND credential_version = ?4
+                 WHERE id = ?1 AND credential_version = ?4
                    AND credential_slot IS ?5 AND api_key_fingerprint IS ?6
                    AND EXISTS (
                        SELECT 1 FROM provider_credential_operations
-                       WHERE operation_id = ?7 AND provider_id = ?1
+                       WHERE operation_id = ?7 AND key_id = ?1
                          AND generation = ?2 AND status = 'pending'
                    )",
                 params![
-                    reservation.provider_id,
+                    reservation.key_id,
                     generation,
                     now,
                     expected,
@@ -325,6 +329,10 @@ impl Database {
         if updated != 1 {
             return Err(public_error("credential_conflict"));
         }
+        transaction.execute(
+            "DELETE FROM provider_key_usage_snapshots WHERE key_id = ?1",
+            [&reservation.key_id],
+        )?;
         let status = if reservation.previous_slot.is_some() {
             "cleanup"
         } else {
@@ -347,7 +355,7 @@ impl Database {
         let conn = lock_conn!(self.conn);
         conn.query_row(
             "SELECT EXISTS(
-                 SELECT 1 FROM provider_api_credentials WHERE credential_slot = ?1
+                 SELECT 1 FROM provider_api_keys WHERE credential_slot = ?1
                  UNION ALL
                  SELECT 1 FROM agent_provider_bindings WHERE credential_slot = ?1
              )",
@@ -359,14 +367,14 @@ impl Database {
 
     pub(crate) fn provider_credential_reconcile_state(
         &self,
-        provider_id: &str,
+        key_id: &str,
     ) -> Result<Option<ProviderCredentialReconcileState>, AppError> {
         let conn = lock_conn!(self.conn);
         conn.query_row(
             "SELECT credential_version, credential_slot,
                     api_key_fingerprint IS NOT NULL
-             FROM provider_api_credentials WHERE provider_id = ?1",
-            [provider_id],
+             FROM provider_api_keys WHERE id = ?1",
+            [key_id],
             |row| {
                 let raw_version = row.get::<_, i64>(0)?;
                 Ok(ProviderCredentialReconcileState {
@@ -395,17 +403,17 @@ impl Database {
         let claimed = transaction.execute(
             "UPDATE provider_credential_operations
              SET status = 'cleanup', previous_slot = staging_slot, updated_at = ?4
-             WHERE operation_id = ?1 AND provider_id = ?2
+             WHERE operation_id = ?1 AND key_id = ?2
                AND generation = ?3 AND status = 'pending'
                AND NOT EXISTS (
-                   SELECT 1 FROM provider_api_credentials WHERE credential_slot = ?5
+                   SELECT 1 FROM provider_api_keys WHERE credential_slot = ?5
                )
                AND NOT EXISTS (
                    SELECT 1 FROM agent_provider_bindings WHERE credential_slot = ?5
                )",
             params![
                 reservation.operation_id,
-                reservation.provider_id,
+                reservation.key_id,
                 generation,
                 now_timestamp()?,
                 staging_slot,
@@ -429,7 +437,7 @@ impl Database {
              WHERE operation_id = ?1 AND status = 'cleanup'
                AND previous_slot = ?2
                AND NOT EXISTS (
-                   SELECT 1 FROM provider_api_credentials WHERE credential_slot = ?2
+                   SELECT 1 FROM provider_api_keys WHERE credential_slot = ?2
                )
                AND NOT EXISTS (
                    SELECT 1 FROM agent_provider_bindings WHERE credential_slot = ?2
@@ -471,10 +479,10 @@ impl Database {
     ) -> Result<Vec<ProviderCredentialJournalEntry>, AppError> {
         let conn = lock_conn!(self.conn);
         let mut statement = conn.prepare(
-            "SELECT operation_id, provider_id, operation_kind, status, generation,
+            "SELECT operation_id, key_id, operation_kind, status, generation,
                     staging_slot, previous_slot
              FROM provider_credential_operations
-             ORDER BY provider_id, generation, operation_id",
+             ORDER BY key_id, generation, operation_id",
         )?;
         let entries = statement
             .query_map([], |row| {
@@ -489,18 +497,11 @@ impl Database {
                 ))
             })?
             .map(|row| {
-                let (
-                    operation_id,
-                    provider_id,
-                    kind,
-                    status,
-                    generation,
-                    staging_slot,
-                    previous_slot,
-                ) = row?;
+                let (operation_id, key_id, kind, status, generation, staging_slot, previous_slot) =
+                    row?;
                 Ok(ProviderCredentialJournalEntry {
                     operation_id,
-                    provider_id,
+                    key_id,
                     kind: parse_mutation_kind(&kind)?,
                     status,
                     generation: u64::try_from(generation)
@@ -535,7 +536,7 @@ impl Database {
     pub(crate) fn delete_pending_provider_journal_entry(
         &self,
         operation_id: &str,
-        provider_id: &str,
+        key_id: &str,
         generation: u64,
     ) -> Result<(), AppError> {
         let generation =
@@ -544,14 +545,14 @@ impl Database {
         let transaction = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         transaction.execute(
             "DELETE FROM provider_credential_operations
-             WHERE operation_id = ?1 AND provider_id = ?2
+             WHERE operation_id = ?1 AND key_id = ?2
                AND generation = ?3 AND status = 'pending'
                AND NOT EXISTS (
-                   SELECT 1 FROM provider_api_credentials
-                   WHERE provider_id = ?2 AND credential_version = ?3
+                   SELECT 1 FROM provider_api_keys
+                   WHERE id = ?2 AND credential_version = ?3
                      AND credential_slot IS NULL AND api_key_fingerprint IS NULL
                )",
-            params![operation_id, provider_id, generation],
+            params![operation_id, key_id, generation],
         )?;
         transaction.commit()?;
         Ok(())
@@ -563,7 +564,7 @@ impl Database {
     ) -> Result<(), AppError> {
         self.finish_provider_credential_operation(&ProviderCredentialOperationReservation {
             operation_id: entry.operation_id.clone(),
-            provider_id: entry.provider_id.clone(),
+            key_id: entry.key_id.clone(),
             kind: entry.kind,
             expected_version: entry.generation.saturating_sub(1),
             generation: entry.generation,
