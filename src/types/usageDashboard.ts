@@ -111,6 +111,33 @@ export interface SystemProviderConnectionTestResult {
   errorCode: string | null;
 }
 
+export interface SystemProviderKeyUsageView {
+  usageTotalUsd: string | null;
+  usageDailyUsd: string | null;
+  usageWeeklyUsd: string | null;
+  usageMonthlyUsd: string | null;
+  limitUsd: string | null;
+  limitRemainingUsd: string | null;
+  isFreeTier: boolean | null;
+  fetchedAt: number;
+  credentialVersion: number;
+  stale: boolean;
+}
+
+export interface ProviderApiKeyView {
+  id: string;
+  providerId: string;
+  label: string;
+  credentialStatus: BindingCredentialStatus;
+  credentialVersion: number;
+  canClearCredential: boolean;
+  lastConnectionTestAt: number | null;
+  lastConnectionTestStatus: string | null;
+  lastConnectionTestErrorCode: string | null;
+  sortOrder: number;
+  keyUsage: SystemProviderKeyUsageView | null;
+}
+
 export interface ClaudeCliAuthStatus {
   installed: boolean;
   authenticated: boolean;
@@ -157,11 +184,9 @@ export interface UsageProviderView {
   systemAuthKind: SystemProviderAuthKind | null;
   canonicalEndpoint: string | null;
   compatibleAgentModuleIds: string[];
-  upstreamCredentialStatus: BindingCredentialStatus;
-  upstreamCredentialVersion: number;
-  canClearUpstreamCredential: boolean;
-  lastConnectionTestAt: number | null;
-  lastConnectionTestStatus: string | null;
+  apiKeys: ProviderApiKeyView[];
+  supportsKeyUsage: boolean;
+  keyUsageTotal: SystemProviderKeyUsageView | null;
 }
 
 export interface CostSourceCounts {

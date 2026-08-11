@@ -176,7 +176,7 @@ describe("usageDashboardApi wire contract", () => {
       [
         "set_system_provider_api_key",
         {
-          providerId: "system-openrouter-api",
+          keyId: "system-openrouter-api",
           expectedVersion: 0,
           apiKey: "provider-set-key",
         },
@@ -184,18 +184,18 @@ describe("usageDashboardApi wire contract", () => {
       [
         "replace_system_provider_api_key",
         {
-          providerId: "system-openrouter-api",
+          keyId: "system-openrouter-api",
           expectedVersion: 1,
           apiKey: "provider-replace-key",
         },
       ],
       [
         "clear_system_provider_api_key",
-        { providerId: "system-openrouter-api", expectedVersion: 2 },
+        { keyId: "system-openrouter-api", expectedVersion: 2 },
       ],
       [
         "test_system_provider_connection",
-        { providerId: "system-openrouter-api", expectedVersion: 2 },
+        { keyId: "system-openrouter-api", expectedVersion: 2 },
       ],
       [
         "reveal_agent_provider_local_key",

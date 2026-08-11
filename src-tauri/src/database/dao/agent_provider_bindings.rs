@@ -138,8 +138,18 @@ pub(crate) const BINDING_RECORD_QUERY: &str =
      LEFT JOIN providers AS legacy
        ON legacy.id = provider.legacy_provider_id
       AND legacy.app_type = provider.legacy_app_type
-     LEFT JOIN provider_api_credentials AS provider_credential
-       ON provider_credential.provider_id = provider.id";
+     LEFT JOIN provider_api_keys AS provider_credential
+       ON provider_credential.id = (
+          SELECT provider_key.id
+          FROM provider_api_keys AS provider_key
+          WHERE provider_key.provider_id = provider.id
+          -- A binding is usable when the Provider has *any* configured key, so
+          -- prefer a configured one; picking merely the first would strand every
+          -- binding whenever the first-ordered key happens to be an empty slot.
+          ORDER BY (provider_key.api_key_fingerprint IS NULL),
+                   provider_key.sort_order, provider_key.created_at, provider_key.id
+          LIMIT 1
+       )";
 
 fn normalized_auth_marker(value: &str) -> String {
     value
@@ -710,8 +720,16 @@ fn provider_context_for_new_binding(
                     COALESCE(provider_credential.credential_version, 0)
              FROM usage_providers AS provider
              JOIN agent_modules AS agent ON agent.id = ?1
-             LEFT JOIN provider_api_credentials AS provider_credential
-               ON provider_credential.provider_id = provider.id
+             LEFT JOIN provider_api_keys AS provider_credential
+               ON provider_credential.id = (
+                  SELECT provider_key.id
+                  FROM provider_api_keys AS provider_key
+                  WHERE provider_key.provider_id = provider.id
+                  ORDER BY (provider_key.api_key_fingerprint IS NULL),
+                           provider_key.sort_order, provider_key.created_at,
+                           provider_key.id
+                  LIMIT 1
+               )
              WHERE provider.id = ?2",
             params![agent_module_id, provider_id],
             |row| {
@@ -972,6 +990,63 @@ mod tests {
             provider_id: provider_id.to_string(),
             enabled,
         }
+    }
+
+    /// A Provider is usable when *any* of its keys holds a credential. Ordering
+    /// alone would pick an empty first key and report the whole Provider — and
+    /// therefore every binding's `effective_enabled` — as unconfigured.
+    #[test]
+    fn provider_credential_state_prefers_a_configured_key_over_an_empty_first_one() {
+        let db = Database::memory().unwrap();
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "INSERT INTO provider_api_keys (
+                     id, provider_id, label, credential_version, sort_order,
+                     created_at, updated_at
+                 ) VALUES ('empty-first', 'system-openrouter-api', 'Empty', 0, 0, 10, 10)",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO provider_api_keys (
+                     id, provider_id, label, api_key_fingerprint, credential_slot,
+                     credential_version, sort_order, created_at, updated_at
+                 ) VALUES ('configured-second', 'system-openrouter-api', 'Configured',
+                           ?1, 'provider-key/configured-second/1/slot', 1, 1, 10, 10)",
+                params![vec![7u8; 32]],
+            )
+            .unwrap();
+        }
+
+        let (fingerprint, slot, version) = {
+            let conn = db.conn.lock().unwrap();
+            conn.query_row(
+                "SELECT provider_key.api_key_fingerprint, provider_key.credential_slot,
+                        provider_key.credential_version
+                 FROM provider_api_keys AS provider_key
+                 WHERE provider_key.provider_id = 'system-openrouter-api'
+                 ORDER BY (provider_key.api_key_fingerprint IS NULL),
+                          provider_key.sort_order, provider_key.created_at, provider_key.id
+                 LIMIT 1",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<Vec<u8>>>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .unwrap()
+        };
+
+        assert_eq!(fingerprint, Some(vec![7u8; 32]));
+        assert_eq!(
+            slot.as_deref(),
+            Some("provider-key/configured-second/1/slot")
+        );
+        assert_eq!(version, 1);
     }
 
     #[test]

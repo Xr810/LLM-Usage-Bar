@@ -6,6 +6,9 @@ use crate::services::{
     official_pricing::{
         start_scheduler as start_official_pricing_scheduler, OfficialPricingSchedulerHandle,
     },
+    provider_key_usage_scheduler::{
+        start_scheduler as start_provider_key_usage_scheduler, ProviderKeyUsageSchedulerHandle,
+    },
     tray_usage::TrayUsageService,
     tray_usage_scheduler::{
         start_local_midnight_scheduler, TraySnapshotPublisher, TrayUsageSchedulerHandle,
@@ -30,6 +33,7 @@ pub struct AppState {
     quota_scheduler: Mutex<Option<QuotaSchedulerHandle>>,
     midnight_scheduler: Mutex<Option<TrayUsageSchedulerHandle>>,
     official_pricing_scheduler: Mutex<Option<OfficialPricingSchedulerHandle>>,
+    provider_key_usage_scheduler: Mutex<Option<ProviderKeyUsageSchedulerHandle>>,
 }
 
 impl AppState {
@@ -114,6 +118,7 @@ impl AppState {
             quota_scheduler: Mutex::new(None),
             midnight_scheduler: Mutex::new(None),
             official_pricing_scheduler: Mutex::new(None),
+            provider_key_usage_scheduler: Mutex::new(None),
         }
     }
 
@@ -193,6 +198,33 @@ impl AppState {
             Ok(mut scheduler) => scheduler.take(),
             Err(_) => {
                 log::error!("official pricing scheduler lock is poisoned");
+                None
+            }
+        }
+    }
+
+    pub fn start_provider_key_usage_scheduler(&self) -> bool {
+        let Ok(mut scheduler) = self.provider_key_usage_scheduler.lock() else {
+            log::error!("provider key usage scheduler lock is poisoned");
+            return false;
+        };
+        if scheduler.is_some() {
+            return false;
+        }
+        *scheduler = Some(start_provider_key_usage_scheduler(
+            self.binding_credential_service.clone(),
+            self.system_provider_connection_service.clone(),
+        ));
+        true
+    }
+
+    pub(crate) fn take_provider_key_usage_scheduler(
+        &self,
+    ) -> Option<ProviderKeyUsageSchedulerHandle> {
+        match self.provider_key_usage_scheduler.lock() {
+            Ok(mut scheduler) => scheduler.take(),
+            Err(_) => {
+                log::error!("provider key usage scheduler lock is poisoned");
                 None
             }
         }

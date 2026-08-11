@@ -307,7 +307,7 @@ impl Database {
             "SELECT EXISTS(
                  SELECT 1 FROM agent_provider_bindings WHERE credential_slot = ?1
                  UNION ALL
-                 SELECT 1 FROM provider_api_credentials WHERE credential_slot = ?1
+                 SELECT 1 FROM provider_api_keys WHERE credential_slot = ?1
              )",
             [slot],
             |row| row.get(0),
@@ -626,7 +626,7 @@ impl Database {
                    WHERE credential_slot = ?5
                )
                AND NOT EXISTS (
-                   SELECT 1 FROM provider_api_credentials
+                   SELECT 1 FROM provider_api_keys
                    WHERE credential_slot = ?5
                )",
             params![
@@ -659,7 +659,7 @@ impl Database {
                    WHERE credential_slot = ?2
                )
                AND NOT EXISTS (
-                   SELECT 1 FROM provider_api_credentials
+                   SELECT 1 FROM provider_api_keys
                    WHERE credential_slot = ?2
                )",
             params![reservation.operation_id, staging_slot],
@@ -700,7 +700,7 @@ impl Database {
                      SELECT 1 FROM agent_provider_bindings
                      WHERE credential_slot = ?1
                      UNION ALL
-                     SELECT 1 FROM provider_api_credentials
+                     SELECT 1 FROM provider_api_keys
                      WHERE credential_slot = ?1
                  )",
                 [previous_slot],

@@ -36,6 +36,7 @@ pub struct SystemProviderDefinition {
     pub quota_interval_seconds: Option<u64>,
     pub upstream_protocol: Option<&'static str>,
     pub connection_test_path: Option<&'static str>,
+    pub key_usage_path: Option<&'static str>,
     pub model_list_path: Option<&'static str>,
     pub route_config: Option<serde_json::Value>,
 }
@@ -70,6 +71,7 @@ fn metered_api_provider_with_paths(
         quota_interval_seconds: None,
         upstream_protocol: Some("codex"),
         connection_test_path: Some(connection_test_path),
+        key_usage_path: None,
         model_list_path: Some(model_list_path),
         route_config: Some(serde_json::json!({
             "base_url": base_url,
@@ -97,6 +99,7 @@ pub fn system_provider_definitions() -> Vec<SystemProviderDefinition> {
             quota_interval_seconds: Some(300),
             upstream_protocol: Some("codex"),
             connection_test_path: None,
+            key_usage_path: None,
             model_list_path: None,
             route_config: None,
         },
@@ -115,6 +118,7 @@ pub fn system_provider_definitions() -> Vec<SystemProviderDefinition> {
             quota_interval_seconds: Some(300),
             upstream_protocol: None,
             connection_test_path: None,
+            key_usage_path: None,
             model_list_path: None,
             route_config: None,
         },
@@ -131,6 +135,7 @@ pub fn system_provider_definitions() -> Vec<SystemProviderDefinition> {
             quota_interval_seconds: None,
             upstream_protocol: Some("codex"),
             connection_test_path: Some("/models"),
+            key_usage_path: None,
             model_list_path: Some("/models"),
             route_config: Some(serde_json::json!({
                 "base_url": "https://api.openai.com/v1",
@@ -151,6 +156,7 @@ pub fn system_provider_definitions() -> Vec<SystemProviderDefinition> {
             quota_interval_seconds: None,
             upstream_protocol: Some("claude"),
             connection_test_path: Some("/v1/models"),
+            key_usage_path: None,
             model_list_path: Some("/v1/models"),
             route_config: Some(serde_json::json!({
                 "base_url": "https://api.anthropic.com",
@@ -174,6 +180,7 @@ pub fn system_provider_definitions() -> Vec<SystemProviderDefinition> {
             // validate the submitted key. `/key` is the official read-only
             // endpoint for the current authenticated API key.
             connection_test_path: Some("/key"),
+            key_usage_path: Some("/key"),
             model_list_path: Some("/models"),
             route_config: Some(serde_json::json!({
                 "base_url": "https://openrouter.ai/api/v1",
@@ -318,7 +325,19 @@ pub(crate) fn is_fixed_api_preset(preset_key: Option<&str>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::system_binding_route_protocol;
+    use super::{system_binding_route_protocol, system_provider_definitions, OPENROUTER_API_ID};
+
+    #[test]
+    fn only_openrouter_declares_key_usage_endpoint() {
+        for definition in system_provider_definitions() {
+            assert_eq!(
+                definition.key_usage_path,
+                (definition.id == OPENROUTER_API_ID).then_some("/key"),
+                "{}",
+                definition.id
+            );
+        }
+    }
 
     #[test]
     fn system_binding_protocol_matrix_is_exact_and_server_owned() {

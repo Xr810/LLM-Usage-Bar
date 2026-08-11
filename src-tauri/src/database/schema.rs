@@ -390,6 +390,20 @@ impl Database {
                         Self::validate_schema_v23_complete(conn)?;
                         crate::usage::usage_light_prediction_migration::migrate_v23_to_v24(conn)?;
                     }
+                    24 => {
+                        log::info!("迁移数据库从 v24 到 v25（添加 Provider API Key 用量快照）");
+                        crate::usage::usage_light_prediction_migration::validate_schema_v24_complete(
+                            conn,
+                        )?;
+                        Self::migrate_v24_to_v25(conn)?;
+                        Self::set_user_version(conn, 25)?;
+                    }
+                    25 => {
+                        log::info!("迁移数据库从 v25 到 v26（每个 Provider 支持多把 API Key）");
+                        Self::validate_schema_v25_complete(conn)?;
+                        Self::migrate_v25_to_v26(conn)?;
+                        Self::set_user_version(conn, 26)?;
+                    }
                     _ => {
                         return Err(AppError::Database(format!(
                             "未知的数据库版本 {version}，无法迁移到 {SCHEMA_VERSION}"
@@ -423,8 +437,16 @@ impl Database {
             if version >= 23 {
                 Self::validate_schema_v23_complete(conn)?;
             }
-            if version == 24 {
+            if version >= 24 {
                 crate::usage::usage_light_prediction_migration::validate_schema_v24_complete(conn)?;
+            }
+            // v25's snapshot table is Provider-scoped; v26 rebuilds it around
+            // key_id, so its validator only applies at exactly 25.
+            if version == 25 {
+                Self::validate_schema_v25_complete(conn)?;
+            }
+            if version >= 26 {
+                Self::validate_schema_v26_complete(conn)?;
             }
             Ok(())
         })();
@@ -1469,6 +1491,273 @@ impl Database {
             return Err(AppError::Database(
                 "incomplete schema v23: provider_model_pricing rates must be nullable".to_string(),
             ));
+        }
+        Ok(())
+    }
+
+    fn migrate_v24_to_v25(conn: &Connection) -> Result<(), AppError> {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS provider_key_usage_snapshots (
+                provider_id TEXT NOT NULL PRIMARY KEY
+                    REFERENCES usage_providers(id) ON DELETE RESTRICT,
+                credential_version INTEGER NOT NULL CHECK (credential_version > 0),
+                usage_total_usd TEXT,
+                usage_daily_usd TEXT,
+                usage_weekly_usd TEXT,
+                usage_monthly_usd TEXT,
+                limit_usd TEXT,
+                limit_remaining_usd TEXT,
+                is_free_tier INTEGER,
+                fetched_at INTEGER NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+             );",
+        )
+        .map_err(|error| {
+            AppError::Database(format!(
+                "v24 -> v25 创建 provider_key_usage_snapshots 失败: {error}"
+            ))
+        })?;
+        Self::validate_schema_v25_complete(conn)
+    }
+
+    /// v25 -> v26 turns the one-credential-per-Provider model into a list of
+    /// named keys per Provider, so a Provider's spend can be broken down by key.
+    ///
+    /// Two invariants make this migration safe to run on a live database:
+    ///
+    /// 1. **Keychain slots are carried over verbatim.** The slot string is the
+    ///    lookup key for the secret in the OS keychain; renaming it here would
+    ///    orphan every stored secret. New slots use the key-scoped naming, old
+    ///    ones keep theirs until the key is next replaced.
+    /// 2. **Only rows that actually hold a credential become keys.** Every
+    ///    Provider currently has a `provider_api_credentials` row, most of them
+    ///    empty placeholders at version 0. In the list model "no credential" is
+    ///    an empty list, so importing those would create phantom unnamed keys.
+    fn migrate_v25_to_v26(conn: &Connection) -> Result<(), AppError> {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS provider_api_keys (
+                 id TEXT NOT NULL PRIMARY KEY CHECK (length(trim(id)) > 0),
+                 provider_id TEXT NOT NULL
+                     REFERENCES usage_providers(id) ON DELETE RESTRICT,
+                 label TEXT NOT NULL CHECK (length(trim(label)) > 0),
+                 api_key_fingerprint BLOB,
+                 credential_slot TEXT,
+                 credential_version INTEGER NOT NULL DEFAULT 0
+                     CHECK (credential_version >= 0),
+                 last_test_at INTEGER,
+                 last_test_status TEXT CHECK (
+                     last_test_status IS NULL OR last_test_status IN ('success','failed')
+                 ),
+                 last_test_error_code TEXT,
+                 sort_order INTEGER NOT NULL DEFAULT 0,
+                 created_at INTEGER NOT NULL,
+                 updated_at INTEGER NOT NULL,
+                 CHECK (
+                     (api_key_fingerprint IS NULL AND credential_slot IS NULL)
+                     OR
+                     (api_key_fingerprint IS NOT NULL
+                      AND typeof(api_key_fingerprint) = 'blob'
+                      AND length(api_key_fingerprint) = 32
+                      AND credential_slot IS NOT NULL
+                      AND length(trim(credential_slot)) > 0
+                      AND credential_version > 0)
+                 )
+             );
+             CREATE UNIQUE INDEX IF NOT EXISTS idx_provider_api_keys_fingerprint
+                 ON provider_api_keys(api_key_fingerprint)
+                 WHERE api_key_fingerprint IS NOT NULL;
+             CREATE UNIQUE INDEX IF NOT EXISTS idx_provider_api_keys_slot
+                 ON provider_api_keys(credential_slot)
+                 WHERE credential_slot IS NOT NULL;
+             CREATE UNIQUE INDEX IF NOT EXISTS idx_provider_api_keys_label
+                 ON provider_api_keys(provider_id, label);
+             CREATE INDEX IF NOT EXISTS idx_provider_api_keys_provider
+                 ON provider_api_keys(provider_id);",
+        )
+        .map_err(|error| {
+            AppError::Database(format!("v25 -> v26 创建 provider_api_keys 失败: {error}"))
+        })?;
+
+        // Invariant 2: only configured credentials migrate. The label falls back
+        // to the Provider's own name, which is what a single-key setup reads as.
+        conn.execute(
+            "INSERT OR IGNORE INTO provider_api_keys (
+                 id, provider_id, label, api_key_fingerprint, credential_slot,
+                 credential_version, last_test_at, last_test_status,
+                 last_test_error_code, sort_order, created_at, updated_at
+             )
+             SELECT credential.provider_id, credential.provider_id, provider.name,
+                    credential.api_key_fingerprint, credential.credential_slot,
+                    credential.credential_version, credential.last_test_at,
+                    credential.last_test_status, credential.last_test_error_code,
+                    0, credential.created_at, credential.updated_at
+             FROM provider_api_credentials credential
+             JOIN usage_providers provider ON provider.id = credential.provider_id
+             WHERE credential.api_key_fingerprint IS NOT NULL
+               AND credential.credential_slot IS NOT NULL",
+            [],
+        )
+        .map_err(|error| AppError::Database(format!("v25 -> v26 迁移已配置凭据失败: {error}")))?;
+
+        Self::migrate_v25_to_v26_snapshots(conn)?;
+        Self::migrate_v25_to_v26_journal(conn)?;
+        Self::validate_schema_v26_complete(conn)
+    }
+
+    /// Snapshots move from Provider-scoped to key-scoped. Rows whose Provider
+    /// produced no key (an unconfigured placeholder) describe spend on a
+    /// credential that no longer has an owner, so they are dropped rather than
+    /// re-pointed at an arbitrary key.
+    fn migrate_v25_to_v26_snapshots(conn: &Connection) -> Result<(), AppError> {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS provider_key_usage_snapshots_v26 (
+                 key_id TEXT NOT NULL PRIMARY KEY
+                     REFERENCES provider_api_keys(id) ON DELETE CASCADE,
+                 credential_version INTEGER NOT NULL CHECK (credential_version > 0),
+                 usage_total_usd TEXT,
+                 usage_daily_usd TEXT,
+                 usage_weekly_usd TEXT,
+                 usage_monthly_usd TEXT,
+                 limit_usd TEXT,
+                 limit_remaining_usd TEXT,
+                 is_free_tier INTEGER,
+                 fetched_at INTEGER NOT NULL,
+                 created_at INTEGER NOT NULL,
+                 updated_at INTEGER NOT NULL
+             );
+             INSERT OR IGNORE INTO provider_key_usage_snapshots_v26 (
+                 key_id, credential_version, usage_total_usd, usage_daily_usd,
+                 usage_weekly_usd, usage_monthly_usd, limit_usd,
+                 limit_remaining_usd, is_free_tier, fetched_at, created_at,
+                 updated_at
+             )
+             SELECT snapshot.provider_id, snapshot.credential_version,
+                    snapshot.usage_total_usd, snapshot.usage_daily_usd,
+                    snapshot.usage_weekly_usd, snapshot.usage_monthly_usd,
+                    snapshot.limit_usd, snapshot.limit_remaining_usd,
+                    snapshot.is_free_tier, snapshot.fetched_at,
+                    snapshot.created_at, snapshot.updated_at
+             FROM provider_key_usage_snapshots snapshot
+             JOIN provider_api_keys key ON key.id = snapshot.provider_id;
+             DROP TABLE provider_key_usage_snapshots;
+             ALTER TABLE provider_key_usage_snapshots_v26
+                 RENAME TO provider_key_usage_snapshots;",
+        )
+        .map_err(|error| AppError::Database(format!("v25 -> v26 迁移用量快照失败: {error}")))
+    }
+
+    /// The credential journal is rebuilt around `key_id`. Any operation still
+    /// pending across the upgrade is dropped: its staging slot is reconciled at
+    /// startup, and replaying a half-finished Provider-scoped operation against
+    /// the new key-scoped table would target the wrong row.
+    fn migrate_v25_to_v26_journal(conn: &Connection) -> Result<(), AppError> {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS provider_credential_operations_v26 (
+                 operation_id TEXT NOT NULL PRIMARY KEY
+                     CHECK (length(trim(operation_id)) > 0),
+                 key_id TEXT NOT NULL,
+                 generation INTEGER NOT NULL CHECK (generation > 0),
+                 operation_kind TEXT NOT NULL
+                     CHECK (operation_kind IN ('set','replace','clear')),
+                 status TEXT NOT NULL CHECK (status IN ('pending','committed','cleanup')),
+                 staging_slot TEXT,
+                 previous_slot TEXT,
+                 created_at INTEGER NOT NULL,
+                 updated_at INTEGER NOT NULL,
+                 FOREIGN KEY (key_id) REFERENCES provider_api_keys(id)
+                     ON DELETE RESTRICT,
+                 UNIQUE (key_id, generation),
+                 CHECK (staging_slot IS NULL OR length(trim(staging_slot)) > 0),
+                 CHECK (previous_slot IS NULL OR length(trim(previous_slot)) > 0),
+                 CHECK (operation_kind = 'clear' OR staging_slot IS NOT NULL)
+             );
+             INSERT OR IGNORE INTO provider_credential_operations_v26 (
+                 operation_id, key_id, generation, operation_kind, status,
+                 staging_slot, previous_slot, created_at, updated_at
+             )
+             SELECT operation.operation_id, operation.provider_id,
+                    operation.generation, operation.operation_kind,
+                    operation.status, operation.staging_slot,
+                    operation.previous_slot, operation.created_at,
+                    operation.updated_at
+             FROM provider_credential_operations operation
+             JOIN provider_api_keys key ON key.id = operation.provider_id
+             WHERE operation.status <> 'pending';
+             DROP TABLE provider_credential_operations;
+             ALTER TABLE provider_credential_operations_v26
+                 RENAME TO provider_credential_operations;
+             CREATE UNIQUE INDEX IF NOT EXISTS
+                 idx_provider_credential_operations_pending_key
+                 ON provider_credential_operations(key_id)
+                 WHERE status = 'pending';",
+        )
+        .map_err(|error| AppError::Database(format!("v25 -> v26 迁移凭据日志失败: {error}")))
+    }
+
+    fn validate_schema_v26_complete(conn: &Connection) -> Result<(), AppError> {
+        if !Self::table_exists(conn, "provider_api_keys")? {
+            return Err(AppError::Database(
+                "incomplete schema v26: provider_api_keys is missing".to_string(),
+            ));
+        }
+        for column in [
+            "id",
+            "provider_id",
+            "label",
+            "api_key_fingerprint",
+            "credential_slot",
+            "credential_version",
+            "last_test_at",
+            "last_test_status",
+            "last_test_error_code",
+            "sort_order",
+        ] {
+            if !Self::has_column(conn, "provider_api_keys", column)? {
+                return Err(AppError::Database(format!(
+                    "incomplete schema v26: provider_api_keys.{column} is missing"
+                )));
+            }
+        }
+        if !Self::has_column(conn, "provider_key_usage_snapshots", "key_id")? {
+            return Err(AppError::Database(
+                "incomplete schema v26: provider_key_usage_snapshots.key_id is missing".to_string(),
+            ));
+        }
+        if !Self::has_column(conn, "provider_credential_operations", "key_id")? {
+            return Err(AppError::Database(
+                "incomplete schema v26: provider_credential_operations.key_id is missing"
+                    .to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_schema_v25_complete(conn: &Connection) -> Result<(), AppError> {
+        if !Self::table_exists(conn, "provider_key_usage_snapshots")? {
+            return Err(AppError::Database(
+                "incomplete schema v25: provider_key_usage_snapshots is missing".to_string(),
+            ));
+        }
+        for column in [
+            "provider_id",
+            "credential_version",
+            "usage_total_usd",
+            "usage_daily_usd",
+            "usage_weekly_usd",
+            "usage_monthly_usd",
+            "limit_usd",
+            "limit_remaining_usd",
+            "is_free_tier",
+            "fetched_at",
+            "created_at",
+            "updated_at",
+        ] {
+            if !Self::has_column(conn, "provider_key_usage_snapshots", column)? {
+                return Err(AppError::Database(format!(
+                    "incomplete schema v25: provider_key_usage_snapshots.{column} is missing"
+                )));
+            }
         }
         Ok(())
     }

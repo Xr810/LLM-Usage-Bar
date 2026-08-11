@@ -21,6 +21,8 @@ import type { ProviderModelPricingView } from "@/types/usageDashboard";
 
 interface ProviderModelPricingSectionProps {
   providerId: string;
+  /** A configured key to fetch the catalogue with, or null when none is set up. */
+  credentialKeyId?: string | null;
   providerName: string;
   /** Credential version the model lookup authenticates with. */
   credentialVersion: number;
@@ -91,6 +93,7 @@ function draftFrom(row: ProviderModelPricingView): DraftPrice {
  */
 export function ProviderModelPricingSection({
   providerId,
+  credentialKeyId,
   providerName,
   credentialVersion,
 }: ProviderModelPricingSectionProps) {
@@ -108,6 +111,7 @@ export function ProviderModelPricingSection({
   // error worth putting on screen.
   const providerModels = useSystemProviderModels(
     providerId,
+    credentialKeyId ?? null,
     credentialVersion,
     open,
   );

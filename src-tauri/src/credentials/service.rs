@@ -8,7 +8,7 @@ use crate::database::{
 use crate::error::AppError;
 use crate::usage::domain::{
     AgentProviderBindingInput, AgentProviderBindingView, BindingCredentialStatus,
-    LocalBindingKeyReveal, SystemProviderAuthKind, UsageProviderView,
+    LocalBindingKeyReveal, ProviderApiKeyView, SystemProviderAuthKind, UsageProviderView,
 };
 use crate::usage::system_providers::{is_fixed_api_preset, system_binding_route_protocol};
 use sha2::{Digest, Sha256};
@@ -101,6 +101,7 @@ fn binding_credential_is_acceptable(secret: &[u8]) -> bool {
 /// Verified, frozen Provider credential used only for a fixed-endpoint
 /// connection probe. It is intentionally non-Clone and non-serializable.
 pub(crate) struct ResolvedProviderCredential {
+    key_id: String,
     provider_id: String,
     system_preset_key: String,
     canonical_endpoint: String,
@@ -109,6 +110,10 @@ pub(crate) struct ResolvedProviderCredential {
 }
 
 impl ResolvedProviderCredential {
+    pub(crate) fn key_id(&self) -> &str {
+        &self.key_id
+    }
+
     pub(crate) fn provider_id(&self) -> &str {
         &self.provider_id
     }
@@ -267,7 +272,7 @@ impl BindingCredentialService {
                 .db
                 .delete_pending_provider_journal_entry(
                     &reservation.operation_id,
-                    &reservation.provider_id,
+                    &reservation.key_id,
                     reservation.generation,
                 )
                 .is_err()
@@ -325,11 +330,11 @@ impl BindingCredentialService {
 
     async fn mutate_provider_api_key(
         &self,
-        provider_id: &str,
+        key_id: &str,
         expected_version: u64,
         api_key: SecretString,
         kind: CredentialMutationKind,
-    ) -> Result<UsageProviderView, AppError> {
+    ) -> Result<ProviderApiKeyView, AppError> {
         if !provider_credential_is_acceptable(api_key.expose_bytes()) {
             return Err(public_error("credential_required"));
         }
@@ -341,7 +346,7 @@ impl BindingCredentialService {
         let reservation = self
             .db
             .reserve_provider_credential_operation(
-                provider_id,
+                key_id,
                 expected_version,
                 kind,
                 Some(&fingerprint),
@@ -371,17 +376,17 @@ impl BindingCredentialService {
             return Err(normalize_db_error(error));
         }
         let _ = self.finish_published_provider_operation(&reservation).await;
-        self.provider_view(provider_id).await
+        self.provider_key_view(key_id).await
     }
 
     pub async fn set_provider_api_key(
         &self,
-        provider_id: &str,
+        key_id: &str,
         expected_version: u64,
         api_key: SecretString,
-    ) -> Result<UsageProviderView, AppError> {
+    ) -> Result<ProviderApiKeyView, AppError> {
         self.mutate_provider_api_key(
-            provider_id,
+            key_id,
             expected_version,
             api_key,
             CredentialMutationKind::Set,
@@ -391,12 +396,12 @@ impl BindingCredentialService {
 
     pub async fn replace_provider_api_key(
         &self,
-        provider_id: &str,
+        key_id: &str,
         expected_version: u64,
         api_key: SecretString,
-    ) -> Result<UsageProviderView, AppError> {
+    ) -> Result<ProviderApiKeyView, AppError> {
         self.mutate_provider_api_key(
-            provider_id,
+            key_id,
             expected_version,
             api_key,
             CredentialMutationKind::Replace,
@@ -406,9 +411,9 @@ impl BindingCredentialService {
 
     pub async fn clear_provider_api_key(
         &self,
-        provider_id: &str,
+        key_id: &str,
         expected_version: u64,
-    ) -> Result<UsageProviderView, AppError> {
+    ) -> Result<ProviderApiKeyView, AppError> {
         let _lifecycle_guard = self.lifecycle_lock.shared().await.map_err(|_| {
             log::error!("credential lifecycle lock failed");
             public_error("credential_unavailable")
@@ -416,7 +421,7 @@ impl BindingCredentialService {
         let reservation = self
             .db
             .reserve_provider_credential_operation(
-                provider_id,
+                key_id,
                 expected_version,
                 CredentialMutationKind::Clear,
                 None,
@@ -431,17 +436,17 @@ impl BindingCredentialService {
             return Err(normalize_db_error(error));
         }
         let _ = self.finish_published_provider_operation(&reservation).await;
-        self.provider_view(provider_id).await
+        self.provider_key_view(key_id).await
     }
 
     pub(crate) async fn resolve_provider_api_key(
         &self,
-        provider_id: &str,
+        key_id: &str,
         expected_version: u64,
     ) -> Result<ResolvedProviderCredential, AppError> {
         let initial = self
             .db
-            .provider_credential_snapshot(provider_id)
+            .provider_credential_snapshot(key_id)
             .map_err(normalize_db_error)?
             .ok_or_else(|| public_error("unsupported_auth"))?;
         if initial.credential_version != expected_version {
@@ -471,7 +476,7 @@ impl BindingCredentialService {
         }
         let current = self
             .db
-            .provider_credential_snapshot(provider_id)
+            .provider_credential_snapshot(key_id)
             .map_err(normalize_db_error)?
             .ok_or_else(|| public_error("unsupported_auth"))?;
         if current.credential_version != initial.credential_version
@@ -480,18 +485,28 @@ impl BindingCredentialService {
         {
             return Err(public_error("credential_conflict"));
         }
+        // The key row is the only thing that knows which Provider this secret
+        // belongs to, and it is read after the credential re-check so a key
+        // moved or removed mid-flight cannot resolve against a stale Provider.
+        let owning_provider_id = self
+            .db
+            .provider_api_key(key_id)
+            .map_err(normalize_db_error)?
+            .map(|key| key.provider_id)
+            .ok_or_else(|| public_error("unsupported_auth"))?;
         let provider = self
             .db
             .list_usage_providers()
             .map_err(normalize_db_error)?
             .into_iter()
-            .find(|provider| provider.id == provider_id)
+            .find(|provider| provider.id == owning_provider_id)
             .filter(|provider| {
                 provider.enabled
                     && provider.system_auth_kind == Some(SystemProviderAuthKind::ProviderApiKey)
             })
             .ok_or_else(|| public_error("unsupported_auth"))?;
         Ok(ResolvedProviderCredential {
+            key_id: key_id.to_string(),
             provider_id: provider.id,
             system_preset_key: provider
                 .system_preset_key
@@ -532,15 +547,44 @@ impl BindingCredentialService {
         }
     }
 
-    async fn provider_view(&self, provider_id: &str) -> Result<UsageProviderView, AppError> {
-        self.list_usage_providers()
-            .await?
-            .into_iter()
-            .find(|provider| provider.id == provider_id)
-            .filter(|provider| {
-                provider.system_auth_kind == Some(SystemProviderAuthKind::ProviderApiKey)
-            })
-            .ok_or_else(|| public_error("unsupported_auth"))
+    /// The view of one key after a mutation. Status is probed against the real
+    /// keychain the same way the Provider-level view does, so a write that
+    /// landed in the database but not in the keychain reports `Unavailable`
+    /// rather than a confident `Configured`.
+    pub(crate) async fn provider_key_view(
+        &self,
+        key_id: &str,
+    ) -> Result<ProviderApiKeyView, AppError> {
+        let key = self
+            .db
+            .provider_api_key(key_id)
+            .map_err(normalize_db_error)?
+            .ok_or_else(|| public_error("unsupported_auth"))?;
+        let snapshot = ProviderCredentialSnapshot {
+            fingerprint: key.fingerprint.clone(),
+            credential_slot: key.credential_slot.clone(),
+            credential_version: key.credential_version,
+        };
+        let can_clear_credential =
+            snapshot.fingerprint.is_some() && snapshot.credential_slot.is_some();
+        let credential_status = self.provider_credential_status(&snapshot).await;
+        let key_usage = self
+            .db
+            .provider_key_usage_view(key_id, key.credential_version)
+            .map_err(normalize_db_error)?;
+        Ok(ProviderApiKeyView {
+            id: key.id,
+            provider_id: key.provider_id,
+            label: key.label,
+            can_clear_credential,
+            credential_status,
+            credential_version: key.credential_version,
+            last_connection_test_at: key.last_test_at,
+            last_connection_test_status: key.last_test_status,
+            last_connection_test_error_code: key.last_test_error_code,
+            sort_order: key.sort_order,
+            key_usage,
+        })
     }
 
     pub async fn list_usage_providers(&self) -> Result<Vec<UsageProviderView>, AppError> {
@@ -549,15 +593,16 @@ impl BindingCredentialService {
             if provider.system_auth_kind != Some(SystemProviderAuthKind::ProviderApiKey) {
                 continue;
             }
-            let snapshot = self
-                .db
-                .provider_credential_snapshot(&provider.id)
-                .map_err(normalize_db_error)?
-                .ok_or_else(|| public_error("credential_unavailable"))?;
-            provider.upstream_credential_status = self.provider_credential_status(&snapshot).await;
-            provider.upstream_credential_version = snapshot.credential_version;
-            provider.can_clear_upstream_credential =
-                snapshot.fingerprint.is_some() && snapshot.credential_slot.is_some();
+            for key in &mut provider.api_keys {
+                let snapshot = self
+                    .db
+                    .provider_credential_snapshot(&key.id)
+                    .map_err(normalize_db_error)?
+                    .ok_or_else(|| public_error("credential_unavailable"))?;
+                key.credential_status = self.provider_credential_status(&snapshot).await;
+                key.can_clear_credential =
+                    snapshot.fingerprint.is_some() && snapshot.credential_slot.is_some();
+            }
         }
         let verified_bindings = self.list_agent_provider_bindings(None).await?;
         for provider in &mut providers {
@@ -1131,7 +1176,7 @@ impl BindingCredentialService {
         if entry.status == "pending" {
             let snapshot = self
                 .db
-                .provider_credential_reconcile_state(&entry.provider_id)
+                .provider_credential_reconcile_state(&entry.key_id)
                 .map_err(|_| ())?
                 .ok_or(())?;
             let published = match entry.kind {
@@ -1168,7 +1213,7 @@ impl BindingCredentialService {
                     }
                     let reservation = ProviderCredentialOperationReservation {
                         operation_id: entry.operation_id.clone(),
-                        provider_id: entry.provider_id.clone(),
+                        key_id: entry.key_id.clone(),
                         kind: entry.kind,
                         expected_version: entry.generation.saturating_sub(1),
                         generation: entry.generation,
@@ -1198,7 +1243,7 @@ impl BindingCredentialService {
                     self.db
                         .delete_pending_provider_journal_entry(
                             &entry.operation_id,
-                            &entry.provider_id,
+                            &entry.key_id,
                             entry.generation,
                         )
                         .map_err(|_| ())?;

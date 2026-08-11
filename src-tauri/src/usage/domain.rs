@@ -279,6 +279,40 @@ pub struct UsageProviderStored {
     pub daily_budget_usd: Option<String>,
 }
 
+/// One named API key under a Provider, with its own credential state and its
+/// own spend. A Provider owns a list of these; the Provider-level totals are
+/// derived by summing them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderApiKeyView {
+    pub id: String,
+    pub provider_id: String,
+    pub label: String,
+    pub credential_status: BindingCredentialStatus,
+    pub credential_version: u64,
+    pub can_clear_credential: bool,
+    pub last_connection_test_at: Option<i64>,
+    pub last_connection_test_status: Option<String>,
+    pub last_connection_test_error_code: Option<String>,
+    pub sort_order: i64,
+    pub key_usage: Option<SystemProviderKeyUsageView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SystemProviderKeyUsageView {
+    pub usage_total_usd: Option<String>,
+    pub usage_daily_usd: Option<String>,
+    pub usage_weekly_usd: Option<String>,
+    pub usage_monthly_usd: Option<String>,
+    pub limit_usd: Option<String>,
+    pub limit_remaining_usd: Option<String>,
+    pub is_free_tier: Option<bool>,
+    pub fetched_at: i64,
+    pub credential_version: u64,
+    pub stale: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageProviderView {
@@ -302,12 +336,10 @@ pub struct UsageProviderView {
     pub system_auth_kind: Option<SystemProviderAuthKind>,
     pub canonical_endpoint: Option<String>,
     pub compatible_agent_module_ids: Vec<String>,
-    pub upstream_credential_status: BindingCredentialStatus,
-    pub upstream_credential_version: u64,
-    pub can_clear_upstream_credential: bool,
-    pub last_connection_test_at: Option<i64>,
-    pub last_connection_test_status: Option<String>,
+    pub api_keys: Vec<ProviderApiKeyView>,
     pub daily_budget_usd: Option<String>,
+    pub supports_key_usage: bool,
+    pub key_usage_total: Option<SystemProviderKeyUsageView>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
