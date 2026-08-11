@@ -133,14 +133,20 @@ export function useUnassignedUsageDiagnostics() {
  */
 export function useSystemProviderModels(
   providerId: string,
+  credentialKeyId: string | null,
   expectedVersion: number,
   enabled: boolean,
 ) {
   return useQuery({
+    // Cached per Provider: the catalogue is the same whichever of its keys
+    // fetched it.
     queryKey: usageDashboardKeys.providerModels(providerId),
     queryFn: () =>
-      usageDashboardApi.listSystemProviderModels(providerId, expectedVersion),
-    enabled,
+      usageDashboardApi.listSystemProviderModels(
+        credentialKeyId ?? "",
+        expectedVersion,
+      ),
+    enabled: enabled && credentialKeyId !== null,
     retry: false,
     staleTime: 5 * 60 * 1000,
   });
@@ -453,44 +459,46 @@ function useTransientUsageDashboardAction() {
   return { isPending, run };
 }
 
+/** Every action here names the API key it acts on, not the Provider — a
+    Provider holds a list of keys and none of these are Provider-wide. */
 export function useSystemProviderCredentialActions() {
   const { isPending, run } = useTransientUsageDashboardAction();
   return {
     isPending,
-    setApiKey: (providerId: string, expectedVersion: number, apiKey: string) =>
+    setApiKey: (keyId: string, expectedVersion: number, apiKey: string) =>
       run(() =>
         usageDashboardApi.setSystemProviderApiKey(
-          providerId,
+          keyId,
           expectedVersion,
           apiKey,
         ),
       ),
-    replaceApiKey: (
-      providerId: string,
-      expectedVersion: number,
-      apiKey: string,
-    ) =>
+    replaceApiKey: (keyId: string, expectedVersion: number, apiKey: string) =>
       run(() =>
         usageDashboardApi.replaceSystemProviderApiKey(
-          providerId,
+          keyId,
           expectedVersion,
           apiKey,
         ),
       ),
-    clearApiKey: (providerId: string, expectedVersion: number) =>
+    clearApiKey: (keyId: string, expectedVersion: number) =>
       run(() =>
-        usageDashboardApi.clearSystemProviderApiKey(
-          providerId,
-          expectedVersion,
-        ),
+        usageDashboardApi.clearSystemProviderApiKey(keyId, expectedVersion),
       ),
-    testConnection: (providerId: string, expectedVersion: number) =>
+    testConnection: (keyId: string, expectedVersion: number) =>
       run(() =>
-        usageDashboardApi.testSystemProviderConnection(
-          providerId,
-          expectedVersion,
-        ),
+        usageDashboardApi.testSystemProviderConnection(keyId, expectedVersion),
       ),
+    refreshKeyUsage: (keyId: string, expectedVersion: number) =>
+      run(() =>
+        usageDashboardApi.refreshSystemProviderKeyUsage(keyId, expectedVersion),
+      ),
+    createKey: (providerId: string, label: string) =>
+      run(() => usageDashboardApi.createProviderApiKey(providerId, label)),
+    renameKey: (keyId: string, label: string) =>
+      run(() => usageDashboardApi.renameProviderApiKey(keyId, label)),
+    deleteKey: (keyId: string, expectedVersion: number) =>
+      run(() => usageDashboardApi.deleteProviderApiKey(keyId, expectedVersion)),
   };
 }
 

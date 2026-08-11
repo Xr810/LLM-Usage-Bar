@@ -8,6 +8,7 @@ import type {
   AgentUsageBreakdownView,
   LocalBindingKeyReveal,
   ModelUsageDashboardView,
+  ProviderApiKeyView,
   ProviderSessionSyncResult,
   ProviderMonitoringDashboardView,
   QuotaRefreshResult,
@@ -17,6 +18,7 @@ import type {
   UsageProviderInput,
   UsageProviderView,
   SystemProviderConnectionTestResult,
+  SystemProviderKeyUsageView,
 } from "@/types/usageDashboard";
 
 export const usageDashboardApi = {
@@ -75,47 +77,72 @@ export const usageDashboardApi = {
       bindingId,
       expectedVersion,
     }),
-  setSystemProviderApiKey: (
+  listProviderApiKeys: (providerId: string): Promise<ProviderApiKeyView[]> =>
+    invoke("list_provider_api_keys", { providerId }),
+  createProviderApiKey: (
     providerId: string,
+    label: string,
+  ): Promise<ProviderApiKeyView> =>
+    invoke("create_provider_api_key", { providerId, label }),
+  renameProviderApiKey: (
+    keyId: string,
+    label: string,
+  ): Promise<ProviderApiKeyView> =>
+    invoke("rename_provider_api_key", { keyId, label }),
+  deleteProviderApiKey: (
+    keyId: string,
+    expectedVersion: number,
+  ): Promise<void> =>
+    invoke("delete_provider_api_key", { keyId, expectedVersion }),
+  setSystemProviderApiKey: (
+    keyId: string,
     expectedVersion: number,
     apiKey: string,
-  ): Promise<UsageProviderView> =>
+  ): Promise<ProviderApiKeyView> =>
     invoke("set_system_provider_api_key", {
-      providerId,
+      keyId,
       expectedVersion,
       apiKey,
     }),
   replaceSystemProviderApiKey: (
-    providerId: string,
+    keyId: string,
     expectedVersion: number,
     apiKey: string,
-  ): Promise<UsageProviderView> =>
+  ): Promise<ProviderApiKeyView> =>
     invoke("replace_system_provider_api_key", {
-      providerId,
+      keyId,
       expectedVersion,
       apiKey,
     }),
   clearSystemProviderApiKey: (
-    providerId: string,
+    keyId: string,
     expectedVersion: number,
-  ): Promise<UsageProviderView> =>
+  ): Promise<ProviderApiKeyView> =>
     invoke("clear_system_provider_api_key", {
-      providerId,
+      keyId,
       expectedVersion,
     }),
   /** Model IDs the Provider's own /v1/models reports. IDs only — the backend
       strips the rest of the body before it leaves the connection client. */
   listSystemProviderModels: (
-    providerId: string,
+    keyId: string,
     expectedVersion: number,
   ): Promise<string[]> =>
-    invoke("list_system_provider_models", { providerId, expectedVersion }),
+    invoke("list_system_provider_models", { keyId, expectedVersion }),
   testSystemProviderConnection: (
-    providerId: string,
+    keyId: string,
     expectedVersion: number,
   ): Promise<SystemProviderConnectionTestResult> =>
     invoke("test_system_provider_connection", {
-      providerId,
+      keyId,
+      expectedVersion,
+    }),
+  refreshSystemProviderKeyUsage: (
+    keyId: string,
+    expectedVersion: number,
+  ): Promise<SystemProviderKeyUsageView> =>
+    invoke("refresh_system_provider_key_usage", {
+      keyId,
       expectedVersion,
     }),
   revealAgentProviderLocalKey: (

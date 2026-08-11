@@ -32,6 +32,7 @@ const fixedProviders = [
   id,
   name,
   systemPresetKey,
+  apiKeys: [],
   billingKind: systemPresetKey.endsWith("subscription")
     ? "subscription"
     : "metered",
@@ -46,6 +47,7 @@ vi.mock("@/lib/query/usageDashboard", () => ({
         id: "custom",
         name: "Custom Example",
         systemPresetKey: null,
+        apiKeys: [],
         billingKind: "metered",
         dailyBudgetUsd: "5",
         enabled: true,
@@ -54,6 +56,7 @@ vi.mock("@/lib/query/usageDashboard", () => ({
         id: "custom-subscription",
         name: "Custom Subscription",
         systemPresetKey: null,
+        apiKeys: [],
         billingKind: "subscription",
         dailyBudgetUsd: null,
         enabled: true,

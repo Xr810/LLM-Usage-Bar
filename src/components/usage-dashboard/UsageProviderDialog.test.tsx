@@ -48,11 +48,9 @@ function provider(
     systemAuthKind: null,
     canonicalEndpoint: null,
     compatibleAgentModuleIds: [],
-    upstreamCredentialStatus: "not_required",
-    upstreamCredentialVersion: 0,
-    canClearUpstreamCredential: false,
-    lastConnectionTestAt: null,
-    lastConnectionTestStatus: null,
+    apiKeys: [],
+    supportsKeyUsage: false,
+    keyUsageTotal: null,
     ...overrides,
   };
 }

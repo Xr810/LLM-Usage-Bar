@@ -5,6 +5,7 @@ import type {
   AgentModuleView,
   AgentProviderBindingInput,
   AgentProviderBindingView,
+  ProviderApiKeyView,
   UsageProviderInput,
   UsageProviderView,
 } from "@/types/usageDashboard";
@@ -226,22 +227,18 @@ const customProviderSystemFields = {
   systemAuthKind: null,
   canonicalEndpoint: null,
   compatibleAgentModuleIds: [],
-  upstreamCredentialStatus: "not_required",
-  upstreamCredentialVersion: 0,
-  canClearUpstreamCredential: false,
-  lastConnectionTestAt: null,
-  lastConnectionTestStatus: null,
+  apiKeys: [],
+  supportsKeyUsage: false,
+  keyUsageTotal: null,
 } satisfies Pick<
   UsageProviderView,
   | "systemPresetKey"
   | "systemAuthKind"
   | "canonicalEndpoint"
   | "compatibleAgentModuleIds"
-  | "upstreamCredentialStatus"
-  | "upstreamCredentialVersion"
-  | "canClearUpstreamCredential"
-  | "lastConnectionTestAt"
-  | "lastConnectionTestStatus"
+  | "apiKeys"
+  | "supportsKeyUsage"
+  | "keyUsageTotal"
 >;
 
 const customBindingCredentialFields = {
@@ -291,11 +288,9 @@ const initialUsageProvidersFixture: UsageProviderView[] = [
     systemAuthKind: "codex_oauth",
     canonicalEndpoint: null,
     compatibleAgentModuleIds: ["codex"],
-    upstreamCredentialStatus: "not_required",
-    upstreamCredentialVersion: 0,
-    canClearUpstreamCredential: false,
-    lastConnectionTestAt: null,
-    lastConnectionTestStatus: null,
+    apiKeys: [],
+    supportsKeyUsage: false,
+    keyUsageTotal: null,
   },
   {
     id: "system-claude-subscription",
@@ -334,11 +329,9 @@ const initialUsageProvidersFixture: UsageProviderView[] = [
     systemAuthKind: "claude_cli",
     canonicalEndpoint: null,
     compatibleAgentModuleIds: ["claude-code"],
-    upstreamCredentialStatus: "not_required",
-    upstreamCredentialVersion: 0,
-    canClearUpstreamCredential: false,
-    lastConnectionTestAt: null,
-    lastConnectionTestStatus: null,
+    apiKeys: [],
+    supportsKeyUsage: false,
+    keyUsageTotal: null,
   },
   ...(
     [
@@ -416,11 +409,9 @@ const initialUsageProvidersFixture: UsageProviderView[] = [
         systemAuthKind: "provider_api_key",
         canonicalEndpoint,
         compatibleAgentModuleIds: [...compatibleAgentModuleIds],
-        upstreamCredentialStatus: "missing",
-        upstreamCredentialVersion: 0,
-        canClearUpstreamCredential: false,
-        lastConnectionTestAt: null,
-        lastConnectionTestStatus: null,
+        apiKeys: [],
+        supportsKeyUsage: false,
+        keyUsageTotal: null,
       }) satisfies UsageProviderView,
   ),
   {
@@ -660,6 +651,16 @@ const cloneUsageFixture = <T>(value: T): T =>
 
 let agentModulesFixture = cloneUsageFixture(initialAgentModulesFixture);
 let usageProvidersFixture = cloneUsageFixture(initialUsageProvidersFixture);
+
+/** Locates a key and the Provider that owns it, mirroring how the backend
+    resolves a key id before any credential mutation. */
+function findProviderApiKey(keyId: string) {
+  for (const provider of usageProvidersFixture) {
+    const apiKey = provider.apiKeys.find((candidate) => candidate.id === keyId);
+    if (apiKey) return { provider, apiKey };
+  }
+  return null;
+}
 let pendingMainWindowDestination: MainWindowDestination | null = null;
 let nextAgentId = 1;
 let nextBindingId = 1;
@@ -1288,26 +1289,20 @@ export const handlers = [
     ["set_system_provider_api_key", "replace_system_provider_api_key"] as const
   ).map((command) =>
     http.post(`${TAURI_ENDPOINT}/${command}`, async ({ request }) => {
-      const { providerId, expectedVersion } = await withJson<{
-        providerId: string;
+      const { keyId, expectedVersion } = await withJson<{
+        keyId: string;
         expectedVersion: number;
         apiKey: string;
       }>(request);
-      const provider = usageProvidersFixture.find(
-        (candidate) => candidate.id === providerId,
-      );
-      if (
-        !provider ||
-        provider.systemAuthKind !== "provider_api_key" ||
-        provider.upstreamCredentialVersion !== expectedVersion
-      ) {
+      const owner = findProviderApiKey(keyId);
+      if (!owner || owner.apiKey.credentialVersion !== expectedVersion) {
         return rejectUsageRequest("credential_conflict");
       }
-      provider.upstreamCredentialStatus = "configured";
-      provider.upstreamCredentialVersion += 1;
-      provider.canClearUpstreamCredential = true;
-      provider.updatedAt += 1;
-      provider.bindings = provider.bindings.map((binding) => ({
+      owner.apiKey.credentialStatus = "configured";
+      owner.apiKey.credentialVersion += 1;
+      owner.apiKey.canClearCredential = true;
+      owner.provider.updatedAt += 1;
+      owner.provider.bindings = owner.provider.bindings.map((binding) => ({
         ...binding,
         credentialStatus:
           binding.localCredentialStatus === "configured"
@@ -1316,45 +1311,125 @@ export const handlers = [
         providerCredentialStatus: "configured",
       }));
       recomputeAgentBindingState();
-      return success(provider);
+      return success(owner.apiKey);
     }),
   ),
   http.post(
     `${TAURI_ENDPOINT}/clear_system_provider_api_key`,
     async ({ request }) => {
-      const { providerId, expectedVersion } = await withJson<{
-        providerId: string;
+      const { keyId, expectedVersion } = await withJson<{
+        keyId: string;
         expectedVersion: number;
+      }>(request);
+      const owner = findProviderApiKey(keyId);
+      if (!owner || owner.apiKey.credentialVersion !== expectedVersion) {
+        return rejectUsageRequest("credential_conflict");
+      }
+      owner.apiKey.credentialStatus = "missing";
+      owner.apiKey.credentialVersion += 1;
+      owner.apiKey.canClearCredential = false;
+      owner.apiKey.keyUsage = null;
+      owner.provider.updatedAt += 1;
+      // A Provider keeps working while any other key is still configured.
+      const stillConfigured = owner.provider.apiKeys.some(
+        (candidate) => candidate.credentialStatus === "configured",
+      );
+      owner.provider.bindings = owner.provider.bindings.map((binding) => ({
+        ...binding,
+        credentialStatus: stillConfigured
+          ? binding.credentialStatus
+          : "missing",
+        providerCredentialStatus: stillConfigured ? "configured" : "missing",
+      }));
+      recomputeAgentBindingState();
+      return success(owner.apiKey);
+    },
+  ),
+  http.post(`${TAURI_ENDPOINT}/list_provider_api_keys`, async ({ request }) => {
+    const { providerId } = await withJson<{ providerId: string }>(request);
+    const provider = usageProvidersFixture.find(
+      (candidate) => candidate.id === providerId,
+    );
+    return success(provider?.apiKeys ?? []);
+  }),
+  http.post(
+    `${TAURI_ENDPOINT}/create_provider_api_key`,
+    async ({ request }) => {
+      const { providerId, label } = await withJson<{
+        providerId: string;
+        label: string;
       }>(request);
       const provider = usageProvidersFixture.find(
         (candidate) => candidate.id === providerId,
       );
+      if (!provider) return rejectUsageRequest("unsupported_auth");
+      if (provider.apiKeys.some((candidate) => candidate.label === label)) {
+        return rejectUsageRequest("duplicate_label");
+      }
+      const created: ProviderApiKeyView = {
+        id: `${providerId}-key-${provider.apiKeys.length + 1}`,
+        providerId,
+        label,
+        credentialStatus: "missing",
+        credentialVersion: 0,
+        canClearCredential: false,
+        lastConnectionTestAt: null,
+        lastConnectionTestStatus: null,
+        lastConnectionTestErrorCode: null,
+        sortOrder: provider.apiKeys.length,
+        keyUsage: null,
+      };
+      provider.apiKeys = [...provider.apiKeys, created];
+      return success(created);
+    },
+  ),
+  http.post(
+    `${TAURI_ENDPOINT}/rename_provider_api_key`,
+    async ({ request }) => {
+      const { keyId, label } = await withJson<{ keyId: string; label: string }>(
+        request,
+      );
+      const owner = findProviderApiKey(keyId);
+      if (!owner) return rejectUsageRequest("credential_conflict");
       if (
-        !provider ||
-        provider.systemAuthKind !== "provider_api_key" ||
-        provider.upstreamCredentialVersion !== expectedVersion
+        owner.provider.apiKeys.some(
+          (candidate) => candidate.id !== keyId && candidate.label === label,
+        )
       ) {
+        return rejectUsageRequest("duplicate_label");
+      }
+      owner.apiKey.label = label;
+      return success(owner.apiKey);
+    },
+  ),
+  http.post(
+    `${TAURI_ENDPOINT}/delete_provider_api_key`,
+    async ({ request }) => {
+      const { keyId, expectedVersion } = await withJson<{
+        keyId: string;
+        expectedVersion: number;
+      }>(request);
+      const owner = findProviderApiKey(keyId);
+      if (!owner || owner.apiKey.credentialVersion !== expectedVersion) {
         return rejectUsageRequest("credential_conflict");
       }
-      provider.upstreamCredentialStatus = "missing";
-      provider.upstreamCredentialVersion += 1;
-      provider.canClearUpstreamCredential = false;
-      provider.updatedAt += 1;
-      provider.bindings = provider.bindings.map((binding) => ({
-        ...binding,
-        credentialStatus: "missing",
-        providerCredentialStatus: "missing",
-      }));
-      recomputeAgentBindingState();
-      return success(provider);
+      owner.provider.apiKeys = owner.provider.apiKeys.filter(
+        (candidate) => candidate.id !== keyId,
+      );
+      return success(null);
     },
   ),
   http.post(
     `${TAURI_ENDPOINT}/test_system_provider_connection`,
     async ({ request }) => {
-      const { providerId } = await withJson<{ providerId: string }>(request);
+      const { keyId } = await withJson<{ keyId: string }>(request);
+      const owner = findProviderApiKey(keyId);
+      if (owner) {
+        owner.apiKey.lastConnectionTestAt = 1_000;
+        owner.apiKey.lastConnectionTestStatus = "success";
+      }
       return success({
-        providerId,
+        providerId: owner?.provider.id ?? "",
         success: true,
         status: "success",
         testedAt: 1_000,

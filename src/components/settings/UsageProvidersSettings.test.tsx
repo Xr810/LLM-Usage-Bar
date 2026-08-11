@@ -43,6 +43,7 @@ vi.mock("@/lib/query/usageDashboard", () => ({
         updatedAt: 1,
         routeBaseUrl: null,
         hasRouteCredentials: false,
+        apiKeys: [],
       },
       {
         id: "metered",
@@ -62,6 +63,7 @@ vi.mock("@/lib/query/usageDashboard", () => ({
         updatedAt: 1,
         routeBaseUrl: "https://example.com",
         hasRouteCredentials: false,
+        apiKeys: [],
       },
     ],
     isLoading: false,

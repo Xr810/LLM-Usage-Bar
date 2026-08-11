@@ -23,6 +23,7 @@ import {
 import type { UsageProviderView } from "@/types/usageDashboard";
 import { ProviderDailyBudgetField } from "./ProviderDailyBudgetField";
 import { ProviderModelPricingSection } from "./ProviderModelPricingSection";
+import { firstConfiguredKey } from "./providerKeys";
 import { ApiBudgetSettings } from "./ApiBudgetSettings";
 import { OfficialPricingRefreshSection } from "./OfficialPricingRefreshSection";
 import { ProviderIcon } from "@/components/ProviderIcon";
@@ -325,7 +326,10 @@ export function UsageProvidersSettings({
                     <ProviderModelPricingSection
                       providerId={provider.id}
                       providerName={provider.name}
-                      credentialVersion={provider.upstreamCredentialVersion}
+                      credentialKeyId={firstConfiguredKey(provider)?.id ?? null}
+                      credentialVersion={
+                        firstConfiguredKey(provider)?.credentialVersion ?? 0
+                      }
                     />
                   </div>
                 ) : null}

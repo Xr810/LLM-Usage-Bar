@@ -72,7 +72,16 @@ describe("SettingsPage Provider-only integration", () => {
 
     const openAiCard = screen.getByTestId("system-provider-system-openai-api");
     const upstreamKey = "transient-upstream-provider-sentinel";
-    await user.type(within(openAiCard).getByLabelText("API key"), upstreamKey);
+    // A Provider holds a list of named keys, so the secret needs one to live in.
+    await user.click(
+      within(openAiCard).getByRole("button", { name: /Add key/ }),
+    );
+    await user.type(within(openAiCard).getByLabelText("Key name"), "Primary");
+    await user.click(within(openAiCard).getByRole("button", { name: "Add" }));
+    await user.type(
+      await within(openAiCard).findByLabelText("API key"),
+      upstreamKey,
+    );
     await user.click(
       within(openAiCard).getByRole("button", { name: "Verify" }),
     );
