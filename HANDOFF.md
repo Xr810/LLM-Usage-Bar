@@ -27,8 +27,9 @@
    ```
 
    > 别照抄这里的哈希 —— 上面这条命令的输出才算数。`main` 与 `origin/main`
-   > 当前一致(0 个未推)。未合并的活分支见 §9.2(`claude/quota-reset-latch`);
-   > 仓库里另有一批没人认领的陈旧本地分支、stash 和老 tag,见 §9.5。
+   > 当前一致(0 个未推)。未合并的活线有两条,且是父子关系:`claude/quota-reset-latch`
+   > (PR #23,见 §9.2)和建在它之上的 `feat/provider-api-keys`(PR #24,见 §10)。
+   > 5 个陈旧本地分支已于 2026-08-11 核实并删除,详见 §9.5。
 
 2. **动数据库/想本地跑 app 之前,先对版本。** 生产库 2026-08-07 傍晚实测 v24:
 
@@ -38,7 +39,10 @@
 
    分支的 `SCHEMA_VERSION`(`src-tauri/src/database/mod.rs:57`)必须 ≥ 库版本,
    否则 app 启动即崩:`authoritative database schema v24 is outside supported range …`。
-   新迁移一律从 main 的版本号往上编,**下一个是 v25**。
+
+   > **v25 和 v26 已经被 `feat/provider-api-keys`(PR #24)占用了**,别再往那两个号上编。
+   > 从 main 拉新线的话下一个是 v25;从 PR #24 之后拉的话是 **v27**。编号冲突正是 8 月两
+   > 次翻车的直接死因,动手前先跑一遍上面那两条命令确认自己的基点。
 
 3. **读完本文件再动手。** 8 月的两条 feature 线全栽在同一个坑
    (基点过时 → 迁移编号错 → 装上就崩),第二次翻车时答案已经写在交接文档里了。
@@ -63,7 +67,8 @@
 | 线 | 分支 / 位置 | 状态 | 需要行动? |
 | --- | --- | --- | --- |
 | 主线 | `main` = `d21d3d682` | 绿,**v24**,与 `origin/main` 同步(0 个未推) | 否 |
-| Claude 额度重置时间 | `claude/quota-reset-latch`(已推,PR #23) | 锁存已实现并验证;`/usage` 探测待做 | 见 §9 |
+| Claude 额度重置时间 | `claude/quota-reset-latch`(已推,PR #23) | 锁存已实现并验证;CI 全绿、`MERGEABLE`/`CLEAN`;`/usage` 探测待做 | **等合并**,见 §9 |
+| Provider 多 key 花费 | `feat/provider-api-keys`(已推,PR #24) | 建在 PR #23 之上,自己 3 个提交;**SCHEMA_VERSION 24 → 26**(两个迁移,各带 validator);本机全套验证绿(见 §10) | **先合 #23,再合 #24**;目视验证未做 |
 | 用量按模型/Agent 分类 | **✅ 已搬上 main(2026-08-07,提交 `e23894168`)** | Codex(max)在隔离 worktree 移植,Claude 逐 hunk 复核并独立重跑全套验证(Rust 1039/0、tsc、prettier、59+9 前端测试全绿) | 旧分支 `claude/usage-model-agent-classification-03acf1` 及其 worktree 已作废,可删(需 `-D`);目视验证仍欠 → P4 |
 | 红绿灯燃烧速度投影 | **✅ 已搬上 main(2026-08-07,提交 `bb8514def`,迁移重编号 v23→v24)** | Codex(max)移植 + 签名脚本修复一并带上;Claude 复核(DDL 范围、预测行无机密、阈值为常量)并独立重验(Rust 1066/0、前端 192+9 全绿) | 旧分支 `claude/traffic-light-logic-redesign-3fbc8e` 及 worktree 可删;**注意:新代码 SCHEMA_VERSION=24,装上后旧 3.16.5 打不开升级后的库,须一步到位** |
 | 2026-08-07 checkpoint 文档 | `claude/llm-usage-monitoring-app-4a9554`(= main 的内容 + 1 个 docs 提交 `67676ef9e`) | 纯文档分支,内容已并入本文 | 可删分支和 worktree |
@@ -75,18 +80,18 @@
 > 实测其父提交 `e337dd32e` **就是 main 的祖先**,该分支只是 main + 一个文档提交,
 > 没有失散的代码。
 
-### GitHub PR(2026-08-07 实查)
+### GitHub PR(2026-08-11 实查)
 
 | PR | 内容 | 检查 | 行动 |
 | --- | --- | --- | --- |
-| #18 | frontend-deps 依赖组(接替被自动关闭的 #16) | **红** | 见 §3 P3,需要用户拍板 |
-| #15 | cargo-deps 依赖组 | 绿 | 可合并 |
-| #14 | actions/labeler 6→7 | 绿 | 可合并 |
-| #13 | actions/stale 10→11 | 绿 | 可合并 |
-| #12 | actions/setup-node 6→7 | 绿 | 可合并 |
+| #24 | Provider 多 key + 每把 key 的花费 | 本机全套绿;CI 待跑 | 合在 #23 之后 |
+| #23 | Claude 额度重置时刻锁存 | 绿(Frontend/Backend Checks 均 SUCCESS) | **可以合,先合这个** |
+| #22 | frontend-deps 依赖组(40 项) | 待查 | 未处理 |
+| #21 | cargo-deps `base64` 0.23.0→0.23.1 | 待查 | 未处理 |
 
-7 月文档里的 PR #4/#5 巨型 Dependabot PR 已不存在,那份 handoff 的修复指引不再适用
-(但它建议的"Dependabot 分组限制 minor/patch"策略仍未落实,见 §3 P5)。
+上一版本节列的 #12–#18 已全部合并或关闭,不再有效。7 月文档里的 PR #4/#5 巨型
+Dependabot PR 同样已不存在。它们建议的"Dependabot 分组限制 minor/patch"策略仍未落实
+(见 §3 P5)—— #22 又是一个 40 项的大组,同一个问题还在复发。
 
 ---
 
@@ -112,6 +117,18 @@
 ---
 
 ## 3. 待办问题清单(按优先级)
+
+### P0 — 把两个 PR 合上 main(2026-08-11 新增,顺序不能反)
+
+两条线是父子关系,`feat/provider-api-keys` 的前 5 个提交**就是** PR #23 的那 5 个:
+
+1. **先合 PR #23**,并且**必须用 merge commit**(仓库三种方式都开着)。squash 或 rebase
+   会重写那 5 个提交的哈希,#24 仍带着原版,同一份改动就会以两组提交的形式出现在 main
+   的祖先里 —— 合 #24 时冲突或 diff 全乱。main 本来就用 merge commit(#17 即是),
+   这不算破坏惯例。
+2. 再合 **PR #24**。#23 一合,#24 的 diff 会自动收敛成它自己的 3 个提交。
+
+两个都合完之后,`SCHEMA_VERSION` 到 v26,新迁移从 **v27** 起编。
 
 ### ~~P1 — 把「分类」线搬上 main~~ ✅ 已完成(2026-08-07,提交 `e23894168`)
 
@@ -143,6 +160,9 @@ minor/patch(见 P5),Dependabot 下个周期会重建一个不含 major 的小 PR
 session 同步正常。**剩下的只是用户亲眼扫一遍**:三个 Tab(Providers /
 Models / Agents)的渲染、新红绿灯与 pace 详情、暗色/亮色、窄窗口。
 测试全绿但像素没人看过 —— 发现视觉问题记回本文件。
+
+> 2026-08-11 补充:P0 的两个 PR 合完之后会有一个新构建,那一次可以把这里欠的一眼、
+> §9.2 的重置时间显示、§10 的多 key 卡片一起看掉,不必分三次装。
 
 ### P5 — 低优先级 / 观察项
 
@@ -502,3 +522,69 @@ Resets Aug 11 at 6pm (Asia/Singapore)
 
 也就是说:**没有代码因为"忘了推"而处于危险状态**,但仓库里确实堆着一批没人认领的
 本地 ref。要清理的话按上面的顺序逐个核实,不要一把梭。
+
+#### 2026-08-11 复查与清理(本节以此为准)
+
+上面那份清单已按它自己给的方法逐条核实并执行完毕:
+
+- **5 个陈旧本地分支全部 `main..<branch>` = 0**(落后 61 / 96 / 103 / 201 / 293),
+  即内容一条不少地在 main 里,已用 `git branch -d` 删除(`-d` 而非 `-D`,让 git 再
+  把关一次)。`backup/pre-backend-strip-branch` 另有同名 tag `backup/pre-backend-strip`
+  留底。
+- **`feat/provider-api-keys` 曾是唯一真正危险的东西** —— 8 个提交、49 个文件、
+  +4839/−855,**只存在于本机,没有任何远端副本**。已推送并开 PR #24。
+- **6 个 stash 一个没动。** 它们挂在 PR #17 那条已合并的分支上,每条自己的说明都写着
+  失败原因(over-cut / over-reached / coupling deeper than scoped / blocked on /
+  build red)—— 是失败的尝试,不是待合并的工作。丢弃是不可逆的,留着不花钱,交给用户决定。
+- **`/Users/max/LLM-Usage-Bar`(无空格的那个目录)是一份死副本。** 8 月 2 号从同一个
+  remote 克隆,`main` = `1cd4c824`,已是当前 main 的祖先(落后 67 个提交),独有提交
+  **0 个**,无 stash、无本地分支、从未 fetch 过、工作区干净。里面没有任何要捞的东西 ——
+  下次别再被它误导成"另一条线"。
+- **worktree 只有主目录一个**,`.claude/worktrees/` 是空目录。
+- reflog 里那个被 `reset HEAD~1` 丢掉的 `WIP: snapshot before splitting multi-key work`
+  (`0e7edc108`)**没有丢东西** —— 它的树与 `feat/provider-api-keys` 顶端 diff 为空,
+  内容原样拆进了那 3 个提交。
+
+---
+
+## 10. Provider 多 key 花费线(2026-08-11,PR #24,待合并)
+
+`feat/provider-api-keys`,建在 `claude/quota-reset-latch` 之上,自己 3 个提交。
+
+**为什么要做**:Provider 花费一直显示不出来,根因是 OpenRouter 的 preset 声明
+`token_sources = [Proxy]`,而这个代码库里**根本不存在本地 proxy**,所以没有任何路径
+能把用量归到它头上。改为直接读每把 key 自己的账单端点 —— 该端点是 key 维度的,这就是
+"一个 Provider 一份凭据"必须改成"一列具名 key"的原因。
+
+| 提交 | 层 |
+| --- | --- |
+| `64723e8b6` | 数据层:v25 加 `provider_key_usage_snapshots`;v26 换成 `provider_api_keys`,快照表与凭据日志重新挂到 `key_id` |
+| `a1c833bc7` | 抓取/调度/暴露:preset 上的 `key_usage_path` 驱动 KeyUsage 端点(目前只有 `openrouter-api`);调度器每 15 分钟刷新每把 key;`UsageProviderView` 带上 `api_keys` 与 `key_usage_total` |
+| `95fb1c1ae` | UI:Provider 卡片按名字列出每把 key,各自的状态点/连接测试/替换/删除/合计 |
+
+**v26 在实库上安全的两条不变量**(改这块之前必读):
+
+- **keychain slot 字符串原样搬运。** slot 是 OS keychain 里取密钥的查找键,改名会把每一
+  份已存密钥变成孤儿。只有新建的 slot 才用 key 维度命名。
+- **只有真正持有凭据的行才变成 key。** 每个 Provider 都有 credentials 行,其中大多是
+  version 0 的空占位;照单全收会造出一批幽灵无名 key。
+
+`binding_credentials.rs` 的 slot 存活检查也搬到了新表 —— 不搬的话,binding 清理会把一把
+活着的 Provider key 的密钥当成孤儿删掉。
+
+**bisect 注意**:`64723e8b6` 和 `a1c833bc7` 单独不可构建,三层是一起重写的。
+
+**本机验证(2026-08-11 实跑,不是 CI 的结论)**:
+
+| 检查 | 结果 |
+| --- | --- |
+| `cargo fmt --check` | 通过 |
+| `cargo clippy --all-targets -- -D warnings` | 通过,0 告警 |
+| `cargo test` | 1106 passed / 0 failed(lib 1093 + 集成 13),2 ignored |
+| `tsc --noEmit` | 通过 |
+| `prettier --check` | 通过 |
+| `vitest run` | 341 passed / 0 failed(52 个文件) |
+
+**还欠的**:目视验证。app 从没用这个分支构建安装过。装之前记住 —— 生产库现在 v24、
+装着的 3.16.5 也是 v24,**这个构建一上去库就迁到 v26,旧版 app 再也打不开,必须一步到位**。
+最近备份 `db_backup_20260810_171554.db`。
