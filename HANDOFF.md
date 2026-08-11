@@ -18,20 +18,20 @@
 
 ## 0. 开工前必做的三步(两次翻车都是因为跳过了这里)
 
-1. **基线就是 `main`。** 2026-08-07 傍晚实测:本地 `main` = `origin/main` =
-   `d21d3d682`,`SCHEMA_VERSION = 24`。之前"本地 main 落后 55 个提交"的问题
+1. **基线就是 `main`。** 2026-08-11 实测:本地 `main` = `origin/main` =
+   `c686ef884`,`SCHEMA_VERSION = 26`。之前"本地 main 落后 55 个提交"的问题
    **已经解决**,不要再从别的分支拉线。
 
    ```bash
    git fetch origin && git log --oneline -1 origin/main
    ```
 
-   > 别照抄这里的哈希 —— 上面这条命令的输出才算数。`main` 与 `origin/main`
-   > 当前一致(0 个未推)。未合并的活线有两条,且是父子关系:`claude/quota-reset-latch`
-   > (PR #23,见 §9.2)和建在它之上的 `feat/provider-api-keys`(PR #24,见 §10)。
-   > 5 个陈旧本地分支已于 2026-08-11 核实并删除,详见 §9.5。
+   > 别照抄这里的哈希 —— 上面这条命令的输出才算数。**2026-08-11 起没有任何未合并的
+   > 活分支**:PR #23(重置时刻锁存)与 PR #24(Provider 多 key)都已用 merge commit
+   > 合入 main,两条线的分支本地与远端均已删除。同日还核实并删除了 5 个陈旧本地分支,
+   > 详见 §9.5。本地只剩 `main` 一条。
 
-2. **动数据库/想本地跑 app 之前,先对版本。** 生产库 2026-08-07 傍晚实测 v24:
+2. **动数据库/想本地跑 app 之前,先对版本。** 生产库 2026-08-11 实测仍是 **v24**:
 
    ```bash
    sqlite3 ~/.llm-usage-bar/llm-usage-bar.db "PRAGMA user_version;"
@@ -40,9 +40,11 @@
    分支的 `SCHEMA_VERSION`(`src-tauri/src/database/mod.rs:57`)必须 ≥ 库版本,
    否则 app 启动即崩:`authoritative database schema v24 is outside supported range …`。
 
-   > **v25 和 v26 已经被 `feat/provider-api-keys`(PR #24)占用了**,别再往那两个号上编。
-   > 从 main 拉新线的话下一个是 v25;从 PR #24 之后拉的话是 **v27**。编号冲突正是 8 月两
-   > 次翻车的直接死因,动手前先跑一遍上面那两条命令确认自己的基点。
+   > **注意这里现在是错开的:代码 v26,库和已安装的 3.16.5 都还是 v24。** PR #24 合入后
+   > main 就带着 v25、v26 两个迁移,但还没有人用它构建安装过。下一次构建安装会把生产库
+   > 一路迁到 v26(自动做迁移前备份),**之后旧 app 再也打不开这个库,必须一步到位**。
+   > 新迁移从 main 的 `SCHEMA_VERSION` 往上编,**下一个是 v27**。编号冲突正是 8 月两次
+   > 翻车的直接死因,动手前先跑一遍上面那两条命令确认自己的基点。
 
 3. **读完本文件再动手。** 8 月的两条 feature 线全栽在同一个坑
    (基点过时 → 迁移编号错 → 装上就崩),第二次翻车时答案已经写在交接文档里了。
@@ -66,9 +68,9 @@
 
 | 线 | 分支 / 位置 | 状态 | 需要行动? |
 | --- | --- | --- | --- |
-| 主线 | `main` = `d21d3d682` | 绿,**v24**,与 `origin/main` 同步(0 个未推) | 否 |
-| Claude 额度重置时间 | `claude/quota-reset-latch`(已推,PR #23) | 锁存已实现并验证;CI 全绿、`MERGEABLE`/`CLEAN`;`/usage` 探测待做 | **等合并**,见 §9 |
-| Provider 多 key 花费 | `feat/provider-api-keys`(已推,PR #24) | 建在 PR #23 之上,自己 3 个提交;**SCHEMA_VERSION 24 → 26**(两个迁移,各带 validator);本机全套验证绿(见 §10) | **先合 #23,再合 #24**;目视验证未做 |
+| 主线 | `main` = `c686ef884` | 绿,**代码 v26**(库仍 v24,见 §0 第 2 步),与 `origin/main` 同步(0 个未推) | 否 |
+| Claude 额度重置时间 | **✅ 已合入 main(2026-08-11,PR #23,merge commit `eb3cd2e76`)** | 锁存已实现并验证;分支本地与远端均已删 | `/usage` PTY 探测仍待做 → §9.3 |
+| Provider 多 key 花费 | **✅ 已合入 main(2026-08-11,PR #24,merge commit `c686ef884`)** | 3 个提交;**SCHEMA_VERSION 24 → 26**(两个迁移,各带 validator);本机全套 + ubuntu CI 双绿(见 §10);分支本地与远端均已删 | 目视验证未做 → P4 |
 | 用量按模型/Agent 分类 | **✅ 已搬上 main(2026-08-07,提交 `e23894168`)** | Codex(max)在隔离 worktree 移植,Claude 逐 hunk 复核并独立重跑全套验证(Rust 1039/0、tsc、prettier、59+9 前端测试全绿) | 旧分支 `claude/usage-model-agent-classification-03acf1` 及其 worktree 已作废,可删(需 `-D`);目视验证仍欠 → P4 |
 | 红绿灯燃烧速度投影 | **✅ 已搬上 main(2026-08-07,提交 `bb8514def`,迁移重编号 v23→v24)** | Codex(max)移植 + 签名脚本修复一并带上;Claude 复核(DDL 范围、预测行无机密、阈值为常量)并独立重验(Rust 1066/0、前端 192+9 全绿) | 旧分支 `claude/traffic-light-logic-redesign-3fbc8e` 及 worktree 可删;**注意:新代码 SCHEMA_VERSION=24,装上后旧 3.16.5 打不开升级后的库,须一步到位** |
 | 2026-08-07 checkpoint 文档 | `claude/llm-usage-monitoring-app-4a9554`(= main 的内容 + 1 个 docs 提交 `67676ef9e`) | 纯文档分支,内容已并入本文 | 可删分支和 worktree |
@@ -84,10 +86,15 @@
 
 | PR | 内容 | 检查 | 行动 |
 | --- | --- | --- | --- |
-| #24 | Provider 多 key + 每把 key 的花费 | 本机全套绿;CI 待跑 | 合在 #23 之后 |
-| #23 | Claude 额度重置时刻锁存 | 绿(Frontend/Backend Checks 均 SUCCESS) | **可以合,先合这个** |
-| #22 | frontend-deps 依赖组(40 项) | 待查 | 未处理 |
-| #21 | cargo-deps `base64` 0.23.0→0.23.1 | 待查 | 未处理 |
+| ~~#24~~ | Provider 多 key + 每把 key 的花费 | 本机全套绿 + ubuntu CI 绿 | **✅ 已合(merge commit)** |
+| ~~#23~~ | Claude 额度重置时刻锁存 | 绿 | **✅ 已合(merge commit)** |
+| #22 | frontend-deps 依赖组(40 项) | `CLEAN` | 未处理 |
+| #21 | cargo-deps `base64` 0.23.0→0.23.1 | `CLEAN` | 未处理 |
+
+> #23 与 #24 **必须**用 merge commit 合,已照做。原因:#24 的前 5 个提交**就是** #23 的
+> 那 5 个,squash 或 rebase 会重写哈希,同一份改动就会以两组提交出现在 main 的祖先里。
+> 合完实测:main 的树与合并前的 `feat/provider-api-keys` **逐字节一致**,无重复提交 ——
+> 也就是说本文 §10 记的那套本机验证结果原样适用于当前 main。
 
 上一版本节列的 #12–#18 已全部合并或关闭,不再有效。7 月文档里的 PR #4/#5 巨型
 Dependabot PR 同样已不存在。它们建议的"Dependabot 分组限制 minor/patch"策略仍未落实
@@ -118,17 +125,16 @@ Dependabot PR 同样已不存在。它们建议的"Dependabot 分组限制 minor
 
 ## 3. 待办问题清单(按优先级)
 
-### P0 — 把两个 PR 合上 main(2026-08-11 新增,顺序不能反)
+### ~~P0 — 把两个 PR 合上 main~~ ✅ 已完成(2026-08-11)
 
-两条线是父子关系,`feat/provider-api-keys` 的前 5 个提交**就是** PR #23 的那 5 个:
+#23 与 #24 都已用 merge commit 合入,顺序正确(先 #23 后 #24)。合后实测:main
+= `c686ef884`,`SCHEMA_VERSION = 26`,树与合并前的 `feat/provider-api-keys`
+逐字节一致,无重复提交,ubuntu CI 绿。四条分支(两条已合、两条本地遗留)本地与
+远端都已删除,本地只剩 `main`。**新迁移从 v27 起编。**
 
-1. **先合 PR #23**,并且**必须用 merge commit**(仓库三种方式都开着)。squash 或 rebase
-   会重写那 5 个提交的哈希,#24 仍带着原版,同一份改动就会以两组提交的形式出现在 main
-   的祖先里 —— 合 #24 时冲突或 diff 全乱。main 本来就用 merge commit(#17 即是),
-   这不算破坏惯例。
-2. 再合 **PR #24**。#23 一合,#24 的 diff 会自动收敛成它自己的 3 个提交。
-
-两个都合完之后,`SCHEMA_VERSION` 到 v26,新迁移从 **v27** 起编。
+> 留作教训:这两条线是父子关系,#24 的前 5 个提交**就是** #23 的那 5 个。用 squash
+> 或 rebase 合 #23 会重写它们的哈希,而 #24 仍带着原版 —— 同一份改动会以两组提交出现
+> 在 main 的祖先里。下次遇到 stacked PR,先查父子关系再选合并方式。
 
 ### ~~P1 — 把「分类」线搬上 main~~ ✅ 已完成(2026-08-07,提交 `e23894168`)
 
@@ -532,7 +538,10 @@ Resets Aug 11 at 6pm (Asia/Singapore)
   把关一次)。`backup/pre-backend-strip-branch` 另有同名 tag `backup/pre-backend-strip`
   留底。
 - **`feat/provider-api-keys` 曾是唯一真正危险的东西** —— 8 个提交、49 个文件、
-  +4839/−855,**只存在于本机,没有任何远端副本**。已推送并开 PR #24。
+  +4839/−855,**只存在于本机,没有任何远端副本**。已推送、开 PR #24 并当日合入 main。
+  它是这次普查里唯一一件"真丢了就没了"的东西;其余全部是已并入 main 的陈旧 ref。
+- **陈旧远端分支 `origin/codex/usage-dashboard-backend` 仍在**(0 独有提交,落后 247)。
+  纯清理项:`git push origin --delete codex/usage-dashboard-backend`。
 - **6 个 stash 一个没动。** 它们挂在 PR #17 那条已合并的分支上,每条自己的说明都写着
   失败原因(over-cut / over-reached / coupling deeper than scoped / blocked on /
   build red)—— 是失败的尝试,不是待合并的工作。丢弃是不可逆的,留着不花钱,交给用户决定。
@@ -547,9 +556,10 @@ Resets Aug 11 at 6pm (Asia/Singapore)
 
 ---
 
-## 10. Provider 多 key 花费线(2026-08-11,PR #24,待合并)
+## 10. Provider 多 key 花费线(2026-08-11,PR #24,✅ 已合入 main)
 
-`feat/provider-api-keys`,建在 `claude/quota-reset-latch` 之上,自己 3 个提交。
+原 `feat/provider-api-keys`(建在 `claude/quota-reset-latch` 之上,自己 3 个提交),
+已用 merge commit `c686ef884` 合入 main,分支本地与远端均已删除。
 
 **为什么要做**:Provider 花费一直显示不出来,根因是 OpenRouter 的 preset 声明
 `token_sources = [Proxy]`,而这个代码库里**根本不存在本地 proxy**,所以没有任何路径
@@ -585,6 +595,12 @@ Resets Aug 11 at 6pm (Asia/Singapore)
 | `prettier --check` | 通过 |
 | `vitest run` | 341 passed / 0 failed(52 个文件) |
 
-**还欠的**:目视验证。app 从没用这个分支构建安装过。装之前记住 —— 生产库现在 v24、
-装着的 3.16.5 也是 v24,**这个构建一上去库就迁到 v26,旧版 app 再也打不开,必须一步到位**。
-最近备份 `db_backup_20260810_171554.db`。
+合并后 ubuntu CI 同样全绿(Backend Checks 12m56s、Frontend Checks 2m37s)。这一条要紧:
+按 §2 的教训,本机是 macOS 而 CI 是 ubuntu,`cfg(target_os)` 形状的缺陷本地编译不到。
+另外合并后实测 main 的树与该分支**逐字节一致**,所以上表结果原样适用于当前 main。
+
+**还欠的**:目视验证。**没有任何人用 v26 的代码构建安装过 app。** 生产库现在 v24、
+装着的 3.16.5 也是 v24,**下一个构建一上去库就迁到 v26,旧版 app 再也打不开,必须一步
+到位**。最近备份 `db_backup_20260810_171554.db`。要看的:每把 key 一行的 Provider 卡片、
+展开后的日/月数字与剩余预算、只有一把 key 时不显示合计、被替换凭据的数字有标注、
+以及 §9.2 的重置时间行 —— 连同 P4 欠的那一眼一次看完。
