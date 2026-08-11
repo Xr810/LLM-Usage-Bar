@@ -19,7 +19,7 @@
 ## 0. 开工前必做的三步(两次翻车都是因为跳过了这里)
 
 1. **基线就是 `main`。** 2026-08-11 实测:本地 `main` = `origin/main` =
-   `c686ef884`,`SCHEMA_VERSION = 26`。之前"本地 main 落后 55 个提交"的问题
+   `6050389ff`,`SCHEMA_VERSION = 26`。之前"本地 main 落后 55 个提交"的问题
    **已经解决**,不要再从别的分支拉线。
 
    ```bash
@@ -68,7 +68,7 @@
 
 | 线 | 分支 / 位置 | 状态 | 需要行动? |
 | --- | --- | --- | --- |
-| 主线 | `main` = `c686ef884` | 绿,**代码 v26**(库仍 v24,见 §0 第 2 步),与 `origin/main` 同步(0 个未推) | 否 |
+| 主线 | `main` = `6050389ff` | 绿(ubuntu CI 双绿 + 本机 Rust 1106/0、前端 341/0 同 sha 实测),**代码 v26**(库仍 v24,见 §0 第 2 步),与 `origin/main` 同步(0 个未推) | 否 |
 | Claude 额度重置时间 | **✅ 已合入 main(2026-08-11,PR #23,merge commit `eb3cd2e76`)** | 锁存已实现并验证;分支本地与远端均已删 | `/usage` PTY 探测仍待做 → §9.3 |
 | Provider 多 key 花费 | **✅ 已合入 main(2026-08-11,PR #24,merge commit `c686ef884`)** | 3 个提交;**SCHEMA_VERSION 24 → 26**(两个迁移,各带 validator);本机全套 + ubuntu CI 双绿(见 §10);分支本地与远端均已删 | 目视验证未做 → P4 |
 | 用量按模型/Agent 分类 | **✅ 已搬上 main(2026-08-07,提交 `e23894168`)** | Codex(max)在隔离 worktree 移植,Claude 逐 hunk 复核并独立重跑全套验证(Rust 1039/0、tsc、prettier、59+9 前端测试全绿) | 旧分支 `claude/usage-model-agent-classification-03acf1` 及其 worktree 已作废,可删(需 `-D`);目视验证仍欠 → P4 |
@@ -88,8 +88,19 @@
 | --- | --- | --- | --- |
 | ~~#24~~ | Provider 多 key + 每把 key 的花费 | 本机全套绿 + ubuntu CI 绿 | **✅ 已合(merge commit)** |
 | ~~#23~~ | Claude 额度重置时刻锁存 | 绿 | **✅ 已合(merge commit)** |
-| #22 | frontend-deps 依赖组(40 项) | `CLEAN` | 未处理 |
-| #21 | cargo-deps `base64` 0.23.0→0.23.1 | `CLEAN` | 未处理 |
+| #25 | frontend-deps 依赖组(5 项:`@types/node`、`postcss`、`vite` 8.2.0→8.2.1、`lucide-react`、`react-hook-form`) | 待跑 | **开着**;base 是当前 main,CI 绿即可合 |
+| ~~#22~~ | frontend-deps 依赖组(40 项,全 minor/patch) | 合前在当前 main 上本机实测 341/0;合后 ubuntu CI 绿 | **✅ 已合(squash)** |
+| ~~#21~~ | cargo-deps `base64` 0.23.0→0.23.1 | 合后本机 Rust 1106/0 + ubuntu CI 绿 | **✅ 已合(squash)** |
+
+> #21/#22 合的时候 base 还停在 `d21d3d682`(落后 13 个提交),它们 PR 页上的绿是对旧
+> 基底跑的 —— 那时多 key 的 UI 还不存在,而 #22 里有 16 个 Radix 包、React、
+> `user-event`、`vite`,正好可能动到当天新增的 149 个前端测试。合之前在隔离 worktree
+> 里把 #22 合到真实 main 上实测过(341/0,无冲突,`--frozen-lockfile` 通过),合之后
+> 又在真实 main 上复验一次。**下次遇到 base 落后的 dependabot PR,先看它的绿是对哪个
+> 基底跑的。** #25 没有这个问题,它 base 就是当前 main。
+>
+> 另:`node-pty` 已完全不在 lockfile 里,§P3 当初预测的"重建的 PR 不再牵涉 node-pty"
+> 成立,那个供应链决策点已消失。
 
 > #23 与 #24 **必须**用 merge commit 合,已照做。原因:#24 的前 5 个提交**就是** #23 的
 > 那 5 个,squash 或 rebase 会重写哈希,同一份改动就会以两组提交出现在 main 的祖先里。
