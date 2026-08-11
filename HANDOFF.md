@@ -172,6 +172,17 @@ Models / Agents)的渲染、新红绿灯与 pace 详情、暗色/亮色、窄窗
 
 ### P5 — 低优先级 / 观察项
 
+- **⚠️ 47 个本地 tag 全部未推,而且不要推(2026-08-11 实测)。** `git ls-remote --tags
+  origin` 返回 0 条,GitHub 上既没有 tag 也没有 Release —— 看起来像遗漏,其实不能补。
+  `.github/workflows/release.yml` 的触发条件是 `push: tags: ["v*"]`,其中 46 个 tag
+  命中该模式,`git push --tags` 会**逐个**触发 macos-14 上的签名 release 构建;
+  concurrency group 是 `release-${{ github.ref_name }}`(按 tag 名分组),所以它们
+  **不会互相取消**,而且 workflow 带 `contents: write`,会建出 46 个 GitHub Release。
+  另外 `v3.8.3`(21 个独有提交)和 `v3.1.2`(2 个)带的是 CC Switch 上游血统,推上去
+  等于把上游发布史灌进本仓库(其余 45 个都在 `origin/main` 历史内,推了不新增对象)。
+  `backup/pre-backend-strip` 不匹配 `v*`,是本地备份标记,本就该留在本地。
+  **要发版就单推那一个 tag。** 这也是 §9.5 那个"未推提交总数"陷阱的另一半:那 23 个
+  不在 origin 上的提交正是这两个 tag 带的,不是谁忘了推分支。
 - **合并绿的 #12–#15**:仍开着 —— agent 侧被权限分类器拦截(`gh pr merge` 属
   对外操作),留给用户执行:
   `for n in 12 13 14 15; do gh pr merge $n --squash --delete-branch; done`
