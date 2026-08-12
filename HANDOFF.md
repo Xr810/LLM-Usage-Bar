@@ -28,9 +28,12 @@
 
    > 别照抄这里的哈希 —— 上面这条命令的输出才算数。远端**只有 `main` 一条活分支**;
    > PR #26(Swift 原生线第一阶段)的 base 分支 `Swift` 已从远端删除,其成果的
-   > 找回方式见 §11.7 —— 那里有一份**只存在于本地 stash 的源码**,清理 stash
-   > 前必读。本地分支现状:`main`、`codex/swift`(只含构建产物的 WIP,勿续用,
-   > 见 §11.7)、两个抢救备份分支(同见 §11.7)。
+   > 找回方式见 §11.7 —— 那份**只存在于本机的 Swift 源码**现在钉在
+   > `backup/swift-native-stash` 上(不再在 stash 里),动它之前必读 §11.7。
+   >
+   > **2026-08-13 更新:本地只剩 2 个分支** —— `main` 和 `backup/swift-native-stash`。
+   > `codex/swift`(`50576652`)与 `pr-26-swift-merge`(`b841a53c`)已删除,`stash` 已清空,
+   > 理由与找回方式见 §11.7。
 
 2. **动数据库/想本地跑 app 之前,先对版本。** 生产库 2026-08-11 实测仍是 **v24**:
 
@@ -572,6 +575,10 @@ Resets Aug 11 at 6pm (Asia/Singapore)
   > 线的,**含唯一一份 Swift 源码,见 §11.7,勿丢**)。原来那 6 个已不在列表里,
   > 谁清的、何时清的没有记录 —— 按上一条的性质判断无实质损失,但这正是"清 stash
   > 不留痕"的例子,引以为戒。
+  >
+  > 2026-08-13 更新:**stash 列表现在是空的。** 最后那个 `stash@{0}` 已 drop —— 它和
+  > `backup/swift-native-stash` 是同一个提交 `296346b8`,分支还在,源码一字未丢,
+  > 见 §11.7。这次删除有记录,不重蹈上面那笔。
 - **`/Users/max/LLM-Usage-Bar`(无空格的那个目录)是一份死副本。** 8 月 2 号从同一个
   remote 克隆,`main` = `1cd4c824`,已是当前 main 的祖先(落后 67 个提交),独有提交
   **0 个**,无 stash、无本地分支、从未 fetch 过、工作区干净。里面没有任何要捞的东西 ——
@@ -772,26 +779,52 @@ SQLite 层(两侧同一个 C 库)、HTTP 层(I/O 等待为主)。后两者判断
 - **但 #26 的 base 是 `Swift` 分支,不是 main,且该分支已从远端删除** —— 远端现在
   只剩 `main`,这 492 行**不在 main 的历史里**。找回锚点:本地备份分支
   `pr-26-swift-merge`(= 被删分支顶端 `b841a53c`),或 `refs/pull/26/head`。
-- **比 PR #26 先进得多的一版源码只存在于 `stash@{0}` 的 untracked 部分**:
-  16 个 UI 文件(`MainWindowView`、`ProviderActivityHeatmap`、
+- **比 PR #26 先进得多的一版源码,现在在 `backup/swift-native-stash^3`**
+  (原 `stash@{0}` 的 untracked 部分,stash 已于 2026-08-13 清空,分支同一个 SHA
+  `296346b8`,内容一字未变)。2026-08-13 实测:该树共 **48 个文件、其中 30 个 `.swift`**,
+  **不含任何 `.build` 产物**。取出方式:
+
+  ```bash
+  git ls-tree -r --name-only backup/swift-native-stash^3
+  git checkout backup/swift-native-stash^3 -- native docs src src-tauri
+  ```
+
+  > **`native/` 和 `docs/` 不是全部。** 2026-08-13 实测,该树里还有 5 个桥接侧文件,
+  > 只 checkout `native docs` 会**静默漏掉**它们:
+  > `src-tauri/src/native_bridge.rs`、`src/types/nativeBridge.ts`,以及三份契约测试
+  > `dashboardContract.test.ts` / `nativeSettingsContract.test.ts` /
+  > `trayUsageContract.test.ts`。Swift 侧靠这几个文件跟 Rust 对接。
+
+  内容为 UI 文件(`MainWindowView`、`ProviderActivityHeatmap`、
   `BreakdownDashboardViews`、`NativeSettingsView`、`NativeDesignSystem`、`L10n` 等)
   + 扩展的 `UsageCore`(`DashboardRepository`、`NativeBridgeClient`、
   `TrayUsageSnapshotV1`、`DashboardModelsV1`)+ Xcode 工程(Preview/Production 两个
   scheme)+ `docs/native-feature-matrix.md`。本机那个跑了 20+ 小时的
   "LLM Usage Bar Native Preview" 进程(**11 MB RSS / 0.0% CPU**,对照 Tauri 版
   32 MB / 1.0%)就是它构建的 —— 这也是目前唯一一组原生 vs Tauri 的同机实测对照。
-- **抢救状态(2026-08-12 已做)**:stash 提交已被本地分支 `backup/swift-native-stash`
-  钉住(三个父提交可达,`git stash drop` 不再致命),PR #26 顶端钉在
-  `pr-26-swift-merge`。**两个备份分支都还只在本地。**
+- **抢救状态(2026-08-12 做的钉住,2026-08-13 收敛)**:唯一需要保留的是
+  `backup/swift-native-stash`(`296346b8`)。已删除的两个及理由,2026-08-13 逐条实测:
+
+  | 已删 | SHA | 实测理由 |
+  | --- | --- | --- |
+  | `codex/swift` | `50576652` | 6,834 个文件**全是 `.build` 产物**;仅有的 2 个 `.swift` 是 SwiftPM 生成的 `runner.swift` 和 `resource_bundle_accessor.swift`。人写的源码零行。 |
+  | `pr-26-swift-merge` | `b841a53c` | 它的 7 个 `.swift` **全部**被 `backup/swift-native-stash^3` 覆盖(5 个 blob 完全相同,`Package.swift` 与 `LLMUsageBarNativeApp.swift` 的 stash 版更新);且 `refs/pull/26/head`(`bec36ef7`)仍在 GitHub 上。 |
+  | `stash@{0}` | `296346b8` | 与 `backup/swift-native-stash` **是同一个提交**,drop 不丢任何字节。 |
+
+  两条删除都能从 reflog 或上表的 SHA 找回。**`backup/swift-native-stash` 仍然只在本地。**
 
 **待办(按顺序):**
 
-1. 把 `stash@{0}` 的源码落成正式分支推上远端(从 main 拉新分支,apply stash,
-   只提交源码与文档,**不要提交 `.build`** —— PR #26 里带了 `native/.gitignore`)。
-2. 本地分支 `codex/swift` 顶端是个 WIP 提交(`50576652`),**只含 6,834 个 `.build`
-   构建产物、零源码** —— 不要续用这条分支,处理完 stash 后可删(留着备份分支即可)。
-3. 三份 Swift 相关文档(`native-swift-migration.md`、`native-feature-matrix.md`)
-   目前也只活在 stash / PR #26 里,随第 1 步一起落地。
+1. 把 `backup/swift-native-stash^3` 的源码落成正式分支推上远端(从 main 拉新分支,
+   `git checkout backup/swift-native-stash^3 -- native docs`,只提交源码与文档,
+   **不要提交 `.build`** —— PR #26 里带了 `native/.gitignore`)。**这是唯一还没做的
+   抢救动作,做完之前这份源码依然只存在于这一台机器。**
+2. ~~删除 `codex/swift`~~ —— 2026-08-13 已删,见上表。
+3. 两份 Swift 相关文档(`docs/native-swift-migration.md`、`docs/native-feature-matrix.md`
+   —— 2026-08-13 实测就是两份,不是之前写的三份)目前也只活在
+   `backup/swift-native-stash^3` / PR #26 里,随第 1 步一起落地。落地时注意本仓库
+   `docs/` 已在 2026-08-13 重排(见 `docs/README.md`):这两份属于"活文档",
+   应放进 `docs/design/`,不要落在 `docs/` 根上。
 
 ### 11.8 选型结论(2026-08-12 评审复核后)
 
