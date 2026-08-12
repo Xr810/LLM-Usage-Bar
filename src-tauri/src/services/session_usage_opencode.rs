@@ -15,7 +15,7 @@ use crate::agent_paths::get_opencode_db_path;
 use crate::database::{lock_conn, Database};
 use crate::error::AppError;
 use crate::services::session_usage::{
-    get_sync_state, metadata_modified_nanos, update_sync_state, SessionSyncResult,
+    load_sync_cursors, metadata_modified_nanos, update_sync_state, SessionSyncResult,
 };
 use crate::services::usage_stats::{find_model_pricing, should_skip_session_insert, DedupKey};
 use crate::usage::metering::calculator::CostCalculator;
@@ -54,6 +54,8 @@ pub fn sync_opencode_usage(db: &Database) -> Result<SessionSyncResult, AppError>
         });
     }
 
+    let sync_cursors = load_sync_cursors(db, "opencode")?;
+
     let db_path_str = db_path.to_string_lossy().to_string();
 
     // 检查文件修改时间。
@@ -69,7 +71,7 @@ pub fn sync_opencode_usage(db: &Database) -> Result<SessionSyncResult, AppError>
         file_modified = file_modified.max(metadata_modified_nanos(&wal_meta));
     }
 
-    let (last_modified, _last_offset) = get_sync_state(db, "opencode", &db_path_str)?;
+    let (last_modified, _last_offset) = sync_cursors.get(&db_path_str).copied().unwrap_or((0, 0));
 
     // 文件未变化则跳过
     if file_modified <= last_modified {
@@ -100,7 +102,7 @@ pub fn sync_opencode_usage(db: &Database) -> Result<SessionSyncResult, AppError>
     for (session_id, time_updated) in &sessions {
         // 检查会话是否需要重新同步
         let sync_key = format!("{db_path_str}:{session_id}");
-        let (sess_last_modified, _) = get_sync_state(db, "opencode", &sync_key)?;
+        let (sess_last_modified, _) = sync_cursors.get(&sync_key).copied().unwrap_or((0, 0));
         if *time_updated <= sess_last_modified {
             continue; // 会话未更新，跳过
         }

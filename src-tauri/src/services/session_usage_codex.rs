@@ -14,10 +14,10 @@
 //! - `event_msg` (type=token_count) → 提取累计 token 用量，计算 delta
 
 use crate::agent_paths::get_codex_config_dir;
-use crate::database::{lock_conn, Database};
+use crate::database::{lock_conn, Database, UsageSyncCursor};
 use crate::error::AppError;
 use crate::services::session_usage::{
-    metadata_modified_nanos, update_sync_state_for_resource, SessionSyncResult,
+    metadata_modified_nanos, update_sync_state_for_resource, SessionSyncResult, SyncCursorMap,
 };
 use crate::services::usage_stats::{find_model_pricing, should_skip_session_insert, DedupKey};
 use crate::usage::domain::{TokenSource, CODEX_AGENT_MODULE_ID};
@@ -27,6 +27,7 @@ use crate::usage::metering::parser::TokenUsage;
 use crate::usage::session::{validate_bound_session_agent, ProviderSessionSyncResult};
 use rust_decimal::Decimal;
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -262,8 +263,29 @@ fn sync_codex_usage_impl(
         return Ok(result);
     }
 
+    let sync_cursor_list = db.list_usage_sync_cursors("codex")?;
+    let mut sync_cursors: SyncCursorMap = sync_cursor_list
+        .iter()
+        .map(|cursor| {
+            (
+                cursor.cursor_key.clone(),
+                (cursor.modified_at_ns, cursor.line_offset),
+            )
+        })
+        .collect();
+    let sync_cursor_details: HashMap<String, UsageSyncCursor> = sync_cursor_list
+        .into_iter()
+        .map(|cursor| (cursor.cursor_key.clone(), cursor))
+        .collect();
+
     for file_path in &files {
-        match sync_single_codex_file(db, file_path, bound_provider_id) {
+        match sync_single_codex_file_with_cursors(
+            db,
+            file_path,
+            bound_provider_id,
+            &mut sync_cursors,
+            &sync_cursor_details,
+        ) {
             Ok((imported, skipped)) => {
                 result.imported += imported;
                 result.skipped += skipped;
@@ -332,10 +354,12 @@ fn collect_jsonl_recursive(dir: &Path, files: &mut Vec<PathBuf>, depth: u32, max
 }
 
 /// 同步单个 Codex JSONL 文件，返回 (imported, skipped)
-fn sync_single_codex_file(
+fn sync_single_codex_file_with_cursors(
     db: &Database,
     file_path: &Path,
     bound_provider_id: Option<&str>,
+    sync_cursors: &mut SyncCursorMap,
+    sync_cursor_details: &HashMap<String, UsageSyncCursor>,
 ) -> Result<(u32, u32), AppError> {
     if let Some(provider_id) = bound_provider_id {
         validate_bound_session_agent(db, "codex", provider_id)?;
@@ -355,34 +379,33 @@ fn sync_single_codex_file(
     let file_size = metadata.len().min(i64::MAX as u64) as i64;
 
     // 新 cursor 以文件实体为 key；首次升级时可从同路径的旧 cursor 提升。
-    let resource_cursor = db.get_usage_sync_cursor("codex", cursor_key)?;
+    let resource_cursor = sync_cursor_details.get(cursor_key);
     let legacy_path_cursor = if resource_cursor.is_none() {
-        db.get_usage_sync_cursor("codex", &file_path_str)?
-            .filter(|cursor| {
-                cursor
-                    .resource_identity
-                    .as_deref()
-                    .is_none_or(|identity| identity == file_identity.resource_identity.as_str())
-            })
+        sync_cursor_details.get(&file_path_str).filter(|cursor| {
+            cursor
+                .resource_identity
+                .as_deref()
+                .is_none_or(|identity| identity == file_identity.resource_identity.as_str())
+        })
     } else {
         None
     };
-    let sync_cursor = resource_cursor.as_ref().or(legacy_path_cursor.as_ref());
     let legacy_cursor_key = legacy_path_cursor
         .as_ref()
         .map(|cursor| cursor.cursor_key.as_str());
-    let (last_modified, last_offset) = sync_cursor
-        .map(|cursor| (cursor.modified_at_ns, cursor.line_offset))
+    let (last_modified, last_offset) = sync_cursors
+        .get(cursor_key)
+        .or_else(|| legacy_cursor_key.and_then(|key| sync_cursors.get(key)))
+        .copied()
         .unwrap_or((0, 0));
 
     // 文件未变化则跳过
     if file_modified <= last_modified {
-        let cursor_needs_promotion_or_path_refresh =
-            resource_cursor.as_ref().is_none_or(|cursor| {
-                cursor.resource_path.as_deref() != Some(file_path_str.as_str())
-                    || cursor.resource_identity.as_deref()
-                        != Some(file_identity.resource_identity.as_str())
-            });
+        let cursor_needs_promotion_or_path_refresh = resource_cursor.is_none_or(|cursor| {
+            cursor.resource_path.as_deref() != Some(file_path_str.as_str())
+                || cursor.resource_identity.as_deref()
+                    != Some(file_identity.resource_identity.as_str())
+        });
         if cursor_needs_promotion_or_path_refresh {
             update_sync_state_for_resource(
                 db,
@@ -395,6 +418,10 @@ fn sync_single_codex_file(
                 file_size,
                 last_offset,
             )?;
+            if let Some(legacy_cursor_key) = legacy_cursor_key {
+                sync_cursors.remove(legacy_cursor_key);
+            }
+            sync_cursors.insert(cursor_key.clone(), (last_modified, last_offset));
         }
         return Ok((0, 0));
     }
@@ -604,8 +631,41 @@ fn sync_single_codex_file(
         file_size,
         line_offset,
     )?;
+    if let Some(legacy_cursor_key) = legacy_cursor_key {
+        sync_cursors.remove(legacy_cursor_key);
+    }
+    sync_cursors.insert(cursor_key.clone(), (file_modified, line_offset));
 
     Ok((imported, skipped))
+}
+
+#[cfg(test)]
+fn sync_single_codex_file(
+    db: &Database,
+    file_path: &Path,
+    bound_provider_id: Option<&str>,
+) -> Result<(u32, u32), AppError> {
+    let sync_cursor_list = db.list_usage_sync_cursors("codex")?;
+    let mut sync_cursors: SyncCursorMap = sync_cursor_list
+        .iter()
+        .map(|cursor| {
+            (
+                cursor.cursor_key.clone(),
+                (cursor.modified_at_ns, cursor.line_offset),
+            )
+        })
+        .collect();
+    let sync_cursor_details = sync_cursor_list
+        .into_iter()
+        .map(|cursor| (cursor.cursor_key.clone(), cursor))
+        .collect();
+    sync_single_codex_file_with_cursors(
+        db,
+        file_path,
+        bound_provider_id,
+        &mut sync_cursors,
+        &sync_cursor_details,
+    )
 }
 
 fn insert_bound_codex_session_entry(

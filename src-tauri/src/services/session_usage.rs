@@ -27,6 +27,8 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+pub(crate) type SyncCursorMap = HashMap<String, (i64, i64)>;
+
 /// 同步结果
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -114,11 +116,12 @@ fn sync_claude_session_logs_impl(
 
     // 收集所有 .jsonl 文件
     let jsonl_files = collect_jsonl_files(&projects_dir);
+    let sync_cursors = load_sync_cursors(db, "claude")?;
 
     for file_path in &jsonl_files {
         result.files_scanned += 1;
 
-        match sync_single_file(db, file_path, bound_provider_id) {
+        match sync_single_file_with_cursors(db, file_path, bound_provider_id, &sync_cursors) {
             Ok((imported, skipped)) => {
                 result.imported += imported;
                 result.skipped += skipped;
@@ -215,10 +218,11 @@ fn push_jsonl_children(dir: &Path, files: &mut Vec<PathBuf>) {
 }
 
 /// 同步单个 JSONL 文件，返回 (imported, skipped)
-fn sync_single_file(
+fn sync_single_file_with_cursors(
     db: &Database,
     file_path: &Path,
     bound_provider_id: Option<&str>,
+    sync_cursors: &SyncCursorMap,
 ) -> Result<(u32, u32), AppError> {
     if let Some(provider_id) = bound_provider_id {
         validate_bound_session_agent(db, "claude", provider_id)?;
@@ -231,7 +235,7 @@ fn sync_single_file(
     let file_modified = metadata_modified_nanos(&metadata);
 
     // 检查同步状态
-    let (last_modified, last_offset) = get_sync_state(db, "claude", &file_path_str)?;
+    let (last_modified, last_offset) = sync_cursors.get(&file_path_str).copied().unwrap_or((0, 0));
 
     // 文件未变化则跳过
     if file_modified <= last_modified {
@@ -407,6 +411,16 @@ fn sync_single_file(
     Ok((imported, skipped))
 }
 
+#[cfg(test)]
+fn sync_single_file(
+    db: &Database,
+    file_path: &Path,
+    bound_provider_id: Option<&str>,
+) -> Result<(u32, u32), AppError> {
+    let sync_cursors = load_sync_cursors(db, "claude")?;
+    sync_single_file_with_cursors(db, file_path, bound_provider_id, &sync_cursors)
+}
+
 fn insert_bound_session_entry(
     db: &Database,
     provider_id: &str,
@@ -474,6 +488,7 @@ fn current_timestamp() -> i64 {
 /// 获取 v14 `usage_sync_cursors` 中某条目的同步进度。
 ///
 /// Shared by all session_usage_* parsers.
+#[cfg(test)]
 pub(crate) fn get_sync_state(
     db: &Database,
     source: &str,
@@ -483,6 +498,19 @@ pub(crate) fn get_sync_state(
         .get_usage_sync_cursor(source, cursor_key)?
         .map(|cursor| (cursor.modified_at_ns, cursor.line_offset))
         .unwrap_or((0, 0)))
+}
+
+pub(crate) fn load_sync_cursors(db: &Database, source: &str) -> Result<SyncCursorMap, AppError> {
+    Ok(db
+        .list_usage_sync_cursors(source)?
+        .into_iter()
+        .map(|cursor| {
+            (
+                cursor.cursor_key,
+                (cursor.modified_at_ns, cursor.line_offset),
+            )
+        })
+        .collect())
 }
 
 /// 返回文件 mtime 的纳秒时间戳。
@@ -754,6 +782,27 @@ mod tests {
             !Database::table_exists(&conn, "session_log_sync")?,
             "v14 session sync must not recreate the retired table"
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn preloaded_sync_cursors_match_individual_queries() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        update_sync_state(&db, "claude", "/tmp/first.jsonl", 42, 7)?;
+        update_sync_state(&db, "claude", "/tmp/second.jsonl", 84, 11)?;
+        update_sync_state(&db, "codex", "/tmp/other-source.jsonl", 99, 13)?;
+
+        let cursors = load_sync_cursors(&db, "claude")?;
+        for cursor_key in [
+            "/tmp/first.jsonl",
+            "/tmp/second.jsonl",
+            "/tmp/missing.jsonl",
+        ] {
+            let preloaded = cursors.get(cursor_key).copied().unwrap_or((0, 0));
+            assert_eq!(preloaded, get_sync_state(&db, "claude", cursor_key)?);
+        }
+        assert!(!cursors.contains_key("/tmp/other-source.jsonl"));
 
         Ok(())
     }

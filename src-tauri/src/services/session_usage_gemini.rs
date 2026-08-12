@@ -17,7 +17,7 @@ use crate::agent_paths::get_gemini_dir;
 use crate::database::{lock_conn, Database};
 use crate::error::AppError;
 use crate::services::session_usage::{
-    get_sync_state, metadata_modified_nanos, update_sync_state, SessionSyncResult,
+    load_sync_cursors, metadata_modified_nanos, update_sync_state, SessionSyncResult, SyncCursorMap,
 };
 use crate::services::usage_stats::{find_model_pricing, should_skip_session_insert, DedupKey};
 use crate::usage::metering::calculator::{CostCalculator, ModelPricing};
@@ -53,8 +53,10 @@ pub fn sync_gemini_usage(db: &Database) -> Result<SessionSyncResult, AppError> {
         return Ok(result);
     }
 
+    let sync_cursors = load_sync_cursors(db, "gemini")?;
+
     for file_path in &files {
-        match sync_single_gemini_file(db, file_path) {
+        match sync_single_gemini_file(db, file_path, &sync_cursors) {
             Ok((imported, skipped)) => {
                 result.imported += imported;
                 result.skipped += skipped;
@@ -122,7 +124,11 @@ fn collect_gemini_session_files(gemini_dir: &Path) -> Vec<PathBuf> {
 }
 
 /// 同步单个 Gemini 会话 JSON 文件，返回 (imported, skipped)
-fn sync_single_gemini_file(db: &Database, file_path: &Path) -> Result<(u32, u32), AppError> {
+fn sync_single_gemini_file(
+    db: &Database,
+    file_path: &Path,
+    sync_cursors: &SyncCursorMap,
+) -> Result<(u32, u32), AppError> {
     let file_path_str = file_path.to_string_lossy().to_string();
 
     // 获取文件元数据
@@ -131,7 +137,7 @@ fn sync_single_gemini_file(db: &Database, file_path: &Path) -> Result<(u32, u32)
     let file_modified = metadata_modified_nanos(&metadata);
 
     // 检查同步状态
-    let (last_modified, _last_offset) = get_sync_state(db, "gemini", &file_path_str)?;
+    let (last_modified, _last_offset) = sync_cursors.get(&file_path_str).copied().unwrap_or((0, 0));
 
     // 文件未变化则跳过
     if file_modified <= last_modified {
