@@ -1,7 +1,7 @@
 # LLM Usage Bar — 全局交接文档(合并版)
 
-最后核实:2026-08-07(所有事实当天用 git / gh / sqlite3 逐条验证过,不是抄旧文档)
-最后更新:2026-08-07 傍晚 —— Claude 重置时间线告一段落,见 §9(新增,下周继续)
+最后核实:2026-08-12(所有事实当天用 git / gh / sqlite3 逐条验证过,不是抄旧文档)
+最后更新:2026-08-12 —— 技术路线评审复核 + Swift 迁移线的真实状态与抢救记录,见 §11(重写了 §11.7)
 
 > **这是唯一的交接文档。** 它取代并吸收了以下分散文档,那些文件不要再单独更新:
 >
@@ -18,18 +18,19 @@
 
 ## 0. 开工前必做的三步(两次翻车都是因为跳过了这里)
 
-1. **基线就是 `main`。** 2026-08-11 实测:本地 `main` = `origin/main` =
-   `6050389ff`,`SCHEMA_VERSION = 26`。之前"本地 main 落后 55 个提交"的问题
+1. **基线就是 `main`。** 2026-08-12 实测:本地 `main` = `origin/main` =
+   `199fdbfc`,`SCHEMA_VERSION = 26`。之前"本地 main 落后 55 个提交"的问题
    **已经解决**,不要再从别的分支拉线。
 
    ```bash
    git fetch origin && git log --oneline -1 origin/main
    ```
 
-   > 别照抄这里的哈希 —— 上面这条命令的输出才算数。**2026-08-11 起没有任何未合并的
-   > 活分支**:PR #23(重置时刻锁存)与 PR #24(Provider 多 key)都已用 merge commit
-   > 合入 main,两条线的分支本地与远端均已删除。同日还核实并删除了 5 个陈旧本地分支,
-   > 详见 §9.5。本地只剩 `main` 一条。
+   > 别照抄这里的哈希 —— 上面这条命令的输出才算数。远端**只有 `main` 一条活分支**;
+   > PR #26(Swift 原生线第一阶段)的 base 分支 `Swift` 已从远端删除,其成果的
+   > 找回方式见 §11.7 —— 那里有一份**只存在于本地 stash 的源码**,清理 stash
+   > 前必读。本地分支现状:`main`、`codex/swift`(只含构建产物的 WIP,勿续用,
+   > 见 §11.7)、两个抢救备份分支(同见 §11.7)。
 
 2. **动数据库/想本地跑 app 之前,先对版本。** 生产库 2026-08-11 实测仍是 **v24**:
 
@@ -82,13 +83,14 @@
 > 实测其父提交 `e337dd32e` **就是 main 的祖先**,该分支只是 main + 一个文档提交,
 > 没有失散的代码。
 
-### GitHub PR(2026-08-11 实查)
+### GitHub PR(2026-08-12 实查:#12–#26 已全部合并或关闭,0 个开着)
 
 | PR | 内容 | 检查 | 行动 |
 | --- | --- | --- | --- |
+| ~~#26~~ | **Swift 原生菜单栏 app + UsageCore 库(迁移第一阶段)** | — | **✅ 已合(2026-08-11)** —— 但 base 是 `Swift` 分支而非 main,该分支已从远端删除,成果不在 main 上!找回方式与后续状态见 §11.7 |
+| ~~#25~~ | frontend-deps 依赖组(5 项) | CI 绿 | **✅ 已合**,即当前 main 顶端 `199fdbfc` |
 | ~~#24~~ | Provider 多 key + 每把 key 的花费 | 本机全套绿 + ubuntu CI 绿 | **✅ 已合(merge commit)** |
 | ~~#23~~ | Claude 额度重置时刻锁存 | 绿 | **✅ 已合(merge commit)** |
-| #25 | frontend-deps 依赖组(5 项:`@types/node`、`postcss`、`vite` 8.2.0→8.2.1、`lucide-react`、`react-hook-form`) | 待跑 | **开着**;base 是当前 main,CI 绿即可合 |
 | ~~#22~~ | frontend-deps 依赖组(40 项,全 minor/patch) | 合前在当前 main 上本机实测 341/0;合后 ubuntu CI 绿 | **✅ 已合(squash)** |
 | ~~#21~~ | cargo-deps `base64` 0.23.0→0.23.1 | 合后本机 Rust 1106/0 + ubuntu CI 绿 | **✅ 已合(squash)** |
 
@@ -194,9 +196,8 @@ Models / Agents)的渲染、新红绿灯与 pace 详情、暗色/亮色、窄窗
   `backup/pre-backend-strip` 不匹配 `v*`,是本地备份标记,本就该留在本地。
   **要发版就单推那一个 tag。** 这也是 §9.5 那个"未推提交总数"陷阱的另一半:那 23 个
   不在 origin 上的提交正是这两个 tag 带的,不是谁忘了推分支。
-- **合并绿的 #12–#15**:仍开着 —— agent 侧被权限分类器拦截(`gh pr merge` 属
-  对外操作),留给用户执行:
-  `for n in 12 13 14 15; do gh pr merge $n --squash --delete-branch; done`
+- ~~合并绿的 #12–#15~~ **✅ 已了结(2026-08-12 实查)**:#12/#13/#14/#15/#17 已合并,
+  #16/#18 已关闭。上一版留的那条 `gh pr merge` 命令作废,不要再跑。
 - ~~Dependabot 分组策略~~ **✅ 已落实(2026-08-07)**:两个组各加
   `update-types: [minor, patch]`(组名未动,避免现有 PR 被重建);major 此后
   单独成 PR。注意:#18 在下个更新周期可能被 Dependabot 按新规则重建,
@@ -567,6 +568,10 @@ Resets Aug 11 at 6pm (Asia/Singapore)
 - **6 个 stash 一个没动。** 它们挂在 PR #17 那条已合并的分支上,每条自己的说明都写着
   失败原因(over-cut / over-reached / coupling deeper than scoped / blocked on /
   build red)—— 是失败的尝试,不是待合并的工作。丢弃是不可逆的,留着不花钱,交给用户决定。
+  > 2026-08-12 更新:`git stash list` 现在**只剩 1 个 stash**(`stash@{0}`,codex/swift
+  > 线的,**含唯一一份 Swift 源码,见 §11.7,勿丢**)。原来那 6 个已不在列表里,
+  > 谁清的、何时清的没有记录 —— 按上一条的性质判断无实质损失,但这正是"清 stash
+  > 不留痕"的例子,引以为戒。
 - **`/Users/max/LLM-Usage-Bar`(无空格的那个目录)是一份死副本。** 8 月 2 号从同一个
   remote 克隆,`main` = `1cd4c824`,已是当前 main 的祖先(落后 67 个提交),独有提交
   **0 个**,无 stash、无本地分支、从未 fetch 过、工作区干净。里面没有任何要捞的东西 ——
@@ -626,3 +631,183 @@ Resets Aug 11 at 6pm (Asia/Singapore)
 到位**。最近备份 `db_backup_20260810_171554.db`。要看的:每把 key 一行的 Provider 卡片、
 展开后的日/月数字与剩余预算、只有一把 key 时不显示合计、被替换凭据的数字有标注、
 以及 §9.2 的重置时间行 —— 连同 P4 欠的那一眼一次看完。
+
+---
+
+## 11. 功耗根因与技术路线评估(2026-08-12,全部实测)
+
+### 11.1 结论先行
+
+**菜单栏 app 的耗电与 UI 技术栈无关,全部来自后端自己的采集循环。** 换 UI 框架
+(原生也好、Slint 也好)对这条线的收益接近于零 —— 这一条推翻了动手前的直觉判断,
+动第 3 步之前先看完本节。
+
+### 11.2 实测数据(生产版本 v3.16.5,PID 776)
+
+| 指标 | 数值 |
+| --- | --- |
+| 累计 CPU / 运行时长 | 22:03 / 22h45m → **平均 1.62%** |
+| 瞬时稳态(20s 窗口 ×3) | 3.0–3.2% |
+| RSS | 46 MB |
+| 线程数 | 18(含 **10 个 tokio worker**) |
+
+> 采样期间本机在跑 Claude Code,会实时产生日志供摄取,瞬时 3.0% 含合理工作量。
+> **22 小时均值 1.62% 是可信数字。**
+
+按线程拆 CPU 时间:
+
+| 线程组 | 累计 CPU |
+| --- | --- |
+| WebView 相关(CVDisplayLink ×2、WebCore Scrolling、JSC scavenger 等 6 个) | **0:00.00** |
+| tokio worker + 临时派生线程(8 个) | **9:53** |
+
+**WebView 线程是字面意义上的零。** 但要注意两个测量边界(2026-08-12 复核时指出):
+
+- **这张表只覆盖 app 进程内的线程。** macOS 上 WKWebView 是进程外架构,渲染/GPU/网络
+  跑在独立的 `com.apple.WebKit.{WebContent,GPU,Networking}` XPC 进程里,它们的 CPU 和
+  内存都不在上表、也不在 46 MB RSS 里。闲置且窗口隐藏时大概率同样接近零,但"UI 层
+  零开销"这个结论目前证据链不完整,要下定论需按进程组重测。
+- **归因缺口:** tokio 组只解释了 9:53,总量 22:03 里**还有约 12 分钟(~55%)没有归属**
+  (最可能在主线程:tray 刷新、事件循环、下述 300ms 轮询)。所以"轮询浪费 ≈ 1,382 秒/天"
+  是把全部均值 CPU 都记在了轮询头上,**修完轮询预期只能收回一部分,动手前先把剩余
+  12 分钟归因清楚**(用 Instruments Time Profiler 对主线程采样即可,它对 Rust 二进制
+  完全可用)。
+
+### 11.3 根因
+
+`lib.rs:1127` 的 60 秒同步定时器要遍历:
+
+```
+~/.claude/projects        71 个 jsonl,111 MB
+~/.codex/sessions       1294 个 jsonl,2.2 GB
+```
+
+同步**本身是增量的**(`session_usage.rs:234` 存 (mtime, line_offset) 游标,内容未变
+就跳过解析),**但游标是逐文件查库的** —— 每个文件一次独立 SQLite 查询。
+
+于是每 60 秒:~1,365 次 stat + ~1,365 次 SQLite 查询,折合**持续每秒 ~45 次磁盘
+操作**(1,365×2/60;上一版写 23 是只算了一类)。采样栈里 `pread` 高频出现,吻合。
+源码坐标:定时器 `lib.rs:1131`(`SESSION_SYNC_INTERVAL_SECS = 60`);逐文件
+先 `fs::metadata` 再查游标的顺序在 `session_usage.rs` 的 `sync_single_file`
+(查询发生在"mtime 未变则跳过"**之前**,所以跳过也省不掉查询)。
+
+**修法**:FSEvents(macOS)/ ReadDirectoryChangesW(Windows)文件监听替代轮询;
+游标改批量单次查询(更彻底:本 app 是 cursors 表唯一写者,启动时整表载入内存,
+热路径完全不碰 SQLite);tokio worker 数封顶(10 个对菜单栏 app 是浪费)。
+另有 `lib.rs:421` 一个 300ms 的常驻轮询(检查主窗口是否最小化),应改为事件驱动。
+
+**别重写已有的半成品**:`src-tauri/src/usage/watcher_state.rs`(445 行)已经实现了
+文件监听要用的 dirty-generation 调度骨架 —— 按源去抖、逐源失败退避(60s–86400s)、
+防重入,带完整单元测试,已在 `usage/mod.rs` 声明 —— **但全仓库零调用方,
+`Cargo.toml` 也还没加 `notify` 依赖**。修这条时应把它接上线,而不是另写一套。
+
+其余可叠加的功耗手段(2026-08-12 评审补充,均与选型正交):`tokio::time::interval`
+是精确唤醒,无法参与 macOS timer coalescing,平台正解是 `NSBackgroundActivityScheduler`
+或带 leeway 的 dispatch timer;FSEvents 自带 latency 参数(设 5–30s 天然替代 60s
+节流语义);Codex 的 1,294 个历史文件绝大多数永不再变,按日期分区剪枝连 stat 都省;
+同步线程设 QoS Background/Utility,让系统调度去 E-core 并配合 App Nap。
+
+**这一项与 UI 选型正交,选哪条路线都必须修。**
+
+### 11.4 Rust vs Swift 核心层基准测试
+
+真实日志(37 MB / 8,921 行 / 3,916 条 usage),两侧实现等价解析,**输出的 token
+总数逐字节一致**。Rust 1.95.0 `--release`+LTO;Apple Swift 6.3.3 `-O -wmo`。
+
+| | Rust (serde_json) | Swift (JSONDecoder) |
+| --- | --- | --- |
+| 耗时(3 次) | **17.1 / 18.0 / 21.8 ms** | **66.3 / 68.1 / 86.8 ms** |
+| 该任务峰值 RSS | **3.5 MB** | 44.7 MB(见下) |
+| 空程序基线 RSS | **1.4 MB** | 5.5 MB |
+
+**CPU:Rust 快约 3.5–4 倍。**
+
+**内存那个 44.7 MB 不能直接比** —— Swift 版一次性把 37 MB 文件读进内存,那是实现
+方式不是语言开销。扣掉后工作集约 7.7 MB,对 3.5 MB 约 2 倍。另写的流式 Swift 版本
+因 `Data.subdata` 重复拷贝反而劣化到 355 ms,**该数字已废弃,别引用**。
+
+可信的内存结论只有两条:**基线 Swift 高约 4 MB,工作集约 2 倍。**
+
+### 11.5 换算到真实负载(估计,非实测)
+
+同步是增量的,稳态每分钟只解析新增几行:
+
+| 场景 | Rust | Swift | 差值 |
+| --- | --- | --- | --- |
+| 首次全量导入 2.3 GB | ~1.1 s | ~4.2 s | 3 秒,一次性 |
+| 稳态每分钟增量 | ~0.05 ms | ~0.2 ms | 0.15 ms |
+| **日均 CPU 差异** | — | — | **< 1 秒/天** |
+
+对照:**11.3 的轮询浪费约 1,382 秒 CPU/天。相差三个数量级。**
+
+**所以:对本应用负载,Rust 与 Swift 的运行时能耗/内存差异可忽略。** 能耗几乎完全由
+架构(唤醒频率、每次扫描量)决定,不由核心语言决定。
+
+边界:本基准只覆盖 JSON 解析(核心最重的计算),未覆盖 ARC 在其他路径的开销、
+SQLite 层(两侧同一个 C 库)、HTTP 层(I/O 等待为主)。后两者判断不足以翻盘,
+但这是判断不是测量。
+
+### 11.6 代码规模(供选型参考)
+
+| | 规模 |
+| --- | --- |
+| Rust 总量 | 94,476 行 / 132 文件 |
+| 与 Tauri 耦合 | 20,214 行 / 35 文件(21%) |
+| 平台无关纯核心 | ~74,000 行(79%) |
+| 前端 | 24,515 行 TS/TSX,83 组件 |
+
+### 11.7 Swift 原生迁移线的真实状态(2026-08-12 重写 —— 上一版本节是错的)
+
+> **上一版说 `native/` "只有空的 `.build` 骨架,源码为零,不要当起点" —— 错。**
+> 错因:只 `ls` 了工作区。源码确实不在工作区,但它在 stash 和已合并的 PR 里。
+> 以下逐条实测(git / gh 直查):
+
+**这条线实际已经开工,且方向正确:**
+
+- **PR #26 已合并**(2026-08-11,"Add Swift native macOS menu-bar app and UsageCore
+  library (initial migration stage)"):10 文件 / +492 行 —— `native/Package.swift`、
+  `UsageCore`(快照模型、statusline 源、原子 JSON 存储)、`MenuBarExtra` app 骨架、
+  测试,以及 **`docs/native-swift-migration.md` —— 绞杀者模式的五阶段迁移路线**
+  (保留 Rust 数据层与 SQLite schema,Swift 只读展示,最后才决定 Rust 核心去留)。
+- **但 #26 的 base 是 `Swift` 分支,不是 main,且该分支已从远端删除** —— 远端现在
+  只剩 `main`,这 492 行**不在 main 的历史里**。找回锚点:本地备份分支
+  `pr-26-swift-merge`(= 被删分支顶端 `b841a53c`),或 `refs/pull/26/head`。
+- **比 PR #26 先进得多的一版源码只存在于 `stash@{0}` 的 untracked 部分**:
+  16 个 UI 文件(`MainWindowView`、`ProviderActivityHeatmap`、
+  `BreakdownDashboardViews`、`NativeSettingsView`、`NativeDesignSystem`、`L10n` 等)
+  + 扩展的 `UsageCore`(`DashboardRepository`、`NativeBridgeClient`、
+  `TrayUsageSnapshotV1`、`DashboardModelsV1`)+ Xcode 工程(Preview/Production 两个
+  scheme)+ `docs/native-feature-matrix.md`。本机那个跑了 20+ 小时的
+  "LLM Usage Bar Native Preview" 进程(**11 MB RSS / 0.0% CPU**,对照 Tauri 版
+  32 MB / 1.0%)就是它构建的 —— 这也是目前唯一一组原生 vs Tauri 的同机实测对照。
+- **抢救状态(2026-08-12 已做)**:stash 提交已被本地分支 `backup/swift-native-stash`
+  钉住(三个父提交可达,`git stash drop` 不再致命),PR #26 顶端钉在
+  `pr-26-swift-merge`。**两个备份分支都还只在本地。**
+
+**待办(按顺序):**
+
+1. 把 `stash@{0}` 的源码落成正式分支推上远端(从 main 拉新分支,apply stash,
+   只提交源码与文档,**不要提交 `.build`** —— PR #26 里带了 `native/.gitignore`)。
+2. 本地分支 `codex/swift` 顶端是个 WIP 提交(`50576652`),**只含 6,834 个 `.build`
+   构建产物、零源码** —— 不要续用这条分支,处理完 stash 后可删(留着备份分支即可)。
+3. 三份 Swift 相关文档(`native-swift-migration.md`、`native-feature-matrix.md`)
+   目前也只活在 stash / PR #26 里,随第 1 步一起落地。
+
+### 11.8 选型结论(2026-08-12 评审复核后)
+
+评审输入材料见 **`docs/tech-route-review-2026-08-12.md`**;复核意见要点:
+
+- 其主结论(§5.5,"能耗由架构决定,不由核心语言决定")**成立**,数据可信;
+- 但评审文档 §6 有两行夸大了 Swift 优势:Instruments 对 Rust 二进制同样可用
+  (进程级、基于符号,保留 debug symbols 即可),不构成换语言的理由;
+  FSEvents/Keychain 在 Rust 侧有 `notify` / `keyring` 等成熟封装,不需要裸 objc2;
+- 流式 Swift 解析 355ms 的劣化是 `Data.subdata` 强制拷贝所致(切片本是零拷贝视图),
+  是实现问题不是语言问题,别拿它论证"Swift 内存必然差"。
+
+**结论:方案 B —— Rust 核心 + SwiftUI 壳。** 这正是 PR #26 已经开工的绞杀者路线,
+**继续它,不要另起炉灶**。已定背景条件不变:macOS 优先、Windows 押后不封死、
+改写工作量不作为约束。阶段 1 的"Rust 导出 JSON 快照、Swift 只读"跑通后,长期可
+升级为 UniFFI 直接绑定(自动生成 Swift 绑定,省掉快照文件中介)。
+
+**优先级不变:先修 11.3(收益比整个选型问题大三个数量级),UI 迁移按绞杀者节奏
+并行,互不阻塞。** 动 11.3 之前先把 §11.2 指出的 ~12 分钟未归因 CPU 查清楚。
