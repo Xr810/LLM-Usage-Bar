@@ -347,6 +347,7 @@ pub fn sync_session_usage(
             result.imported += codex_result.imported;
             result.skipped += codex_result.skipped;
             result.files_scanned += codex_result.files_scanned;
+            result.files_pruned += codex_result.files_pruned;
             result.errors.extend(codex_result.errors);
         }
         Err(e) => {
@@ -360,6 +361,7 @@ pub fn sync_session_usage(
             result.imported += gemini_result.imported;
             result.skipped += gemini_result.skipped;
             result.files_scanned += gemini_result.files_scanned;
+            result.files_pruned += gemini_result.files_pruned;
             result.errors.extend(gemini_result.errors);
         }
         Err(e) => {
@@ -373,6 +375,7 @@ pub fn sync_session_usage(
             result.imported += opencode_result.imported;
             result.skipped += opencode_result.skipped;
             result.files_scanned += opencode_result.files_scanned;
+            result.files_pruned += opencode_result.files_pruned;
             result.errors.extend(opencode_result.errors);
         }
         Err(e) => {

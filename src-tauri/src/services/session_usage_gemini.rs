@@ -46,6 +46,7 @@ pub fn sync_gemini_usage(db: &Database) -> Result<SessionSyncResult, AppError> {
         imported: 0,
         skipped: 0,
         files_scanned: files.len() as u32,
+        files_pruned: 0,
         errors: vec![],
     };
 

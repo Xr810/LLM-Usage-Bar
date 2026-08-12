@@ -33,6 +33,20 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+// 实测剪枝效果的 File::open 计数器（仅测试构建存在）。
+// 用 thread_local 而不是全局静态量，避免并行测试互相污染计数。
+#[cfg(test)]
+thread_local! {
+    static CODEX_FILE_OPEN_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// 打开会话文件;测试构建下累计 CODEX_FILE_OPEN_COUNT。
+fn open_codex_session_file(path: &Path) -> std::io::Result<fs::File> {
+    #[cfg(test)]
+    CODEX_FILE_OPEN_COUNT.with(|count| count.set(count.get() + 1));
+    fs::File::open(path)
+}
+
 /// 累计 token 用量（跟踪 total_token_usage 字段）
 #[derive(Debug, Clone, Default)]
 struct CumulativeTokens {
@@ -214,6 +228,10 @@ fn parse_cumulative_tokens(total_usage: &serde_json::Value) -> Option<Cumulative
     })
 }
 
+/// 日期分区保留窗口(天):分区日期早于「今天 - 该窗口」时才可能被整体剪枝。
+/// 给时区偏移和跨天写入留出余量——今天、昨天、前天的分区永远不会被剪。
+const CODEX_PARTITION_FRESH_DAYS: i64 = 2;
+
 /// 同步 Codex 使用数据（从 JSONL 会话日志）
 pub fn sync_codex_usage(db: &Database) -> Result<SessionSyncResult, AppError> {
     sync_codex_usage_impl(db, None)
@@ -249,20 +267,23 @@ fn sync_codex_usage_impl(
     bound_provider_id: Option<&str>,
 ) -> Result<SessionSyncResult, AppError> {
     let codex_dir = get_codex_config_dir();
+    sync_codex_usage_impl_with_window(
+        db,
+        bound_provider_id,
+        &codex_dir,
+        CODEX_PARTITION_FRESH_DAYS,
+    )
+}
 
-    let files = collect_codex_session_files(&codex_dir);
-
-    let mut result = SessionSyncResult {
-        imported: 0,
-        skipped: 0,
-        files_scanned: files.len() as u32,
-        errors: vec![],
-    };
-
-    if files.is_empty() {
-        return Ok(result);
-    }
-
+/// `fresh_days` 可注入的实现本体:测试用极大窗口等价关闭剪枝,对照改动前行为。
+fn sync_codex_usage_impl_with_window(
+    db: &Database,
+    bound_provider_id: Option<&str>,
+    codex_dir: &Path,
+    fresh_days: i64,
+) -> Result<SessionSyncResult, AppError> {
+    // 先预载游标,再收集文件:分区剪枝按 resource_path 索引游标,
+    // 只需 read_dir 的文件名即可判断,不必为每个文件打开并计算实体标识。
     let sync_cursor_list = db.list_usage_sync_cursors("codex")?;
     let mut sync_cursors: SyncCursorMap = sync_cursor_list
         .iter()
@@ -277,6 +298,25 @@ fn sync_codex_usage_impl(
         .into_iter()
         .map(|cursor| (cursor.cursor_key.clone(), cursor))
         .collect();
+    let by_path: HashMap<&str, &UsageSyncCursor> = sync_cursor_details
+        .values()
+        .filter_map(|cursor| cursor.resource_path.as_deref().map(|path| (path, cursor)))
+        .collect();
+
+    let (files, files_pruned) =
+        collect_codex_session_files_with_window(codex_dir, &by_path, fresh_days);
+
+    let mut result = SessionSyncResult {
+        imported: 0,
+        skipped: 0,
+        files_scanned: files.len() as u32,
+        files_pruned,
+        errors: vec![],
+    };
+
+    if files.is_empty() {
+        return Ok(result);
+    }
 
     for file_path in &files {
         match sync_single_codex_file_with_cursors(
@@ -300,27 +340,40 @@ fn sync_codex_usage_impl(
 
     if result.imported > 0 {
         log::info!(
-            "[CODEX-SYNC] 同步完成: 导入 {} 条, 跳过 {} 条, 扫描 {} 个文件",
+            "[CODEX-SYNC] 同步完成: 导入 {} 条, 跳过 {} 条, 扫描 {} 个文件, 剪枝 {} 个文件",
             result.imported,
             result.skipped,
-            result.files_scanned
+            result.files_scanned,
+            result.files_pruned
         );
     }
 
     Ok(result)
 }
 
-/// 收集所有 Codex 会话 JSONL 文件
-fn collect_codex_session_files(codex_dir: &Path) -> Vec<PathBuf> {
+/// 收集所有 Codex 会话 JSONL 文件;满足剪枝条件的旧日期分区被整体跳过。
+/// 返回 (文件列表, 被剪掉的旧分区文件数)。
+fn collect_codex_session_files_with_window(
+    codex_dir: &Path,
+    by_path: &HashMap<&str, &UsageSyncCursor>,
+    fresh_days: i64,
+) -> (Vec<PathBuf>, u32) {
     let mut files = Vec::new();
+    let mut files_pruned: u32 = 0;
 
     // 1. 扫描 sessions/YYYY/MM/DD/*.jsonl（日期分区目录）
     let sessions_dir = codex_dir.join("sessions");
     if sessions_dir.is_dir() {
-        collect_jsonl_recursive(&sessions_dir, &mut files, 0, 3);
+        collect_sessions_files(
+            &sessions_dir,
+            &mut files,
+            &mut files_pruned,
+            by_path,
+            fresh_days,
+        );
     }
 
-    // 2. 扫描 archived_sessions/*.jsonl（扁平归档目录）
+    // 2. 扫描 archived_sessions/*.jsonl（扁平归档目录，不参与剪枝）
     let archived_dir = codex_dir.join("archived_sessions");
     if archived_dir.is_dir() {
         if let Ok(entries) = fs::read_dir(&archived_dir) {
@@ -333,7 +386,169 @@ fn collect_codex_session_files(codex_dir: &Path) -> Vec<PathBuf> {
         }
     }
 
-    files
+    (files, files_pruned)
+}
+
+/// 解析分区目录名：必须是纯 ASCII 数字且长度正好 `digits` 位。
+fn parse_partition_component(name: &str, digits: usize) -> Option<u32> {
+    if name.len() != digits || !name.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    name.parse::<u32>().ok()
+}
+
+/// sessions/ 顶层：年份目录必须是 4 位数字；其它目录沿用通用递归，不参与剪枝。
+fn collect_sessions_files(
+    sessions_dir: &Path,
+    files: &mut Vec<PathBuf>,
+    files_pruned: &mut u32,
+    by_path: &HashMap<&str, &UsageSyncCursor>,
+    fresh_days: i64,
+) {
+    let Ok(entries) = fs::read_dir(sessions_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
+                files.push(path);
+            }
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        match parse_partition_component(&name, 4) {
+            // 非年份目录（如 sessions/tmp/）：沿用通用递归
+            None => collect_jsonl_recursive(&path, files, 1, 3),
+            Some(year) => collect_month_dirs(&path, year, files, files_pruned, by_path, fresh_days),
+        }
+    }
+}
+
+/// sessions/YYYY/ 层：月份目录必须是 2 位数字。
+fn collect_month_dirs(
+    year_dir: &Path,
+    year: u32,
+    files: &mut Vec<PathBuf>,
+    files_pruned: &mut u32,
+    by_path: &HashMap<&str, &UsageSyncCursor>,
+    fresh_days: i64,
+) {
+    let Ok(entries) = fs::read_dir(year_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
+                files.push(path);
+            }
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        match parse_partition_component(&name, 2) {
+            None => collect_jsonl_recursive(&path, files, 2, 3),
+            Some(month) => {
+                collect_day_dirs(&path, year, month, files, files_pruned, by_path, fresh_days);
+            }
+        }
+    }
+}
+
+/// sessions/YYYY/MM/ 层：识别合法日期分区 sessions/YYYY/MM/DD/，尝试整体剪枝。
+fn collect_day_dirs(
+    month_dir: &Path,
+    year: u32,
+    month: u32,
+    files: &mut Vec<PathBuf>,
+    files_pruned: &mut u32,
+    by_path: &HashMap<&str, &UsageSyncCursor>,
+    fresh_days: i64,
+) {
+    let Ok(entries) = fs::read_dir(month_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
+                files.push(path);
+            }
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        let date = match parse_partition_component(&name, 2)
+            .and_then(|day| chrono::NaiveDate::from_ymd_opt(year as i32, month, day))
+        {
+            // 目录名不是合法日历日期（如 02/30）：沿用通用递归，不参与剪枝
+            None => {
+                collect_jsonl_recursive(&path, files, 3, 3);
+                continue;
+            }
+            Some(date) => date,
+        };
+        match try_prune_codex_partition(&path, date, by_path, fresh_days) {
+            Some(pruned) => *files_pruned += pruned,
+            None => collect_jsonl_recursive(&path, files, 3, 3),
+        }
+    }
+}
+
+/// 判断一个 sessions/YYYY/MM/DD 分区能否整体跳过，能则返回被剪掉的 .jsonl 文件数。
+///
+/// 三条规则必须同时满足：
+///   (a) 分区日期早于「今天（本地时区）- 保留窗口」；
+///   (b) 分区下每个 .jsonl 都在游标表中有记录且 modified_at_ns > 0（确实成功同步过）；
+///   (c) 分区目录 mtime 不晚于分区内所有游标里最大的 modified_at_ns
+///       （目录 mtime 在文件新增/删除时会变，兜住「老分区里多了个新文件」）。
+///
+/// 任何一条不满足都返回 None，分区照常全扫。判断全程只 read_dir / stat 目录，
+/// 不打开任何会话文件。
+fn try_prune_codex_partition(
+    partition_dir: &Path,
+    partition_date: chrono::NaiveDate,
+    by_path: &HashMap<&str, &UsageSyncCursor>,
+    fresh_days: i64,
+) -> Option<u32> {
+    // (a) 日期窗口；窗口极大时 duration/cutoff 溢出，等价于关闭剪枝
+    let today = chrono::Local::now().date_naive();
+    let cutoff = chrono::Duration::try_days(fresh_days)
+        .and_then(|window| today.checked_sub_signed(window))?;
+    if partition_date >= cutoff {
+        return None;
+    }
+
+    // (b) 每个 .jsonl 都有游标且 modified_at_ns > 0
+    let entries = fs::read_dir(partition_dir).ok()?;
+    let mut pruned: u32 = 0;
+    let mut max_cursor_modified: i64 = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let path_str = path.to_string_lossy();
+        let cursor = by_path.get(path_str.as_ref())?;
+        if cursor.modified_at_ns <= 0 {
+            return None;
+        }
+        max_cursor_modified = max_cursor_modified.max(cursor.modified_at_ns);
+        pruned += 1;
+    }
+    if pruned == 0 {
+        // 空分区没有文件可剪
+        return Some(0);
+    }
+
+    // (c) 目录 mtime 不晚于分区内最大游标时间
+    let dir_modified = fs::metadata(partition_dir)
+        .ok()
+        .map(|metadata| metadata_modified_nanos(&metadata))?;
+    if dir_modified > max_cursor_modified {
+        return None;
+    }
+
+    Some(pruned)
 }
 
 /// 递归扫描目录下的 .jsonl 文件（限制最大深度）
@@ -368,8 +583,8 @@ fn sync_single_codex_file_with_cursors(
 
     // 先打开文件，再从同一句柄取 metadata 和实体标识，
     // 避免路径在 metadata 查询与实际解析之间被替换。
-    let file =
-        fs::File::open(file_path).map_err(|e| AppError::Config(format!("无法打开文件: {e}")))?;
+    let file = open_codex_session_file(file_path)
+        .map_err(|e| AppError::Config(format!("无法打开文件: {e}")))?;
     let metadata = file
         .metadata()
         .map_err(|e| AppError::Config(format!("无法读取文件元数据: {e}")))?;
@@ -853,6 +1068,7 @@ fn find_codex_pricing(conn: &rusqlite::Connection, model_id: &str) -> Option<Mod
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Datelike;
 
     fn save_session_provider(db: &Database, provider_id: &str) -> Result<(), AppError> {
         db.save_usage_provider(&crate::usage::domain::UsageProviderInput {
@@ -1004,8 +1220,375 @@ mod tests {
 
     #[test]
     fn test_collect_codex_session_files_nonexistent() {
-        let files = collect_codex_session_files(Path::new("/nonexistent/path"));
+        let (files, files_pruned) = collect_codex_session_files_with_window(
+            Path::new("/nonexistent/path"),
+            &HashMap::new(),
+            CODEX_PARTITION_FRESH_DAYS,
+        );
         assert!(files.is_empty());
+        assert_eq!(files_pruned, 0);
+    }
+
+    // ── 日期分区剪枝 ──
+
+    /// 构造按 resource_path 索引的游标表（剪枝判断只看这张表）
+    fn by_path_from_cursors(cursors: &[UsageSyncCursor]) -> HashMap<&str, &UsageSyncCursor> {
+        cursors
+            .iter()
+            .filter_map(|cursor| cursor.resource_path.as_deref().map(|path| (path, cursor)))
+            .collect()
+    }
+
+    /// 造一个指向给定文件的游标记录（资源身份留空，模拟旧的路径键游标）
+    fn cursor_for_path(path: &Path, modified_at_ns: i64) -> UsageSyncCursor {
+        let path_str = path.to_string_lossy().to_string();
+        UsageSyncCursor {
+            source: "codex".to_string(),
+            cursor_key: path_str.clone(),
+            resource_path: Some(path_str),
+            resource_identity: None,
+            modified_at_ns,
+            size_bytes: 0,
+            byte_offset: 0,
+            line_offset: 0,
+            parser_state_json: None,
+            last_success_at: 1,
+        }
+    }
+
+    /// 返回 sessions/YYYY/MM/DD 分区目录路径
+    fn partition_dir(root: &Path, date: chrono::NaiveDate) -> PathBuf {
+        root.join("sessions")
+            .join(format!("{:04}", date.year()))
+            .join(format!("{:02}", date.month()))
+            .join(format!("{:02}", date.day()))
+    }
+
+    /// 在分区目录里写一个 .jsonl 文件并返回其路径
+    fn write_partition_file(root: &Path, date: chrono::NaiveDate, name: &str) -> PathBuf {
+        let dir = partition_dir(root, date);
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join(name);
+        fs::write(&file, "{}\n").unwrap();
+        file
+    }
+
+    /// 距今 N 天的日期（本地时区）
+    fn date_days_ago(days: i64) -> chrono::NaiveDate {
+        chrono::Local::now().date_naive() - chrono::Duration::days(days)
+    }
+
+    /// 游标时间戳 = 文件 mtime + 1 小时，保证目录 mtime 不晚于最大游标时间
+    fn cursor_modified_after_file(path: &Path) -> i64 {
+        let metadata = fs::metadata(path).unwrap();
+        metadata_modified_nanos(&metadata) + 3_600_000_000_000
+    }
+
+    fn new_temp_dir(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("llm-usage-bar-{label}-{}", uuid::Uuid::new_v4()))
+    }
+
+    fn reset_codex_file_open_count() {
+        CODEX_FILE_OPEN_COUNT.with(|count| count.set(0));
+    }
+
+    fn codex_file_open_count() -> u64 {
+        CODEX_FILE_OPEN_COUNT.with(|count| count.get())
+    }
+
+    #[test]
+    fn prune_skips_old_partition_when_every_file_has_a_positive_cursor() {
+        let tmp = new_temp_dir("codex-prune-old");
+        let date = date_days_ago(30);
+        let first = write_partition_file(&tmp, date, "first.jsonl");
+        let second = write_partition_file(&tmp, date, "second.jsonl");
+        let cursors = vec![
+            cursor_for_path(&first, cursor_modified_after_file(&first)),
+            cursor_for_path(&second, cursor_modified_after_file(&second)),
+        ];
+        let by_path = by_path_from_cursors(&cursors);
+
+        let (files, files_pruned) =
+            collect_codex_session_files_with_window(&tmp, &by_path, CODEX_PARTITION_FRESH_DAYS);
+        assert_eq!(files_pruned, 2);
+        assert!(
+            files.is_empty(),
+            "被剪掉的分区文件不应出现在 files 里: {files:?}"
+        );
+        fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn prune_requires_every_partition_file_to_have_a_cursor() {
+        let tmp = new_temp_dir("codex-prune-missing-cursor");
+        let date = date_days_ago(30);
+        let first = write_partition_file(&tmp, date, "first.jsonl");
+        let second = write_partition_file(&tmp, date, "second.jsonl");
+        // second.jsonl 在 by_path 里查不到 → 整个分区不剪
+        let cursors = vec![cursor_for_path(&first, cursor_modified_after_file(&first))];
+        let by_path = by_path_from_cursors(&cursors);
+
+        let (files, files_pruned) =
+            collect_codex_session_files_with_window(&tmp, &by_path, CODEX_PARTITION_FRESH_DAYS);
+        assert_eq!(files_pruned, 0, "缺失游标的文件必须照常扫描");
+        assert_eq!(files.len(), 2);
+        assert!(files.contains(&first) && files.contains(&second));
+        fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn prune_requires_positive_cursor_timestamps() {
+        let tmp = new_temp_dir("codex-prune-zero-cursor");
+        let date = date_days_ago(30);
+        let first = write_partition_file(&tmp, date, "first.jsonl");
+        let second = write_partition_file(&tmp, date, "second.jsonl");
+        // modified_at_ns == 0 表示从未成功同步过 → 不剪
+        let cursors = vec![cursor_for_path(&first, 0), cursor_for_path(&second, 0)];
+        let by_path = by_path_from_cursors(&cursors);
+
+        let (files, files_pruned) =
+            collect_codex_session_files_with_window(&tmp, &by_path, CODEX_PARTITION_FRESH_DAYS);
+        assert_eq!(files_pruned, 0);
+        assert_eq!(files.len(), 2);
+        fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn prune_requires_partition_dir_mtime_not_newer_than_cursor_times() {
+        let tmp = new_temp_dir("codex-prune-dir-mtime");
+        let date = date_days_ago(30);
+        let first = write_partition_file(&tmp, date, "first.jsonl");
+        let second = write_partition_file(&tmp, date, "second.jsonl");
+        // 游标时间戳很旧；随后触碰目录（新增再删除条目），把目录 mtime 抬到「现在」
+        let cursors = vec![cursor_for_path(&first, 1), cursor_for_path(&second, 1)];
+        let by_path = by_path_from_cursors(&cursors);
+        let scratch = partition_dir(&tmp, date).join("scratch.tmp");
+        fs::write(&scratch, "x").unwrap();
+        fs::remove_file(&scratch).unwrap();
+
+        let (files, files_pruned) =
+            collect_codex_session_files_with_window(&tmp, &by_path, CODEX_PARTITION_FRESH_DAYS);
+        assert_eq!(files_pruned, 0, "目录 mtime 比最大游标时间新时必须全扫");
+        assert_eq!(files.len(), 2);
+        fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn prune_never_touches_recent_partitions() {
+        let tmp = new_temp_dir("codex-prune-recent");
+        let mut cursors = Vec::new();
+        let mut recent_files = Vec::new();
+        // 今天、昨天、前天都在保留窗口内，永不剪
+        for days in [0, 1, 2] {
+            let date = date_days_ago(days);
+            let file = write_partition_file(&tmp, date, "recent.jsonl");
+            cursors.push(cursor_for_path(&file, cursor_modified_after_file(&file)));
+            recent_files.push(file);
+        }
+        let by_path = by_path_from_cursors(&cursors);
+
+        let (files, files_pruned) =
+            collect_codex_session_files_with_window(&tmp, &by_path, CODEX_PARTITION_FRESH_DAYS);
+        assert_eq!(files_pruned, 0, "今天/昨天/前天的分区永不剪枝");
+        assert_eq!(files.len(), 3);
+        for file in &recent_files {
+            assert!(files.contains(file), "{} 必须被扫描", file.display());
+        }
+        fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn prune_ignores_non_date_and_invalid_date_directories() {
+        let tmp = new_temp_dir("codex-prune-non-date");
+        // sessions/tmp/ 不是 4 位年份目录
+        let tmp_dir = tmp.join("sessions").join("tmp");
+        fs::create_dir_all(&tmp_dir).unwrap();
+        let scratch_file = tmp_dir.join("scratch.jsonl");
+        fs::write(&scratch_file, "{}\n").unwrap();
+        // sessions/2026/02/30 是纯数字但非法日历日期
+        let invalid_dir = tmp.join("sessions").join("2026").join("02").join("30");
+        fs::create_dir_all(&invalid_dir).unwrap();
+        let invalid_file = invalid_dir.join("bad.jsonl");
+        fs::write(&invalid_file, "{}\n").unwrap();
+
+        let cursors = vec![
+            cursor_for_path(&scratch_file, cursor_modified_after_file(&scratch_file)),
+            cursor_for_path(&invalid_file, cursor_modified_after_file(&invalid_file)),
+        ];
+        let by_path = by_path_from_cursors(&cursors);
+
+        let (files, files_pruned) =
+            collect_codex_session_files_with_window(&tmp, &by_path, CODEX_PARTITION_FRESH_DAYS);
+        assert_eq!(files_pruned, 0);
+        assert_eq!(files.len(), 2, "非日期/非法日期目录必须照常扫描");
+        fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn prune_never_touches_archived_sessions() {
+        let tmp = new_temp_dir("codex-prune-archived");
+        let archived = tmp.join("archived_sessions");
+        fs::create_dir_all(&archived).unwrap();
+        let file = archived.join("old-session.jsonl");
+        fs::write(&file, "{}\n").unwrap();
+        let cursors = vec![cursor_for_path(&file, cursor_modified_after_file(&file))];
+        let by_path = by_path_from_cursors(&cursors);
+
+        let (files, files_pruned) =
+            collect_codex_session_files_with_window(&tmp, &by_path, CODEX_PARTITION_FRESH_DAYS);
+        assert_eq!(files_pruned, 0, "archived_sessions 不参与剪枝");
+        assert_eq!(files, vec![file]);
+        fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn disabling_the_prune_window_matches_pre_change_collection() {
+        let tmp = new_temp_dir("codex-prune-disabled");
+        let old_file = write_partition_file(&tmp, date_days_ago(30), "old.jsonl");
+        let today_file = write_partition_file(&tmp, date_days_ago(0), "today.jsonl");
+        let cursors = vec![
+            cursor_for_path(&old_file, cursor_modified_after_file(&old_file)),
+            cursor_for_path(&today_file, cursor_modified_after_file(&today_file)),
+        ];
+        let by_path = by_path_from_cursors(&cursors);
+
+        // 关闭剪枝（fresh_days 极大，cutoff 下溢）：收集结果必须与改动前全量收集一致
+        let (disabled_files, disabled_pruned) =
+            collect_codex_session_files_with_window(&tmp, &by_path, i64::MAX);
+        // 空游标表 → 任何分区都不满足规则 (b)，等价于旧版的全量收集
+        let (baseline_files, baseline_pruned) = collect_codex_session_files_with_window(
+            &tmp,
+            &HashMap::new(),
+            CODEX_PARTITION_FRESH_DAYS,
+        );
+
+        assert_eq!(disabled_pruned, 0);
+        assert_eq!(baseline_pruned, 0);
+        assert_eq!(
+            disabled_files, baseline_files,
+            "关闭剪枝后的收集结果必须与改动前全量收集逐文件一致"
+        );
+        assert_eq!(disabled_files.len(), 2);
+        fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn sync_with_pruning_disabled_matches_pre_change_results() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let tmp = new_temp_dir("codex-sync-disabled");
+        let date = date_days_ago(30);
+        let first = write_partition_file(&tmp, date, "first.jsonl");
+        let second = write_partition_file(&tmp, date, "second.jsonl");
+        // 两个文件都已成功同步（游标时间戳晚于文件 mtime，扫描时必然 skip）
+        for file in [&first, &second] {
+            let metadata = fs::metadata(file).unwrap();
+            db.put_usage_sync_cursor(&UsageSyncCursor {
+                source: "codex".to_string(),
+                cursor_key: file.to_string_lossy().to_string(),
+                resource_path: Some(file.to_string_lossy().to_string()),
+                resource_identity: None,
+                modified_at_ns: metadata_modified_nanos(&metadata) + 3_600_000_000_000,
+                size_bytes: metadata.len() as i64,
+                byte_offset: 0,
+                line_offset: 0,
+                parser_state_json: None,
+                last_success_at: 1,
+            })?;
+        }
+
+        // 关闭剪枝：与改动前一致 —— 两个文件都被扫描并被游标 skip
+        let disabled = sync_codex_usage_impl_with_window(&db, None, &tmp, i64::MAX)?;
+        assert_eq!(
+            (
+                disabled.files_scanned,
+                disabled.files_pruned,
+                disabled.imported,
+                disabled.skipped
+            ),
+            (2, 0, 0, 0),
+            "关闭剪枝时必须与改动前逐字段一致"
+        );
+
+        // 默认窗口：老分区被整体剪掉，不再打开文件
+        let enabled =
+            sync_codex_usage_impl_with_window(&db, None, &tmp, CODEX_PARTITION_FRESH_DAYS)?;
+        assert_eq!(
+            (
+                enabled.files_scanned,
+                enabled.files_pruned,
+                enabled.imported,
+                enabled.skipped
+            ),
+            (0, 2, 0, 0)
+        );
+        fs::remove_dir_all(&tmp).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn prune_skips_file_opens_for_fully_synced_old_partitions() -> Result<(), AppError> {
+        // 实测:模拟 1294 个文件的会话目录树,对比关闭/开启剪枝时的 File::open 次数。
+        let db = Database::memory()?;
+        let tmp = new_temp_dir("codex-prune-open-count");
+        let mut files: Vec<PathBuf> = Vec::new();
+        // 三个 30 天前的老分区 × 400 个文件 = 1200 个
+        for (i, days) in [30i64, 31, 32].iter().enumerate() {
+            let date = date_days_ago(*days);
+            for j in 0..400 {
+                files.push(write_partition_file(&tmp, date, &format!("{i}-{j}.jsonl")));
+            }
+        }
+        // 今天分区 94 个文件,永不剪
+        let recent = date_days_ago(0);
+        for j in 0..94 {
+            files.push(write_partition_file(
+                &tmp,
+                recent,
+                &format!("recent-{j}.jsonl"),
+            ));
+        }
+        assert_eq!(files.len(), 1294);
+
+        // 全部文件都成功同步过（游标时间戳晚于文件 mtime,扫描时必然 skip）
+        for file in &files {
+            let metadata = fs::metadata(file).unwrap();
+            db.put_usage_sync_cursor(&UsageSyncCursor {
+                source: "codex".to_string(),
+                cursor_key: file.to_string_lossy().to_string(),
+                resource_path: Some(file.to_string_lossy().to_string()),
+                resource_identity: None,
+                modified_at_ns: metadata_modified_nanos(&metadata) + 3_600_000_000_000,
+                size_bytes: metadata.len() as i64,
+                byte_offset: 0,
+                line_offset: 0,
+                parser_state_json: None,
+                last_success_at: 1,
+            })?;
+        }
+
+        // 关闭剪枝（改动前行为）：每个文件都 File::open 一次
+        reset_codex_file_open_count();
+        let baseline = sync_codex_usage_impl_with_window(&db, None, &tmp, i64::MAX)?;
+        assert_eq!(baseline.files_scanned, 1294);
+        assert_eq!(baseline.files_pruned, 0);
+        assert_eq!(codex_file_open_count(), 1294, "关闭剪枝时必须打开全部文件");
+
+        // 开启剪枝（改动后行为）：只有今天分区的 94 个文件被打开
+        reset_codex_file_open_count();
+        let pruned =
+            sync_codex_usage_impl_with_window(&db, None, &tmp, CODEX_PARTITION_FRESH_DAYS)?;
+        assert_eq!(pruned.files_scanned, 94);
+        assert_eq!(pruned.files_pruned, 1200);
+        assert_eq!(
+            codex_file_open_count(),
+            94,
+            "老分区必须连 File::open 都不做"
+        );
+        assert_eq!(pruned.imported, 0);
+        assert_eq!(pruned.skipped, 0);
+
+        fs::remove_dir_all(&tmp).ok();
+        Ok(())
     }
 
     #[test]

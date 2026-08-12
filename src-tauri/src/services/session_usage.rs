@@ -36,6 +36,7 @@ pub struct SessionSyncResult {
     pub imported: u32,
     pub skipped: u32,
     pub files_scanned: u32,
+    pub files_pruned: u32,
     pub errors: Vec<String>,
 }
 
@@ -103,6 +104,7 @@ fn sync_claude_session_logs_impl(
             imported: 0,
             skipped: 0,
             files_scanned: 0,
+            files_pruned: 0,
             errors: vec![],
         });
     }
@@ -111,6 +113,7 @@ fn sync_claude_session_logs_impl(
         imported: 0,
         skipped: 0,
         files_scanned: 0,
+        files_pruned: 0,
         errors: vec![],
     };
 
