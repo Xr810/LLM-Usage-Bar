@@ -1,0 +1,8 @@
+// The formal com.llmusagebar.desktop identity is intentionally withheld until
+// every active interface has switched to Swift and the production gate passes.
+PRODUCT_BUNDLE_IDENTIFIER = com.llmusagebar.native.production-candidate
+PRODUCT_NAME = LLM Usage Bar Native Candidate
+SWIFT_OPTIMIZATION_LEVEL = -O
+DEBUG_INFORMATION_FORMAT = dwarf-with-dsym
+ENABLE_HARDENED_RUNTIME = YES
+CODE_SIGN_STYLE = Automatic

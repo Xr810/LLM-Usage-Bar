@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "data": {
+    "launchOnStartup": false,
+    "silentStartup": true,
+    "showInTray": true,
+    "minimizeToTrayOnClose": true,
+    "language": "zh-TW",
+    "usageWarningRemainingPercent": 45,
+    "usageCriticalRemainingPercent": 15,
+    "apiBudgetMode": "perProvider",
+    "sharedApiDailyBudgetUsd": "12.50",
+    "usageDashboardRefreshIntervalMs": 30000
+  },
+  "revision": "ffeda4e872ddd66df359599371f97f04"
+}
