@@ -1,5 +1,13 @@
 # Codex Manual Weekly Reset Credits — Design QA
 
+> **归档说明(2026-08-13):** 本文原名 `design-qa.md`,位于仓库根目录。
+> 文中引用的 `qa-artifacts/*.png` 截图已从工作区移除 —— 那是已完成改版的
+> 一次性产物。需要时从 git 历史取回:
+>
+> ```bash
+> git checkout 29b159f2 -- qa-artifacts/
+> ```
+
 Date: 2026-07-19
 Branch: `codex/manual-reset-credits`
 

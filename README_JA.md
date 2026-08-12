@@ -75,7 +75,7 @@ LLM Usage Bar はそのすべてをローカルで読み取り、メニューバ
 pnpm install && pnpm build:local:mac
 ```
 
-ビルドと署名を行い、`release/tauri-target/release/bundle/macos/LLM Usage Bar.app` を生成して終了します。`--build-only` を外して `./script/build_and_run.sh` を実行すると、`/Applications` へのインストールと起動まで行い、新しいバンドルが起動しなかった場合は直前のアプリに復元する検証も走ります。
+ビルドと署名を行い、`release/tauri-target/release/bundle/macos/LLM Usage Bar.app` を生成して終了します。`--build-only` を外して `./scripts/build_and_run.sh` を実行すると、`/Applications` へのインストールと起動まで行い、新しいバンドルが起動しなかった場合は直前のアプリに復元する検証も走ります。
 
 > **アップグレードは一方向です。** アプリは初回起動時にデータベースを前方へマイグレートし、その前に自動バックアップを取ります。マイグレート後は古いビルドではもう開けません — バージョン上限が、データを危険に晒す代わりに拒否します。意図して入れてください。
 

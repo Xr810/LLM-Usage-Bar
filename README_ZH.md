@@ -75,7 +75,7 @@ LLM Usage Bar 在本地把这些全读出来，在菜单栏给出一个答案：
 pnpm install && pnpm build:local:mac
 ```
 
-这会构建并签名，产物在 `release/tauri-target/release/bundle/macos/LLM Usage Bar.app`，然后停下。去掉 `--build-only`（即直接跑 `./script/build_and_run.sh`）则会顺带装进 `/Applications` 并启动，还带一道校验 —— 新包起不来就自动恢复上一个版本。
+这会构建并签名，产物在 `release/tauri-target/release/bundle/macos/LLM Usage Bar.app`，然后停下。去掉 `--build-only`（即直接跑 `./scripts/build_and_run.sh`）则会顺带装进 `/Applications` 并启动，还带一道校验 —— 新包起不来就自动恢复上一个版本。
 
 > **升级是单向的。** app 首次启动会把数据库向前迁移，迁移前自动备份。一旦迁移完成，旧版本就再也打不开它了 —— 版本上限会直接拒绝，而不是冒险去写。装之前想清楚。
 

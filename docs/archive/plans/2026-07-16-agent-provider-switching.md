@@ -12,7 +12,7 @@
 
 **Tech Stack:** Tauri 2.11.5, Rust 2021, rusqlite/SQLite, protected macOS credential storage, XChaCha20-Poly1305, Axum/Hyper proxying, React 18, TypeScript, TanStack Query, Tailwind, i18next, Vitest, Testing Library.
 
-**Approved design:** [`docs/superpowers/specs/2026-07-16-agent-provider-switching-design.md`](../specs/2026-07-16-agent-provider-switching-design.md)
+**Approved design:** [`docs/design/2026-07-16-agent-provider-switching-design.md`](../../design/2026-07-16-agent-provider-switching-design.md)
 
 ---
 

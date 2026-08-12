@@ -75,7 +75,7 @@ There are no published releases yet. Build it yourself — macOS 12 or later:
 pnpm install && pnpm build:local:mac
 ```
 
-That builds and signs the app at `release/tauri-target/release/bundle/macos/LLM Usage Bar.app` and stops. Drop `--build-only` — run `./script/build_and_run.sh` — to also install it to `/Applications` and launch it, with a verification pass that restores the previous app if the new bundle fails to start.
+That builds and signs the app at `release/tauri-target/release/bundle/macos/LLM Usage Bar.app` and stops. Drop `--build-only` — run `./scripts/build_and_run.sh` — to also install it to `/Applications` and launch it, with a verification pass that restores the previous app if the new bundle fails to start.
 
 > **One-way upgrade.** The app migrates its database forward on first launch and takes an automatic backup first. Once migrated, an older build can no longer open it — the version ceiling refuses rather than risking the data. Install deliberately.
 

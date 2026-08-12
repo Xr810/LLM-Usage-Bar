@@ -7,9 +7,9 @@
 >
 > | 被取代的文档 | 原位置 | 状态 |
 > | --- | --- | --- |
-> | `docs/task-state/current-task.md`(2026-07 版) | 主仓库 | 历史,PR #6 时代,已完成 |
-> | `docs/task-state/2026-07-12-dependabot-ci-failures-handoff.md` | 主仓库 | 作废 —— PR #4/#5 已被关闭重开为 #15/#18 |
-> | 2026-08-07 checkpoint(`docs/task-state/current-task.md` 更新版) | 分支 `claude/llm-usage-monitoring-app-4a9554` 提交 `67676ef9e` | 内容已并入本文 §2、§6、§7 |
+> | `docs/archive/task-state/current-task.md`(2026-07 版) | 主仓库 | 历史,PR #6 时代,已完成 |
+> | `docs/archive/task-state/2026-07-12-dependabot-ci-failures-handoff.md` | 主仓库 | 作废 —— PR #4/#5 已被关闭重开为 #15/#18 |
+> | 2026-08-07 checkpoint(`docs/archive/task-state/current-task.md` 更新版) | 分支 `claude/llm-usage-monitoring-app-4a9554` 提交 `67676ef9e` | 内容已并入本文 §2、§6、§7 |
 > | `HANDOFF.md` 报告(一)(二) | worktree `usage-model-agent-classification-03acf1`(报告二未提交) | 内容已并入本文 §4、§5 |
 >
 > 交接方式:后续 agent 把新发现**追加到本文件**,不要另开新文档。
@@ -174,7 +174,7 @@ minor/patch(见 P5),Dependabot 下个周期会重建一个不含 major 的小 PR
 
 ### P4 — 目视验证 ⏳ 只剩最后一眼(2026-08-07)
 
-新版已通过 `script/build_and_run.sh` 构建、签名、安装并正常运行;生产库已
+新版已通过 `scripts/build_and_run.sh` 构建、签名、安装并正常运行;生产库已
 迁移 v23→v24(迁移前备份 `db_backup_20260807_134610.db`),日志健康,
 session 同步正常。**剩下的只是用户亲眼扫一遍**:三个 Tab(Providers /
 Models / Agents)的渲染、新红绿灯与 pace 详情、暗色/亮色、窄窗口。
@@ -327,7 +327,7 @@ max 混判的真 bug(改为各自判定取最差)。
 - **cfg 陷阱**:开发机 macOS、CI ubuntu。平台门控代码的错误本地不可见,
   只有 CI 能抓(§2 第一条的根因)。
 - **签名**:`~/Library/Keychains/llm-usage-bar-signing.keychain-db` 是独立密码
-  且用户没有密码。`script/build_and_run.sh` 的修复(提交 `5ed753e08`,在
+  且用户没有密码。`scripts/build_and_run.sh` 的修复(提交 `5ed753e08`,在
   traffic-light 分支上,搬迁时一并带上):只在提供了
   `LLM_USAGE_BAR_SIGNING_KEYCHAIN_PASSWORD` 时才用专用钥匙串,否则 login 钥匙串;
   真签探针带 5 秒看门狗(codesign 对锁住的钥匙串会弹 GUI 框无限等待,不会快速
@@ -345,12 +345,12 @@ max 混判的真 bug(改为各自判定取最差)。
 
 ## 8. 仍然有效的参考文档(未被本文取代)
 
-- `docs/superpowers/specs/2026-07-17-provider-only-monitoring-design.md` —— 产品方向定调
-- `docs/superpowers/specs/2026-08-03-official-pricing-refresh-design.md` —— 官方价目刷新(已实现)
-- `docs/superpowers/specs/2026-08-05-custom-pricing-usability-design.md` —— 自定义价格可用性(已实现,`317911b33` / `08dcb9dea`)
+- `docs/design/2026-07-17-provider-only-monitoring-design.md` —— 产品方向定调
+- `docs/design/2026-08-03-official-pricing-refresh-design.md` —— 官方价目刷新(已实现)
+- `docs/design/2026-08-05-custom-pricing-usability-design.md` —— 自定义价格可用性(已实现,`317911b33` / `08dcb9dea`)
 - `AGENTS.md` —— 包装器与 Kimi 委派规则
-- `docs/usage-dashboard-acceptance.md` —— 验收 runbook(PR #6 时代,流程仍可参考)
-- 其余 `docs/superpowers/plans/*` 与 `design-qa.md` 为历史实施记录,只作考古用
+- `docs/testing/usage-dashboard-acceptance.md` —— 验收 runbook(PR #6 时代,流程仍可参考)
+- 其余 `docs/archive/plans/*` 与 `docs/archive/2026-07-19-manual-reset-credits-design-qa.md` 为历史实施记录,只作考古用
 
 ---
 
@@ -795,7 +795,7 @@ SQLite 层(两侧同一个 C 库)、HTTP 层(I/O 等待为主)。后两者判断
 
 ### 11.8 选型结论(2026-08-12 评审复核后)
 
-评审输入材料见 **`docs/tech-route-review-2026-08-12.md`**;复核意见要点:
+评审输入材料见 **`docs/design/tech-route-review-2026-08-12.md`**;复核意见要点:
 
 - 其主结论(§5.5,"能耗由架构决定,不由核心语言决定")**成立**,数据可信;
 - 但评审文档 §6 有两行夸大了 Swift 优势:Instruments 对 Rust 二进制同样可用

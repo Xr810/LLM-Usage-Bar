@@ -23,7 +23,7 @@ the official `claude auth` commands; it is never a proxy target.
 TanStack Query, Vitest, Testing Library, i18next.
 
 **Approved design:**
-[`docs/superpowers/specs/2026-07-15-default-provider-cards-design.md`](../specs/2026-07-15-default-provider-cards-design.md)
+[`docs/design/2026-07-15-default-provider-cards-design.md`](../../design/2026-07-15-default-provider-cards-design.md)
 
 ## Non-negotiable implementation decisions
 

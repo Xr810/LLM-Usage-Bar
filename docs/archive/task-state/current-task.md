@@ -1,6 +1,6 @@
 # Current Task State — moved
 
-**This document is superseded. Read the repository-root [`HANDOFF.md`](../../HANDOFF.md) instead.**
+**This document is superseded. Read the repository-root [`HANDOFF.md`](../../../HANDOFF.md) instead.**
 
 On 2026-08-07 every scattered record document (this file's July content, the
 2026-08-07 checkpoint on `claude/llm-usage-monitoring-app-4a9554`, both reports

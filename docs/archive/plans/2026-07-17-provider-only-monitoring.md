@@ -4,7 +4,7 @@
 leaving CC Switch as the sole Provider-switching application.
 
 **Canonical design:**
-[`2026-07-17-provider-only-monitoring-design.md`](../specs/2026-07-17-provider-only-monitoring-design.md)
+[`2026-07-17-provider-only-monitoring-design.md`](../../design/2026-07-17-provider-only-monitoring-design.md)
 
 **Status (2026-07-17):** Implemented on `codex/provider-only-monitoring`.
 Tasks 1–5 are complete. Task 6 is complete at the runtime boundary: Agent

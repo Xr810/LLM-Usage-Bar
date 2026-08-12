@@ -6,7 +6,7 @@
 - 日期：2026-07-12
 - 目标仓库：`/Users/max/LLM Usage Bar`
 - 目标产品：LLM Usage Bar
-- 基线规范：`docs/superpowers/specs/2026-07-10-usage-dashboard-design.md`
+- 基线规范：`docs/design/2026-07-10-usage-dashboard-design.md`
 
 本文细化并替换基线规范中的首页信息架构和 Provider 配置入口，不改变其中已经确认的计费、额度、事件来源与去重边界。
 

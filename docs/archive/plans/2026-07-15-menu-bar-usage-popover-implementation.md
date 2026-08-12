@@ -8,7 +8,7 @@
 
 **Tech Stack:** Tauri 2.11.5, Rust, rusqlite, rust_decimal, chrono, tokio, React 18, TypeScript, TanStack Query, Tailwind, i18next, Vitest, Testing Library.
 
-**Approved design:** [`docs/superpowers/specs/2026-07-15-menu-bar-usage-popover-design.md`](../specs/2026-07-15-menu-bar-usage-popover-design.md)
+**Approved design:** [`docs/design/2026-07-15-menu-bar-usage-popover-design.md`](../../design/2026-07-15-menu-bar-usage-popover-design.md)
 
 ## Global Constraints
 
