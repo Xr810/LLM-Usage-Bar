@@ -798,7 +798,11 @@ fn save_settings_file_at(path: &Path, settings: &AppSettings) -> Result<(), AppE
     let mut normalized = settings.clone();
     normalized.normalize_paths();
 
-    let json = serde_json::to_string_pretty(&normalized)
+    save_settings_file_exact_at(path, &normalized)
+}
+
+fn save_settings_file_exact_at(path: &Path, settings: &AppSettings) -> Result<(), AppError> {
+    let json = serde_json::to_string_pretty(settings)
         .map_err(|e| AppError::JsonSerialize { source: e })?;
     write_settings_json_atomically(path, &json)
 }
@@ -857,15 +861,85 @@ pub fn get_settings_for_frontend() -> AppSettings {
 }
 
 pub fn update_settings(mut new_settings: AppSettings) -> Result<(), AppError> {
-    new_settings.normalize_paths();
-    save_settings_file(&new_settings)?;
+    update_settings_checked(move |_| {
+        new_settings.normalize_paths();
+        Ok((new_settings, ()))
+    })
+}
 
-    let mut guard = settings_store().write().unwrap_or_else(|e| {
+pub(crate) fn update_settings_checked<T, E, F>(prepare: F) -> Result<T, E>
+where
+    E: From<AppError>,
+    F: FnOnce(&AppSettings) -> Result<(AppSettings, T), E>,
+{
+    let path = AppSettings::settings_path()
+        .ok_or_else(|| E::from(AppError::Config("无法获取用户主目录".to_string())))?;
+    update_settings_in_store(settings_store(), &path, prepare)
+}
+
+pub(crate) fn update_settings_in_store<T, E, F>(
+    store: &RwLock<AppSettings>,
+    path: &Path,
+    prepare: F,
+) -> Result<T, E>
+where
+    E: From<AppError>,
+    F: FnOnce(&AppSettings) -> Result<(AppSettings, T), E>,
+{
+    update_settings_in_store_with_hooks(
+        store,
+        path,
+        |existing| {
+            let (mut next, result) = prepare(existing)?;
+            next.normalize_paths();
+            Ok((next, result))
+        },
+        |_, _| Ok(()),
+        |_, _| {},
+    )
+}
+
+pub(crate) fn update_settings_checked_with_hooks<T, E, F, Before, Rollback>(
+    prepare: F,
+    before_persist: Before,
+    rollback: Rollback,
+) -> Result<T, E>
+where
+    E: From<AppError>,
+    F: FnOnce(&AppSettings) -> Result<(AppSettings, T), E>,
+    Before: FnOnce(&AppSettings, &AppSettings) -> Result<(), E>,
+    Rollback: FnOnce(&AppSettings, &AppSettings),
+{
+    let path = AppSettings::settings_path()
+        .ok_or_else(|| E::from(AppError::Config("无法获取用户主目录".to_string())))?;
+    update_settings_in_store_with_hooks(settings_store(), &path, prepare, before_persist, rollback)
+}
+
+pub(crate) fn update_settings_in_store_with_hooks<T, E, F, Before, Rollback>(
+    store: &RwLock<AppSettings>,
+    path: &Path,
+    prepare: F,
+    before_persist: Before,
+    rollback: Rollback,
+) -> Result<T, E>
+where
+    E: From<AppError>,
+    F: FnOnce(&AppSettings) -> Result<(AppSettings, T), E>,
+    Before: FnOnce(&AppSettings, &AppSettings) -> Result<(), E>,
+    Rollback: FnOnce(&AppSettings, &AppSettings),
+{
+    let mut guard = store.write().unwrap_or_else(|e| {
         log::warn!("设置锁已毒化，使用恢复值: {e}");
         e.into_inner()
     });
-    *guard = new_settings;
-    Ok(())
+    let (next, result) = prepare(&guard)?;
+    before_persist(&guard, &next)?;
+    if let Err(error) = save_settings_file_exact_at(path, &next) {
+        rollback(&guard, &next);
+        return Err(E::from(error));
+    }
+    *guard = next;
+    Ok(result)
 }
 
 fn mutate_settings<F>(mutator: F) -> Result<(), AppError>

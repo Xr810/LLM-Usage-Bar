@@ -77,6 +77,23 @@ describe("useMainWindowNavigation", () => {
     expect(openProviderSettings).toHaveBeenCalledTimes(2);
   });
 
+  it("opens General settings for a native handoff", async () => {
+    const openGeneralSettings = vi.fn();
+    navigationMocks.takePending.mockResolvedValueOnce({
+      kind: "generalSettings",
+    });
+
+    renderHook(() =>
+      useMainWindowNavigation({
+        openUsage: vi.fn(),
+        openProviderSettings: vi.fn(),
+        openGeneralSettings,
+      }),
+    );
+
+    await waitFor(() => expect(openGeneralSettings).toHaveBeenCalledOnce());
+  });
+
   it("releases the waiting reveal only once the destination is painted", async () => {
     // The window is held back until this lands, so it has to survive the
     // re-render that removing the destination triggers.

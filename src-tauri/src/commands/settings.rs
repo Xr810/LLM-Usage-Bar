@@ -55,9 +55,10 @@ pub async fn save_settings(
     _state: tauri::State<'_, crate::store::AppState>,
     settings: crate::settings::AppSettings,
 ) -> Result<bool, String> {
-    let existing = crate::settings::get_settings();
-    let merged = merge_settings_for_save(settings, &existing);
-    crate::settings::update_settings(merged).map_err(|e| e.to_string())?;
+    crate::settings::update_settings_checked(move |existing| {
+        Ok::<_, crate::error::AppError>((merge_settings_for_save(settings, existing), ()))
+    })
+    .map_err(|error| error.to_string())?;
 
     Ok(true)
 }

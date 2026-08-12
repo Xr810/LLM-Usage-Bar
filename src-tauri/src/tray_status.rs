@@ -81,6 +81,11 @@ fn try_update_tray_tooltip(app: &AppHandle, tooltip: &'static str) -> Result<(),
 }
 
 pub fn publish_tray_usage(app: &AppHandle, snapshot: &TrayUsageSnapshot) {
+    #[cfg(target_os = "macos")]
+    if let Err(error) = crate::native_bridge::persist_tray_snapshot(snapshot) {
+        log::warn!("native tray snapshot persistence failed: {error}");
+    }
+
     crate::services::budget_alert::notify_for_snapshot(app, snapshot);
     publish_tray_usage_with_sinks(
         snapshot,

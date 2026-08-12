@@ -28,6 +28,8 @@ mod services;
 mod settings;
 mod store;
 
+#[cfg(target_os = "macos")]
+mod native_bridge;
 mod tray;
 mod tray_popover;
 pub mod tray_status;
@@ -455,24 +457,31 @@ pub fn run() {
 
     #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     {
-        builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
-            log::info!("=== Single Instance Callback Triggered ===");
-            log::debug!("Args count: {}", args.len());
-            for (i, arg) in args.iter().enumerate() {
-                log::debug!("  arg[{i}]: {}", redact_url_for_log(arg));
-            }
+        #[cfg(target_os = "macos")]
+        let should_install_single_instance = !native_bridge::isolated_test_mode();
+        #[cfg(not(target_os = "macos"))]
+        let should_install_single_instance = true;
 
-            if crate::lightweight::is_lightweight_mode() {
-                if let Err(e) = crate::lightweight::exit_lightweight_mode(app) {
-                    log::error!("退出轻量模式重建窗口失败: {e}");
+        if should_install_single_instance {
+            builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+                log::info!("=== Single Instance Callback Triggered ===");
+                log::debug!("Args count: {}", args.len());
+                for (i, arg) in args.iter().enumerate() {
+                    log::debug!("  arg[{i}]: {}", redact_url_for_log(arg));
                 }
-            }
 
-            // Show and focus window regardless.
-            if let Err(error) = crate::tray_popover::reveal_main_window(app) {
-                log::error!("Failed to reveal main window: {error}");
-            }
-        }));
+                if crate::lightweight::is_lightweight_mode() {
+                    if let Err(e) = crate::lightweight::exit_lightweight_mode(app) {
+                        log::error!("退出轻量模式重建窗口失败: {e}");
+                    }
+                }
+
+                // Show and focus window regardless.
+                if let Err(error) = crate::tray_popover::reveal_main_window(app) {
+                    log::error!("Failed to reveal main window: {error}");
+                }
+            }));
+        }
     }
 
     let builder = builder
@@ -595,14 +604,16 @@ pub fn run() {
             // written by auto-launch 0.6 before the executable-path fix.
             #[cfg(target_os = "macos")]
             {
-                let launch_on_startup = crate::settings::get_settings().launch_on_startup;
-                let result = if launch_on_startup {
-                    crate::auto_launch::enable_auto_launch()
-                } else {
-                    crate::auto_launch::disable_auto_launch()
-                };
-                if let Err(error) = result {
-                    log::warn!("Failed to reconcile launch-at-login state: {error}");
+                if !native_bridge::bridge_only() {
+                    let launch_on_startup = crate::settings::get_settings().launch_on_startup;
+                    let result = if launch_on_startup {
+                        crate::auto_launch::enable_auto_launch()
+                    } else {
+                        crate::auto_launch::disable_auto_launch()
+                    };
+                    if let Err(error) = result {
+                        log::warn!("Failed to reconcile launch-at-login state: {error}");
+                    }
                 }
             }
 
@@ -808,6 +819,12 @@ pub fn run() {
                 log::info!("✓ First-run welcome notice pending");
             }
 
+            #[cfg(target_os = "macos")]
+            if !native_bridge::bridge_only() {
+                crate::services::budget_alert::ensure_permission(app.handle());
+            }
+
+            #[cfg(not(target_os = "macos"))]
             crate::services::budget_alert::ensure_permission(app.handle());
 
             // 迁移旧的 app_config_dir 配置到 Store
@@ -958,18 +975,38 @@ pub fn run() {
             }
 
             let _tray = tray_builder.build(app)?;
-            crate::services::webdav_auto_sync::start_worker(
-                app_state.db.clone(),
-                app.handle().clone(),
-            );
-            crate::services::s3_auto_sync::start_worker(
-                app_state.db.clone(),
-                app.handle().clone(),
-            );
+            #[cfg(target_os = "macos")]
+            if !native_bridge::isolated_test_mode() {
+                crate::services::webdav_auto_sync::start_worker(
+                    app_state.db.clone(),
+                    app.handle().clone(),
+                );
+                crate::services::s3_auto_sync::start_worker(
+                    app_state.db.clone(),
+                    app.handle().clone(),
+                );
+            }
+
+            #[cfg(not(target_os = "macos"))]
+            {
+                crate::services::webdav_auto_sync::start_worker(
+                    app_state.db.clone(),
+                    app.handle().clone(),
+                );
+                crate::services::s3_auto_sync::start_worker(
+                    app_state.db.clone(),
+                    app.handle().clone(),
+                );
+            }
             // 将同一个实例注入到全局状态，避免重复创建导致的不一致
             app.manage(app_state);
             app.manage(commands::CodexOAuthState(codex_oauth_manager));
             log::info!("✓ CodexOAuthManager initialized");
+
+            #[cfg(target_os = "macos")]
+            if let Err(error) = native_bridge::start(app.handle().clone()) {
+                log::error!("native bridge failed to start: {error}");
+            }
 
             // 初始化全局出站代理 HTTP 客户端
             {
@@ -1000,6 +1037,12 @@ pub fn run() {
                         );
                     }
                 }
+            }
+
+            #[cfg(target_os = "macos")]
+            if native_bridge::isolated_test_mode() {
+                log::info!("native bridge isolated test mode: external workers are disabled");
+                return Ok(());
             }
 
             let quota_callback_app = app.handle().clone();
@@ -1494,6 +1537,7 @@ pub fn run() {
                     }
                 }
                 RunEvent::Exit => {
+                    native_bridge::stop();
                     #[cfg(all(target_os = "macos", not(test)))]
                     stop_main_window_visibility_monitor();
                 }
@@ -1518,6 +1562,9 @@ pub fn run() {
 /// 确保 Claude Code/Codex/Gemini 的配置不会处于损坏状态。
 /// 使用 stop_with_restore_keep_state 保留 settings 表中的代理状态，下次启动时自动恢复。
 pub async fn cleanup_before_exit(app_handle: &tauri::AppHandle) {
+    #[cfg(target_os = "macos")]
+    native_bridge::stop();
+
     let cleanup_resources = app_handle.try_state::<store::AppState>().map(|state| {
         (
             state.take_quota_scheduler(),

@@ -11,11 +11,13 @@ interface MainWindowNavigationOptions {
   agents?: unknown[];
   openUsage: (agentModuleId?: string | null) => void;
   openProviderSettings: (providerId: string | null) => void;
+  openGeneralSettings?: () => void;
 }
 
 export function useMainWindowNavigation({
   openUsage,
   openProviderSettings,
+  openGeneralSettings,
 }: MainWindowNavigationOptions): void {
   const [pending, setPending] = useState<MainWindowDestination[]>([]);
   const activeRef = useRef(true);
@@ -54,8 +56,10 @@ export function useMainWindowNavigation({
 
     if (destination.kind === "usage") {
       openUsage();
-    } else {
+    } else if (destination.kind === "providerBudget") {
       openProviderSettings(destination.providerId);
+    } else {
+      openGeneralSettings?.();
     }
 
     const wasLast = pending.length === 1;
@@ -80,5 +84,5 @@ export function useMainWindowNavigation({
         void acknowledgeMainWindowReady().catch(() => undefined);
       });
     });
-  }, [openProviderSettings, openUsage, pending]);
+  }, [openGeneralSettings, openProviderSettings, openUsage, pending]);
 }

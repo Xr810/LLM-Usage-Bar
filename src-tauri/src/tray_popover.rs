@@ -35,6 +35,7 @@ pub enum TrayClickAction {
 pub enum MainWindowDestination {
     Usage { agent_module_id: Option<String> },
     ProviderBudget { provider_id: Option<String> },
+    GeneralSettings,
 }
 
 #[derive(Debug)]
@@ -603,6 +604,7 @@ mod tests {
         let budget = MainWindowDestination::ProviderBudget {
             provider_id: Some("openai-api".to_string()),
         };
+        let settings = MainWindowDestination::GeneralSettings;
 
         assert_eq!(
             serde_json::to_value(usage).unwrap(),
@@ -611,6 +613,10 @@ mod tests {
         assert_eq!(
             serde_json::to_value(budget).unwrap(),
             serde_json::json!({"kind": "providerBudget", "providerId": "openai-api"}),
+        );
+        assert_eq!(
+            serde_json::to_value(settings).unwrap(),
+            serde_json::json!({"kind": "generalSettings"}),
         );
     }
 

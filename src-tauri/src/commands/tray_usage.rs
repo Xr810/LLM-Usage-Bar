@@ -84,10 +84,12 @@ pub async fn set_api_budget_config(
         .as_deref()
         .map(crate::usage::budget_migration::canonicalize_daily_budget)
         .transpose()?;
-    let mut settings = crate::settings::get_settings();
-    settings.api_budget_mode = mode;
-    settings.shared_api_daily_budget_usd = canonical;
-    crate::settings::update_settings(settings)?;
+    crate::settings::update_settings_checked(move |existing| {
+        let mut settings = existing.clone();
+        settings.api_budget_mode = mode;
+        settings.shared_api_daily_budget_usd = canonical;
+        Ok::<_, AppError>((settings, ()))
+    })?;
 
     let publisher_app = app.clone();
     state

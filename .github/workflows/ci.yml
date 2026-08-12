@@ -96,3 +96,76 @@ jobs:
 
       - name: Run tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
+
+  native-swift:
+    name: Native Swift Preview
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Create frontend dist placeholder
+        run: mkdir -p dist
+
+      - name: Rust bridge contract tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml native_bridge --lib
+
+      - name: Build Rust bridge executable
+        run: cargo build --manifest-path src-tauri/Cargo.toml --bin llm-usage-bar
+
+      - name: Rust bridge process E2E
+        run: |
+          TARGET_DIR=$(cargo metadata \
+            --manifest-path src-tauri/Cargo.toml \
+            --no-deps \
+            --format-version 1 \
+            | node -e 'let input=""; process.stdin.on("data", chunk => input += chunk); process.stdin.on("end", () => console.log(JSON.parse(input).target_directory));')
+          node native/script/bridge_e2e.mjs "$TARGET_DIR/debug/llm-usage-bar"
+
+      - name: Swift package tests
+        working-directory: native
+        run: swift test
+
+      - name: Xcode Preview build
+        run: |
+          xcodebuild \
+            -project native/LLMUsageBarNative.xcodeproj \
+            -scheme "Native Preview" \
+            -configuration Preview \
+            -derivedDataPath native/.build/xcode-preview \
+            CODE_SIGNING_ALLOWED=NO \
+            ARCHS="arm64 x86_64" \
+            ONLY_ACTIVE_ARCH=NO \
+            build
+
+      - name: Xcode Production candidate build
+        run: |
+          xcodebuild \
+            -project native/LLMUsageBarNative.xcodeproj \
+            -scheme "Native Production" \
+            -configuration Production \
+            -derivedDataPath native/.build/xcode-production \
+            CODE_SIGNING_ALLOWED=NO \
+            ARCHS="arm64 x86_64" \
+            ONLY_ACTIVE_ARCH=NO \
+            build
+
+      - name: Verify Preview support is absent from Production
+        run: |
+          APP_BINARY="native/.build/xcode-production/Build/Products/Production/LLM Usage Bar Native Candidate.app/Contents/MacOS/LLM Usage Bar Native Candidate"
+          CORE_BINARY="native/.build/xcode-production/Build/Products/Production/UsageCore.framework/Versions/A/UsageCore"
+          THIN_CORE_BINARY="${RUNNER_TEMP}/UsageCore-arm64.a"
+          if grep -aE 'preview-fixture|native-preview-event-' "$APP_BINARY" "$CORE_BINARY"; then
+            echo "Preview fixture markers entered the Production artifacts" >&2
+            exit 1
+          fi
+          lipo "$CORE_BINARY" -thin arm64 -output "$THIN_CORE_BINARY"
+          if ar -t "$THIN_CORE_BINARY" | grep -q 'NativePreviewSupport'; then
+            echo "NativePreviewSupport was compiled into the Production UsageCore archive" >&2
+            exit 1
+          fi
+          lipo -archs "$APP_BINARY" | grep -qw arm64
+          lipo -archs "$APP_BINARY" | grep -qw x86_64

@@ -2,8 +2,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    if std::env::args_os()
-        .nth(1)
+    let launch_mode = std::env::args_os().nth(1);
+    if launch_mode
+        .as_ref()
         .is_some_and(|argument| argument == "--claude-statusline-bridge")
     {
         if let Err(error) = llm_usage_bar_lib::run_claude_statusline_bridge() {
@@ -11,6 +12,15 @@ fn main() {
             std::process::exit(1);
         }
         return;
+    }
+
+    if launch_mode
+        .as_ref()
+        .is_some_and(|argument| argument == "--native-bridge-server")
+    {
+        // The bridge still boots the existing Rust application state so it owns
+        // the database, Keychain access, and schedulers during the transition.
+        std::env::set_var("LLM_USAGE_BAR_NATIVE_BRIDGE_ONLY", "1");
     }
 
     // 在 Linux 上设置 WebKit 环境变量以解决 DMA-BUF 渲染问题

@@ -127,4 +127,5 @@ export interface TrayMeteredUsageView {
 
 export type MainWindowDestination =
   | { kind: "usage"; agentModuleId: string | null }
-  | { kind: "providerBudget"; providerId: string | null };
+  | { kind: "providerBudget"; providerId: string | null }
+  | { kind: "generalSettings" };

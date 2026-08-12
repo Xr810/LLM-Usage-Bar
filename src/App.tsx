@@ -52,6 +52,7 @@ export default function App() {
   useMainWindowNavigation({
     openUsage,
     openProviderSettings,
+    openGeneralSettings,
   });
 
   const runWindowAction = async (

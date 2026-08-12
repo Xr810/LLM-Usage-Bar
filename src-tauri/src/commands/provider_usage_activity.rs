@@ -10,6 +10,14 @@ pub fn get_provider_usage_activity(
     start_at: i64,
     end_at: i64,
 ) -> Result<Vec<UsageTrendBucketView>, AppError> {
+    get_provider_usage_activity_test_hook(&state, start_at, end_at)
+}
+
+pub(crate) fn get_provider_usage_activity_test_hook(
+    state: &AppState,
+    start_at: i64,
+    end_at: i64,
+) -> Result<Vec<UsageTrendBucketView>, AppError> {
     let (_, buckets) = aggregate_enabled_provider_trend(&state.db, start_at, end_at)?;
     Ok(buckets)
 }
