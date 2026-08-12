@@ -22,7 +22,10 @@ pub(crate) mod system_providers;
 pub mod tray_snapshot;
 pub(crate) mod usage_light_prediction;
 pub(crate) mod usage_light_prediction_migration;
-#[cfg(test)]
+pub(crate) mod watcher;
+// watcher_state:生产路径只使用 begin_due/finish/mark_* 等子集;其余 getter 与
+// set_interval 由模块内单元测试覆盖,非测试构建下允许未被引用(dead_code)。
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) mod watcher_state;
 
 pub use domain::*;

@@ -1131,12 +1131,18 @@ pub fn run() {
                     }
                 });
 
-                // Session log usage sync: 启动时同步一次，之后每 60 秒检查
+                // Session log usage sync: 启动时全量同步一次，之后由文件监听事件驱动；
+                // 15 分钟慢速兜底保证监听彻底失效时用量仍会更新（安全底线，见 usage/watcher）。
                 let db_for_session_sync = state.db.clone();
                 let provider_session_sync = state.session_usage_service.clone();
+                let sync_schedule = Arc::new(std::sync::Mutex::new(
+                    usage::watcher_state::WatcherSchedule::new(
+                        usage::watcher::SYNC_MIN_INTERVAL_SECS,
+                    ),
+                ));
+                let sync_wake = Arc::new(tokio::sync::Notify::new());
+                usage::watcher::start_usage_watcher(Arc::clone(&sync_schedule), Arc::clone(&sync_wake));
                 tauri::async_runtime::spawn(async move {
-                    const SESSION_SYNC_INTERVAL_SECS: u64 = 60;
-
                     fn run_step<T>(name: &str, result: Result<T, crate::error::AppError>) {
                         if let Err(e) = result {
                             log::warn!("{name} failed: {e}");
@@ -1167,28 +1173,72 @@ pub fn run() {
                         crate::services::session_usage_opencode::sync_opencode_usage(db),
                     );
 
-                    // 定期同步
-                    let mut interval = tokio::time::interval(std::time::Duration::from_secs(
-                        SESSION_SYNC_INTERVAL_SECS,
-                    ));
-                    interval.tick().await; // skip immediate first tick
+                    // 单个源的一次同步，把结果映射成调度退避信号：
+                    // Err(AppError) 与「Ok 但 errors 非空」（个别文件解析失败）都算失败——
+                    // 游标按文件推进，坏文件下次同步自然会重试；退避只是避免坏文件把
+                    // 事件驱动的同步重新拖成每 60 秒的全量扫描。
+                    let mut sync_source = |source: usage::watcher_state::SourceId| {
+                        let clean = match source {
+                            usage::watcher_state::SourceId::Claude => provider_session_sync
+                                .sync_source("claude")
+                                .map(|r| r.errors.is_empty()),
+                            usage::watcher_state::SourceId::Codex => provider_session_sync
+                                .sync_source("codex")
+                                .map(|r| r.errors.is_empty()),
+                            usage::watcher_state::SourceId::Gemini => {
+                                crate::services::session_usage_gemini::sync_gemini_usage(
+                                    &db_for_session_sync,
+                                )
+                                .map(|r| r.errors.is_empty())
+                            }
+                            usage::watcher_state::SourceId::OpenCode => {
+                                crate::services::session_usage_opencode::sync_opencode_usage(
+                                    &db_for_session_sync,
+                                )
+                                .map(|r| r.errors.is_empty())
+                            }
+                        };
+                        match clean {
+                            Ok(true) => Ok(()),
+                            Ok(false) => {
+                                log::warn!("{source:?} usage sync: 部分文件解析失败，触发退避");
+                                Err(())
+                            }
+                            Err(e) => {
+                                log::warn!("{source:?} usage sync failed: {e}");
+                                Err(())
+                            }
+                        }
+                    };
+
+                    // 启动时把四个源全部标脏，保证首轮该跑的源都跑。
+                    // SYNC_MIN_INTERVAL_SECS=60 是「同一个源两次同步之间的最小间隔」，
+                    // 不是轮询周期。
+                    sync_schedule.lock().unwrap().mark_all_dirty();
+
+                    let mut last_fallback_second = usage::watcher::unix_seconds_now();
                     loop {
-                        interval.tick().await;
-                        run_step(
-                            "Session usage periodic sync",
-                            provider_session_sync.sync_source("claude"),
+                        // 有文件事件时被立刻唤醒；超时仅用于慢速兜底检查。
+                        let _ = tokio::time::timeout(
+                            std::time::Duration::from_secs(usage::watcher::DRIVER_WAKE_TIMEOUT_SECS),
+                            sync_wake.notified(),
+                        )
+                        .await;
+
+                        if sync_schedule.lock().unwrap().is_shutdown() {
+                            break;
+                        }
+
+                        let now = usage::watcher::unix_seconds_now();
+                        usage::watcher::apply_fallback_if_due(
+                            &sync_schedule,
+                            now,
+                            &mut last_fallback_second,
                         );
-                        run_step(
-                            "Codex usage periodic sync",
-                            provider_session_sync.sync_source("codex"),
-                        );
-                        run_step(
-                            "Gemini usage periodic sync",
-                            crate::services::session_usage_gemini::sync_gemini_usage(db),
-                        );
-                        run_step(
-                            "OpenCode usage periodic sync",
-                            crate::services::session_usage_opencode::sync_opencode_usage(db),
+                        usage::watcher::drive_due_syncs(
+                            &sync_schedule,
+                            usage::watcher::unix_seconds_now,
+                            &mut sync_source,
                         );
                     }
                 });
@@ -1462,6 +1512,10 @@ pub fn run() {
 
             #[cfg(all(target_os = "macos", not(test)))]
             stop_main_window_visibility_monitor();
+
+            // 停止文件监听与同步调度（驱动循环看到 is_shutdown 后退出，
+            // 不留下永远跑不完的 spawn）；重启路径走 re-exec，无需显式清理。
+            usage::watcher::stop_usage_watcher();
 
             log::info!("收到用户主动退出请求 (code={code:?})，开始清理...");
             api.prevent_exit();
