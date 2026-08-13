@@ -454,6 +454,10 @@ fn handle_minimized_main_window(app: &tauri::AppHandle) {
 fn start_main_window_visibility_monitor(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+        // 睡醒/挂起恢复后不追补错过的 tick，而是推迟到下一个整周期：
+        // 避免唤醒瞬间连发多次检查，也让唤醒节奏对 timer coalescing 更友好
+        // （真正的 dispatch-timer leeway 见 HANDOFF §11.3 的说明）。
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         interval.tick().await;
         loop {
             interval.tick().await;
@@ -470,6 +474,15 @@ pub fn run() {
     let async_runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
+        .on_thread_start(|| {
+            // macOS:这个 runtime 上跑的全是后台工作（用量同步、事件驱动循环、
+            // 5 秒最小化兜底），把 worker/blocking 线程降到 Utility QoS，让系统
+            // 调度排到 E-core 并配合 App Nap。主线程（UI）不受影响。
+            #[cfg(target_os = "macos")]
+            unsafe {
+                libc::pthread_set_qos_class_self_np(libc::qos_class_t::QOS_CLASS_UTILITY, 0);
+            }
+        })
         .build()
         .expect("failed to initialize async runtime");
     tauri::async_runtime::set(async_runtime.handle().clone());
