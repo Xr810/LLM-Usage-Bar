@@ -102,7 +102,6 @@ describe("app-owned identity discriminators", () => {
     expect(
       classifyOldIdentityOccurrence(
         "src-tauri/src/product_identity.rs",
-        16,
         44,
         "cc-switch",
         'pub const LEGACY_SYNC_REMOTE_ROOT: &str = "cc-switch-sync";',
@@ -111,7 +110,6 @@ describe("app-owned identity discriminators", () => {
     expect(
       classifyOldIdentityOccurrence(
         "src-tauri/src/product_identity.rs",
-        13,
         37,
         "cc-switch",
         'pub const LEGACY_DATA_DIR: &str = ".cc-switch";',
@@ -120,12 +118,20 @@ describe("app-owned identity discriminators", () => {
     expect(
       classifyOldIdentityOccurrence(
         "src/unknown.ts",
-        1,
         18,
         "cc-switch",
         'const product = "cc-switch";',
       ),
     ).toBeUndefined();
+    // 同一行搬到文件的哪一行都不影响分类：锚点是内容，不是行号。
+    expect(
+      classifyOldIdentityOccurrence(
+        "src-tauri/src/product_identity.rs",
+        37,
+        "cc-switch",
+        '  pub const LEGACY_DATA_DIR: &str = ".cc-switch";  ',
+      )?.kind,
+    ).toBe("legacyReadOnly");
   });
 
   it("removes owned Task 4 literals and pins approved compatibility bytes", () => {
@@ -136,22 +142,26 @@ describe("app-owned identity discriminators", () => {
           source,
           `${occurrence.file} still contains ${occurrence.context}`,
         ).not.toContain(occurrence.context);
-      } else {
-        const actualLine = source
-          .split("\n")
-          [occurrence.lineNumber - 1]?.trim();
-        expect(
-          actualLine,
-          `${occurrence.file}:${occurrence.lineNumber} changed`,
-        ).toBe(occurrence.context);
-        const actualMatch = findOldIdentityMatches(actualLine ?? "").find(
-          (match) => match.columnNumber === occurrence.columnNumber,
-        );
-        expect(
-          actualMatch?.matchedText,
-          `${occurrence.file}:${occurrence.lineNumber}:${occurrence.columnNumber} changed`,
-        ).toBe(occurrence.matchedText);
+        continue;
       }
+
+      // 按内容数出现次数。行号变了无所谓；次数变了才说明真的多出/少了一处。
+      const actualLines = source
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line === occurrence.context);
+      expect(
+        actualLines.length,
+        `${occurrence.file} should contain ${occurrence.occurrences}x "${occurrence.context}" but has ${actualLines.length}`,
+      ).toBe(occurrence.occurrences);
+
+      const actualMatch = findOldIdentityMatches(occurrence.context).find(
+        (match) => match.columnNumber === occurrence.columnNumber,
+      );
+      expect(
+        actualMatch?.matchedText,
+        `${occurrence.file}:${occurrence.columnNumber} "${occurrence.context}" changed`,
+      ).toBe(occurrence.matchedText);
     }
   });
 
@@ -167,7 +177,6 @@ describe("app-owned identity discriminators", () => {
         for (const match of findOldIdentityMatches(line)) {
           const occurrence = classifyOldIdentityOccurrence(
             file,
-            lineIndex + 1,
             match.columnNumber,
             match.matchedText,
             line,
