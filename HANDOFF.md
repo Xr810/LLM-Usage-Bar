@@ -7,7 +7,9 @@
 (`d96543df` + 补漏 `96e08fd3`)已合入 main,两条移进「已完成」,该节只剩三条仍未做;
 ④ubuntu CI 红了两个剪枝测试(同秒 mtime 依赖),修于 `3b915f5f`,根因见 §2;
 ⑤窗口最小化检测事件化(`980aa620`,合并提交 `320d04c3`)合入 main,Swift 壳源码落
-`feat/swift-native-shell` 并开 PR #27
+`feat/swift-native-shell` 并开 PR #27;⑥productIdentity pins 重锚(`0e7dd3cd`),
+CI 前端红修复、main 上 CI 双绿;⑦任务 7 归因实测写入 §11.2,任务 6(QoS + 定时器
+唤醒)落地,§11.3 五项全部完成
 
 > **这是唯一的交接文档。** 它取代并吸收了以下分散文档,那些文件不要再单独更新:
 >
@@ -85,7 +87,7 @@
 | Provider 多 key 花费 | **✅ 已合入 main(2026-08-11,PR #24,merge commit `c686ef884`)** | 3 个提交;**SCHEMA_VERSION 24 → 26**(两个迁移,各带 validator);本机全套 + ubuntu CI 双绿(见 §10);分支本地与远端均已删 | 目视验证未做 → P4 |
 | 用量按模型/Agent 分类 | **✅ 已搬上 main(2026-08-07,提交 `e23894168`)** | Codex(max)在隔离 worktree 移植,Claude 逐 hunk 复核并独立重跑全套验证(Rust 1039/0、tsc、prettier、59+9 前端测试全绿) | 旧分支 `claude/usage-model-agent-classification-03acf1` 及其 worktree 已作废,可删(需 `-D`);目视验证仍欠 → P4 |
 | 红绿灯燃烧速度投影 | **✅ 已搬上 main(2026-08-07,提交 `bb8514def`,迁移重编号 v23→v24)** | Codex(max)移植 + 签名脚本修复一并带上;Claude 复核(DDL 范围、预测行无机密、阈值为常量)并独立重验(Rust 1066/0、前端 192+9 全绿) | 旧分支 `claude/traffic-light-logic-redesign-3fbc8e` 及 worktree 可删;**注意:新代码 SCHEMA_VERSION=24,装上后旧 3.16.5 打不开升级后的库,须一步到位** |
-| 性能优化线(§11.3) | `main` | 5 件完成 4 件:游标预载 + tokio worker 封顶(`52bd4559`)、Codex 日期分区剪枝(`d96543df` + 补漏 `96e08fd3`)、文件监听替代轮询(`bf46de69` + `e4ece596`)、300ms 窗口轮询事件化(`980aa620`);仍未做:定时器唤醒方式、同步线程 QoS | 是(见 §11.3) |
+| 性能优化线(§11.3) | `main` | 5 件全部完成:游标预载 + tokio worker 封顶(`52bd4559`)、Codex 日期分区剪枝(`d96543df` + 补漏 `96e08fd3`)、文件监听替代轮询(`bf46de69` + `e4ece596`)、300ms 窗口轮询事件化(`980aa620`)、同步线程 QoS + 定时器唤醒(任务 6);dispatch-timer leeway 留观察项 | 否 |
 | 2026-08-07 checkpoint 文档 | `claude/llm-usage-monitoring-app-4a9554`(= main 的内容 + 1 个 docs 提交 `67676ef9e`) | 纯文档分支,内容已并入本文 | 可删分支和 worktree |
 | 本合并任务 | `claude/consolidate-error-issues-4d8721` | 即本文件所在分支 | 合并进 main 让后续 agent 能看到 |
 | 6 个 `codex/*` 旧线(7 月) | ~~`.worktrees/`~~ | **✅ 已清理(2026-08-07)**:6 个 worktree、6 个分支、3 个失效 bridge worktree 全部移除(删前核实 0 独有提交、工作区干净) | 否 |
@@ -698,7 +700,37 @@ Resets Aug 11 at 6pm (Asia/Singapore)
   12 分钟归因清楚**(用 Instruments Time Profiler 对主线程采样即可,它对 Rust 二进制
   完全可用)。
 
-### 11.3 根因(2026-08-13 更新:五项已完成四项,只剩「定时器唤醒方式」与「同步线程 QoS」,进度见本节末尾)
+  #### 2026-08-13 实测归因(任务 7 产出,全部实测)
+
+  原测量对象 PID 776 已随 app 重启消失,22:03 的历史归因无法重测。对**当前运行的同
+  一版本实例**(v3.16.5,PID 811,采样时已运行 76 分钟、累计 CPU 2:06,平均 ~2.8%)做
+  了两组实测:
+
+  - **线程级累计 CPU(`ps -M`)**:主线程 ~50.7s(**~40%**);其余 ~75.9s(~60%)分布在
+    ~8 个活跃线程(单个 5–17.4s,分布均匀,与 10 个 tokio worker + 驱动线程的结构
+    吻合)。即「未归因」的那部分在当前实例里主要落在**主线程之外**的线程组。
+  - **60 秒 Time Profiler 采样(`sample`,1ms 间隔,~6 万样本)**:
+    - 主线程 48,847 样本中 **47,906(98%)阻塞在 runloop 的 mach_msg 等待**,活动样本
+      集中在 WebKit IPC 消息分发(~450)与事件处理 —— 主线程 CPU 是**事件驱动的突发**,
+      不是常驻轮询;
+    - 忙碌的 tokio worker:~2% 样本在 `pread` 链(SQLite 游标读取,60 秒同步扫描),
+      11% 在 `kevent`(IO 驱动线程被定时器反复唤醒),其余在 `pthread_cond_wait`(park);
+    - **修正 §11.2 的原假设**:v3.16.5 里 300ms 窗口轮询是 `tauri::async_runtime::spawn`
+      到 **tokio worker** 上的,不在主线程 —— 「12 分钟未归因最可能在主线程」应改为
+      「更可能在 tokio 组与驱动线程(定时器唤醒与同步扫描)」。与 §11.5 的结论一致:
+      能耗几乎全部来自架构(唤醒频率、每次扫描量),不在主线程。
+  - **测量边界(新增发现)**:发行版二进制带 `strip = "symbols"`,采样里全部 Rust 帧
+    显示为 `???`(只有地址)。线程级归因可用,**函数级归因不行** —— §11.8 说的
+    「Instruments 对 Rust 二进制完全可用」在进程级/线程级成立,函数级需符号。
+    下次构建安装若想重做函数级复测,保留 debug symbols 或产 dSYM。
+
+**结论**:剩余优化的目标确认在 **tokio 侧**(定时器唤醒方式 + 同步线程 QoS),
+不在主线程 —— 这两条已随任务 6 落地(worker 线程 Utility QoS、5 秒兜底加
+`MissedTickBehavior::Delay`,见 §11.3)。v3.16.5 的 300ms 轮询(在 tokio 上)与
+60 秒全量扫描在 main 上已分别被事件化与文件监听 + 分区剪枝消除;main 代码里剩的
+固定唤醒源是 5 秒最小化兜底定时器与 15 分钟 `mark_all_dirty`。
+
+### 11.3 根因(2026-08-13 更新:五项全部完成,见本节末尾)
 
 `lib.rs` 的 60 秒同步定时器(当时的 `SESSION_SYNC_INTERVAL_SECS = 60`,该常量已随
 `e4ece596` 删除)要遍历:
@@ -774,12 +806,22 @@ Resets Aug 11 at 6pm (Asia/Singapore)
   检查)及其单测 —— 实现本体在 `#[cfg(all(target_os = "macos", not(test)))]`
   里测试编译不到,判定条件必须抽成不带 cfg 的纯函数。
 
-#### 仍未做
+**同步线程 QoS + 定时器唤醒(2026-08-13,任务 6):**
 
-- **定时器唤醒方式**:`tokio::time::interval` 是精确唤醒,无法参与 macOS timer
-  coalescing,平台正解是 `NSBackgroundActivityScheduler` 或带 leeway 的 dispatch
-  timer;FSEvents 自带 latency 参数(设 5–30s 天然替代 60s 节流语义)。
-- **同步线程 QoS**:设 Background/Utility,让系统调度去 E-core 并配合 App Nap。
+- **QoS**:runtime builder 加 `on_thread_start`,所有 worker/blocking 线程在 macOS 上
+  设 Utility QoS(`pthread_set_qos_class_self_np`,libc)。用量同步、事件驱动循环、
+  5 秒最小化兜底全在这个 runtime 上 —— 系统调度会排到 E-core 并配合 App Nap;
+  主线程(UI)不受影响。这段是 cfg 门控,ubuntu CI 编译不到,本地 clippy/test/fmt
+  全绿是唯一的门。
+- **定时器唤醒**:60 秒全量轮询此前已由文件监听替代(事件驱动 + 15 秒超时等待,
+  等待本身几乎不耗电);剩下的 5 秒最小化兜底定时器加了 `MissedTickBehavior::Delay`
+  (睡醒/挂起恢复后不追补错过的 tick,唤醒节奏对 timer coalescing 更友好)。
+  **未做**:真正的 dispatch-timer leeway / `NSBackgroundActivityScheduler` —— 需要
+  objc2-foundation 或 dispatch FFI,而 §11.2 的 2026-08-13 实测归因显示剩余固定唤醒
+  源只有 5 秒兜底(12 次/分,每次只读一次 Dock 可见性)与 15 分钟 mark_all_dirty,
+  收益远小于成本。FSEvents 的 latency 在 notify 8.2 里硬编码为 0 且不暴露配置口
+  (`watcher.rs` 顶部已记录),节流语义由脏代数 + 60 秒最小同步间隔承担。
+  留作观察项。
 
 **这一项与 UI 选型正交,选哪条路线都必须修** —— 方案 B 是绞杀者模式、Rust 采集层
 保留,所以这里的改动在 SwiftUI 迁移之后依然有效(唯一例外是窗口最小化监控里的
