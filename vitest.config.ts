@@ -21,6 +21,11 @@ export default defineConfig({
       // `.claude/worktrees/` for agent branches.
       "**/.worktrees/**",
       "**/.claude/worktrees/**",
+      // `pnpm rust` / `pnpm tauri` 把 cargo 的 target 目录放在 .cache/cargo-targets/
+      // 下（见 AGENTS.md 与 scripts/cargo-cache.mjs）。那里是几 GB、几十万个编译
+      // 产物文件，glob 走一遍要几分钟到几十分钟，表现为 vitest 启动后长时间零输出、
+      // CPU 0%（卡在磁盘 I/O 而不是在跑测试）。里面不可能有测试，直接排除。
+      "**/.cache/**",
     ],
     setupFiles: ["./tests/setupGlobals.ts", "./tests/setupTests.ts"],
     globals: true,
