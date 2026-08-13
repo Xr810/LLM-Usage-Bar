@@ -1,77 +1,5 @@
 [
   {
-    "file": "README.md",
-    "lineNumber": 158,
-    "columnNumber": 71,
-    "matchedText": "CC Switch",
-    "context": "Compatibility note: LLM Usage Bar does not modify the original Legacy CC Switch data directory at `~/.cc-switch`.",
-    "kind": "legacyReadOnly",
-    "reason": "exact read-only legacy compatibility or coexistence reference"
-  },
-  {
-    "file": "README.md",
-    "lineNumber": 158,
-    "columnNumber": 103,
-    "matchedText": "cc-switch",
-    "context": "Compatibility note: LLM Usage Bar does not modify the original Legacy CC Switch data directory at `~/.cc-switch`.",
-    "kind": "legacyReadOnly",
-    "reason": "exact read-only legacy compatibility or coexistence reference"
-  },
-  {
-    "file": "README_DE.md",
-    "lineNumber": 158,
-    "columnNumber": 96,
-    "matchedText": "CC Switch",
-    "context": "Kompatibilitätshinweis: LLM Usage Bar verändert das Datenverzeichnis der ursprünglichen Legacy CC Switch-App unter `~/.cc-switch` nicht.",
-    "kind": "legacyReadOnly",
-    "reason": "exact read-only legacy compatibility or coexistence reference"
-  },
-  {
-    "file": "README_DE.md",
-    "lineNumber": 158,
-    "columnNumber": 120,
-    "matchedText": "cc-switch",
-    "context": "Kompatibilitätshinweis: LLM Usage Bar verändert das Datenverzeichnis der ursprünglichen Legacy CC Switch-App unter `~/.cc-switch` nicht.",
-    "kind": "legacyReadOnly",
-    "reason": "exact read-only legacy compatibility or coexistence reference"
-  },
-  {
-    "file": "README_JA.md",
-    "lineNumber": 158,
-    "columnNumber": 40,
-    "matchedText": "CC Switch",
-    "context": "互換性に関する注意：LLM Usage Bar はオリジナルの Legacy CC Switch データディレクトリ `~/.cc-switch` を変更しません。",
-    "kind": "legacyReadOnly",
-    "reason": "exact read-only legacy compatibility or coexistence reference"
-  },
-  {
-    "file": "README_JA.md",
-    "lineNumber": 158,
-    "columnNumber": 64,
-    "matchedText": "cc-switch",
-    "context": "互換性に関する注意：LLM Usage Bar はオリジナルの Legacy CC Switch データディレクトリ `~/.cc-switch` を変更しません。",
-    "kind": "legacyReadOnly",
-    "reason": "exact read-only legacy compatibility or coexistence reference"
-  },
-  {
-    "file": "README_ZH.md",
-    "lineNumber": 160,
-    "columnNumber": 34,
-    "matchedText": "CC Switch",
-    "context": "兼容说明：LLM Usage Bar 不会修改原版 Legacy CC Switch 的数据目录 `~/.cc-switch`。",
-    "kind": "legacyReadOnly",
-    "reason": "exact read-only legacy compatibility or coexistence reference"
-  },
-  {
-    "file": "README_ZH.md",
-    "lineNumber": 160,
-    "columnNumber": 54,
-    "matchedText": "cc-switch",
-    "context": "兼容说明：LLM Usage Bar 不会修改原版 Legacy CC Switch 的数据目录 `~/.cc-switch`。",
-    "kind": "legacyReadOnly",
-    "reason": "exact read-only legacy compatibility or coexistence reference"
-  },
-  {
     "file": "src-tauri/Info.plist",
     "lineNumber": 5,
     "columnNumber": 54,
@@ -649,7 +577,7 @@
   },
   {
     "file": "src-tauri/src/lib.rs",
-    "lineNumber": 829,
+    "lineNumber": 861,
     "columnNumber": 57,
     "matchedText": "ccswitch",
     "context": "// tauri-plugin-deep-link writes to: ~/.local/share/com.ccswitch.desktop/applications/cc-switch-handler.desktop",
@@ -658,7 +586,7 @@
   },
   {
     "file": "src-tauri/src/lib.rs",
-    "lineNumber": 829,
+    "lineNumber": 861,
     "columnNumber": 87,
     "matchedText": "cc-switch",
     "context": "// tauri-plugin-deep-link writes to: ~/.local/share/com.ccswitch.desktop/applications/cc-switch-handler.desktop",
@@ -667,7 +595,7 @@
   },
   {
     "file": "src-tauri/src/lib.rs",
-    "lineNumber": 834,
+    "lineNumber": 866,
     "columnNumber": 32,
     "matchedText": "cc-switch",
     "context": ".map(|d| !d.join(\"applications/cc-switch-handler.desktop\").exists())",
