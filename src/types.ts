@@ -340,6 +340,12 @@ export interface Settings {
   useAppWindowControls?: boolean;
   // 启用 Claude 插件联动（写入 ~/.claude/config.json 的 primaryApiKey）
   enableClaudePluginIntegration?: boolean;
+  // 同意门控：允许读取 Claude Code 的钥匙串 OAuth 凭据查询官方额度（默认关）
+  claudeOauthQuotaEnabled?: boolean;
+  // 钥匙串读取提示模式：never / onlyOnUserAction / always
+  claudeOauthPromptMode?: string;
+  // 系统授权对话框被拒后的冷却截止（Unix 秒；后端自动写入，前端透传）
+  claudeOauthDeniedUntil?: number | null;
   // 跳过 Claude Code 初次安装确认（写入 ~/.claude.json 的 hasCompletedOnboarding）
   skipClaudeOnboarding?: boolean;
   // 是否开机自启

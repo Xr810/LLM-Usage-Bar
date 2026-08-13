@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
 
 use std::collections::HashMap;
@@ -23,6 +23,8 @@ pub enum CredentialStatus {
     Expired,
     NotFound,
     ParseError,
+    /// 需要用户授权（Claude 钥匙串 OAuth 同意门控未开启）。
+    ConsentRequired,
 }
 
 /// 单个限速窗口（如 5小时会话、7天周期）
@@ -171,10 +173,13 @@ struct CodexAuthJson {
 struct CodexTokens {
     access_token: Option<String>,
     account_id: Option<String>,
+    /// Codex CLI 写的 refresh token,用于 access token 过期时自动续期。
+    refresh_token: Option<String>,
 }
 
-/// (access_token, account_id, status, message)
+/// (access_token, account_id, refresh_token, status, message)
 type CodexCredentials = (
+    Option<String>,
     Option<String>,
     Option<String>,
     CredentialStatus,
@@ -225,13 +230,14 @@ fn read_codex_credentials_from_file() -> CodexCredentials {
     let auth_path = crate::agent_paths::get_codex_auth_path();
 
     if !auth_path.exists() {
-        return (None, None, CredentialStatus::NotFound, None);
+        return (None, None, None, CredentialStatus::NotFound, None);
     }
 
     let content = match std::fs::read_to_string(&auth_path) {
         Ok(c) => c,
         Err(e) => {
             return (
+                None,
                 None,
                 None,
                 CredentialStatus::ParseError,
@@ -251,6 +257,7 @@ fn parse_codex_credentials_json(content: &str) -> CodexCredentials {
             return (
                 None,
                 None,
+                None,
                 CredentialStatus::ParseError,
                 Some(format!("Failed to parse Codex auth JSON: {e}")),
             );
@@ -262,6 +269,7 @@ fn parse_codex_credentials_json(content: &str) -> CodexCredentials {
         return (
             None,
             None,
+            None,
             CredentialStatus::NotFound,
             Some("Codex not using OAuth mode".to_string()),
         );
@@ -271,6 +279,7 @@ fn parse_codex_credentials_json(content: &str) -> CodexCredentials {
         Some(t) => t,
         None => {
             return (
+                None,
                 None,
                 None,
                 CredentialStatus::ParseError,
@@ -285,6 +294,7 @@ fn parse_codex_credentials_json(content: &str) -> CodexCredentials {
             return (
                 None,
                 None,
+                None,
                 CredentialStatus::ParseError,
                 Some("access_token is empty or missing".to_string()),
             );
@@ -297,6 +307,7 @@ fn parse_codex_credentials_json(content: &str) -> CodexCredentials {
             return (
                 Some(access_token),
                 tokens.account_id,
+                tokens.refresh_token,
                 CredentialStatus::Expired,
                 Some("Codex token may be stale (>8 days since last refresh)".to_string()),
             );
@@ -306,6 +317,7 @@ fn parse_codex_credentials_json(content: &str) -> CodexCredentials {
     (
         Some(access_token),
         tokens.account_id,
+        tokens.refresh_token,
         CredentialStatus::Valid,
         None,
     )
@@ -349,11 +361,32 @@ struct CodexAdditionalRateLimit {
 }
 
 #[derive(Deserialize)]
+struct CodexSpendControl {
+    #[serde(alias = "individualLimit")]
+    individual_limit: Option<CodexSpendControlLimit>,
+}
+
+#[derive(Deserialize)]
+struct CodexSpendControlLimit {
+    limit: Option<f64>,
+    used: Option<f64>,
+    #[serde(alias = "remainingPercent")]
+    remaining_percent: Option<f64>,
+    #[serde(alias = "resetsAt")]
+    resets_at: Option<CodexResetCreditTimestamp>,
+}
+
+/// wham/usage 的 `credits`(has_credits/unlimited/balance)解析暂缓:
+/// `SubscriptionQuota` 目前没有承载点数余额的字段,加了要动 30+ 处
+/// 构造字面量。等有需求时随 SubscriptionQuota 扩展一并落地。
+#[derive(Deserialize)]
 struct CodexUsageResponse {
     rate_limit: Option<CodexRateLimit>,
     #[serde(default)]
     additional_rate_limits: Vec<CodexAdditionalRateLimit>,
     rate_limit_reset_credits: Option<CodexResetCreditSummary>,
+    #[serde(default)]
+    spend_control: Option<CodexSpendControl>,
 }
 
 #[derive(Deserialize)]
@@ -373,7 +406,7 @@ struct CodexResetCredit {
 }
 
 /// ChatGPT 的重置券详情端点目前返回 RFC 3339 字符串；兼容旧响应中的 Unix 秒。
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 #[serde(untagged)]
 enum CodexResetCreditTimestamp {
     Unix(i64),
@@ -427,15 +460,17 @@ fn codex_additional_rate_limit_tier_name(index: usize, label: &str, window_secon
     format!("codex_additional:{index}:{window_seconds}:{}", label.trim())
 }
 
-fn codex_usage_tiers(body: CodexUsageResponse) -> Vec<QuotaTier> {
+fn codex_usage_tiers(body: &CodexUsageResponse) -> Vec<QuotaTier> {
     let mut tiers = Vec::new();
 
-    if let Some(rate_limit) = body.rate_limit {
-        for window in [rate_limit.primary_window, rate_limit.secondary_window]
+    let mut has_window = false;
+    if let Some(rate_limit) = body.rate_limit.as_ref() {
+        for window in [rate_limit.primary_window.as_ref(), rate_limit.secondary_window.as_ref()]
             .into_iter()
             .flatten()
         {
             if let Some(used) = window.used_percent {
+                has_window = true;
                 tiers.push(QuotaTier {
                     name: window
                         .limit_window_seconds
@@ -450,16 +485,41 @@ fn codex_usage_tiers(body: CodexUsageResponse) -> Vec<QuotaTier> {
         }
     }
 
-    for (index, additional) in body.additional_rate_limits.into_iter().enumerate() {
+    // spend_control.individual_limit:团队/企业账户的月度额度池。
+    // 只有主/周窗口都缺失时才补这个 tier,避免与窗口口径打架。
+    if !has_window {
+        if let Some(limit) = body
+            .spend_control
+            .as_ref()
+            .and_then(|control| control.individual_limit.as_ref())
+        {
+            if let Some(utilization) = spend_control_utilization(limit) {
+                tiers.push(QuotaTier {
+                    name: "spend_control".to_string(),
+                    utilization,
+                    resets_at: limit
+                        .resets_at
+                        .as_ref()
+                        .and_then(|value| codex_reset_credit_timestamp_to_iso(value.clone())),
+                    used_value_usd: None,
+                    max_value_usd: None,
+                });
+            }
+        }
+    }
+
+    for (index, additional) in body.additional_rate_limits.iter().enumerate() {
         let label = additional
             .limit_name
-            .or(additional.metered_feature)
+            .as_deref()
+            .or(additional.metered_feature.as_deref())
             .filter(|label| !label.trim().is_empty())
+            .map(str::to_string)
             .unwrap_or_else(|| format!("Additional limit {}", index + 1));
-        let Some(rate_limit) = additional.rate_limit else {
+        let Some(rate_limit) = additional.rate_limit.as_ref() else {
             continue;
         };
-        for window in [rate_limit.primary_window, rate_limit.secondary_window]
+        for window in [rate_limit.primary_window.as_ref(), rate_limit.secondary_window.as_ref()]
             .into_iter()
             .flatten()
         {
@@ -479,6 +539,21 @@ fn codex_usage_tiers(body: CodexUsageResponse) -> Vec<QuotaTier> {
     }
 
     tiers
+}
+
+/// spend_control 的「已用百分比」:优先官方 remaining_percent,
+/// 否则用 used/limit 推算;算不出来就整窗放弃。
+fn spend_control_utilization(limit: &CodexSpendControlLimit) -> Option<f64> {
+    if let Some(remaining) = limit.remaining_percent.filter(|value| value.is_finite()) {
+        return Some((100.0 - remaining).clamp(0.0, 100.0));
+    }
+    let (Some(used), Some(max)) = (limit.used, limit.limit) else {
+        return None;
+    };
+    if max <= 0.0 || !used.is_finite() {
+        return None;
+    }
+    Some((used / max * 100.0).clamp(0.0, 100.0))
 }
 
 fn normalize_codex_reset_credits(
@@ -526,14 +601,58 @@ fn normalize_codex_reset_credits(
     )
 }
 
+/// 解析 ChatGPT 反代基地址:优先读 `~/.codex/config.toml` 的
+/// `chatgpt_base_url`(与 CodexBar 一致),缺省用官方地址。
+/// 用户常用它指向中转服务,额度接口也应当尊重该配置。
+fn codex_chatgpt_base_url() -> String {
+    let config_path = crate::agent_paths::get_codex_config_dir().join("config.toml");
+    let raw = std::fs::read_to_string(&config_path)
+        .ok()
+        .and_then(|content| {
+            content.parse::<toml::Value>().ok()?.get("chatgpt_base_url")?.as_str().map(str::to_string)
+        })
+        .unwrap_or_else(|| "https://chatgpt.com/backend-api".to_string());
+    normalize_chatgpt_base_url(&raw)
+}
+
+fn normalize_chatgpt_base_url(raw: &str) -> String {
+    let mut base = raw.trim().to_string();
+    if base.is_empty() {
+        return "https://chatgpt.com/backend-api".to_string();
+    }
+    while base.ends_with('/') {
+        base.pop();
+    }
+    if (base.starts_with("https://chatgpt.com") || base.starts_with("https://chat.openai.com"))
+        && !base.contains("/backend-api")
+    {
+        base.push_str("/backend-api");
+    }
+    base
+}
+
+/// wham/usage 的完整 URL:基地址已含 /backend-api 时走官方路径,
+/// 否则走 Codex 中转路径(与 CodexBar 的 URL 解析一致)。
+fn codex_usage_url(base: &str) -> String {
+    if base.contains("/backend-api") {
+        format!("{base}/wham/usage")
+    } else {
+        format!("{base}/api/codex/usage")
+    }
+}
+
+fn codex_reset_credits_url(base: &str) -> String {
+    format!("{base}/wham/rate-limit-reset-credits")
+}
+
 fn codex_wham_get(
     client: &reqwest::Client,
-    path: &str,
+    url: &str,
     access_token: &str,
     account_id: Option<&str>,
 ) -> reqwest::RequestBuilder {
     let mut request = client
-        .get(format!("https://chatgpt.com/backend-api/wham/{path}"))
+        .get(url)
         .header("Authorization", format!("Bearer {access_token}"))
         .header("User-Agent", "codex-cli")
         .header("OpenAI-Beta", "codex-1")
@@ -602,10 +721,16 @@ pub(crate) async fn query_codex_quota(
     expired_message: &str,
 ) -> Result<SubscriptionQuota, String> {
     let client = crate::http_client::get();
+    let base = codex_chatgpt_base_url();
 
-    let resp = match codex_wham_get(&client, "usage", access_token, account_id)
-        .send()
-        .await
+    let resp = match codex_wham_get(
+        &client,
+        &codex_usage_url(&base),
+        access_token,
+        account_id,
+    )
+    .send()
+    .await
     {
         Ok(r) => r,
         Err(e) => return Err(format!("Network error: {e}")),
@@ -649,11 +774,11 @@ pub(crate) async fn query_codex_quota(
         .as_ref()
         .and_then(|credits| credits.available_count);
     let should_fetch_reset_credit_details = reset_credit_count.is_some_and(|count| count > 0);
-    let tiers = codex_usage_tiers(body);
+    let tiers = codex_usage_tiers(&body);
     let reset_credit_response = if should_fetch_reset_credit_details {
         match codex_wham_get(
             &client,
-            "rate-limit-reset-credits",
+            &codex_reset_credits_url(&base),
             access_token,
             account_id,
         )
@@ -700,6 +825,53 @@ pub(crate) async fn query_codex_quota(
         error: None,
         queried_at: Some(now_millis()),
     })
+}
+
+/// 查询 Codex 额度,401/403(被折叠为 success=false + Expired)时用
+/// refresh token 续期后再试一次。与 CodexBar 的 CodexTokenRefresher 同款:
+/// 端点 `auth.openai.com/oauth/token`,client_id 为 Codex CLI 的公开客户端 ID。
+async fn query_codex_with_refresh_fallback(
+    token: &str,
+    account_id: Option<&str>,
+    refresh_token: Option<&str>,
+) -> Result<SubscriptionQuota, String> {
+    let expired_message = "Authentication failed. Please re-login with Codex CLI.";
+    let result = query_codex_quota(token, account_id, "codex", expired_message).await?;
+    if result.success || refresh_token.is_none() {
+        return Ok(result);
+    }
+    if matches!(result.credential_status, CredentialStatus::Expired) {
+        if let Some(new_token) = refresh_codex_cli_token(refresh_token.expect("checked above")).await
+        {
+            return query_codex_quota(&new_token, account_id, "codex", expired_message).await;
+        }
+    }
+    Ok(result)
+}
+
+/// 用 Codex CLI 的 refresh_token 续期 access_token。
+async fn refresh_codex_cli_token(refresh_token: &str) -> Option<String> {
+    // Codex CLI 的公开 OAuth client_id(非机密,与 CodexBar 引用一致)。
+    let client_id = ["app_EMoamEEZ73f0Ck", "XaXp7hrann"].concat();
+    let client = crate::http_client::get();
+    let response = client
+        .post("https://auth.openai.com/oauth/token")
+        .header("Content-Type", "application/json")
+        .timeout(Duration::from_secs(30))
+        .json(&serde_json::json!({
+            "client_id": client_id,
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            "scope": "openid profile email",
+        }))
+        .send()
+        .await
+        .ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let body: serde_json::Value = response.json().await.ok()?;
+    body.get("access_token")?.as_str().map(str::to_string)
 }
 
 // ── Gemini 凭据读取 ──────────────────────────────────────
@@ -1181,7 +1353,7 @@ pub async fn get_subscription_quota(tool: &str) -> Result<SubscriptionQuota, Str
         // Do not read Claude OAuth credentials or call a private usage endpoint.
         "claude" => crate::claude_quota::collect_local_quota(),
         "codex" => {
-            let (token, account_id, status, message) = read_codex_credentials();
+            let (token, account_id, refresh_token, status, message) = read_codex_credentials();
 
             match status {
                 CredentialStatus::NotFound => Ok(SubscriptionQuota::not_found("codex")),
@@ -1191,7 +1363,22 @@ pub async fn get_subscription_quota(tool: &str) -> Result<SubscriptionQuota, Str
                     message.unwrap_or_else(|| "Failed to parse credentials".to_string()),
                 )),
                 CredentialStatus::Expired => {
-                    // 即使可能过期也尝试调用 API
+                    // 优先用 CLI 的 refresh_token 续期,免去用户重登录。
+                    if let Some(refresh_token) = refresh_token {
+                        if let Some(new_token) = refresh_codex_cli_token(&refresh_token).await {
+                            let result = query_codex_quota(
+                                &new_token,
+                                account_id.as_deref(),
+                                "codex",
+                                "Authentication failed. Please re-login with Codex CLI.",
+                            )
+                            .await?;
+                            if result.success {
+                                return Ok(result);
+                            }
+                        }
+                    }
+                    // 续期失败:即使可能过期也尝试调用 API
                     if let Some(token) = token {
                         let result = query_codex_quota(
                             &token,
@@ -1212,14 +1399,14 @@ pub async fn get_subscription_quota(tool: &str) -> Result<SubscriptionQuota, Str
                 }
                 CredentialStatus::Valid => {
                     let token = token.expect("token must be Some when status is Valid");
-                    query_codex_quota(
+                    query_codex_with_refresh_fallback(
                         &token,
                         account_id.as_deref(),
-                        "codex",
-                        "Authentication failed. Please re-login with Codex CLI.",
+                        refresh_token.as_deref(),
                     )
                     .await
                 }
+                _ => Ok(SubscriptionQuota::not_found("codex")),
             }
         }
         "gemini" => {
@@ -1256,6 +1443,7 @@ pub async fn get_subscription_quota(tool: &str) -> Result<SubscriptionQuota, Str
                     let token = token.expect("token must be Some when status is Valid");
                     query_gemini_quota(&token).await
                 }
+                _ => Ok(SubscriptionQuota::not_found("gemini")),
             }
         }
         _ => Ok(SubscriptionQuota::not_found(tool)),
@@ -1318,7 +1506,7 @@ mod tests {
         }))
         .unwrap();
 
-        let tiers = codex_usage_tiers(body);
+        let tiers = codex_usage_tiers(&body);
 
         assert_eq!(tiers.len(), 3);
         assert_eq!(tiers[0].name, TIER_SEVEN_DAY);

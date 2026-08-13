@@ -1404,6 +1404,7 @@ mod tests {
         fn collect<'a>(
             &'a self,
             _provider: &'a crate::usage::domain::UsageProviderStored,
+            _interactive: bool,
         ) -> BoxFuture<'a, Result<SubscriptionQuota, String>> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             Box::pin(async {
@@ -1455,6 +1456,7 @@ mod tests {
         fn collect<'a>(
             &'a self,
             _provider: &'a crate::usage::domain::UsageProviderStored,
+            _interactive: bool,
         ) -> BoxFuture<'a, Result<SubscriptionQuota, String>> {
             let call = self.calls.fetch_add(1, Ordering::SeqCst);
             Box::pin(async move {

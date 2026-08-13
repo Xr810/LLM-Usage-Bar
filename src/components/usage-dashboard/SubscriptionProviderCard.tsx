@@ -13,6 +13,7 @@ import type {
 import { useTranslation } from "react-i18next";
 import { QuotaMeter } from "./QuotaMeter";
 import { QuotaPaceDetails } from "./QuotaPaceDetails";
+import { quotaErrorCopy } from "@/components/settings/providerCredentialErrors";
 import { providerDisplayName } from "../tray-usage/trayUsagePresentation";
 import {
   DEFAULT_REMAINING_THRESHOLDS,
@@ -374,8 +375,18 @@ export function SubscriptionProviderCard({
 
       {fetchState?.stale && fetchState.lastError ? (
         <p className="px-5 pt-2 text-xs text-warning">
-          {t("usageDashboard.stale", { defaultValue: "Stale" })}:{" "}
-          {fetchState.lastError}
+          {(() => {
+            const mapped = quotaErrorCopy(fetchState.lastError);
+            if (!mapped) {
+              return (
+                <>
+                  {t("usageDashboard.stale", { defaultValue: "Stale" })}:{" "}
+                  {fetchState.lastError}
+                </>
+              );
+            }
+            return t(mapped.key, { defaultValue: mapped.fallback });
+          })()}
         </p>
       ) : null}
       {!compact ? (

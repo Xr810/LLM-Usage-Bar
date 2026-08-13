@@ -61,12 +61,17 @@ pub type QuotaCycleCallback =
 /// Object-safe boundary around existing quota HTTP/parsing implementations.
 /// The adapter returns their common `SubscriptionQuota` representation so this
 /// module only owns normalization and persistence semantics.
+///
+/// `interactive` marks user-initiated refreshes (manual refresh button), which
+/// layers behind consent gates may treat differently from background cycles
+/// (e.g. prompting the macOS Keychain dialog only on user action).
 pub trait QuotaCollector: Send + Sync {
     fn source(&self) -> &'static str;
 
     fn collect<'a>(
         &'a self,
         provider: &'a UsageProviderStored,
+        interactive: bool,
     ) -> BoxFuture<'a, Result<SubscriptionQuota, String>>;
 }
 
@@ -82,14 +87,53 @@ impl QuotaCollector for SubscriptionQuotaCollector {
     fn collect<'a>(
         &'a self,
         _provider: &'a UsageProviderStored,
+        _interactive: bool,
     ) -> BoxFuture<'a, Result<SubscriptionQuota, String>> {
         Box::pin(async move { get_subscription_quota(self.source).await })
     }
 }
 
-struct ClaudeLocalQuotaCollector;
+/// Claude 订阅额度的三层回退链:官方 OAuth 接口 → CLI 探测 → 本地文件。
+///
+/// 前两层失败以稳定错误码降级,第三层(现有本地采集)是零成本兜底;
+/// 三层全败时错误串只保留各层错误码的摘要,绝不透传凭据。
+type ClaudeStage =
+    Arc<dyn Fn(bool) -> BoxFuture<'static, Result<SubscriptionQuota, String>> + Send + Sync>;
 
-impl QuotaCollector for ClaudeLocalQuotaCollector {
+struct ClaudeChainCollector {
+    oauth_stage: ClaudeStage,
+    probe_stage: ClaudeStage,
+    local_stage: ClaudeStage,
+}
+
+impl ClaudeChainCollector {
+    fn production() -> Self {
+        Self {
+            oauth_stage: Arc::new(|interactive| {
+                Box::pin(async move {
+                    crate::usage::claude_oauth::collect_claude_oauth_quota(interactive).await
+                })
+            }),
+            probe_stage: Arc::new(|interactive| {
+                Box::pin(async move { crate::usage::cli_probe::probe_claude_usage(interactive).await })
+            }),
+            local_stage: Arc::new(|_| {
+                Box::pin(async move { crate::claude_quota::collect_local_quota() })
+            }),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_stages(oauth_stage: ClaudeStage, probe_stage: ClaudeStage, local_stage: ClaudeStage) -> Self {
+        Self {
+            oauth_stage,
+            probe_stage,
+            local_stage,
+        }
+    }
+}
+
+impl QuotaCollector for ClaudeChainCollector {
     fn source(&self) -> &'static str {
         CLAUDE_LOCAL_QUOTA_SOURCE
     }
@@ -97,9 +141,39 @@ impl QuotaCollector for ClaudeLocalQuotaCollector {
     fn collect<'a>(
         &'a self,
         _provider: &'a UsageProviderStored,
+        interactive: bool,
     ) -> BoxFuture<'a, Result<SubscriptionQuota, String>> {
-        Box::pin(async move { crate::claude_quota::collect_local_quota() })
+        let oauth_stage = self.oauth_stage.clone();
+        let probe_stage = self.probe_stage.clone();
+        let local_stage = self.local_stage.clone();
+        Box::pin(async move {
+            let mut chain_errors = Vec::new();
+            for (label, stage) in [
+                ("oauth", &oauth_stage),
+                ("probe", &probe_stage),
+                ("local", &local_stage),
+            ] {
+                match stage(interactive).await {
+                    Ok(quota) if quota.success => return Ok(quota),
+                    Ok(quota) => {
+                        let error = quota
+                            .error
+                            .or(quota.credential_message)
+                            .unwrap_or_else(|| "quota collection failed".to_string());
+                        chain_errors.push(stage_error(label, &error));
+                    }
+                    Err(error) => chain_errors.push(stage_error(label, &error)),
+                }
+            }
+            Err(format!("claude quota chain failed: {}", chain_errors.join(" → ")))
+        })
     }
+}
+
+/// 层摘要只保留稳定错误码的前缀段,截断长文案,避免链错误串夹带路径等细节。
+fn stage_error(label: &str, error: &str) -> String {
+    let cap = error.char_indices().nth(64).map(|(index, _)| index).unwrap_or(error.len());
+    format!("{label}({})", &error[..cap])
 }
 
 struct CodingPlanQuotaCollector;
@@ -112,6 +186,7 @@ impl QuotaCollector for CodingPlanQuotaCollector {
     fn collect<'a>(
         &'a self,
         provider: &'a UsageProviderStored,
+        _interactive: bool,
     ) -> BoxFuture<'a, Result<SubscriptionQuota, String>> {
         Box::pin(async move {
             let empty_config = Value::Null;
@@ -152,6 +227,7 @@ impl QuotaCollector for ManagedCodexOAuthQuotaCollector {
     fn collect<'a>(
         &'a self,
         _provider: &'a UsageProviderStored,
+        _interactive: bool,
     ) -> BoxFuture<'a, Result<SubscriptionQuota, String>> {
         Box::pin(async move { query_managed_codex_oauth_quota(&self.manager, None).await })
     }
@@ -190,7 +266,7 @@ impl QuotaService {
         vec![
             Arc::new(SubscriptionQuotaCollector { source: "claude" }),
             Arc::new(SubscriptionQuotaCollector { source: "codex" }),
-            Arc::new(ClaudeLocalQuotaCollector),
+            Arc::new(ClaudeChainCollector::production()),
             Arc::new(CodingPlanQuotaCollector),
         ]
     }
@@ -211,7 +287,8 @@ impl QuotaService {
         &self,
         provider_id: &str,
     ) -> Result<QuotaRefreshResult, AppError> {
-        self.refresh_provider_at(provider_id, now_timestamp()?)
+        // 手动刷新是用户主动操作,允许触发同意门控的系统授权对话框。
+        self.refresh_provider_at(provider_id, now_timestamp()?, true)
             .await
     }
 
@@ -219,6 +296,7 @@ impl QuotaService {
         &self,
         provider_id: &str,
         attempted_at: i64,
+        interactive: bool,
     ) -> Result<QuotaRefreshResult, AppError> {
         let (flight, is_leader) = {
             let mut in_flight = self.in_flight.lock().await;
@@ -238,7 +316,7 @@ impl QuotaService {
             let leader_flight = flight.clone();
             tokio::spawn(async move {
                 let result = service
-                    .refresh_provider_once_at(&provider_id, attempted_at)
+                    .refresh_provider_once_at(&provider_id, attempted_at, interactive)
                     .await
                     .map_err(|error| error.to_string());
                 leader_flight.result.send_replace(Some(result));
@@ -268,6 +346,7 @@ impl QuotaService {
         &self,
         provider_id: &str,
         attempted_at: i64,
+        interactive: bool,
     ) -> Result<QuotaRefreshResult, AppError> {
         let provider = self
             .db
@@ -275,7 +354,7 @@ impl QuotaService {
             .ok_or_else(|| AppError::Message("usage provider not found".to_string()))?;
         validate_refresh_provider(&provider)?;
 
-        let normalized = match self.collect_normalized_quota(&provider).await {
+        let normalized = match self.collect_normalized_quota(&provider, interactive).await {
             Ok(normalized) => normalized,
             Err(error) => {
                 self.db
@@ -306,6 +385,7 @@ impl QuotaService {
     async fn collect_normalized_quota(
         &self,
         provider: &UsageProviderStored,
+        interactive: bool,
     ) -> Result<NormalizedQuota, AppError> {
         let quota_source = provider
             .quota_source
@@ -316,7 +396,7 @@ impl QuotaService {
             AppError::Message(format!("unsupported quota source: {quota_source}"))
         })?;
 
-        let quota = match collector.collect(provider).await {
+        let quota = match collector.collect(provider, interactive).await {
             Ok(quota) if quota.success => quota,
             Ok(quota) => {
                 let error = quota
@@ -386,7 +466,8 @@ impl QuotaService {
                 continue;
             }
             cycle.attempted += 1;
-            if let Err(error) = self.refresh_provider_at(&view.id, now).await {
+            // 调度器路径是后台刷新,同意门控不应因此弹系统对话框。
+            if let Err(error) = self.refresh_provider_at(&view.id, now, false).await {
                 cycle.errors.push(format!("{}: {error}", view.id));
             }
         }
@@ -595,7 +676,7 @@ mod tests {
         CredentialStatus, ManualResetCredit, ManualResetCredits, QuotaTier, SubscriptionQuota,
         TIER_FIVE_HOUR, TIER_SEVEN_DAY,
     };
-    use crate::usage::domain::{BillingKind, TokenSource, UsageProviderInput};
+    use crate::usage::domain::{BillingKind, TokenSource, UsageProviderInput, UsageProviderStored};
     use crate::usage::system_providers::{CHATGPT_SUBSCRIPTION_ID, CLAUDE_SUBSCRIPTION_ID};
     use serde_json::json;
     use std::collections::VecDeque;
@@ -682,6 +763,7 @@ mod tests {
         fn collect<'a>(
             &'a self,
             _provider: &'a UsageProviderStored,
+            _interactive: bool,
         ) -> BoxFuture<'a, Result<SubscriptionQuota, String>> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             let result = self
@@ -707,6 +789,7 @@ mod tests {
         fn collect<'a>(
             &'a self,
             _provider: &'a UsageProviderStored,
+            _interactive: bool,
         ) -> BoxFuture<'a, Result<SubscriptionQuota, String>> {
             Box::pin(async move {
                 self.calls.fetch_add(1, Ordering::SeqCst);
@@ -809,7 +892,7 @@ mod tests {
             .unwrap()
             .unwrap();
         let quota = service.collectors[MANAGED_CODEX_QUOTA_SOURCE]
-            .collect(&provider)
+            .collect(&provider, true)
             .await
             .unwrap();
         assert!(!quota.success);
@@ -817,6 +900,101 @@ mod tests {
             quota.credential_status,
             CredentialStatus::NotFound
         ));
+    }
+
+    // ── Claude 回退链 ────────────────────────────────────
+
+    fn stored_provider() -> UsageProviderStored {
+        UsageProviderStored {
+            id: "sub".to_string(),
+            name: "sub".to_string(),
+            billing_kind: BillingKind::Subscription,
+            product_group_id: "claude".to_string(),
+            token_sources: vec![TokenSource::SessionLog],
+            quota_source: Some(CLAUDE_LOCAL_QUOTA_SOURCE.to_string()),
+            quota_interval_seconds: Some(300),
+            route_app_type: None,
+            route_config: None,
+            quota_config: None,
+            enabled: true,
+            needs_review: false,
+            legacy_app_type: None,
+            legacy_provider_id: None,
+            created_at: 0,
+            updated_at: 0,
+            system_preset_key: None,
+            daily_budget_usd: None,
+        }
+    }
+
+    fn chain_stage(
+        response: Result<SubscriptionQuota, String>,
+        calls: Arc<AtomicUsize>,
+    ) -> ClaudeStage {
+        Arc::new(move |_interactive| {
+            let response = response.clone();
+            let calls = calls.clone();
+            Box::pin(async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                response
+            })
+        })
+    }
+
+    #[tokio::test]
+    async fn claude_chain_returns_first_successful_stage() {
+        for winner in 0..3 {
+            let calls = [
+                Arc::new(AtomicUsize::new(0)),
+                Arc::new(AtomicUsize::new(0)),
+                Arc::new(AtomicUsize::new(0)),
+            ];
+            let stage = |index: usize| -> Result<SubscriptionQuota, String> {
+                if index == winner {
+                    Ok(successful_quota("claude"))
+                } else {
+                    Err(format!("stage-{index}-failed"))
+                }
+            };
+            let collector = ClaudeChainCollector::with_stages(
+                chain_stage(stage(0), calls[0].clone()),
+                chain_stage(stage(1), calls[1].clone()),
+                chain_stage(stage(2), calls[2].clone()),
+            );
+            let quota = collector
+                .collect(&stored_provider(), false)
+                .await
+                .expect("chain succeeds");
+            assert!(quota.success, "winner stage {winner}");
+            for (index, calls) in calls.iter().enumerate() {
+                assert_eq!(calls.load(Ordering::SeqCst), usize::from(index <= winner));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn claude_chain_summary_keeps_stage_codes_in_order() {
+        let collector = ClaudeChainCollector::with_stages(
+            chain_stage(
+                Ok(SubscriptionQuota::error(
+                    "claude_oauth",
+                    CredentialStatus::ConsentRequired,
+                    crate::usage::claude_oauth::CONSENT_ERROR_CODE.to_string(),
+                )),
+                Arc::new(AtomicUsize::new(0)),
+            ),
+            chain_stage(Err("probe failed".to_string()), Arc::new(AtomicUsize::new(0))),
+            chain_stage(Err("local stage failed".to_string()), Arc::new(AtomicUsize::new(0))),
+        );
+        let error = collector
+            .collect(&stored_provider(), false)
+            .await
+            .expect_err("all stages fail");
+        assert_eq!(
+            error,
+            "claude quota chain failed: \
+             oauth(claude_oauth_consent_required) → probe(probe failed) → local(local stage failed)"
+        );
     }
 
     #[test]

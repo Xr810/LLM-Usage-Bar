@@ -64,7 +64,7 @@ fn command_error(code: &'static str) -> AppError {
     AppError::Message(code.to_string())
 }
 
-fn claude_binary_candidates_for_home(home: &Path) -> Vec<PathBuf> {
+pub(crate) fn claude_binary_candidates_for_home(home: &Path) -> Vec<PathBuf> {
     let mut candidates = vec![PathBuf::from(CLAUDE_BINARY)];
 
     #[cfg(not(target_os = "windows"))]

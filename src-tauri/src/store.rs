@@ -253,6 +253,7 @@ mod tests {
         fn collect<'a>(
             &'a self,
             _provider: &'a UsageProviderStored,
+            _interactive: bool,
         ) -> BoxFuture<'a, Result<SubscriptionQuota, String>> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             Box::pin(async { Err("store fake collection failure".to_string()) })
