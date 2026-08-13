@@ -496,14 +496,21 @@ fn collect_day_dirs(
 
 /// 判断一个 sessions/YYYY/MM/DD 分区能否整体跳过，能则返回被剪掉的 .jsonl 文件数。
 ///
-/// 三条规则必须同时满足：
+/// 四条规则必须同时满足：
 ///   (a) 分区日期早于「今天（本地时区）- 保留窗口」；
 ///   (b) 分区下每个 .jsonl 都在游标表中有记录且 modified_at_ns > 0（确实成功同步过）；
-///   (c) 分区目录 mtime 不晚于分区内所有游标里最大的 modified_at_ns
+///   (c) 每个 .jsonl 的当前 mtime 不晚于它自己游标里的 modified_at_ns
+///       （与 `sync_single_codex_file_with_cursors` 的跳过条件 `file_modified <=
+///       last_modified` 逐字对齐：只有「逐文件扫描也会全部跳过」的分区才配被剪）；
+///   (d) 分区目录 mtime 不晚于分区内所有游标里最大的 modified_at_ns
 ///       （目录 mtime 在文件新增/删除时会变，兜住「老分区里多了个新文件」）。
 ///
-/// 任何一条不满足都返回 None，分区照常全扫。判断全程只 read_dir / stat 目录，
-/// 不打开任何会话文件。
+/// 规则 (c) 不可省：`codex resume` 会往原 rollout 文件里继续 append，而 append
+/// 不改父目录 mtime，只靠 (d) 会让「几天前的分区里被续写的会话」永久不再同步。
+/// 实测 1296 个会话文件里有 4 个最后一条记录晚于分区日期 2 天以上，最长 +63 天。
+///
+/// 任何一条不满足都返回 None，分区照常全扫。判断全程只 read_dir / stat，
+/// 不打开任何会话文件（实测 1296 个文件纯 stat 约 5ms，逐个 open 约 250ms）。
 fn try_prune_codex_partition(
     partition_dir: &Path,
     partition_date: chrono::NaiveDate,
@@ -532,6 +539,14 @@ fn try_prune_codex_partition(
         if cursor.modified_at_ns <= 0 {
             return None;
         }
+
+        // (c) 文件自身 mtime 不晚于它的游标：read_dir 手上就有 DirEntry，
+        // 这里只多一次 stat，不打开文件。
+        let file_modified = metadata_modified_nanos(&entry.metadata().ok()?);
+        if file_modified > cursor.modified_at_ns {
+            return None;
+        }
+
         max_cursor_modified = max_cursor_modified.max(cursor.modified_at_ns);
         pruned += 1;
     }
@@ -540,7 +555,7 @@ fn try_prune_codex_partition(
         return Some(0);
     }
 
-    // (c) 目录 mtime 不晚于分区内最大游标时间
+    // (d) 目录 mtime 不晚于分区内最大游标时间
     let dir_modified = fs::metadata(partition_dir)
         .ok()
         .map(|metadata| metadata_modified_nanos(&metadata))?;
@@ -1284,6 +1299,15 @@ mod tests {
         metadata_modified_nanos(&metadata) + 3_600_000_000_000
     }
 
+    /// 游标时间戳 = 文件 mtime，恰好满足规则 (c) 而不额外放宽规则 (d)
+    fn cursor_matching_file(path: &Path) -> i64 {
+        metadata_modified_nanos(&fs::metadata(path).unwrap())
+    }
+
+    fn dir_mtime_nanos(dir: &Path) -> i64 {
+        metadata_modified_nanos(&fs::metadata(dir).unwrap())
+    }
+
     fn new_temp_dir(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!("llm-usage-bar-{label}-{}", uuid::Uuid::new_v4()))
     }
@@ -1359,8 +1383,12 @@ mod tests {
         let date = date_days_ago(30);
         let first = write_partition_file(&tmp, date, "first.jsonl");
         let second = write_partition_file(&tmp, date, "second.jsonl");
-        // 游标时间戳很旧；随后触碰目录（新增再删除条目），把目录 mtime 抬到「现在」
-        let cursors = vec![cursor_for_path(&first, 1), cursor_for_path(&second, 1)];
+        // 游标与文件 mtime 相等（规则 (c) 通过），随后触碰目录（新增再删除条目）
+        // 把目录 mtime 抬到「现在」，隔离出规则 (d) 单独生效
+        let cursors = vec![
+            cursor_for_path(&first, cursor_matching_file(&first)),
+            cursor_for_path(&second, cursor_matching_file(&second)),
+        ];
         let by_path = by_path_from_cursors(&cursors);
         let scratch = partition_dir(&tmp, date).join("scratch.tmp");
         fs::write(&scratch, "x").unwrap();
@@ -1370,6 +1398,49 @@ mod tests {
             collect_codex_session_files_with_window(&tmp, &by_path, CODEX_PARTITION_FRESH_DAYS);
         assert_eq!(files_pruned, 0, "目录 mtime 比最大游标时间新时必须全扫");
         assert_eq!(files.len(), 2);
+        fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// `codex resume` 会往几天前分区里的原 rollout 文件继续 append。append 不改
+    /// 父目录 mtime，所以只有逐文件比对 mtime（规则 (c)）才能兜住——否则该分区
+    /// 一旦被剪就永久不再同步，续写的用量静默丢失。
+    #[test]
+    fn prune_rescans_partition_when_a_synced_file_was_appended_to() {
+        let tmp = new_temp_dir("codex-prune-resumed-append");
+        let date = date_days_ago(30);
+        let untouched = write_partition_file(&tmp, date, "untouched.jsonl");
+        let resumed = write_partition_file(&tmp, date, "resumed.jsonl");
+
+        // 两个文件都已成功同步：游标 = 各自当前 mtime
+        let cursors = vec![
+            cursor_for_path(&untouched, cursor_matching_file(&untouched)),
+            cursor_for_path(&resumed, cursor_matching_file(&resumed)),
+        ];
+        let by_path = by_path_from_cursors(&cursors);
+
+        // 前置断言：此刻分区确实是可剪的
+        let (files, files_pruned) =
+            collect_codex_session_files_with_window(&tmp, &by_path, CODEX_PARTITION_FRESH_DAYS);
+        assert_eq!(files_pruned, 2, "同步干净的老分区本应被剪");
+        assert!(files.is_empty());
+
+        // 模拟 resume：往 resumed.jsonl 续写，游标保持不变
+        let dir = partition_dir(&tmp, date);
+        let dir_mtime_before = dir_mtime_nanos(&dir);
+        let mut handle = fs::OpenOptions::new().append(true).open(&resumed).unwrap();
+        std::io::Write::write_all(&mut handle, b"{\"appended\":true}\n").unwrap();
+        drop(handle);
+        assert_eq!(
+            dir_mtime_nanos(&dir),
+            dir_mtime_before,
+            "append 不应改变父目录 mtime——正因如此规则 (d) 兜不住这一场景"
+        );
+
+        let (files, files_pruned) =
+            collect_codex_session_files_with_window(&tmp, &by_path, CODEX_PARTITION_FRESH_DAYS);
+        assert_eq!(files_pruned, 0, "分区内有文件被续写时必须整体全扫");
+        assert_eq!(files.len(), 2);
+        assert!(files.contains(&resumed) && files.contains(&untouched));
         fs::remove_dir_all(&tmp).ok();
     }
 
