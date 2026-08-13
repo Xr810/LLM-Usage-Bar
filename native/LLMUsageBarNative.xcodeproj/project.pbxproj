@@ -1,0 +1,241 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A10000000000000000000001 /* AppLifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000001 /* AppLifecycle.swift */; };
+		A10000000000000000000002 /* L10n.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000002 /* L10n.swift */; };
+		A10000000000000000000003 /* LLMUsageBarNativeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000003 /* LLMUsageBarNativeApp.swift */; };
+		A10000000000000000000004 /* MainWindowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000004 /* MainWindowView.swift */; };
+		A10000000000000000000005 /* NativeFormatting.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000005 /* NativeFormatting.swift */; };
+		A10000000000000000000006 /* NativeSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000006 /* NativeSettingsView.swift */; };
+		A10000000000000000000007 /* UsageAppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000007 /* UsageAppModel.swift */; };
+		A10000000000000000000008 /* UsageMenuView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000008 /* UsageMenuView.swift */; };
+		A10000000000000000000009 /* ClaudeStatuslineSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000009 /* ClaudeStatuslineSource.swift */; };
+		A1000000000000000000000A /* NativeBridgeClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000A /* NativeBridgeClient.swift */; };
+		A1000000000000000000000B /* TrayUsageSnapshotV1.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000B /* TrayUsageSnapshotV1.swift */; };
+		A1000000000000000000000C /* UsageModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000C /* UsageModels.swift */; };
+		A1000000000000000000000D /* UsageRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000D /* UsageRepository.swift */; };
+		A1000000000000000000000E /* UsageSnapshotStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000E /* UsageSnapshotStore.swift */; };
+		A1000000000000000000000F /* UsageCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A20000000000000000000012 /* UsageCore.framework */; };
+		A10000000000000000000010 /* DashboardModelsV1.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000013 /* DashboardModelsV1.swift */; };
+		A10000000000000000000011 /* DashboardRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000014 /* DashboardRepository.swift */; };
+		A10000000000000000000012 /* DashboardDetailViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000015 /* DashboardDetailViews.swift */; };
+		A10000000000000000000013 /* NativePreviewSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000016 /* NativePreviewSupport.swift */; };
+		A10000000000000000000014 /* NativeViewPreviews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000017 /* NativeViewPreviews.swift */; };
+		A10000000000000000000015 /* NativeDesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000018 /* NativeDesignSystem.swift */; };
+		A10000000000000000000016 /* ProviderActivityHeatmap.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000019 /* ProviderActivityHeatmap.swift */; };
+		A10000000000000000000017 /* ProviderMonitoringView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000001A /* ProviderMonitoringView.swift */; };
+		A10000000000000000000018 /* BreakdownDashboardViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000001B /* BreakdownDashboardViews.swift */; };
+		A10000000000000000000019 /* DashboardRangeResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000001C /* DashboardRangeResolver.swift */; };
+		A1000000000000000000001A /* openai.svg in Resources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000001D /* openai.svg */; };
+		A1000000000000000000001B /* claude.svg in Resources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000001E /* claude.svg */; };
+		A1000000000000000000001C /* anthropic.svg in Resources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000001F /* anthropic.svg */; };
+		A1000000000000000000001D /* openrouter.svg in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000020 /* openrouter.svg */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		AB0000000000000000000001 /* PBXContainerItemProxy */ = {isa = PBXContainerItemProxy; containerPortal = A80000000000000000000001 /* Project object */; proxyType = 1; remoteGlobalIDString = A50000000000000000000002; remoteInfo = UsageCore; };
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		A20000000000000000000001 /* AppLifecycle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLifecycle.swift; sourceTree = "<group>"; };
+		A20000000000000000000002 /* L10n.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = L10n.swift; sourceTree = "<group>"; };
+		A20000000000000000000003 /* LLMUsageBarNativeApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMUsageBarNativeApp.swift; sourceTree = "<group>"; };
+		A20000000000000000000004 /* MainWindowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainWindowView.swift; sourceTree = "<group>"; };
+		A20000000000000000000005 /* NativeFormatting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeFormatting.swift; sourceTree = "<group>"; };
+		A20000000000000000000006 /* NativeSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeSettingsView.swift; sourceTree = "<group>"; };
+		A20000000000000000000007 /* UsageAppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageAppModel.swift; sourceTree = "<group>"; };
+		A20000000000000000000008 /* UsageMenuView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageMenuView.swift; sourceTree = "<group>"; };
+		A20000000000000000000009 /* ClaudeStatuslineSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeStatuslineSource.swift; sourceTree = "<group>"; };
+		A2000000000000000000000A /* NativeBridgeClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeBridgeClient.swift; sourceTree = "<group>"; };
+		A2000000000000000000000B /* TrayUsageSnapshotV1.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrayUsageSnapshotV1.swift; sourceTree = "<group>"; };
+		A2000000000000000000000C /* UsageModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageModels.swift; sourceTree = "<group>"; };
+		A2000000000000000000000D /* UsageRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageRepository.swift; sourceTree = "<group>"; };
+		A2000000000000000000000E /* UsageSnapshotStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageSnapshotStore.swift; sourceTree = "<group>"; };
+		A2000000000000000000000F /* LLM Usage Bar Native.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "LLM Usage Bar Native.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		A20000000000000000000010 /* Preview.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Preview.xcconfig; sourceTree = "<group>"; };
+		A20000000000000000000011 /* Production.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Production.xcconfig; sourceTree = "<group>"; };
+		A20000000000000000000012 /* UsageCore.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = UsageCore.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		A20000000000000000000013 /* DashboardModelsV1.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardModelsV1.swift; sourceTree = "<group>"; };
+		A20000000000000000000014 /* DashboardRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardRepository.swift; sourceTree = "<group>"; };
+		A20000000000000000000015 /* DashboardDetailViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardDetailViews.swift; sourceTree = "<group>"; };
+		A20000000000000000000016 /* NativePreviewSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativePreviewSupport.swift; sourceTree = "<group>"; };
+		A20000000000000000000017 /* NativeViewPreviews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeViewPreviews.swift; sourceTree = "<group>"; };
+		A20000000000000000000018 /* NativeDesignSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeDesignSystem.swift; sourceTree = "<group>"; };
+		A20000000000000000000019 /* ProviderActivityHeatmap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderActivityHeatmap.swift; sourceTree = "<group>"; };
+		A2000000000000000000001A /* ProviderMonitoringView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderMonitoringView.swift; sourceTree = "<group>"; };
+		A2000000000000000000001B /* BreakdownDashboardViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BreakdownDashboardViews.swift; sourceTree = "<group>"; };
+		A2000000000000000000001C /* DashboardRangeResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardRangeResolver.swift; sourceTree = "<group>"; };
+		A2000000000000000000001D /* openai.svg */ = {isa = PBXFileReference; lastKnownFileType = image.svg; name = openai.svg; path = ../src/icons/extracted/openai.svg; sourceTree = SOURCE_ROOT; };
+		A2000000000000000000001E /* claude.svg */ = {isa = PBXFileReference; lastKnownFileType = image.svg; name = claude.svg; path = ../src/icons/extracted/claude.svg; sourceTree = SOURCE_ROOT; };
+		A2000000000000000000001F /* anthropic.svg */ = {isa = PBXFileReference; lastKnownFileType = image.svg; name = anthropic.svg; path = ../src/icons/extracted/anthropic.svg; sourceTree = SOURCE_ROOT; };
+		A20000000000000000000020 /* openrouter.svg */ = {isa = PBXFileReference; lastKnownFileType = image.svg; name = openrouter.svg; path = ../src/icons/extracted/openrouter.svg; sourceTree = SOURCE_ROOT; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A30000000000000000000001 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (A1000000000000000000000F /* UsageCore.framework in Frameworks */); runOnlyForDeploymentPostprocessing = 0; };
+		A30000000000000000000002 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A40000000000000000000001 = {
+			isa = PBXGroup;
+			children = (
+				A40000000000000000000002 /* Sources */,
+				A40000000000000000000005 /* Configuration */,
+				A40000000000000000000007 /* Brand Resources */,
+				A40000000000000000000004 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A40000000000000000000002 /* Sources */ = {
+			isa = PBXGroup;
+			children = (A40000000000000000000003 /* LLMUsageBarNative */, A40000000000000000000000006 /* UsageCore */);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+		A40000000000000000000003 /* LLMUsageBarNative */ = {
+			isa = PBXGroup;
+			children = (
+				A20000000000000000000001, A20000000000000000000002, A20000000000000000000003,
+				A20000000000000000000004, A20000000000000000000005, A20000000000000000000006,
+				A20000000000000000000007, A20000000000000000000008,
+				A20000000000000000000015,
+				A20000000000000000000017,
+				A20000000000000000000018, A20000000000000000000019,
+				A2000000000000000000001A, A2000000000000000000001B,
+			);
+			path = LLMUsageBarNative;
+			sourceTree = "<group>";
+		};
+		A40000000000000000000000006 /* UsageCore */ = {
+			isa = PBXGroup;
+			children = (
+				A20000000000000000000009, A2000000000000000000000A, A2000000000000000000000B,
+				A2000000000000000000000C, A2000000000000000000000D, A2000000000000000000000E,
+				A20000000000000000000013, A20000000000000000000014,
+				A20000000000000000000016, A2000000000000000000001C,
+			);
+			path = UsageCore;
+			sourceTree = "<group>";
+		};
+		A40000000000000000000004 /* Products */ = {
+			isa = PBXGroup;
+			children = (A2000000000000000000000F /* LLM Usage Bar Native.app */, A20000000000000000000012 /* UsageCore.framework */);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		A40000000000000000000005 /* Configuration */ = {
+			isa = PBXGroup;
+			children = (A20000000000000000000010 /* Preview.xcconfig */, A20000000000000000000011 /* Production.xcconfig */);
+			path = Configuration;
+			sourceTree = "<group>";
+		};
+		A40000000000000000000007 /* Brand Resources */ = {
+			isa = PBXGroup;
+			children = (
+				A2000000000000000000001D,
+				A2000000000000000000001E,
+				A2000000000000000000001F,
+				A20000000000000000000020,
+			);
+			name = "Brand Resources";
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A50000000000000000000001 /* LLMUsageBarNative */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A90000000000000000000002 /* Build configuration list for PBXNativeTarget */;
+			buildPhases = (A60000000000000000000001 /* Sources */, A30000000000000000000001 /* Frameworks */, A70000000000000000000001 /* Resources */);
+			buildRules = ();
+			dependencies = (AB0000000000000000000002 /* UsageCore */);
+			name = LLMUsageBarNative;
+			productName = LLMUsageBarNative;
+			productReference = A2000000000000000000000F /* LLM Usage Bar Native.app */;
+			productType = "com.apple.product-type.application";
+		};
+		A50000000000000000000002 /* UsageCore */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A90000000000000000000003 /* Build configuration list for UsageCore */;
+			buildPhases = (A60000000000000000000002 /* Sources */, A30000000000000000000002 /* Frameworks */, A70000000000000000000002 /* Resources */);
+			buildRules = ();
+			dependencies = ();
+			name = UsageCore;
+			productName = UsageCore;
+			productReference = A20000000000000000000012 /* UsageCore.framework */;
+			productType = "com.apple.product-type.framework";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A80000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {BuildIndependentTargetsInParallel = 1; LastSwiftUpdateCheck = 2660; LastUpgradeCheck = 2660; TargetAttributes = {A50000000000000000000001 = {CreatedOnToolsVersion = 26.6; };};};
+			buildConfigurationList = A90000000000000000000001 /* Build configuration list for PBXProject */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (en, Base, zh-Hans, zh-Hant, ja);
+			mainGroup = A40000000000000000000001;
+			productRefGroup = A40000000000000000000004 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (A50000000000000000000001 /* LLMUsageBarNative */, A50000000000000000000002 /* UsageCore */);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A70000000000000000000001 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (A1000000000000000000001A, A1000000000000000000001B, A1000000000000000000001C, A1000000000000000000001D); runOnlyForDeploymentPostprocessing = 0; };
+		A70000000000000000000002 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A60000000000000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000000000000000000001, A10000000000000000000002, A10000000000000000000003,
+				A10000000000000000000004, A10000000000000000000005, A10000000000000000000006,
+				A10000000000000000000007, A10000000000000000000008,
+				A10000000000000000000012,
+				A10000000000000000000014,
+				A10000000000000000000015, A10000000000000000000016,
+				A10000000000000000000017, A10000000000000000000018,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A60000000000000000000002 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (A10000000000000000000009, A1000000000000000000000A, A1000000000000000000000B, A1000000000000000000000C, A1000000000000000000000D, A1000000000000000000000E, A10000000000000000000010, A10000000000000000000011, A10000000000000000000013, A10000000000000000000019);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		AB0000000000000000000002 /* UsageCore */ = {isa = PBXTargetDependency; target = A50000000000000000000002 /* UsageCore */; targetProxy = AB0000000000000000000001 /* PBXContainerItemProxy */; };
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		AA0000000000000000000001 /* Preview */ = {isa = XCBuildConfiguration; baseConfigurationReference = A20000000000000000000010; buildSettings = {CLANG_ENABLE_MODULES = YES; SDKROOT = macosx;}; name = Preview;};
+		AA0000000000000000000002 /* Production */ = {isa = XCBuildConfiguration; baseConfigurationReference = A20000000000000000000011; buildSettings = {CLANG_ENABLE_MODULES = YES; SDKROOT = macosx;}; name = Production;};
+		AA0000000000000000000003 /* Preview */ = {isa = XCBuildConfiguration; baseConfigurationReference = A20000000000000000000010; buildSettings = {ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES; CODE_SIGN_STYLE = Automatic; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_LSUIElement = YES; MACOSX_DEPLOYMENT_TARGET = 13.0; PRODUCT_MODULE_NAME = LLMUsageBarNative; SWIFT_VERSION = 6.0;}; name = Preview;};
+		AA0000000000000000000004 /* Production */ = {isa = XCBuildConfiguration; baseConfigurationReference = A20000000000000000000011; buildSettings = {ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES; CODE_SIGN_STYLE = Automatic; EXCLUDED_SOURCE_FILE_NAMES = NativeViewPreviews.swift; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_LSUIElement = YES; MACOSX_DEPLOYMENT_TARGET = 13.0; PRODUCT_MODULE_NAME = LLMUsageBarNative; SWIFT_VERSION = 6.0;}; name = Production;};
+		AA0000000000000000000005 /* Preview */ = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGNING_ALLOWED = NO; DEFINES_MODULE = YES; GENERATE_INFOPLIST_FILE = YES; MACH_O_TYPE = staticlib; MACOSX_DEPLOYMENT_TARGET = 13.0; PRODUCT_BUNDLE_IDENTIFIER = com.llmusagebar.native.UsageCore; PRODUCT_NAME = UsageCore; SKIP_INSTALL = YES; SWIFT_ACTIVE_COMPILATION_CONDITIONS = NATIVE_PREVIEW_SUPPORT; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; SWIFT_VERSION = 6.0;}; name = Preview;};
+		AA0000000000000000000006 /* Production */ = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGN_STYLE = Automatic; DEFINES_MODULE = YES; EXCLUDED_SOURCE_FILE_NAMES = NativePreviewSupport.swift; GENERATE_INFOPLIST_FILE = YES; MACH_O_TYPE = staticlib; MACOSX_DEPLOYMENT_TARGET = 13.0; PRODUCT_BUNDLE_IDENTIFIER = com.llmusagebar.native.production-candidate.UsageCore; PRODUCT_NAME = UsageCore; SKIP_INSTALL = YES; SWIFT_OPTIMIZATION_LEVEL = "-O"; SWIFT_VERSION = 6.0;}; name = Production;};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A90000000000000000000001 /* Build configuration list for PBXProject */ = {isa = XCConfigurationList; buildConfigurations = (AA0000000000000000000001, AA0000000000000000000002); defaultConfigurationIsVisible = 0; defaultConfigurationName = Preview;};
+		A90000000000000000000002 /* Build configuration list for PBXNativeTarget */ = {isa = XCConfigurationList; buildConfigurations = (AA0000000000000000000003, AA0000000000000000000004); defaultConfigurationIsVisible = 0; defaultConfigurationName = Preview;};
+		A90000000000000000000003 /* Build configuration list for UsageCore */ = {isa = XCConfigurationList; buildConfigurations = (AA0000000000000000000005, AA0000000000000000000006); defaultConfigurationIsVisible = 0; defaultConfigurationName = Preview;};
+/* End XCConfigurationList section */
+	};
+	rootObject = A80000000000000000000001 /* Project object */;
+}
