@@ -409,6 +409,16 @@ fn should_hide_minimized_main(dock_visible: bool, is_minimized: bool) -> bool {
     dock_visible && is_minimized
 }
 
+/// 事件路由：哪些窗口事件应触发主窗口最小化检查。
+/// 只认 `main` 窗口的 `Focused(false)`：tao 0.35.3 / tauri 2.11.5 没有专门的
+/// Minimized 事件，最小化一个处于 key 状态的窗口必然让它 resign key，因此失焦是
+/// 伴随最小化的可靠信号；失焦的其它原因由 `handle_minimized_main_window` 里的
+/// `is_minimized()` 判定过滤。抽成不带 cfg 的纯函数，测试里才能编译到。
+#[cfg(any(target_os = "macos", test))]
+fn classify_minimize_check_event(label: &str, event: &tauri::WindowEvent) -> bool {
+    label == "main" && matches!(event, tauri::WindowEvent::Focused(false))
+}
+
 /// 主窗口最小化后的隐藏处理：读取 Dock 可见性并按判定结果隐藏窗口、调整托盘策略。
 /// 事件回调与兜底定时器共用这段逻辑，判定语义与原来 300ms 轮询的循环体完全一致。
 #[cfg(all(target_os = "macos", not(test)))]
@@ -498,8 +508,7 @@ pub fn run() {
             // 用 is_minimized() 确认真实状态，其它原因导致的失焦会被判定逻辑过滤掉。
             #[cfg(all(target_os = "macos", not(test)))]
             {
-                if window.label() == "main" && matches!(event, tauri::WindowEvent::Focused(false))
-                {
+                if classify_minimize_check_event(window.label(), event) {
                     handle_minimized_main_window(window.app_handle());
                 }
             }
@@ -1888,9 +1897,9 @@ pub fn restart_process(app_handle: &tauri::AppHandle) -> ! {
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_exit_request, classify_window_event_route, should_hide_minimized_main,
-        DatabaseRuntimePreflight, ExitRequestAction, PreparedDatabaseRuntime, WindowEventKind,
-        WindowEventRoute,
+        classify_exit_request, classify_minimize_check_event, classify_window_event_route,
+        should_hide_minimized_main, DatabaseRuntimePreflight, ExitRequestAction,
+        PreparedDatabaseRuntime, WindowEventKind, WindowEventRoute,
     };
     use crate::database::DatabaseIdentityOutcome;
     use crate::error::AppError;
@@ -2042,6 +2051,28 @@ mod tests {
         assert!(!should_hide_minimized_main(true, false));
         assert!(!should_hide_minimized_main(false, true));
         assert!(!should_hide_minimized_main(false, false));
+    }
+
+    #[test]
+    fn minimize_check_event_fires_only_for_main_window_focus_loss() {
+        use tauri::WindowEvent;
+
+        assert!(classify_minimize_check_event(
+            "main",
+            &WindowEvent::Focused(false)
+        ));
+        assert!(!classify_minimize_check_event(
+            "main",
+            &WindowEvent::Focused(true)
+        ));
+        assert!(!classify_minimize_check_event(
+            "main",
+            &WindowEvent::Resized(tauri::PhysicalSize::new(800, 600)),
+        ));
+        assert!(!classify_minimize_check_event(
+            crate::tray_popover::TRAY_POPOVER_LABEL,
+            &WindowEvent::Focused(false),
+        ));
     }
 
     #[test]
