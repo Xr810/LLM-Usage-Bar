@@ -946,7 +946,7 @@
   },
   {
     "file": "src-tauri/src/settings.rs",
-    "lineNumber": 1204,
+    "lineNumber": 1208,
     "columnNumber": 2,
     "matchedText": "cc-switch",
     "context": "\"cc-switch-sync\"",
@@ -955,7 +955,7 @@
   },
   {
     "file": "src-tauri/src/settings.rs",
-    "lineNumber": 1217,
+    "lineNumber": 1221,
     "columnNumber": 26,
     "matchedText": "cc_switch",
     "context": "\"skillStorageLocation\": \"cc_switch\",",
@@ -964,7 +964,7 @@
   },
   {
     "file": "src-tauri/src/settings.rs",
-    "lineNumber": 1221,
+    "lineNumber": 1225,
     "columnNumber": 16,
     "matchedText": "cc-switch",
     "context": "\"remoteRoot\": \"cc-switch-sync\"",
@@ -973,7 +973,7 @@
   },
   {
     "file": "src-tauri/src/settings.rs",
-    "lineNumber": 1224,
+    "lineNumber": 1228,
     "columnNumber": 14,
     "matchedText": "cc-switch",
     "context": "\"identity\": \"cc-switch-plugin-wire\",",
@@ -982,7 +982,7 @@
   },
   {
     "file": "src-tauri/src/settings.rs",
-    "lineNumber": 1241,
+    "lineNumber": 1245,
     "columnNumber": 52,
     "matchedText": "cc-switch",
     "context": "assert_eq!(rewritten[\"webdavSync\"][\"remoteRoot\"], \"cc-switch-sync\");",
@@ -991,7 +991,7 @@
   },
   {
     "file": "src-tauri/src/settings.rs",
-    "lineNumber": 1245,
+    "lineNumber": 1249,
     "columnNumber": 14,
     "matchedText": "cc-switch",
     "context": "\"identity\": \"cc-switch-plugin-wire\",",
@@ -1000,7 +1000,7 @@
   },
   {
     "file": "src-tauri/src/settings.rs",
-    "lineNumber": 1257,
+    "lineNumber": 1261,
     "columnNumber": 29,
     "matchedText": "cc_switch",
     "context": "r#\"{\"skillStorageLocation\":\"cc_switch\",\"language\":\"zh\"}\"#,",
@@ -1009,7 +1009,7 @@
   },
   {
     "file": "src-tauri/src/settings.rs",
-    "lineNumber": 1276,
+    "lineNumber": 1280,
     "columnNumber": 12,
     "matchedText": "cc_switch",
     "context": ".contains(\"cc_switch\"));",
@@ -1018,7 +1018,7 @@
   },
   {
     "file": "src-tauri/src/settings.rs",
-    "lineNumber": 1288,
+    "lineNumber": 1292,
     "columnNumber": 14,
     "matchedText": "cc-switch",
     "context": ".contains(\"/.cc-switch/\"));",
