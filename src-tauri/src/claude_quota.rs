@@ -7,9 +7,7 @@
 
 use crate::config;
 use crate::error::AppError;
-use crate::services::subscription::{
-    CredentialStatus, QuotaTier, SubscriptionQuota, TIER_FIVE_HOUR, TIER_SEVEN_DAY,
-};
+use crate::services::subscription::{QuotaTier, SubscriptionQuota, TIER_FIVE_HOUR, TIER_SEVEN_DAY};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -752,17 +750,11 @@ fn collect_local_quota_from_paths_at(
     }
 
     Ok(SubscriptionQuota {
-        tool: "claude".to_string(),
-        credential_status: CredentialStatus::Valid,
-        credential_message: None,
         success: true,
         tiers,
         plan_type: read_cli_plan_type(),
-        plan_renews_at: None,
-        manual_reset_credits: None,
-        extra_usage: None,
-        error: None,
         queried_at: observed_at_ms,
+        ..SubscriptionQuota::skeleton("claude")
     })
 }
 
@@ -1050,19 +1042,13 @@ fn collect_statusline_quota_from_path_at(
     let observations = read_statusline_observations(cache_path, now)?;
     let queried_at = observations.iter().map(|value| value.observed_at_ms).min();
     Ok(SubscriptionQuota {
-        tool: "claude".to_string(),
-        credential_status: CredentialStatus::Valid,
-        credential_message: None,
         success: true,
         tiers: observations.into_iter().map(|value| value.tier).collect(),
         // Both Claude collectors describe the same account, so both report its
         // plan — whichever one a given machine ends up serving.
         plan_type: read_cli_plan_type(),
-        plan_renews_at: None,
-        manual_reset_credits: None,
-        extra_usage: None,
-        error: None,
         queried_at,
+        ..SubscriptionQuota::skeleton("claude")
     })
 }
 

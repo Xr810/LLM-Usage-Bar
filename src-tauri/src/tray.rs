@@ -811,17 +811,10 @@ mod tests {
 
     fn make_quota(tool: &str, success: bool, tiers: Vec<QuotaTier>) -> SubscriptionQuota {
         SubscriptionQuota {
-            tool: tool.to_string(),
-            credential_status: CredentialStatus::Valid,
-            credential_message: None,
             success,
             tiers,
-            plan_type: None,
-            plan_renews_at: None,
-            manual_reset_credits: None,
-            extra_usage: None,
-            error: None,
             queried_at: Some(0),
+            ..SubscriptionQuota::skeleton(tool)
         }
     }
 

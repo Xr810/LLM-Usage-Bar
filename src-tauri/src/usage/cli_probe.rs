@@ -19,8 +19,8 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use crate::services::subscription::{
-    CredentialStatus, QuotaTier, SubscriptionQuota, TIER_FIVE_HOUR, TIER_SEVEN_DAY,
-    TIER_SEVEN_DAY_OPUS, TIER_SEVEN_DAY_SONNET,
+    QuotaTier, SubscriptionQuota, TIER_FIVE_HOUR, TIER_SEVEN_DAY, TIER_SEVEN_DAY_OPUS,
+    TIER_SEVEN_DAY_SONNET,
 };
 
 /// 探测总超时。
@@ -380,17 +380,10 @@ pub(crate) struct ProbeUsage {
 impl ProbeUsage {
     fn into_quota(self, tool: &str) -> SubscriptionQuota {
         SubscriptionQuota {
-            tool: tool.to_string(),
-            credential_status: CredentialStatus::Valid,
-            credential_message: None,
             success: true,
             tiers: self.tiers,
-            plan_type: None,
-            plan_renews_at: None,
-            manual_reset_credits: None,
-            extra_usage: None,
-            error: None,
             queried_at: Some(now_millis()),
+            ..SubscriptionQuota::skeleton(tool)
         }
     }
 }

@@ -101,13 +101,30 @@ pub struct SubscriptionQuota {
 }
 
 impl SubscriptionQuota {
-    pub(crate) fn not_found(tool: &str) -> Self {
+    /// 一次采集结果的骨架：只有 `tool` 必填，其余字段取中性值（没数据、没错误）。
+    /// 构造时用结构体更新语法只写自己关心的部分：
+    ///
+    /// ```ignore
+    /// SubscriptionQuota {
+    ///     success: true,
+    ///     tiers,
+    ///     ..SubscriptionQuota::skeleton("codex")
+    /// }
+    /// ```
+    ///
+    /// 这样给某个 provider 加一个它独有的字段时，只动这里和真正用得上的那一处，
+    /// 不必回头去补另外三十几个与它无关的构造点——那正是 Codex 的点数余额一直
+    /// 没落地的原因（「加了要动 30+ 处构造字面量」）。
+    ///
+    /// 刻意不实现 `Default`：`tool` 是语义上必填的，给它一个空字符串默认值等于
+    /// 埋一个可以被忘记的坑。
+    pub(crate) fn skeleton(tool: &str) -> Self {
         Self {
             tool: tool.to_string(),
-            credential_status: CredentialStatus::NotFound,
+            credential_status: CredentialStatus::Valid,
             credential_message: None,
             success: false,
-            tiers: vec![],
+            tiers: Vec::new(),
             plan_type: None,
             plan_renews_at: None,
             manual_reset_credits: None,
@@ -117,19 +134,20 @@ impl SubscriptionQuota {
         }
     }
 
+    pub(crate) fn not_found(tool: &str) -> Self {
+        Self {
+            credential_status: CredentialStatus::NotFound,
+            ..Self::skeleton(tool)
+        }
+    }
+
     pub(crate) fn error(tool: &str, status: CredentialStatus, message: String) -> Self {
         Self {
-            tool: tool.to_string(),
             credential_status: status,
             credential_message: Some(message.clone()),
-            success: false,
-            tiers: vec![],
-            plan_type: None,
-            plan_renews_at: None,
-            manual_reset_credits: None,
-            extra_usage: None,
             error: Some(message),
             queried_at: Some(now_millis()),
+            ..Self::skeleton(tool)
         }
     }
 }
@@ -864,17 +882,11 @@ pub(crate) async fn query_codex_quota(
         normalize_codex_reset_credits(reset_credit_count, reset_credit_response);
 
     Ok(SubscriptionQuota {
-        tool: tool_label.to_string(),
-        credential_status: CredentialStatus::Valid,
-        credential_message: None,
         success: true,
         tiers,
-        plan_type: None,
-        plan_renews_at: None,
         manual_reset_credits,
-        extra_usage: None,
-        error: None,
         queried_at: Some(now_millis()),
+        ..SubscriptionQuota::skeleton(tool_label)
     })
 }
 
@@ -1338,17 +1350,10 @@ async fn query_gemini_quota(access_token: &str) -> Result<SubscriptionQuota, Str
     tiers.sort_by_key(|t| sort_order(&t.name));
 
     Ok(SubscriptionQuota {
-        tool: "gemini".to_string(),
-        credential_status: CredentialStatus::Valid,
-        credential_message: None,
         success: true,
         tiers,
-        plan_type: None,
-        plan_renews_at: None,
-        manual_reset_credits: None,
-        extra_usage: None,
-        error: None,
         queried_at: Some(now_millis()),
+        ..SubscriptionQuota::skeleton("gemini")
     })
 }
 
@@ -1460,6 +1465,58 @@ fn now_millis() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 24 处构造点现在靠 `skeleton` 兜住那些它们不关心的字段。改动这里的任何一个
+    /// 默认值，等于一次性改掉那 24 处的行为——所以把它钉死，让改动必须先过这一关。
+    #[test]
+    fn skeleton_defaults_are_pinned() {
+        let quota = SubscriptionQuota::skeleton("probe");
+        assert_eq!(quota.tool, "probe");
+        assert!(matches!(quota.credential_status, CredentialStatus::Valid));
+        assert!(quota.credential_message.is_none());
+        assert!(!quota.success, "骨架默认不是成功结果");
+        assert!(quota.tiers.is_empty());
+        assert!(quota.plan_type.is_none());
+        assert!(quota.plan_renews_at.is_none());
+        assert!(quota.manual_reset_credits.is_none());
+        assert!(quota.extra_usage.is_none());
+        assert!(quota.error.is_none());
+        assert!(quota.queried_at.is_none(), "没查过就没有查询时刻");
+    }
+
+    /// 两个既有构造器改成基于骨架后，对外行为必须与重构前逐字段一致。
+    #[test]
+    fn not_found_and_error_keep_their_previous_shape() {
+        let not_found = SubscriptionQuota::not_found("codex");
+        assert_eq!(not_found.tool, "codex");
+        assert!(matches!(
+            not_found.credential_status,
+            CredentialStatus::NotFound
+        ));
+        assert!(!not_found.success);
+        assert!(not_found.credential_message.is_none());
+        assert!(not_found.error.is_none());
+        assert!(not_found.queried_at.is_none());
+
+        let failed = SubscriptionQuota::error(
+            "claude",
+            CredentialStatus::Expired,
+            "some_error_code".to_string(),
+        );
+        assert_eq!(failed.tool, "claude");
+        assert!(matches!(
+            failed.credential_status,
+            CredentialStatus::Expired
+        ));
+        assert!(!failed.success);
+        // 错误文案同时进 credential_message 和 error 两个字段（前端两处都在读）。
+        assert_eq!(
+            failed.credential_message.as_deref(),
+            Some("some_error_code")
+        );
+        assert_eq!(failed.error.as_deref(), Some("some_error_code"));
+        assert!(failed.queried_at.is_some(), "错误结果带查询时刻");
+    }
 
     #[test]
     fn chatgpt_base_url_falls_back_unless_https() {

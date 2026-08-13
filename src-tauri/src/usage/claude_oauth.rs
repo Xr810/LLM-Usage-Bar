@@ -542,17 +542,11 @@ async fn fetch_claude_oauth_usage(access_token: &str) -> Result<SubscriptionQuot
     }
 
     Ok(SubscriptionQuota {
-        tool: TOOL_LABEL.to_string(),
-        credential_status: CredentialStatus::Valid,
-        credential_message: None,
         success: true,
         tiers,
-        plan_type: None,
-        plan_renews_at: None,
-        manual_reset_credits: None,
         extra_usage: extra_usage_from_response(body.extra_usage),
-        error: None,
         queried_at: Some(now_millis()),
+        ..SubscriptionQuota::skeleton(TOOL_LABEL)
     })
 }
 

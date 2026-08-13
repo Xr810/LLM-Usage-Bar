@@ -987,9 +987,6 @@ mod tests {
 
     fn successful_quota(tool: &str) -> SubscriptionQuota {
         SubscriptionQuota {
-            tool: tool.to_string(),
-            credential_status: CredentialStatus::Valid,
-            credential_message: None,
             success: true,
             tiers: vec![
                 QuotaTier {
@@ -1007,12 +1004,8 @@ mod tests {
                     max_value_usd: None,
                 },
             ],
-            plan_type: None,
-            plan_renews_at: None,
-            manual_reset_credits: None,
-            extra_usage: None,
-            error: None,
             queried_at: Some(100_000),
+            ..SubscriptionQuota::skeleton(tool)
         }
     }
 

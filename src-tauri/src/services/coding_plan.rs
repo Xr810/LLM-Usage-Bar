@@ -86,17 +86,9 @@ fn parse_f64(value: &serde_json::Value) -> Option<f64> {
 
 fn make_error(msg: String) -> SubscriptionQuota {
     SubscriptionQuota {
-        tool: "coding_plan".to_string(),
-        credential_status: CredentialStatus::Valid,
-        credential_message: None,
-        success: false,
-        tiers: vec![],
-        plan_type: None,
-        plan_renews_at: None,
-        manual_reset_credits: None,
-        extra_usage: None,
         error: Some(msg),
         queried_at: Some(now_millis()),
+        ..SubscriptionQuota::skeleton("coding_plan")
     }
 }
 
@@ -121,17 +113,11 @@ async fn query_kimi(api_key: &str) -> Result<SubscriptionQuota, String> {
     let status = resp.status();
     if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
         return Ok(SubscriptionQuota {
-            tool: "coding_plan".to_string(),
             credential_status: CredentialStatus::Expired,
             credential_message: Some("Invalid API key".to_string()),
-            success: false,
-            tiers: vec![],
-            plan_type: None,
-            plan_renews_at: None,
-            manual_reset_credits: None,
-            extra_usage: None,
             error: Some(format!("Authentication failed (HTTP {status})")),
             queried_at: Some(now_millis()),
+            ..SubscriptionQuota::skeleton("coding_plan")
         });
     }
 
@@ -200,17 +186,10 @@ async fn query_kimi(api_key: &str) -> Result<SubscriptionQuota, String> {
     }
 
     Ok(SubscriptionQuota {
-        tool: "coding_plan".to_string(),
-        credential_status: CredentialStatus::Valid,
-        credential_message: None,
         success: true,
         tiers,
-        plan_type: None,
-        plan_renews_at: None,
-        manual_reset_credits: None,
-        extra_usage: None,
-        error: None,
         queried_at: Some(now_millis()),
+        ..SubscriptionQuota::skeleton("coding_plan")
     })
 }
 
@@ -346,17 +325,11 @@ async fn query_zhipu(base_url: &str, api_key: &str) -> Result<SubscriptionQuota,
     let status = resp.status();
     if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
         return Ok(SubscriptionQuota {
-            tool: "coding_plan".to_string(),
             credential_status: CredentialStatus::Expired,
             credential_message: Some("Invalid API key".to_string()),
-            success: false,
-            tiers: vec![],
-            plan_type: None,
-            plan_renews_at: None,
-            manual_reset_credits: None,
-            extra_usage: None,
             error: Some(format!("Authentication failed (HTTP {status})")),
             queried_at: Some(now_millis()),
+            ..SubscriptionQuota::skeleton("coding_plan")
         });
     }
 
@@ -406,17 +379,11 @@ fn zhipu_quota_from_body(body: &serde_json::Value) -> SubscriptionQuota {
         .map(|s| s.to_string());
 
     SubscriptionQuota {
-        tool: "coding_plan".to_string(),
-        credential_status: CredentialStatus::Valid,
         credential_message: level,
         success: true,
         tiers,
-        plan_type: None,
-        plan_renews_at: None,
-        manual_reset_credits: None,
-        extra_usage: None,
-        error: None,
         queried_at: Some(now_millis()),
+        ..SubscriptionQuota::skeleton("coding_plan")
     }
 }
 
@@ -448,17 +415,11 @@ async fn query_minimax(api_key: &str, is_cn: bool) -> Result<SubscriptionQuota, 
     let status = resp.status();
     if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
         return Ok(SubscriptionQuota {
-            tool: "coding_plan".to_string(),
             credential_status: CredentialStatus::Expired,
             credential_message: Some("Invalid API key".to_string()),
-            success: false,
-            tiers: vec![],
-            plan_type: None,
-            plan_renews_at: None,
-            manual_reset_credits: None,
-            extra_usage: None,
             error: Some(format!("Authentication failed (HTTP {status})")),
             queried_at: Some(now_millis()),
+            ..SubscriptionQuota::skeleton("coding_plan")
         });
     }
 
@@ -497,17 +458,10 @@ async fn query_minimax(api_key: &str, is_cn: bool) -> Result<SubscriptionQuota, 
     let tiers = parse_minimax_tiers(&body);
 
     Ok(SubscriptionQuota {
-        tool: "coding_plan".to_string(),
-        credential_status: CredentialStatus::Valid,
-        credential_message: None,
         success: true,
         tiers,
-        plan_type: None,
-        plan_renews_at: None,
-        manual_reset_credits: None,
-        extra_usage: None,
-        error: None,
         queried_at: Some(now_millis()),
+        ..SubscriptionQuota::skeleton("coding_plan")
     })
 }
 
@@ -532,17 +486,11 @@ async fn query_zenmux(base_url: &str, api_key: &str) -> Result<SubscriptionQuota
     let status = resp.status();
     if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
         return Ok(SubscriptionQuota {
-            tool: "coding_plan".to_string(),
             credential_status: CredentialStatus::Expired,
             credential_message: Some("Invalid API key".to_string()),
-            success: false,
-            tiers: vec![],
-            plan_type: None,
-            plan_renews_at: None,
-            manual_reset_credits: None,
-            extra_usage: None,
             error: Some(format!("Authentication failed (HTTP {status})")),
             queried_at: Some(now_millis()),
+            ..SubscriptionQuota::skeleton("coding_plan")
         });
     }
 
@@ -637,8 +585,6 @@ async fn query_zenmux(base_url: &str, api_key: &str) -> Result<SubscriptionQuota
     };
 
     Ok(SubscriptionQuota {
-        tool: "coding_plan".to_string(),
-        credential_status: CredentialStatus::Valid,
         credential_message: if plan_info.is_empty() {
             None
         } else {
@@ -646,12 +592,8 @@ async fn query_zenmux(base_url: &str, api_key: &str) -> Result<SubscriptionQuota
         },
         success: true,
         tiers,
-        plan_type: None,
-        plan_renews_at: None,
-        manual_reset_credits: None,
-        extra_usage: None,
-        error: None,
         queried_at: Some(now_millis()),
+        ..SubscriptionQuota::skeleton("coding_plan")
     })
 }
 
@@ -1097,33 +1039,21 @@ fn parse_coding_plan_tiers(result: &serde_json::Value) -> Vec<QuotaTier> {
 
 fn volcengine_success(tiers: Vec<QuotaTier>, plan: Option<String>) -> SubscriptionQuota {
     SubscriptionQuota {
-        tool: "coding_plan".to_string(),
-        credential_status: CredentialStatus::Valid,
         credential_message: plan,
         success: true,
         tiers,
-        plan_type: None,
-        plan_renews_at: None,
-        manual_reset_credits: None,
-        extra_usage: None,
-        error: None,
         queried_at: Some(now_millis()),
+        ..SubscriptionQuota::skeleton("coding_plan")
     }
 }
 
 fn volcengine_auth_error(detail: String) -> SubscriptionQuota {
     SubscriptionQuota {
-        tool: "coding_plan".to_string(),
         credential_status: CredentialStatus::Expired,
         credential_message: Some("Invalid API key".to_string()),
-        success: false,
-        tiers: vec![],
-        plan_type: None,
-        plan_renews_at: None,
-        manual_reset_credits: None,
-        extra_usage: None,
         error: Some(detail),
         queried_at: Some(now_millis()),
+        ..SubscriptionQuota::skeleton("coding_plan")
     }
 }
 
@@ -1207,17 +1137,9 @@ async fn query_volcengine(
 /// 构造"凭据缺失 / 域名未命中"的失败结果（NotFound 状态 + 明确错误文案）。
 fn coding_plan_not_found(error: &str) -> SubscriptionQuota {
     SubscriptionQuota {
-        tool: "coding_plan".to_string(),
         credential_status: CredentialStatus::NotFound,
-        credential_message: None,
-        success: false,
-        tiers: vec![],
-        plan_type: None,
-        plan_renews_at: None,
-        manual_reset_credits: None,
-        extra_usage: None,
         error: Some(error.to_string()),
-        queried_at: None,
+        ..SubscriptionQuota::skeleton("coding_plan")
     }
 }
 
@@ -1268,17 +1190,11 @@ async fn query_zhipu_team_at(
     let status = resp.status();
     if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
         return Ok(SubscriptionQuota {
-            tool: "coding_plan".to_string(),
             credential_status: CredentialStatus::Expired,
             credential_message: Some("Invalid API key".to_string()),
-            success: false,
-            tiers: vec![],
-            plan_type: None,
-            plan_renews_at: None,
-            manual_reset_credits: None,
-            extra_usage: None,
             error: Some(format!("Authentication failed (HTTP {status})")),
             queried_at: Some(now_millis()),
+            ..SubscriptionQuota::skeleton("coding_plan")
         });
     }
 

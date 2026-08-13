@@ -91,17 +91,9 @@ mod tests {
 
     fn fake_quota() -> SubscriptionQuota {
         SubscriptionQuota {
-            tool: "claude".to_string(),
-            credential_status: CredentialStatus::Valid,
-            credential_message: None,
             success: true,
-            tiers: vec![],
-            plan_type: None,
-            plan_renews_at: None,
-            manual_reset_credits: None,
-            extra_usage: None,
-            error: None,
             queried_at: Some(0),
+            ..SubscriptionQuota::skeleton("claude")
         }
     }
 

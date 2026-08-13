@@ -1409,9 +1409,6 @@ mod tests {
             self.calls.fetch_add(1, Ordering::SeqCst);
             Box::pin(async {
                 Ok(SubscriptionQuota {
-                    tool: MANAGED_CODEX_QUOTA_SOURCE.to_string(),
-                    credential_status: CredentialStatus::Valid,
-                    credential_message: None,
                     success: true,
                     tiers: vec![
                         QuotaTier {
@@ -1429,12 +1426,8 @@ mod tests {
                             max_value_usd: None,
                         },
                     ],
-                    plan_type: None,
-                    plan_renews_at: None,
-                    manual_reset_credits: None,
-                    extra_usage: None,
-                    error: None,
                     queried_at: Some(1),
+                    ..SubscriptionQuota::skeleton(MANAGED_CODEX_QUOTA_SOURCE)
                 })
             })
         }
@@ -1464,9 +1457,6 @@ mod tests {
                     return Err(QUOTA_FAILURE_SENTINEL.to_string());
                 }
                 Ok(SubscriptionQuota {
-                    tool: MANAGED_CODEX_QUOTA_SOURCE.to_string(),
-                    credential_status: CredentialStatus::Valid,
-                    credential_message: None,
                     success: true,
                     tiers: vec![
                         QuotaTier {
@@ -1484,12 +1474,8 @@ mod tests {
                             max_value_usd: None,
                         },
                     ],
-                    plan_type: None,
-                    plan_renews_at: None,
-                    manual_reset_credits: None,
-                    extra_usage: None,
-                    error: None,
                     queried_at: Some(1),
+                    ..SubscriptionQuota::skeleton(MANAGED_CODEX_QUOTA_SOURCE)
                 })
             })
         }
