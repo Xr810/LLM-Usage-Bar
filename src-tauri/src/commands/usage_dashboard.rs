@@ -1500,10 +1500,10 @@ mod tests {
         let db = Arc::new(Database::memory().unwrap());
         db.reconcile_system_providers().unwrap();
         let collector = Arc::new(ManagedCodexQuotaCollector::default());
-        let quota_service = Arc::new(QuotaService::with_collectors(
-            db.clone(),
-            vec![collector.clone()],
-        ));
+        let quota_service = Arc::new(
+            QuotaService::with_collectors(db.clone(), vec![collector.clone()])
+                .with_manual_refresh_cooldown(0),
+        );
         let state = AppState::new_with_credential_store_and_quota_service(
             db.clone(),
             Arc::new(MemoryCredentialStore::default()),
@@ -2696,10 +2696,10 @@ mod tests {
         let db = Arc::new(Database::memory().unwrap());
         db.reconcile_system_providers().unwrap();
         let collector = Arc::new(CriticalThenFailingQuotaCollector::default());
-        let quota_service = Arc::new(QuotaService::with_collectors(
-            db.clone(),
-            vec![collector.clone()],
-        ));
+        let quota_service = Arc::new(
+            QuotaService::with_collectors(db.clone(), vec![collector.clone()])
+                .with_manual_refresh_cooldown(0),
+        );
         let state = AppState::new_with_credential_store_and_quota_service(
             db,
             Arc::new(MemoryCredentialStore::default()),
@@ -2757,10 +2757,10 @@ mod tests {
         let db = Arc::new(Database::memory().unwrap());
         db.reconcile_system_providers().unwrap();
         let collector = Arc::new(CriticalThenFailingQuotaCollector::default());
-        let quota_service = Arc::new(QuotaService::with_collectors(
-            db.clone(),
-            vec![collector.clone()],
-        ));
+        let quota_service = Arc::new(
+            QuotaService::with_collectors(db.clone(), vec![collector.clone()])
+                .with_manual_refresh_cooldown(0),
+        );
         let state = AppState::new_with_credential_store_and_quota_service(
             db,
             Arc::new(MemoryCredentialStore::default()),

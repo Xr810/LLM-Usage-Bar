@@ -8,7 +8,7 @@
 //!
 //! 探测很重(拉起一个交互式 CLI 进程),因此:
 //! - 调度器(后台)路径上两次探测之间至少间隔 30 分钟(两个 CLI 各自独立计数);
-//! - 用户手动刷新豁免最小间隔,但仍受失败退避约束;
+//! - 用户手动刷新有 60 秒最小间隔(防狂点反复拉起 CLI),但仍豁免后台长间隔;
 //! - 任何失败只产生稳定错误码,绝不含终端原文(可能带敏感信息)。
 //!
 //! 文本解析是纯函数(`parse_claude_usage_text` / `parse_codex_status_text`),
@@ -27,6 +27,8 @@ use crate::services::subscription::{
 const PROBE_TIMEOUT: Duration = Duration::from_secs(20);
 /// 调度器(非交互)路径上的最小探测间隔。
 const BACKGROUND_MIN_INTERVAL: Duration = Duration::from_secs(30 * 60);
+/// 手动刷新路径上的最小探测间隔:防用户狂点刷新反复拉起 CLI 进程。
+const INTERACTIVE_MIN_INTERVAL: Duration = Duration::from_secs(60);
 /// 探测失败后的退避(对交互与后台统一生效,避免反复拉起失败的 CLI)。
 const FAILURE_BACKOFF: Duration = Duration::from_secs(5 * 60);
 
@@ -57,11 +59,15 @@ impl ProbeGate {
                 return Err(BACKOFF_ERROR_CODE);
             }
         }
-        if !interactive {
-            if let Ok(last_attempt) = self.last_attempt.lock() {
-                if last_attempt.is_some_and(|at| now.duration_since(at) < BACKGROUND_MIN_INTERVAL) {
-                    return Err(THROTTLED_ERROR_CODE);
-                }
+        // 交互豁免后台的 30 分钟长间隔,但仍有 60 秒最小间隔兜底。
+        let min_interval = if interactive {
+            INTERACTIVE_MIN_INTERVAL
+        } else {
+            BACKGROUND_MIN_INTERVAL
+        };
+        if let Ok(last_attempt) = self.last_attempt.lock() {
+            if last_attempt.is_some_and(|at| now.duration_since(at) < min_interval) {
+                return Err(THROTTLED_ERROR_CODE);
             }
         }
         Ok(())
@@ -469,6 +475,44 @@ fn now_millis() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── 探测闸门 ────────────────────────────────────────
+
+    #[test]
+    fn gate_background_interval_is_long_and_interactive_is_short() {
+        let gate = ProbeGate::new();
+        let t0 = Instant::now();
+        // 首次后台尝试放行。
+        assert!(gate.check(false, t0).is_ok());
+        gate.mark_attempt(t0);
+        // 后台 30 分钟内节流;交互只豁免到 60 秒。
+        assert_eq!(
+            gate.check(false, t0 + Duration::from_secs(60)),
+            Err(THROTTLED_ERROR_CODE)
+        );
+        assert_eq!(
+            gate.check(true, t0 + Duration::from_secs(30)),
+            Err(THROTTLED_ERROR_CODE)
+        );
+        assert!(gate.check(true, t0 + Duration::from_secs(61)).is_ok());
+        assert_eq!(
+            gate.check(false, t0 + Duration::from_secs(29 * 60)),
+            Err(THROTTLED_ERROR_CODE)
+        );
+        assert!(gate.check(false, t0 + Duration::from_secs(30 * 60)).is_ok());
+    }
+
+    #[test]
+    fn gate_failure_backoff_applies_to_interactive_too() {
+        let gate = ProbeGate::new();
+        let t0 = Instant::now();
+        gate.mark_failure(t0);
+        assert_eq!(
+            gate.check(true, t0 + Duration::from_secs(30)),
+            Err(BACKOFF_ERROR_CODE)
+        );
+        assert!(gate.check(true, t0 + Duration::from_secs(5 * 60)).is_ok());
+    }
 
     // ── Claude /usage ────────────────────────────────────
 

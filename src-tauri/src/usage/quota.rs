@@ -25,6 +25,8 @@ use uuid::Uuid;
 pub const DEFAULT_QUOTA_INTERVAL_SECONDS: u64 = 300;
 const SCHEDULER_TICK_SECONDS: u64 = 30;
 const FAILURE_RETRY_DELAYS_SECONDS: [u64; 5] = [30, 60, 300, 600, 1_800];
+/// 手动刷新的冷却:60 秒内重复点击复用上一次结果,不再向外部取数。
+const MANUAL_REFRESH_MIN_INTERVAL_SECS: i64 = 60;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct NormalizedQuota {
@@ -319,6 +321,11 @@ pub struct QuotaService {
     db: Arc<Database>,
     collectors: Arc<HashMap<String, Arc<dyn QuotaCollector>>>,
     in_flight: Arc<AsyncMutex<HashMap<String, Arc<QuotaFlight>>>>,
+    /// provider_id → (手动刷新时间, 上次结果)。冷却期内的重复手动刷新
+    /// 复用上次结果(成功或失败都缓存),避免狂点刷新打外部接口。
+    last_manual: Arc<RwLock<HashMap<String, (i64, Result<QuotaRefreshResult, String>)>>>,
+    /// 手动刷新冷却(秒),测试可调 0 禁用。
+    manual_refresh_cooldown_secs: i64,
 }
 
 type SharedQuotaRefreshResult = Result<QuotaRefreshResult, String>;
@@ -361,16 +368,48 @@ impl QuotaService {
             db,
             collectors: Arc::new(collectors),
             in_flight: Arc::new(AsyncMutex::new(HashMap::new())),
+            last_manual: Arc::new(RwLock::new(HashMap::new())),
+            manual_refresh_cooldown_secs: MANUAL_REFRESH_MIN_INTERVAL_SECS,
         }
+    }
+
+    /// 测试用:调整手动刷新冷却(0 表示禁用)。
+    #[cfg(test)]
+    pub fn with_manual_refresh_cooldown(mut self, secs: i64) -> Self {
+        self.manual_refresh_cooldown_secs = secs;
+        self
     }
 
     pub async fn refresh_provider(
         &self,
         provider_id: &str,
     ) -> Result<QuotaRefreshResult, AppError> {
-        // 手动刷新是用户主动操作,允许触发同意门控的系统授权对话框。
-        self.refresh_provider_at(provider_id, now_timestamp()?, true)
+        // 手动刷新是用户主动操作,允许触发同意门控的系统授权对话框;
+        // 60 秒内的重复点击复用上一次结果,不再向外部取数。
+        self.refresh_provider_manual_at(provider_id, now_timestamp()?)
             .await
+    }
+
+    pub(crate) async fn refresh_provider_manual_at(
+        &self,
+        provider_id: &str,
+        now: i64,
+    ) -> Result<QuotaRefreshResult, AppError> {
+        if let Some((attempted_at, cached)) = self.last_manual.read().await.get(provider_id) {
+            if now.saturating_sub(*attempted_at) < self.manual_refresh_cooldown_secs {
+                return cached.clone().map_err(AppError::Message);
+            }
+        }
+        let result = self.refresh_provider_at(provider_id, now, true).await;
+        let cached = match &result {
+            Ok(ok) => Ok(ok.clone()),
+            Err(error) => Err(error.to_string()),
+        };
+        self.last_manual
+            .write()
+            .await
+            .insert(provider_id.to_string(), (now, cached));
+        result
     }
 
     async fn refresh_provider_at(
@@ -1130,6 +1169,49 @@ mod tests {
             error,
             "codex quota chain failed: managed(quota collection failed) → cli(cli failed) → probe(probe failed)"
         );
+    }
+
+    // ── 手动刷新冷却 ────────────────────────────────────
+
+    #[tokio::test]
+    async fn manual_refresh_cooldown_reuses_result_within_sixty_seconds() {
+        let db = isolated_quota_test_db();
+        db.save_usage_provider(&provider("sub", BillingKind::Subscription, true))
+            .unwrap();
+        let collector = Arc::new(FakeCollector::new(vec![
+            Ok(successful_quota("claude")),
+            Ok(successful_quota("claude")),
+        ]));
+        let service = QuotaService::with_collectors(db, vec![collector.clone()]);
+
+        let first = service.refresh_provider_manual_at("sub", 100).await.unwrap();
+        assert_eq!(collector.calls.load(Ordering::SeqCst), 1);
+
+        // 60 秒内:复用上次结果,不采集。
+        let reused = service.refresh_provider_manual_at("sub", 150).await.unwrap();
+        assert_eq!(reused, first);
+        assert_eq!(collector.calls.load(Ordering::SeqCst), 1);
+
+        // 60 秒后:重新采集。
+        let second = service.refresh_provider_manual_at("sub", 160).await.unwrap();
+        assert!(second.snapshot.snapshot_id != first.snapshot.snapshot_id);
+        assert_eq!(collector.calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn manual_refresh_cooldown_caches_failures_too() {
+        let db = isolated_quota_test_db();
+        db.save_usage_provider(&provider("sub", BillingKind::Subscription, true))
+            .unwrap();
+        let collector = Arc::new(FakeCollector::new(vec![Err("boom".to_string())]));
+        let service = QuotaService::with_collectors(db, vec![collector.clone()]);
+
+        let first = service.refresh_provider_manual_at("sub", 100).await;
+        assert!(first.is_err());
+        // 冷却期内的重复点击复用失败的缓存,不再打采集器。
+        let second = service.refresh_provider_manual_at("sub", 130).await;
+        assert!(second.is_err());
+        assert_eq!(collector.calls.load(Ordering::SeqCst), 1);
     }
 
     #[test]
