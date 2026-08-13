@@ -5,7 +5,9 @@
 游标 N+1 与 tokio worker 数已由提交 `52bd4559` 修掉,该节改为「已完成 / 仍未做」两栏;
 ③§11.3 第三次更新:文件监听替代轮询(`bf46de69` + `e4ece596`)与 Codex 日期分区剪枝
 (`d96543df` + 补漏 `96e08fd3`)已合入 main,两条移进「已完成」,该节只剩三条仍未做;
-④ubuntu CI 红了两个剪枝测试(同秒 mtime 依赖),修于 `3b915f5f`,根因见 §2
+④ubuntu CI 红了两个剪枝测试(同秒 mtime 依赖),修于 `3b915f5f`,根因见 §2;
+⑤窗口最小化检测事件化(`980aa620`,合并提交 `320d04c3`)合入 main,Swift 壳源码落
+`feat/swift-native-shell` 并开 PR #27
 
 > **这是唯一的交接文档。** 它取代并吸收了以下分散文档,那些文件不要再单独更新:
 >
@@ -36,7 +38,8 @@
    > `backup/swift-native-stash` 上(不再在 stash 里),动它之前必读 §11.7。
    >
 > **2026-08-13 更新:本地还剩 3 个分支** —— `main`、`backup/swift-native-stash`、
-> `perf/window-visibility-events`(300ms 窗口轮询的事件化改造,待合,见 §11.3)。
+> `perf/window-visibility-events`(300ms 窗口轮询的事件化改造,已于 2026-08-13
+> 合入 main,分支保留,见 §11.3)。
 > `codex/swift`(`50576652`)与 `pr-26-swift-merge`(`b841a53c`)已删除,`stash` 已清空,
 > 理由与找回方式见 §11.7。
 
@@ -82,7 +85,7 @@
 | Provider 多 key 花费 | **✅ 已合入 main(2026-08-11,PR #24,merge commit `c686ef884`)** | 3 个提交;**SCHEMA_VERSION 24 → 26**(两个迁移,各带 validator);本机全套 + ubuntu CI 双绿(见 §10);分支本地与远端均已删 | 目视验证未做 → P4 |
 | 用量按模型/Agent 分类 | **✅ 已搬上 main(2026-08-07,提交 `e23894168`)** | Codex(max)在隔离 worktree 移植,Claude 逐 hunk 复核并独立重跑全套验证(Rust 1039/0、tsc、prettier、59+9 前端测试全绿) | 旧分支 `claude/usage-model-agent-classification-03acf1` 及其 worktree 已作废,可删(需 `-D`);目视验证仍欠 → P4 |
 | 红绿灯燃烧速度投影 | **✅ 已搬上 main(2026-08-07,提交 `bb8514def`,迁移重编号 v23→v24)** | Codex(max)移植 + 签名脚本修复一并带上;Claude 复核(DDL 范围、预测行无机密、阈值为常量)并独立重验(Rust 1066/0、前端 192+9 全绿) | 旧分支 `claude/traffic-light-logic-redesign-3fbc8e` 及 worktree 可删;**注意:新代码 SCHEMA_VERSION=24,装上后旧 3.16.5 打不开升级后的库,须一步到位** |
-| 性能优化线(§11.3) | `main` | 5 件完成 3 件:游标预载 + tokio worker 封顶(`52bd4559`)、Codex 日期分区剪枝(`d96543df` + 补漏 `96e08fd3`)、文件监听替代轮询(`bf46de69` + `e4ece596`);仍未做:300ms 窗口轮询、定时器唤醒方式、同步线程 QoS | 是(见 §11.3) |
+| 性能优化线(§11.3) | `main` | 5 件完成 4 件:游标预载 + tokio worker 封顶(`52bd4559`)、Codex 日期分区剪枝(`d96543df` + 补漏 `96e08fd3`)、文件监听替代轮询(`bf46de69` + `e4ece596`)、300ms 窗口轮询事件化(`980aa620`);仍未做:定时器唤醒方式、同步线程 QoS | 是(见 §11.3) |
 | 2026-08-07 checkpoint 文档 | `claude/llm-usage-monitoring-app-4a9554`(= main 的内容 + 1 个 docs 提交 `67676ef9e`) | 纯文档分支,内容已并入本文 | 可删分支和 worktree |
 | 本合并任务 | `claude/consolidate-error-issues-4d8721` | 即本文件所在分支 | 合并进 main 让后续 agent 能看到 |
 | 6 个 `codex/*` 旧线(7 月) | ~~`.worktrees/`~~ | **✅ 已清理(2026-08-07)**:6 个 worktree、6 个分支、3 个失效 bridge worktree 全部移除(删前核实 0 独有提交、工作区干净) | 否 |
@@ -695,9 +698,10 @@ Resets Aug 11 at 6pm (Asia/Singapore)
   12 分钟归因清楚**(用 Instruments Time Profiler 对主线程采样即可,它对 Rust 二进制
   完全可用)。
 
-### 11.3 根因(2026-08-13 更新:已修掉一半,进度见本节末尾的表)
+### 11.3 根因(2026-08-13 更新:五项已完成四项,只剩「定时器唤醒方式」与「同步线程 QoS」,进度见本节末尾)
 
-`lib.rs` 的 60 秒同步定时器(现 `lib.rs:1138`,`SESSION_SYNC_INTERVAL_SECS = 60`)要遍历:
+`lib.rs` 的 60 秒同步定时器(当时的 `SESSION_SYNC_INTERVAL_SECS = 60`,该常量已随
+`e4ece596` 删除)要遍历:
 
 ```
 ~/.claude/projects        71 个 jsonl,111 MB
@@ -714,7 +718,8 @@ Resets Aug 11 at 6pm (Asia/Singapore)
 > **2026-08-13 修正:上面这段的 SQLite 那一半已经不成立了。** 提交 `52bd4559`
 > 把四个 source 的游标全部改成"每趟同步预载一次"。别再照抄"~1,365 次 SQLite
 > 查询"这个数去论证任何事 —— 现在是每个 source 一次。
-> 文件系统那一半(1,294 次 `File::open`)**仍然每 60 秒发生一次**。
+> 文件系统那一半(1,294 次 `File::open`)当时每 60 秒发生一次 —— 2026-08-13
+> 已由事件驱动同步(`e4ece596`)与日期分区剪枝(`d96543df`)消除,见下。
 
 #### 已完成
 
@@ -750,25 +755,35 @@ Resets Aug 11 at 6pm (Asia/Singapore)
 - `e4ece596`:用文件系统事件(FSEvents / ReadDirectoryChangesW / inotify)驱动同步,
   替代 60 秒全量轮询。新增 `src-tauri/src/usage/watcher.rs`(483 行),把原本
   全仓库零调用方的 `usage/watcher_state.rs`(445 行 dirty-generation 调度骨架:
-  按源去抖、逐源失败退避 60s–86400s、防重入)接上线 —— `lib.rs:1139-1144` 建
-  `WatcherSchedule` + `start_usage_watcher`;15 分钟 `mark_all_dirty` 兜底;
-  退出路径调 `stop_usage_watcher()`(`lib.rs:1518`)。**旧结论
+  按源去抖、逐源失败退避 60s–86400s、防重入)接上线 —— `lib.rs:1164-1169` 建
+  `WatcherSchedule` + `start_usage_watcher`;15 分钟 `mark_all_dirty` 兜底
+  (`SLOW_FALLBACK_INTERVAL_SECS`,`watcher.rs:27`);退出路径调
+  `stop_usage_watcher()`(`lib.rs:1540`)。**旧结论
   「`watcher_state.rs` 零调用方、`Cargo.toml` 没有 `notify`」已经作废,
   不要再照做"接线"。**
 
+**300ms 窗口轮询事件化(提交 `980aa620`,2026-08-13 经合并提交 `320d04c3` 进 main):**
+
+- 主窗口最小化检测从 300ms 常驻轮询改为事件驱动:`Focused(false)` 挂在 builder 级
+  `on_window_event`(轻量模式会销毁重建主窗口,builder 级对每次新建都生效);
+  判定逻辑抽成 `handle_minimized_main_window`(`lib.rs:425`),事件回调与
+  5 秒兜底定时器共用(兜底覆盖「窗口非 key 时被最小化」这类不产生 Focused 变化的
+  场景,`lib.rs:456`)。`STOP_MAIN_WINDOW_VISIBILITY_MONITOR` 原子量与
+  `stop_main_window_visibility_monitor` 删除。合入时补了纯函数
+  `classify_minimize_check_event`(`lib.rs:418`,判定哪些 WindowEvent 触发最小化
+  检查)及其单测 —— 实现本体在 `#[cfg(all(target_os = "macos", not(test)))]`
+  里测试编译不到,判定条件必须抽成不带 cfg 的纯函数。
+
 #### 仍未做
 
-- **300ms 常驻轮询**:`lib.rs:422`(`interval`,`from_millis(300)`;函数在 `:417`,
-  检查主窗口是否最小化)应改为事件驱动。2026-08-13 实测原封未动。注意它带
-  `#[cfg(all(target_os = "macos", not(test)))]`,**ubuntu CI 编译不到**。
 - **定时器唤醒方式**:`tokio::time::interval` 是精确唤醒,无法参与 macOS timer
   coalescing,平台正解是 `NSBackgroundActivityScheduler` 或带 leeway 的 dispatch
   timer;FSEvents 自带 latency 参数(设 5–30s 天然替代 60s 节流语义)。
 - **同步线程 QoS**:设 Background/Utility,让系统调度去 E-core 并配合 App Nap。
 
 **这一项与 UI 选型正交,选哪条路线都必须修** —— 方案 B 是绞杀者模式、Rust 采集层
-保留,所以这里的改动在 SwiftUI 迁移之后依然有效(唯一例外是那个 300ms 窗口轮询,
-它最终会随外壳一起被 SwiftUI 取代)。
+保留,所以这里的改动在 SwiftUI 迁移之后依然有效(唯一例外是窗口最小化监控里的
+5 秒兜底定时器,它最终会随外壳一起被 SwiftUI 取代)。
 
 ### 11.4 Rust vs Swift 核心层基准测试
 
@@ -865,14 +880,15 @@ SQLite 层(两侧同一个 C 库)、HTTP 层(I/O 等待为主)。后两者判断
   | `pr-26-swift-merge` | `b841a53c` | 它的 7 个 `.swift` **全部**被 `backup/swift-native-stash^3` 覆盖(5 个 blob 完全相同,`Package.swift` 与 `LLMUsageBarNativeApp.swift` 的 stash 版更新);且 `refs/pull/26/head`(`bec36ef7`)仍在 GitHub 上。 |
   | `stash@{0}` | `296346b8` | 与 `backup/swift-native-stash` **是同一个提交**,drop 不丢任何字节。 |
 
-  两条删除都能从 reflog 或上表的 SHA 找回。**`backup/swift-native-stash` 仍然只在本地。**
+  两条删除都能从 reflog 或上表的 SHA 找回。**`backup/swift-native-stash` 的源码内容
+  已随 `feat/swift-native-shell`(PR #27,2026-08-13)上远端,本机分支仍原样保留。**
 
 **待办(按顺序):**
 
-1. 把 `backup/swift-native-stash^3` 的源码落成正式分支推上远端(从 main 拉新分支,
-   `git checkout backup/swift-native-stash^3 -- native docs`,只提交源码与文档,
-   **不要提交 `.build`** —— PR #26 里带了 `native/.gitignore`)。**这是唯一还没做的
-   抢救动作,做完之前这份源码依然只存在于这一台机器。**
+1. ~~把 `backup/swift-native-stash^3` 的源码落成正式分支推上远端~~ —— **✅ 已完成
+   (2026-08-13)**:分支 `feat/swift-native-shell`(48 文件、30 个 `.swift`、
+   0 个 `.build`,与 stash 树逐字节一致;两份文档落在 `docs/design/`;三份前端
+   契约测试本地 3/3),见 **PR #27**。源码现在 GitHub 上有副本。
 2. ~~删除 `codex/swift`~~ —— 2026-08-13 已删,见上表。
 3. 两份 Swift 相关文档(`docs/native-swift-migration.md`、`docs/native-feature-matrix.md`
    —— 2026-08-13 实测就是两份,不是之前写的三份)目前也只活在
