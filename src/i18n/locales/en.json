@@ -53,7 +53,7 @@
     "codexSessionSource": "Codex session logs",
     "routeProtocol": "Route protocol",
     "quotaSource": "Quota source",
-    "quotaInterval": "Refresh interval (seconds)",
+    "quotaInterval": "Idle refresh interval (seconds)",
     "invalidQuotaInterval": "Refresh interval must be 0 or at least 60 seconds.",
     "dailyBudgetLabel": "{{name}} daily budget (USD)",
     "invalidDailyBudget": "Enter a positive amount.",

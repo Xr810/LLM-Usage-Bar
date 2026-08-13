@@ -1949,7 +1949,7 @@ mod migration_v16_to_v17 {
                 )
                 .unwrap();
             assert_eq!(chatgpt.0.as_deref(), Some("codex_oauth"));
-            assert_eq!(chatgpt.1, Some(300));
+            assert_eq!(chatgpt.1, Some(900));
 
             let claude = conn
                 .query_row(
@@ -1965,7 +1965,7 @@ mod migration_v16_to_v17 {
                 )
                 .unwrap();
             assert_eq!(claude.0.as_deref(), Some("claude_local"));
-            assert_eq!(claude.1, Some(300));
+            assert_eq!(claude.1, Some(900));
 
             assert_eq!(
                 conn.query_row(

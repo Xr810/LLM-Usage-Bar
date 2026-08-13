@@ -53,7 +53,7 @@
     "codexSessionSource": "Codex セッションログ",
     "routeProtocol": "ルートプロトコル",
     "quotaSource": "上限ソース",
-    "quotaInterval": "更新間隔（秒）",
+    "quotaInterval": "アイドル時の更新間隔（秒）",
     "invalidQuotaInterval": "更新間隔は 0 または 60 秒以上である必要があります。",
     "dailyBudgetLabel": "{{name}} の1日予算（USD）",
     "invalidDailyBudget": "0 より大きい金額を入力してください。",

@@ -116,7 +116,7 @@ describe("UsageProviderDialog", () => {
 
     expect(screen.queryByText("Usage module")).toBeNull();
     expect(screen.queryByText("codex", { selector: "option" })).toBeNull();
-    expect(screen.getByLabelText("Refresh interval (seconds)")).toHaveValue(
+    expect(screen.getByLabelText("Idle refresh interval (seconds)")).toHaveValue(
       300,
     );
 
@@ -256,7 +256,7 @@ describe("UsageProviderDialog", () => {
       />,
     );
 
-    fireEvent.change(screen.getByLabelText("Refresh interval (seconds)"), {
+    fireEvent.change(screen.getByLabelText("Idle refresh interval (seconds)"), {
       target: { value: "30" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));

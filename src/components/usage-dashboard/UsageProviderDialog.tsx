@@ -44,7 +44,7 @@ export function UsageProviderDialog({
     SessionSource[]
   >([]);
   const [quotaSource, setQuotaSource] = useState("");
-  const [quotaIntervalSeconds, setQuotaIntervalSeconds] = useState("300");
+  const [quotaIntervalSeconds, setQuotaIntervalSeconds] = useState("900");
   const [routeAppType, setRouteAppType] = useState("claude");
   const [baseUrl, setBaseUrl] = useState("");
   const [enabled, setEnabled] = useState(true);
@@ -59,7 +59,7 @@ export function UsageProviderDialog({
     setTokenSources(provider?.tokenSources ?? ["proxy"]);
     setSessionSourceBindings(provider?.sessionSourceBindings ?? []);
     setQuotaSource(provider?.quotaSource ?? "");
-    setQuotaIntervalSeconds(String(provider?.quotaIntervalSeconds ?? 300));
+    setQuotaIntervalSeconds(String(provider?.quotaIntervalSeconds ?? 900));
     setRouteAppType(provider?.routeAppType ?? "claude");
     setBaseUrl(provider?.routeBaseUrl ?? "");
     setEnabled(provider?.enabled ?? true);
@@ -292,13 +292,13 @@ export function UsageProviderDialog({
               </Label>
               <Label>
                 {t("usageDashboard.quotaInterval", {
-                  defaultValue: "Refresh interval (seconds)",
+                  defaultValue: "Idle refresh interval (seconds)",
                 })}
                 <Input
                   type="number"
                   min={0}
                   aria-label={t("usageDashboard.quotaInterval", {
-                    defaultValue: "Refresh interval (seconds)",
+                    defaultValue: "Idle refresh interval (seconds)",
                   })}
                   value={quotaIntervalSeconds}
                   onChange={(event) =>

@@ -16,17 +16,23 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::async_runtime::JoinHandle;
 use tokio::sync::{watch, Mutex as AsyncMutex, RwLock};
 use uuid::Uuid;
 
-pub const DEFAULT_QUOTA_INTERVAL_SECONDS: u64 = 300;
+/// 空闲时的默认刷新间隔(秒)。有用量活动时,调度器会在更短的去抖窗口内
+/// 补刷一次(见 ACTIVE_* 常量),所以空闲间隔可以放宽到 15 分钟。
+pub const DEFAULT_QUOTA_INTERVAL_SECONDS: u64 = 900;
 const SCHEDULER_TICK_SECONDS: u64 = 30;
 const FAILURE_RETRY_DELAYS_SECONDS: [u64; 5] = [30, 60, 300, 600, 1_800];
 /// 手动刷新的冷却:60 秒内重复点击复用上一次结果,不再向外部取数。
 const MANUAL_REFRESH_MIN_INTERVAL_SECS: i64 = 60;
+/// 活动触发刷新的去抖窗口:活动标记写入后等这么久再刷,合并密集写入。
+const ACTIVITY_DEBOUNCE_SECS: i64 = 30;
+/// 活动期间两次刷新的最小间隔:再活跃也至少隔这么久(失败阶梯优先)。
+const ACTIVE_MIN_SPACING_SECS: i64 = 120;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct NormalizedQuota {
@@ -176,6 +182,81 @@ impl QuotaCollector for ClaudeChainCollector {
 fn stage_error(label: &str, error: &str) -> String {
     let cap = error.char_indices().nth(64).map(|(index, _)| index).unwrap_or(error.len());
     format!("{label}({})", &error[..cap])
+}
+
+// ── 用量活动信号(自适应刷新) ─────────────────────────────
+
+/// 用量活动标记:provider_id → 最近一次用量写入的 Unix 秒。
+/// 写入路径(session 同步、事件摄入)没有 QuotaService 句柄,
+/// 用进程级静态表传递信号;调度器 tick 时消费(去抖后补刷一次并清除)。
+static SUBSCRIPTION_ACTIVITY: OnceLock<std::sync::RwLock<HashMap<String, i64>>> = OnceLock::new();
+
+fn subscription_activity() -> &'static std::sync::RwLock<HashMap<String, i64>> {
+    SUBSCRIPTION_ACTIVITY.get_or_init(|| std::sync::RwLock::new(HashMap::new()))
+}
+
+/// 用量写入路径调用:给对应 Provider 打活动标记(触发一次补刷)。
+pub(crate) fn mark_subscription_activity(provider_id: &str) {
+    let now = now_timestamp().unwrap_or(0);
+    if let Ok(mut map) = subscription_activity().write() {
+        map.insert(provider_id.to_string(), now);
+    }
+}
+
+#[cfg(test)]
+fn mark_subscription_activity_at(provider_id: &str, now: i64) {
+    if let Ok(mut map) = subscription_activity().write() {
+        map.insert(provider_id.to_string(), now);
+    }
+}
+
+fn read_subscription_activity(provider_id: &str) -> Option<i64> {
+    subscription_activity()
+        .read()
+        .ok()?
+        .get(provider_id)
+        .copied()
+}
+
+fn clear_subscription_activity(provider_id: &str) {
+    if let Ok(mut map) = subscription_activity().write() {
+        map.remove(provider_id);
+    }
+}
+
+/// 空闲基线到期:距上次尝试超过间隔(或失败阶梯)。
+fn idle_due(state: Option<&QuotaFetchState>, interval: u64, now: i64) -> bool {
+    let Some(state) = state else { return true };
+    let Some(last_attempt) = state.last_attempt_at else {
+        return true;
+    };
+    let delay = quota_refresh_delay_seconds(state, interval);
+    now.saturating_sub(last_attempt) >= delay as i64
+}
+
+/// 活动触发到期:标记写入超过去抖窗口、距上次尝试超过活跃最小间隔、
+/// 且失败阶梯已让路,才允许补刷。每次标记最多触发一次(触发即清)。
+fn activity_due(provider_id: &str, state: Option<&QuotaFetchState>, now: i64) -> bool {
+    let Some(activity_at) = read_subscription_activity(provider_id) else {
+        return false;
+    };
+    let Some(state) = state else {
+        return false;
+    };
+    let Some(last_attempt) = state.last_attempt_at else {
+        return false;
+    };
+    // 活动必须发生在最近一次尝试之后,且过完去抖窗口。
+    if last_attempt >= activity_at || now.saturating_sub(activity_at) < ACTIVITY_DEBOUNCE_SECS {
+        return false;
+    }
+    if state.consecutive_failures > 0 {
+        // 失败阶梯优先:退避期内不因活动补刷。
+        let backoff = quota_refresh_delay_seconds(state, 0) as i64;
+        return now.saturating_sub(last_attempt) >= backoff;
+    }
+    // 再活跃也至少隔 ACTIVITY_MIN_SPACING 秒。
+    now.saturating_sub(last_attempt) >= ACTIVE_MIN_SPACING_SECS
 }
 
 struct CodingPlanQuotaCollector;
@@ -560,8 +641,11 @@ impl QuotaService {
     }
 
     /// Runs one deterministic scheduling pass. Normal refreshes use the
-    /// configured interval. Failures retry after 30s, 1m, 5m, 10m, then 30m;
-    /// the fetch state only becomes stale when the 10-minute retry fails.
+    /// configured idle interval; usage activity marks trigger one extra
+    /// refresh after a short debounce (spaced at least 2 minutes apart).
+    /// Failures retry after 30s, 1m, 5m, 10m, then 30m and always outrank
+    /// activity; the fetch state only becomes stale when the 10-minute
+    /// retry fails.
     pub async fn refresh_due_at(&self, now: i64) -> Result<QuotaSchedulerCycle, AppError> {
         let mut cycle = QuotaSchedulerCycle::default();
         for view in self.db.list_usage_providers()? {
@@ -575,17 +659,14 @@ impl QuotaService {
                 continue;
             };
             let state = self.db.get_quota_fetch_state(&view.id)?;
-            let due = state.as_ref().is_none_or(|state| {
-                let Some(last_attempt) = state.last_attempt_at else {
-                    return true;
-                };
-                let delay = quota_refresh_delay_seconds(state, interval);
-                now.saturating_sub(last_attempt) >= delay as i64
-            });
+            let due = idle_due(state.as_ref(), interval, now)
+                || activity_due(&view.id, state.as_ref(), now);
             if !due {
                 continue;
             }
             cycle.attempted += 1;
+            // 活动标记最多消费一次:无论因空闲还是活动到期,都清掉。
+            clear_subscription_activity(&view.id);
             // 调度器路径是后台刷新,同意门控不应因此弹系统对话框。
             if let Err(error) = self.refresh_provider_at(&view.id, now, false).await {
                 cycle.errors.push(format!("{}: {error}", view.id));
@@ -968,8 +1049,8 @@ mod tests {
     }
 
     #[test]
-    fn interval_contract_defaults_to_five_minutes_and_zero_disables() {
-        assert_eq!(quota_interval_seconds(None).unwrap(), Some(300));
+    fn interval_contract_defaults_to_idle_fifteen_minutes_and_zero_disables() {
+        assert_eq!(quota_interval_seconds(None).unwrap(), Some(900));
         assert_eq!(quota_interval_seconds(Some(0)).unwrap(), None);
         assert!(quota_interval_seconds(Some(59)).is_err());
         assert_eq!(quota_interval_seconds(Some(60)).unwrap(), Some(60));
@@ -1212,6 +1293,77 @@ mod tests {
         let second = service.refresh_provider_manual_at("sub", 130).await;
         assert!(second.is_err());
         assert_eq!(collector.calls.load(Ordering::SeqCst), 1);
+    }
+
+    // ── 活动自适应刷新 ──────────────────────────────────
+
+    #[tokio::test]
+    async fn activity_mark_triggers_one_refresh_after_debounce_and_spacing() {
+        let db = isolated_quota_test_db();
+        db.save_usage_provider(&provider("activity-sub", BillingKind::Subscription, true))
+            .unwrap();
+        let collector = Arc::new(FakeCollector::new(vec![
+            Ok(successful_quota("claude")),
+            Ok(successful_quota("claude")),
+            Ok(successful_quota("claude")),
+        ]));
+        let service = QuotaService::with_collectors(db, vec![collector.clone()]);
+        clear_subscription_activity("activity-sub");
+
+        // 空闲首次采集(t=100)。
+        assert_eq!(service.refresh_due_at(100).await.unwrap().attempted, 1);
+        assert_eq!(collector.calls.load(Ordering::SeqCst), 1);
+
+        // 活动标记发生在 t=250;去抖窗口(30s)内不到期。
+        mark_subscription_activity_at("activity-sub", 250);
+        assert_eq!(service.refresh_due_at(260).await.unwrap().attempted, 0);
+
+        // t=285:过完去抖且距上次尝试超过 120s → 补刷一次,标记被消费。
+        let cycle = service.refresh_due_at(285).await.unwrap();
+        assert_eq!(cycle.attempted, 1);
+        assert_eq!(collector.calls.load(Ordering::SeqCst), 2);
+
+        // 无新活动:空闲基线(夹具 300s,上次 285)未到,不刷。
+        assert_eq!(service.refresh_due_at(400).await.unwrap().attempted, 0);
+
+        // 新活动在 120s 活跃间隔内(距上次尝试 45s) → 不刷。
+        mark_subscription_activity_at("activity-sub", 310);
+        assert_eq!(service.refresh_due_at(330).await.unwrap().attempted, 0);
+
+        // 距上次尝试超过 120s 且过完去抖 → 补刷。
+        mark_subscription_activity_at("activity-sub", 420);
+        assert_eq!(service.refresh_due_at(450).await.unwrap().attempted, 1);
+        assert_eq!(collector.calls.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn activity_does_not_bypass_failure_backoff() {
+        // 与上一个活动测试用不同的 provider id:静态活动表是进程级共享的,
+        // 测试并行时同 id 的标记会互相干扰。
+        let db = isolated_quota_test_db();
+        db.save_usage_provider(&provider("activity-sub-failure", BillingKind::Subscription, true))
+            .unwrap();
+        let collector = Arc::new(FakeCollector::new(vec![
+            Err("boom".to_string()),
+            Ok(successful_quota("claude")),
+        ]));
+        let service = QuotaService::with_collectors(db, vec![collector.clone()]);
+        clear_subscription_activity("activity-sub-failure");
+
+        // 首次失败(t=100) → 阶梯 30s。
+        let cycle = service.refresh_due_at(100).await.unwrap();
+        assert_eq!(cycle.attempted, 1);
+        assert_eq!(cycle.errors.len(), 1);
+
+        // 活动发生在 t=105,但失败阶梯 30s 未让路(t=120 < 130) → 不刷。
+        mark_subscription_activity_at("activity-sub-failure", 105);
+        assert_eq!(service.refresh_due_at(120).await.unwrap().attempted, 0);
+
+        // t=140:阶梯让路 + 去抖完成 → 补刷成功(消费第二个响应)。
+        let cycle = service.refresh_due_at(140).await.unwrap();
+        assert_eq!(cycle.attempted, 1);
+        assert_eq!(cycle.errors.len(), 0);
+        assert_eq!(collector.calls.load(Ordering::SeqCst), 2);
     }
 
     #[test]

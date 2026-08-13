@@ -53,7 +53,7 @@
     "codexSessionSource": "Codex 会话日志",
     "routeProtocol": "路由协议",
     "quotaSource": "额度来源",
-    "quotaInterval": "刷新间隔（秒）",
+    "quotaInterval": "空闲时的刷新间隔（秒）",
     "invalidQuotaInterval": "刷新间隔必须为 0 或至少 60 秒。",
     "dailyBudgetLabel": "{{name}} 每日预算（USD）",
     "invalidDailyBudget": "请输入大于 0 的金额。",

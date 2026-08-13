@@ -1070,6 +1070,10 @@ fn insert_codex_session_entry(
 
     if inserted_rows > 0 {
         crate::usage_events::notify_log_recorded();
+        // Codex 用量活动 → 触发订阅额度的一次短去抖补刷。
+        crate::usage::quota::mark_subscription_activity(
+            crate::usage::system_providers::CHATGPT_SUBSCRIPTION_ID,
+        );
     }
 
     Ok(true)

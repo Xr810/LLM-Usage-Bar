@@ -1546,7 +1546,7 @@ mod tests {
             provider.quota_source.as_deref(),
             Some(MANAGED_CODEX_QUOTA_SOURCE)
         );
-        assert_eq!(provider.quota_interval_seconds, Some(300));
+        assert_eq!(provider.quota_interval_seconds, Some(900));
 
         let second = refresh_provider_quota_test_hook(&state, CHATGPT_SUBSCRIPTION_ID)
             .await

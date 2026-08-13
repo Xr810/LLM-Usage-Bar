@@ -153,6 +153,8 @@ impl<'a> UsageIngestionService<'a> {
         transaction.commit()?;
         if outcome.inserted {
             crate::usage_events::notify_log_recorded();
+            // 用量活动按事件归属的 Provider 打标记,触发其订阅额度补刷。
+            crate::usage::quota::mark_subscription_activity(&input.provider_id);
         }
         Ok(outcome)
     }
@@ -184,6 +186,10 @@ impl<'a> UsageIngestionService<'a> {
         transaction.commit()?;
         if outcomes.iter().any(|outcome| outcome.inserted) {
             crate::usage_events::notify_log_recorded();
+            // 同一批内不同 Provider 的事件分别打标记(去重交给静态表)。
+            for input in inputs {
+                crate::usage::quota::mark_subscription_activity(&input.provider_id);
+            }
         }
         Ok(outcomes)
     }

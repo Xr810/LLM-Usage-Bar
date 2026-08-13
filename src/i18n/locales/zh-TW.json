@@ -53,7 +53,7 @@
     "codexSessionSource": "Codex 工作階段記錄",
     "routeProtocol": "路由協定",
     "quotaSource": "額度來源",
-    "quotaInterval": "重新整理間隔（秒）",
+    "quotaInterval": "閒置時的重新整理間隔（秒）",
     "invalidQuotaInterval": "重新整理間隔必須為 0 或至少 60 秒。",
     "dailyBudgetLabel": "{{name}} 每日預算（USD）",
     "invalidDailyBudget": "請輸入大於 0 的金額。",
