@@ -31,8 +31,18 @@ const FAILURE_RETRY_DELAYS_SECONDS: [u64; 5] = [30, 60, 300, 600, 1_800];
 const MANUAL_REFRESH_MIN_INTERVAL_SECS: i64 = 60;
 /// 活动触发刷新的去抖窗口:活动标记写入后等这么久再刷,合并密集写入。
 const ACTIVITY_DEBOUNCE_SECS: i64 = 30;
-/// 活动期间两次刷新的最小间隔:再活跃也至少隔这么久(失败阶梯优先)。
-const ACTIVE_MIN_SPACING_SECS: i64 = 120;
+/// 活动期间刷新的最小间隔(秒),随爆发持续时长拉伸:
+/// 爆发前 10 分钟用 2 分钟间隔,10~30 分钟用 3 分钟,30 分钟以上用 5 分钟。
+/// 短爆发保持灵敏,长会话稳态请求量回到固定 5 分钟档的水平。
+const ACTIVITY_MIN_SPACING_SECS: i64 = 120;
+const ACTIVITY_MID_SPACING_SECS: i64 = 180;
+const ACTIVITY_MAX_SPACING_SECS: i64 = 300;
+/// 分段边界:爆发持续到这两个时刻后,间隔升档。
+const ACTIVITY_STAGE_1_UNTIL_SECS: i64 = 10 * 60;
+const ACTIVITY_STAGE_2_UNTIL_SECS: i64 = 30 * 60;
+/// 标记间隔达到该值视为「旧爆发已结束」,下一个标记开启新爆发
+/// (新爆发重新从 2 分钟间隔起步)。
+const ACTIVITY_BURST_RESET_GAP_SECS: i64 = 5 * 60;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct NormalizedQuota {
@@ -186,31 +196,72 @@ fn stage_error(label: &str, error: &str) -> String {
 
 // ── 用量活动信号(自适应刷新) ─────────────────────────────
 
+/// 一次用量活动爆发:记录最新标记时刻与爆发开始时刻。
+/// 间隔按「爆发已持续多久」分级拉伸(2→3→5 分钟),见 `activity_spacing_seconds`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ActivityMark {
+    last_mark_at: i64,
+    burst_started_at: i64,
+}
+
 /// 用量活动标记:provider_id → 最近一次用量写入的 Unix 秒。
 /// 写入路径(session 同步、事件摄入)没有 QuotaService 句柄,
 /// 用进程级静态表传递信号;调度器 tick 时消费(去抖后补刷一次并清除)。
-static SUBSCRIPTION_ACTIVITY: OnceLock<std::sync::RwLock<HashMap<String, i64>>> = OnceLock::new();
+static SUBSCRIPTION_ACTIVITY: OnceLock<std::sync::RwLock<HashMap<String, ActivityMark>>> =
+    OnceLock::new();
 
-fn subscription_activity() -> &'static std::sync::RwLock<HashMap<String, i64>> {
+fn subscription_activity() -> &'static std::sync::RwLock<HashMap<String, ActivityMark>> {
     SUBSCRIPTION_ACTIVITY.get_or_init(|| std::sync::RwLock::new(HashMap::new()))
 }
 
 /// 用量写入路径调用:给对应 Provider 打活动标记(触发一次补刷)。
+/// 标记间隔 ≥ [`ACTIVITY_BURST_RESET_GAP_SECS`] 视为旧爆发已结束,
+/// 新标记开启一次新爆发(间隔从 2 分钟重新起步)。
 pub(crate) fn mark_subscription_activity(provider_id: &str) {
     let now = now_timestamp().unwrap_or(0);
-    if let Ok(mut map) = subscription_activity().write() {
-        map.insert(provider_id.to_string(), now);
-    }
+    mark_subscription_activity_at_impl(provider_id, now);
 }
 
 #[cfg(test)]
 fn mark_subscription_activity_at(provider_id: &str, now: i64) {
+    mark_subscription_activity_at_impl(provider_id, now);
+}
+
+fn mark_subscription_activity_at_impl(provider_id: &str, now: i64) {
     if let Ok(mut map) = subscription_activity().write() {
-        map.insert(provider_id.to_string(), now);
+        match map.get_mut(provider_id) {
+            Some(mark) if now.saturating_sub(mark.last_mark_at) < ACTIVITY_BURST_RESET_GAP_SECS => {
+                // 延续当前爆发。
+                mark.last_mark_at = now;
+            }
+            _ => {
+                // 无标记或旧爆发已结束:开启新爆发。
+                map.insert(
+                    provider_id.to_string(),
+                    ActivityMark {
+                        last_mark_at: now,
+                        burst_started_at: now,
+                    },
+                );
+            }
+        }
     }
 }
 
-fn read_subscription_activity(provider_id: &str) -> Option<i64> {
+#[cfg(test)]
+fn set_activity_mark_at(provider_id: &str, last_mark_at: i64, burst_started_at: i64) {
+    if let Ok(mut map) = subscription_activity().write() {
+        map.insert(
+            provider_id.to_string(),
+            ActivityMark {
+                last_mark_at,
+                burst_started_at,
+            },
+        );
+    }
+}
+
+fn read_subscription_activity(provider_id: &str) -> Option<ActivityMark> {
     subscription_activity()
         .read()
         .ok()?
@@ -224,6 +275,18 @@ fn clear_subscription_activity(provider_id: &str) {
     }
 }
 
+/// 爆发已持续时长对应的刷新间隔:前 10 分钟 2 分钟,10~30 分钟 3 分钟,
+/// 30 分钟以上 5 分钟封顶。纯函数,便于单测。
+fn activity_spacing_seconds(burst_elapsed: i64) -> i64 {
+    if burst_elapsed < ACTIVITY_STAGE_1_UNTIL_SECS {
+        ACTIVITY_MIN_SPACING_SECS
+    } else if burst_elapsed < ACTIVITY_STAGE_2_UNTIL_SECS {
+        ACTIVITY_MID_SPACING_SECS
+    } else {
+        ACTIVITY_MAX_SPACING_SECS
+    }
+}
+
 /// 空闲基线到期:距上次尝试超过间隔(或失败阶梯)。
 fn idle_due(state: Option<&QuotaFetchState>, interval: u64, now: i64) -> bool {
     let Some(state) = state else { return true };
@@ -234,10 +297,10 @@ fn idle_due(state: Option<&QuotaFetchState>, interval: u64, now: i64) -> bool {
     now.saturating_sub(last_attempt) >= delay as i64
 }
 
-/// 活动触发到期:标记写入超过去抖窗口、距上次尝试超过活跃最小间隔、
+/// 活动触发到期:标记写入超过去抖窗口、距上次尝试超过当前爆发档位的间隔、
 /// 且失败阶梯已让路,才允许补刷。每次标记最多触发一次(触发即清)。
 fn activity_due(provider_id: &str, state: Option<&QuotaFetchState>, now: i64) -> bool {
-    let Some(activity_at) = read_subscription_activity(provider_id) else {
+    let Some(mark) = read_subscription_activity(provider_id) else {
         return false;
     };
     let Some(state) = state else {
@@ -247,7 +310,9 @@ fn activity_due(provider_id: &str, state: Option<&QuotaFetchState>, now: i64) ->
         return false;
     };
     // 活动必须发生在最近一次尝试之后,且过完去抖窗口。
-    if last_attempt >= activity_at || now.saturating_sub(activity_at) < ACTIVITY_DEBOUNCE_SECS {
+    if last_attempt >= mark.last_mark_at
+        || now.saturating_sub(mark.last_mark_at) < ACTIVITY_DEBOUNCE_SECS
+    {
         return false;
     }
     if state.consecutive_failures > 0 {
@@ -255,8 +320,9 @@ fn activity_due(provider_id: &str, state: Option<&QuotaFetchState>, now: i64) ->
         let backoff = quota_refresh_delay_seconds(state, 0) as i64;
         return now.saturating_sub(last_attempt) >= backoff;
     }
-    // 再活跃也至少隔 ACTIVITY_MIN_SPACING 秒。
-    now.saturating_sub(last_attempt) >= ACTIVE_MIN_SPACING_SECS
+    // 间隔随爆发持续时长拉伸;再活跃也至少隔当前档位这么久。
+    let spacing = activity_spacing_seconds(now.saturating_sub(mark.burst_started_at));
+    now.saturating_sub(last_attempt) >= spacing
 }
 
 struct CodingPlanQuotaCollector;
@@ -1364,6 +1430,73 @@ mod tests {
         assert_eq!(cycle.attempted, 1);
         assert_eq!(cycle.errors.len(), 0);
         assert_eq!(collector.calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn activity_spacing_stretches_in_stages_with_burst_duration() {
+        // 前 10 分钟 2 分钟;10~30 分钟 3 分钟;30 分钟以上 5 分钟封顶。
+        assert_eq!(activity_spacing_seconds(0), 120);
+        assert_eq!(activity_spacing_seconds(9 * 60 + 59), 120);
+        assert_eq!(activity_spacing_seconds(10 * 60), 180);
+        assert_eq!(activity_spacing_seconds(29 * 60 + 59), 180);
+        assert_eq!(activity_spacing_seconds(30 * 60), 300);
+        assert_eq!(activity_spacing_seconds(10 * 60 * 60), 300);
+    }
+
+    #[tokio::test]
+    async fn activity_spacing_uses_burst_started_at_not_last_mark() {
+        // 独立 provider id:静态活动表进程级共享,避免与并行测试互踩。
+        let db = isolated_quota_test_db();
+        db.save_usage_provider(&provider("activity-ramp-sub", BillingKind::Subscription, true))
+            .unwrap();
+        let collector = Arc::new(FakeCollector::new(vec![
+            Ok(successful_quota("claude")),
+            Ok(successful_quota("claude")),
+            Ok(successful_quota("claude")),
+            Ok(successful_quota("claude")),
+            Ok(successful_quota("claude")),
+        ]));
+        let service = QuotaService::with_collectors(db, vec![collector.clone()]);
+        clear_subscription_activity("activity-ramp-sub");
+
+        // 空闲节奏(夹具 300s)推进到 t=3000。
+        assert_eq!(service.refresh_due_at(0).await.unwrap().attempted, 1);
+        assert_eq!(service.refresh_due_at(3000).await.unwrap().attempted, 1);
+
+        // 长爆发:burst 从 1000 开始,标记在 3050(已持续 2000s+ → 5 分钟档)。
+        set_activity_mark_at("activity-ramp-sub", 3_050, 1_000);
+        // 距上次尝试 250s:2 分钟档会放行,5 分钟档不放行 → 拉伸生效。
+        assert_eq!(service.refresh_due_at(3_250).await.unwrap().attempted, 0);
+        // 距上次尝试 330s ≥ 300s → 放行。
+        assert_eq!(service.refresh_due_at(3_330).await.unwrap().attempted, 1);
+
+        // 空闲推进到 t=5100;中段爆发:burst 从 4000 开始,标记在 5150
+        // (已持续 1100s+ → 3 分钟档)。
+        assert_eq!(service.refresh_due_at(5100).await.unwrap().attempted, 1);
+        set_activity_mark_at("activity-ramp-sub", 5_150, 4_000);
+        // 距上次尝试 150s:2 分钟档会放行,3 分钟档不放行。
+        assert_eq!(service.refresh_due_at(5_250).await.unwrap().attempted, 0);
+        // 距上次尝试 200s ≥ 180s → 放行。
+        assert_eq!(service.refresh_due_at(5_300).await.unwrap().attempted, 1);
+        assert_eq!(collector.calls.load(Ordering::SeqCst), 5);
+    }
+
+    #[test]
+    fn activity_mark_extends_existing_burst_and_resets_after_gap() {
+        clear_subscription_activity("burst-sub");
+        // 新爆发:t=100 起步。
+        mark_subscription_activity_at("burst-sub", 100);
+        // 4 分钟后继续标记:延续爆发,burst 起点保持 100。
+        mark_subscription_activity_at("burst-sub", 340);
+        let mark = read_subscription_activity("burst-sub").expect("mark exists");
+        assert_eq!(mark.last_mark_at, 340);
+        assert_eq!(mark.burst_started_at, 100);
+        // 间隔 ≥ 5 分钟:旧爆发结束,新爆发重新起步。
+        mark_subscription_activity_at("burst-sub", 700);
+        let mark = read_subscription_activity("burst-sub").expect("mark exists");
+        assert_eq!(mark.last_mark_at, 700);
+        assert_eq!(mark.burst_started_at, 700);
+        clear_subscription_activity("burst-sub");
     }
 
     #[test]
