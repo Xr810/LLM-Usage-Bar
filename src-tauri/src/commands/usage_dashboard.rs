@@ -1404,6 +1404,7 @@ mod tests {
         fn collect<'a>(
             &'a self,
             _provider: &'a crate::usage::domain::UsageProviderStored,
+            _interactive: bool,
         ) -> BoxFuture<'a, Result<SubscriptionQuota, String>> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             Box::pin(async {
@@ -1455,6 +1456,7 @@ mod tests {
         fn collect<'a>(
             &'a self,
             _provider: &'a crate::usage::domain::UsageProviderStored,
+            _interactive: bool,
         ) -> BoxFuture<'a, Result<SubscriptionQuota, String>> {
             let call = self.calls.fetch_add(1, Ordering::SeqCst);
             Box::pin(async move {
@@ -1498,10 +1500,10 @@ mod tests {
         let db = Arc::new(Database::memory().unwrap());
         db.reconcile_system_providers().unwrap();
         let collector = Arc::new(ManagedCodexQuotaCollector::default());
-        let quota_service = Arc::new(QuotaService::with_collectors(
-            db.clone(),
-            vec![collector.clone()],
-        ));
+        let quota_service = Arc::new(
+            QuotaService::with_collectors(db.clone(), vec![collector.clone()])
+                .with_manual_refresh_cooldown(0),
+        );
         let state = AppState::new_with_credential_store_and_quota_service(
             db.clone(),
             Arc::new(MemoryCredentialStore::default()),
@@ -1544,7 +1546,7 @@ mod tests {
             provider.quota_source.as_deref(),
             Some(MANAGED_CODEX_QUOTA_SOURCE)
         );
-        assert_eq!(provider.quota_interval_seconds, Some(300));
+        assert_eq!(provider.quota_interval_seconds, Some(900));
 
         let second = refresh_provider_quota_test_hook(&state, CHATGPT_SUBSCRIPTION_ID)
             .await
@@ -2694,10 +2696,10 @@ mod tests {
         let db = Arc::new(Database::memory().unwrap());
         db.reconcile_system_providers().unwrap();
         let collector = Arc::new(CriticalThenFailingQuotaCollector::default());
-        let quota_service = Arc::new(QuotaService::with_collectors(
-            db.clone(),
-            vec![collector.clone()],
-        ));
+        let quota_service = Arc::new(
+            QuotaService::with_collectors(db.clone(), vec![collector.clone()])
+                .with_manual_refresh_cooldown(0),
+        );
         let state = AppState::new_with_credential_store_and_quota_service(
             db,
             Arc::new(MemoryCredentialStore::default()),
@@ -2755,10 +2757,10 @@ mod tests {
         let db = Arc::new(Database::memory().unwrap());
         db.reconcile_system_providers().unwrap();
         let collector = Arc::new(CriticalThenFailingQuotaCollector::default());
-        let quota_service = Arc::new(QuotaService::with_collectors(
-            db.clone(),
-            vec![collector.clone()],
-        ));
+        let quota_service = Arc::new(
+            QuotaService::with_collectors(db.clone(), vec![collector.clone()])
+                .with_manual_refresh_cooldown(0),
+        );
         let state = AppState::new_with_credential_store_and_quota_service(
             db,
             Arc::new(MemoryCredentialStore::default()),

@@ -123,6 +123,8 @@ export function useSettingsForm(): UseSettingsFormResult {
       useAppWindowControls: data.useAppWindowControls ?? false,
       enableClaudePluginIntegration:
         data.enableClaudePluginIntegration ?? false,
+      claudeOauthQuotaEnabled: data.claudeOauthQuotaEnabled ?? false,
+      claudeOauthPromptMode: data.claudeOauthPromptMode ?? "onlyOnUserAction",
       silentStartup: data.silentStartup ?? false,
       usageWarningRemainingPercent: data.usageWarningRemainingPercent ?? 50,
       usageCriticalRemainingPercent: data.usageCriticalRemainingPercent ?? 20,
@@ -153,6 +155,8 @@ export function useSettingsForm(): UseSettingsFormResult {
             minimizeToTrayOnClose: true,
             useAppWindowControls: false,
             enableClaudePluginIntegration: false,
+            claudeOauthQuotaEnabled: false,
+            claudeOauthPromptMode: "onlyOnUserAction",
             skipClaudeOnboarding: false,
             preserveCodexOfficialAuthOnSwitch: false,
             unifyCodexSessionHistory: false,
@@ -193,6 +197,9 @@ export function useSettingsForm(): UseSettingsFormResult {
         useAppWindowControls: serverData.useAppWindowControls ?? false,
         enableClaudePluginIntegration:
           serverData.enableClaudePluginIntegration ?? false,
+        claudeOauthQuotaEnabled: serverData.claudeOauthQuotaEnabled ?? false,
+        claudeOauthPromptMode:
+          serverData.claudeOauthPromptMode ?? "onlyOnUserAction",
         silentStartup: serverData.silentStartup ?? false,
         usageWarningRemainingPercent:
           serverData.usageWarningRemainingPercent ?? 50,

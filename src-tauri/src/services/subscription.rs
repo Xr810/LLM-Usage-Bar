@@ -4,8 +4,8 @@
 //! status-line 作为可验证的补充来源；其他工具沿用各自现有实现。
 
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
 
 use std::collections::HashMap;
@@ -23,6 +23,8 @@ pub enum CredentialStatus {
     Expired,
     NotFound,
     ParseError,
+    /// 需要用户授权（Claude 钥匙串 OAuth 同意门控未开启）。
+    ConsentRequired,
 }
 
 /// 单个限速窗口（如 5小时会话、7天周期）
@@ -349,11 +351,32 @@ struct CodexAdditionalRateLimit {
 }
 
 #[derive(Deserialize)]
+struct CodexSpendControl {
+    #[serde(alias = "individualLimit")]
+    individual_limit: Option<CodexSpendControlLimit>,
+}
+
+#[derive(Deserialize)]
+struct CodexSpendControlLimit {
+    limit: Option<f64>,
+    used: Option<f64>,
+    #[serde(alias = "remainingPercent")]
+    remaining_percent: Option<f64>,
+    #[serde(alias = "resetsAt")]
+    resets_at: Option<CodexResetCreditTimestamp>,
+}
+
+/// wham/usage 的 `credits`(has_credits/unlimited/balance)解析暂缓:
+/// `SubscriptionQuota` 目前没有承载点数余额的字段,加了要动 30+ 处
+/// 构造字面量。等有需求时随 SubscriptionQuota 扩展一并落地。
+#[derive(Deserialize)]
 struct CodexUsageResponse {
     rate_limit: Option<CodexRateLimit>,
     #[serde(default)]
     additional_rate_limits: Vec<CodexAdditionalRateLimit>,
     rate_limit_reset_credits: Option<CodexResetCreditSummary>,
+    #[serde(default)]
+    spend_control: Option<CodexSpendControl>,
 }
 
 #[derive(Deserialize)]
@@ -373,7 +396,7 @@ struct CodexResetCredit {
 }
 
 /// ChatGPT 的重置券详情端点目前返回 RFC 3339 字符串；兼容旧响应中的 Unix 秒。
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 #[serde(untagged)]
 enum CodexResetCreditTimestamp {
     Unix(i64),
@@ -427,15 +450,20 @@ fn codex_additional_rate_limit_tier_name(index: usize, label: &str, window_secon
     format!("codex_additional:{index}:{window_seconds}:{}", label.trim())
 }
 
-fn codex_usage_tiers(body: CodexUsageResponse) -> Vec<QuotaTier> {
+fn codex_usage_tiers(body: &CodexUsageResponse) -> Vec<QuotaTier> {
     let mut tiers = Vec::new();
 
-    if let Some(rate_limit) = body.rate_limit {
-        for window in [rate_limit.primary_window, rate_limit.secondary_window]
-            .into_iter()
-            .flatten()
+    let mut has_window = false;
+    if let Some(rate_limit) = body.rate_limit.as_ref() {
+        for window in [
+            rate_limit.primary_window.as_ref(),
+            rate_limit.secondary_window.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
         {
             if let Some(used) = window.used_percent {
+                has_window = true;
                 tiers.push(QuotaTier {
                     name: window
                         .limit_window_seconds
@@ -450,18 +478,46 @@ fn codex_usage_tiers(body: CodexUsageResponse) -> Vec<QuotaTier> {
         }
     }
 
-    for (index, additional) in body.additional_rate_limits.into_iter().enumerate() {
+    // spend_control.individual_limit:团队/企业账户的月度额度池。
+    // 只有主/周窗口都缺失时才补这个 tier,避免与窗口口径打架。
+    if !has_window {
+        if let Some(limit) = body
+            .spend_control
+            .as_ref()
+            .and_then(|control| control.individual_limit.as_ref())
+        {
+            if let Some(utilization) = spend_control_utilization(limit) {
+                tiers.push(QuotaTier {
+                    name: "spend_control".to_string(),
+                    utilization,
+                    resets_at: limit
+                        .resets_at
+                        .as_ref()
+                        .and_then(|value| codex_reset_credit_timestamp_to_iso(value.clone())),
+                    used_value_usd: None,
+                    max_value_usd: None,
+                });
+            }
+        }
+    }
+
+    for (index, additional) in body.additional_rate_limits.iter().enumerate() {
         let label = additional
             .limit_name
-            .or(additional.metered_feature)
+            .as_deref()
+            .or(additional.metered_feature.as_deref())
             .filter(|label| !label.trim().is_empty())
+            .map(str::to_string)
             .unwrap_or_else(|| format!("Additional limit {}", index + 1));
-        let Some(rate_limit) = additional.rate_limit else {
+        let Some(rate_limit) = additional.rate_limit.as_ref() else {
             continue;
         };
-        for window in [rate_limit.primary_window, rate_limit.secondary_window]
-            .into_iter()
-            .flatten()
+        for window in [
+            rate_limit.primary_window.as_ref(),
+            rate_limit.secondary_window.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
         {
             let (Some(used), Some(window_seconds)) =
                 (window.used_percent, window.limit_window_seconds)
@@ -479,6 +535,21 @@ fn codex_usage_tiers(body: CodexUsageResponse) -> Vec<QuotaTier> {
     }
 
     tiers
+}
+
+/// spend_control 的「已用百分比」:优先官方 remaining_percent,
+/// 否则用 used/limit 推算;算不出来就整窗放弃。
+fn spend_control_utilization(limit: &CodexSpendControlLimit) -> Option<f64> {
+    if let Some(remaining) = limit.remaining_percent.filter(|value| value.is_finite()) {
+        return Some((100.0 - remaining).clamp(0.0, 100.0));
+    }
+    let (Some(used), Some(max)) = (limit.used, limit.limit) else {
+        return None;
+    };
+    if max <= 0.0 || !used.is_finite() {
+        return None;
+    }
+    Some((used / max * 100.0).clamp(0.0, 100.0))
 }
 
 fn normalize_codex_reset_credits(
@@ -526,14 +597,97 @@ fn normalize_codex_reset_credits(
     )
 }
 
+/// 解析 ChatGPT 反代基地址:优先读 `~/.codex/config.toml` 的
+/// `chatgpt_base_url`(与 CodexBar 一致),缺省用官方地址。
+/// 用户常用它指向中转服务,额度接口也应当尊重该配置。
+fn codex_chatgpt_base_url() -> String {
+    let config_path = crate::agent_paths::get_codex_config_dir().join("config.toml");
+    let raw = std::fs::read_to_string(&config_path)
+        .ok()
+        .and_then(|content| {
+            content
+                .parse::<toml::Value>()
+                .ok()?
+                .get("chatgpt_base_url")?
+                .as_str()
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| CHATGPT_OFFICIAL_BASE_URL.to_string());
+    normalize_chatgpt_base_url(&raw)
+}
+
+/// 官方基地址。任何无法安全使用的配置值都回落到它。
+const CHATGPT_OFFICIAL_BASE_URL: &str = "https://chatgpt.com/backend-api";
+
+fn normalize_chatgpt_base_url(raw: &str) -> String {
+    let mut base = raw.trim().to_string();
+    if base.is_empty() {
+        return CHATGPT_OFFICIAL_BASE_URL.to_string();
+    }
+    // 这个地址会收到 ChatGPT 的 OAuth access token（Bearer 头）。配置文件是
+    // 不可信输入（中转商的安装脚本常改这个键），明文 http 会把 token 暴露在
+    // 网络上，非 http(s) 的值更是没有意义——一律回落官方地址。
+    if !base.starts_with("https://") {
+        log::warn!("chatgpt_base_url 不是 https，已回落到官方地址");
+        return CHATGPT_OFFICIAL_BASE_URL.to_string();
+    }
+    while base.ends_with('/') {
+        base.pop();
+    }
+    if (base.starts_with("https://chatgpt.com") || base.starts_with("https://chat.openai.com"))
+        && !base.contains("/backend-api")
+    {
+        base.push_str("/backend-api");
+    }
+    base
+}
+
+/// wham/usage 的完整 URL:基地址已含 /backend-api 时走官方路径,
+/// 否则走 Codex 中转路径(与 CodexBar 的 URL 解析一致)。
+fn codex_usage_url(base: &str) -> String {
+    if base.contains("/backend-api") {
+        format!("{base}/wham/usage")
+    } else {
+        format!("{base}/api/codex/usage")
+    }
+}
+
+fn codex_reset_credits_url(base: &str) -> String {
+    format!("{base}/wham/rate-limit-reset-credits")
+}
+
+/// wham 接口 429 限流冷却(进程内,对齐 claude_oauth 层)。
+const CODEX_RATE_LIMIT_DEFAULT_BLOCK_SECS: u64 = 5 * 60;
+
+fn codex_rate_limit_block() -> &'static Mutex<Option<Instant>> {
+    static BLOCK: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
+    BLOCK.get_or_init(|| Mutex::new(None))
+}
+
+fn codex_is_rate_limited() -> bool {
+    codex_rate_limit_block()
+        .lock()
+        .map(|guard| guard.is_some_and(|until| until > Instant::now()))
+        .unwrap_or(false)
+}
+
+fn record_codex_rate_limited(retry_after_secs: Option<u64>) {
+    let secs = retry_after_secs
+        .unwrap_or(CODEX_RATE_LIMIT_DEFAULT_BLOCK_SECS)
+        .max(1);
+    if let Ok(mut guard) = codex_rate_limit_block().lock() {
+        *guard = Some(Instant::now() + Duration::from_secs(secs));
+    }
+}
+
 fn codex_wham_get(
     client: &reqwest::Client,
-    path: &str,
+    url: &str,
     access_token: &str,
     account_id: Option<&str>,
 ) -> reqwest::RequestBuilder {
     let mut request = client
-        .get(format!("https://chatgpt.com/backend-api/wham/{path}"))
+        .get(url)
         .header("Authorization", format!("Bearer {access_token}"))
         .header("User-Agent", "codex-cli")
         .header("OpenAI-Beta", "codex-1")
@@ -602,8 +756,14 @@ pub(crate) async fn query_codex_quota(
     expired_message: &str,
 ) -> Result<SubscriptionQuota, String> {
     let client = crate::http_client::get();
+    let base = codex_chatgpt_base_url();
 
-    let resp = match codex_wham_get(&client, "usage", access_token, account_id)
+    if codex_is_rate_limited() {
+        // 429 冷却期内直接判失败,让回退链/调度器退避,不再打接口。
+        return Err("codex_quota_rate_limited".to_string());
+    }
+
+    let resp = match codex_wham_get(&client, &codex_usage_url(&base), access_token, account_id)
         .send()
         .await
     {
@@ -618,6 +778,22 @@ pub(crate) async fn query_codex_quota(
             tool_label,
             CredentialStatus::Expired,
             format!("{expired_message} (HTTP {status})"),
+        ));
+    }
+
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        // 记录限流冷却;后续请求在冷却期内直接失败,让链降级、不再打接口。
+        let retry_after = crate::usage::claude_oauth::parse_retry_after(
+            resp.headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|value| value.to_str().ok()),
+            chrono::Utc::now(),
+        );
+        record_codex_rate_limited(retry_after);
+        return Ok(SubscriptionQuota::error(
+            tool_label,
+            CredentialStatus::Valid,
+            "codex_quota_rate_limited".to_string(),
         ));
     }
 
@@ -649,11 +825,11 @@ pub(crate) async fn query_codex_quota(
         .as_ref()
         .and_then(|credits| credits.available_count);
     let should_fetch_reset_credit_details = reset_credit_count.is_some_and(|count| count > 0);
-    let tiers = codex_usage_tiers(body);
+    let tiers = codex_usage_tiers(&body);
     let reset_credit_response = if should_fetch_reset_credit_details {
         match codex_wham_get(
             &client,
-            "rate-limit-reset-credits",
+            &codex_reset_credits_url(&base),
             access_token,
             account_id,
         )
@@ -701,6 +877,14 @@ pub(crate) async fn query_codex_quota(
         queried_at: Some(now_millis()),
     })
 }
+
+// 说明:这里刻意**不**用 Codex CLI 的 refresh_token 去 `auth.openai.com/oauth/token`
+// 续期。OAuth refresh token 通常是轮换式的 —— 用一次就作废旧的,而服务端返回的
+// 新 token 需要写回 `~/.codex/auth.json`。本 app 是只读监控方,不该成为 auth.json
+// 的写入方;而"刷了却不回写"会让 Codex CLI 自己存的 refresh_token 变成陈旧值,
+// 把用户从 Codex CLI 里踢下线 —— 监控工具把被监控工具搞挂,收益不抵风险。
+// 凭据过期时直接报 Expired,由回退链的下一层(CLI 探测)出数,重新登录交给用户
+// 在 Codex CLI 侧完成。
 
 // ── Gemini 凭据读取 ──────────────────────────────────────
 
@@ -1220,6 +1404,7 @@ pub async fn get_subscription_quota(tool: &str) -> Result<SubscriptionQuota, Str
                     )
                     .await
                 }
+                _ => Ok(SubscriptionQuota::not_found("codex")),
             }
         }
         "gemini" => {
@@ -1256,6 +1441,7 @@ pub async fn get_subscription_quota(tool: &str) -> Result<SubscriptionQuota, Str
                     let token = token.expect("token must be Some when status is Valid");
                     query_gemini_quota(&token).await
                 }
+                _ => Ok(SubscriptionQuota::not_found("gemini")),
             }
         }
         _ => Ok(SubscriptionQuota::not_found(tool)),
@@ -1274,6 +1460,54 @@ fn now_millis() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chatgpt_base_url_falls_back_unless_https() {
+        // 明文 http / 非 http(s) / 空值都不允许携带 Bearer token 出去。
+        assert_eq!(
+            normalize_chatgpt_base_url("http://relay.example.com"),
+            CHATGPT_OFFICIAL_BASE_URL
+        );
+        assert_eq!(
+            normalize_chatgpt_base_url("relay.example.com"),
+            CHATGPT_OFFICIAL_BASE_URL
+        );
+        assert_eq!(
+            normalize_chatgpt_base_url("file:///etc/passwd"),
+            CHATGPT_OFFICIAL_BASE_URL
+        );
+        assert_eq!(normalize_chatgpt_base_url("   "), CHATGPT_OFFICIAL_BASE_URL);
+    }
+
+    #[test]
+    fn chatgpt_base_url_keeps_https_values_and_official_suffix() {
+        // 官方裸域补 /backend-api；已带后缀的不重复补。
+        assert_eq!(
+            normalize_chatgpt_base_url("https://chatgpt.com"),
+            CHATGPT_OFFICIAL_BASE_URL
+        );
+        assert_eq!(
+            normalize_chatgpt_base_url("https://chatgpt.com/backend-api/"),
+            CHATGPT_OFFICIAL_BASE_URL
+        );
+        // https 的第三方中转按原样保留（用户自己的配置）。
+        assert_eq!(
+            normalize_chatgpt_base_url("https://relay.example.com/v1/"),
+            "https://relay.example.com/v1"
+        );
+    }
+
+    #[test]
+    fn codex_usage_url_switches_on_backend_api_suffix() {
+        assert_eq!(
+            codex_usage_url(CHATGPT_OFFICIAL_BASE_URL),
+            "https://chatgpt.com/backend-api/wham/usage"
+        );
+        assert_eq!(
+            codex_usage_url("https://relay.example.com/v1"),
+            "https://relay.example.com/v1/api/codex/usage"
+        );
+    }
 
     #[test]
     fn window_seconds_map_to_expected_tier_names() {
@@ -1318,7 +1552,7 @@ mod tests {
         }))
         .unwrap();
 
-        let tiers = codex_usage_tiers(body);
+        let tiers = codex_usage_tiers(&body);
 
         assert_eq!(tiers.len(), 3);
         assert_eq!(tiers[0].name, TIER_SEVEN_DAY);

@@ -718,6 +718,10 @@ fn insert_session_log_entry(
     // 仅在确实写入新行时通知前端，避免 INSERT OR IGNORE 跳过时产生空刷新
     if inserted_rows > 0 {
         crate::usage_events::notify_log_recorded();
+        // Claude 用量活动 → 触发订阅额度的一次短去抖补刷。
+        crate::usage::quota::mark_subscription_activity(
+            crate::usage::system_providers::CLAUDE_SUBSCRIPTION_ID,
+        );
     }
 
     Ok(true)

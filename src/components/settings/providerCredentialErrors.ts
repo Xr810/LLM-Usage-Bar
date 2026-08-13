@@ -43,6 +43,30 @@ const FALLBACK = {
   fallback: "Unable to update this Provider.",
 };
 
+/** 额度采集层的稳定错误码（claude_oauth_*），映射到可操作的提示文案。 */
+const QUOTA_ERRORS: Record<string, { key: string; fallback: string }> = {
+  claude_oauth_consent_required: {
+    key: "usageDashboard.claudeOauthConsentRequired",
+    fallback:
+      "Official Claude quota needs access to Claude Code's credentials. Enable it in the Claude provider settings.",
+  },
+  claude_oauth_keychain_denied: {
+    key: "usageDashboard.claudeOauthKeychainDenied",
+    fallback:
+      "Access to the Claude Code credential was denied in the system dialog. Try again later.",
+  },
+  claude_oauth_keychain_not_found: {
+    key: "usageDashboard.claudeOauthKeychainNotFound",
+    fallback:
+      "No Claude Code login was found in the system keychain. Sign in with Claude Code first.",
+  },
+  claude_oauth_keychain_timeout: {
+    key: "usageDashboard.claudeOauthKeychainTimeout",
+    fallback:
+      "The system authorization dialog was not answered in time. Refresh again and allow access when macOS asks.",
+  },
+};
+
 /** Backend errors arrive as bare codes; anything unmapped keeps the old wording. */
 export function credentialErrorCopy(errorCode: string | null): {
   key: string;
@@ -50,6 +74,15 @@ export function credentialErrorCopy(errorCode: string | null): {
 } | null {
   if (!errorCode) return null;
   return CREDENTIAL_ERRORS[errorCode] ?? FALLBACK;
+}
+
+/** 额度错误码的 i18n 映射;未识别的码返回 null(调用方回退显示原文)。 */
+export function quotaErrorCopy(errorCode: string | null): {
+  key: string;
+  fallback: string;
+} | null {
+  if (!errorCode) return null;
+  return QUOTA_ERRORS[errorCode] ?? null;
 }
 
 export function credentialErrorCodeOf(cause: unknown): string {

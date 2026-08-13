@@ -1,9 +1,12 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { LogIn, LogOut, RefreshCw } from "lucide-react";
+import { KeyRound, LogIn, LogOut, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { relativeTimeAgo } from "@/lib/relativeTime";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { ToggleRow } from "@/components/ui/toggle-row";
+import { useSaveSettingsMutation, useSettingsQuery } from "@/lib/query";
 import {
   useClaudeCliAuthActions,
   useClaudeCliAuthStatus,
@@ -13,7 +16,10 @@ export function ClaudeCliAuthSection() {
   const { t, i18n } = useTranslation();
   const status = useClaudeCliAuthStatus();
   const actions = useClaudeCliAuthActions();
+  const settingsQuery = useSettingsQuery();
+  const saveSettings = useSaveSettingsMutation();
   const [failed, setFailed] = useState(false);
+  const [consentDialogOpen, setConsentDialogOpen] = useState(false);
 
   const run = async (operation: () => Promise<unknown>) => {
     setFailed(false);
@@ -22,6 +28,15 @@ export function ClaudeCliAuthSection() {
     } catch {
       setFailed(true);
     }
+  };
+
+  const oauthQuotaEnabled =
+    settingsQuery.data?.claudeOauthQuotaEnabled ?? false;
+
+  const saveConsent = (value: boolean) => {
+    const current = settingsQuery.data;
+    if (!current) return;
+    saveSettings.mutate({ ...current, claudeOauthQuotaEnabled: value });
   };
 
   const data = status.data;
@@ -160,6 +175,52 @@ export function ClaudeCliAuthSection() {
           })}
         </div>
       ) : null}
+
+      <ToggleRow
+        icon={<KeyRound className="h-4 w-4" aria-hidden="true" />}
+        title={t("usageDashboard.claudeOauthQuotaToggleTitle", {
+          defaultValue: "Query official quota with Claude Code credentials",
+        })}
+        description={t("usageDashboard.claudeOauthQuotaToggleDescription", {
+          defaultValue:
+            "Reads Claude Code's login stored in the macOS keychain to fetch exact usage windows from Anthropic. Off by default; you can revoke it here at any time.",
+        })}
+        checked={oauthQuotaEnabled}
+        disabled={saveSettings.isPending}
+        onCheckedChange={(value) => {
+          if (value) {
+            setConsentDialogOpen(true);
+          } else {
+            saveConsent(false);
+          }
+        }}
+      />
+
+      <ConfirmDialog
+        isOpen={consentDialogOpen}
+        variant="info"
+        title={t("usageDashboard.claudeOauthConsentTitle", {
+          defaultValue: "Allow reading Claude Code's login?",
+        })}
+        message={t("usageDashboard.claudeOauthConsentMessage", {
+          defaultValue:
+            "Enabling this lets LLM Usage Bar read the login that Claude Code stores in the macOS keychain, and use it to query Anthropic's official quota endpoint.\n\nIt reads nothing else. The credential is sent only to Anthropic's own API as the request's authorization header, never to any third party, and it is not stored or logged by this app. You can turn this off here at any time. macOS may ask you to confirm access when the quota is refreshed.",
+        })}
+        checkboxLabel={t("usageDashboard.claudeOauthConsentCheckbox", {
+          defaultValue:
+            "I understand that Claude Code's keychain login will be read to query the official quota.",
+        })}
+        confirmText={t("usageDashboard.claudeOauthConsentConfirm", {
+          defaultValue: "Allow",
+        })}
+        onConfirm={(checkboxChecked) => {
+          setConsentDialogOpen(false);
+          if (checkboxChecked) {
+            saveConsent(true);
+          }
+        }}
+        onCancel={() => setConsentDialogOpen(false)}
+      />
     </div>
   );
 }

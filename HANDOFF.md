@@ -963,3 +963,67 @@ SQLite 层(两侧同一个 C 库)、HTTP 层(I/O 等待为主)。后两者判断
 
 **优先级不变:先修 11.3(收益比整个选型问题大三个数量级),UI 迁移按绞杀者节奏
 并行,互不阻塞。** 动 11.3 之前先把 §11.2 指出的 ~12 分钟未归因 CPU 查清楚。
+
+---
+
+## 12. 订阅额度回退链与自适应刷新(2026-08-13 合入)
+
+分支 `feat/claude-oauth-chain`,5 个 feature 提交 + 1 个审核修复提交。
+
+### 12.1 做了什么
+
+| 层 | 内容 |
+| --- | --- |
+| Claude 额度 | 单层「本地文件」换成三层链:官方 OAuth 接口 → CLI 探测(`claude /usage`)→ 本地文件。`ClaudeChainCollector`,source 仍是 `claude_local`,schema 未动 |
+| Codex 额度 | 同样换成三层链:自管 OAuth → CLI 凭据(`~/.codex/auth.json`)→ CLI 探测(`codex /status`)。`CodexChainCollector`,source 仍是 `codex_oauth` |
+| 同意门控 | 读 Claude Code 的钥匙串条目由三层闸门包住:`claude_oauth_quota_enabled`(默认关)、`claude_oauth_prompt_mode`(默认 `onlyOnUserAction`,后台绝不弹框)、`claude_oauth_denied_until`(被拒后 6 小时冷却)。闸门是纯函数 `check_consent_gate` |
+| 刷新节奏 | 定频 5 分钟 → 空闲 15 分钟 + 用量活动触发补刷(30 秒去抖,间隔随爆发时长 2→3→5 分钟拉伸)。稳态请求量与原来的固定 5 分钟持平 |
+| 限流 | OAuth 与 wham 两条路径都尊重 429 的 `Retry-After`,进程内冷却;手动刷新 60 秒内复用上次结果 |
+
+新增依赖:`portable-pty 0.8`(CLI 探测要真 PTY 才能让 TUI 渲染)。
+
+### 12.2 审核时修掉的问题(合入前)
+
+1. **钥匙串 2 秒超时**:首次读取正是要弹 macOS 授权对话框的那次,`security` 会一直
+   阻塞到用户点击。2 秒超时把「用户还没来得及点 Allow」判成拒绝,还顺手写了 6 小时
+   冷却——主路径基本走不通。改成交互 90 秒 / 后台 2 秒,并新增 `TimedOut` 结果,
+   超时**不**写冷却(只有 `security` 真的返回失败才写)。
+2. **Codex refresh_token 轮换**:原实现拿 Codex CLI 的 refresh_token 去
+   `auth.openai.com/oauth/token` 换新 access_token,却不回写 `auth.json`。轮换式
+   refresh token 用一次就作废旧的,会把用户从 Codex CLI 里踢下线。整段移除,过期
+   直接报 Expired,由链的下一层出数。
+3. **`chatgpt_base_url` 无协议校验**:该地址会收到 ChatGPT 的 OAuth access token
+   (Bearer 头),而配置文件是不可信输入(中转商的安装脚本常改这个键)。现在非
+   `https://` 一律回落官方地址。
+4. **同意对话框文案不实**:原文写「凭据不会离开本机」,但 token 正是要发给
+   `api.anthropic.com`。四语言改成「只作为授权头发给 Anthropic 官方接口,不发给
+   任何第三方,本应用不存储不记录」。
+5. **CLI 探测的候选路径是死代码**:按「父目录存在」筛选,而裸名字的父目录是空串,
+   于是永远命中第一个候选。打包后从 Finder 启动的 app PATH 只有
+   `/usr/bin:/bin:/usr/sbin:/sbin`,这一层本来永远失败。改成先查 PATH、再逐个检查
+   绝对路径候选**自身**是否存在,加了回归测试。
+6. **PTY 探测的 20 秒超时不生效**:`reader.read()` 阻塞,deadline 只在 read 返回后
+   才检查,子进程一静默就永久占住一个 blocking 线程。改成读线程 + `recv_timeout`。
+   同时把催重绘的回车从「无限每 800ms 一次」限到最多 3 次——回车会「确认」CLI 可能
+   正停在的对话框(信任目录、onboarding)。
+7. **`claude_oauth_denied_until` 被前端保存冲掉**:前端表单不携带该字段,而
+   `update_settings` 是整体复写。按 `local_migrations` 的既有约定加进
+   `merge_settings_for_save` 的后端owned 字段,补了测试。
+8. **手动刷新缓存不随设置失效**:开完同意开关立刻点刷新,会拿到 60 秒缓存里那条
+   `consent_required`,看着像开关没生效。`save_settings` 在同意相关字段变化时清缓存。
+9. CI 四红:`cargo fmt`(33 处)、`cargo clippy -D warnings`(3 条 lib 警告 +
+   `ManagedCodexOAuthQuotaCollector` 在生产代码里已无构造点的 dead_code)、
+   `prettier`(4 个文件)、`productIdentity` 行号 pin 未重锚(settings.rs 与四个
+   locale 文件都移位了)。全部修掉。
+
+### 12.3 仍然要知道的取舍
+
+- **CLI 探测会真的拉起一个交互式 CLI 进程**(Claude 在 `$HOME`,带
+  `--allowed-tools ""` 和 `--strict-mcp-config`;Codex 带 `-s read-only -a untrusted`)。
+  后台 30 分钟一次、手动 60 秒一次、失败退避 5 分钟。它是链的第二层,只有 OAuth 层
+  拿不到数才会触发。**残余风险**:向 TUI 发回车这件事本身无法完全避免歧义,如果
+  CLI 恰好停在某个确认框上,那次回车等于替用户确认。已把回车限到 3 次,但没有消除。
+- **Codex 链降级到 CLI 凭据时,显示的账号可能不是应用自管的那个账号**。这是「有额度
+  可看」对「账号精确」的取舍,原分支已在注释里写明。
+- wham 的 `credits`(点数余额)仍未解析:`SubscriptionQuota` 没有承载余额的字段,
+  加了要动 30+ 处构造字面量,留到下次扩展该结构时一并做。

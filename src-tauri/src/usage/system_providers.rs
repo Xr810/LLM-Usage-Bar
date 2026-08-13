@@ -96,7 +96,8 @@ pub fn system_provider_definitions() -> Vec<SystemProviderDefinition> {
             auth_kind: SystemProviderAuthKind::CodexOauth,
             default_enabled: true,
             quota_source: Some(MANAGED_CODEX_QUOTA_SOURCE),
-            quota_interval_seconds: Some(300),
+            // 空闲基线 15 分钟;用量活动会触发短去抖补刷(见 usage/quota)。
+            quota_interval_seconds: Some(900),
             upstream_protocol: Some("codex"),
             connection_test_path: None,
             key_usage_path: None,
@@ -115,7 +116,8 @@ pub fn system_provider_definitions() -> Vec<SystemProviderDefinition> {
             auth_kind: SystemProviderAuthKind::ClaudeCli,
             default_enabled: true,
             quota_source: Some(CLAUDE_LOCAL_QUOTA_SOURCE),
-            quota_interval_seconds: Some(300),
+            // 空闲基线 15 分钟;用量活动会触发短去抖补刷(见 usage/quota)。
+            quota_interval_seconds: Some(900),
             upstream_protocol: None,
             connection_test_path: None,
             key_usage_path: None,

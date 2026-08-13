@@ -16,15 +16,33 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::async_runtime::JoinHandle;
 use tokio::sync::{watch, Mutex as AsyncMutex, RwLock};
 use uuid::Uuid;
 
-pub const DEFAULT_QUOTA_INTERVAL_SECONDS: u64 = 300;
+/// 空闲时的默认刷新间隔(秒)。有用量活动时,调度器会在更短的去抖窗口内
+/// 补刷一次(见 ACTIVE_* 常量),所以空闲间隔可以放宽到 15 分钟。
+pub const DEFAULT_QUOTA_INTERVAL_SECONDS: u64 = 900;
 const SCHEDULER_TICK_SECONDS: u64 = 30;
 const FAILURE_RETRY_DELAYS_SECONDS: [u64; 5] = [30, 60, 300, 600, 1_800];
+/// 手动刷新的冷却:60 秒内重复点击复用上一次结果,不再向外部取数。
+const MANUAL_REFRESH_MIN_INTERVAL_SECS: i64 = 60;
+/// 活动触发刷新的去抖窗口:活动标记写入后等这么久再刷,合并密集写入。
+const ACTIVITY_DEBOUNCE_SECS: i64 = 30;
+/// 活动期间刷新的最小间隔(秒),随爆发持续时长拉伸:
+/// 爆发前 10 分钟用 2 分钟间隔,10~30 分钟用 3 分钟,30 分钟以上用 5 分钟。
+/// 短爆发保持灵敏,长会话稳态请求量回到固定 5 分钟档的水平。
+const ACTIVITY_MIN_SPACING_SECS: i64 = 120;
+const ACTIVITY_MID_SPACING_SECS: i64 = 180;
+const ACTIVITY_MAX_SPACING_SECS: i64 = 300;
+/// 分段边界:爆发持续到这两个时刻后,间隔升档。
+const ACTIVITY_STAGE_1_UNTIL_SECS: i64 = 10 * 60;
+const ACTIVITY_STAGE_2_UNTIL_SECS: i64 = 30 * 60;
+/// 标记间隔达到该值视为「旧爆发已结束」,下一个标记开启新爆发
+/// (新爆发重新从 2 分钟间隔起步)。
+const ACTIVITY_BURST_RESET_GAP_SECS: i64 = 5 * 60;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct NormalizedQuota {
@@ -61,12 +79,17 @@ pub type QuotaCycleCallback =
 /// Object-safe boundary around existing quota HTTP/parsing implementations.
 /// The adapter returns their common `SubscriptionQuota` representation so this
 /// module only owns normalization and persistence semantics.
+///
+/// `interactive` marks user-initiated refreshes (manual refresh button), which
+/// layers behind consent gates may treat differently from background cycles
+/// (e.g. prompting the macOS Keychain dialog only on user action).
 pub trait QuotaCollector: Send + Sync {
     fn source(&self) -> &'static str;
 
     fn collect<'a>(
         &'a self,
         provider: &'a UsageProviderStored,
+        interactive: bool,
     ) -> BoxFuture<'a, Result<SubscriptionQuota, String>>;
 }
 
@@ -82,14 +105,59 @@ impl QuotaCollector for SubscriptionQuotaCollector {
     fn collect<'a>(
         &'a self,
         _provider: &'a UsageProviderStored,
+        _interactive: bool,
     ) -> BoxFuture<'a, Result<SubscriptionQuota, String>> {
         Box::pin(async move { get_subscription_quota(self.source).await })
     }
 }
 
-struct ClaudeLocalQuotaCollector;
+/// Claude 订阅额度的三层回退链:官方 OAuth 接口 → CLI 探测 → 本地文件。
+///
+/// 前两层失败以稳定错误码降级,第三层(现有本地采集)是零成本兜底;
+/// 三层全败时错误串只保留各层错误码的摘要,绝不透传凭据。
+type ClaudeStage =
+    Arc<dyn Fn(bool) -> BoxFuture<'static, Result<SubscriptionQuota, String>> + Send + Sync>;
 
-impl QuotaCollector for ClaudeLocalQuotaCollector {
+struct ClaudeChainCollector {
+    oauth_stage: ClaudeStage,
+    probe_stage: ClaudeStage,
+    local_stage: ClaudeStage,
+}
+
+impl ClaudeChainCollector {
+    fn production() -> Self {
+        Self {
+            oauth_stage: Arc::new(|interactive| {
+                Box::pin(async move {
+                    crate::usage::claude_oauth::collect_claude_oauth_quota(interactive).await
+                })
+            }),
+            probe_stage: Arc::new(|interactive| {
+                Box::pin(
+                    async move { crate::usage::cli_probe::probe_claude_usage(interactive).await },
+                )
+            }),
+            local_stage: Arc::new(|_| {
+                Box::pin(async move { crate::claude_quota::collect_local_quota() })
+            }),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_stages(
+        oauth_stage: ClaudeStage,
+        probe_stage: ClaudeStage,
+        local_stage: ClaudeStage,
+    ) -> Self {
+        Self {
+            oauth_stage,
+            probe_stage,
+            local_stage,
+        }
+    }
+}
+
+impl QuotaCollector for ClaudeChainCollector {
     fn source(&self) -> &'static str {
         CLAUDE_LOCAL_QUOTA_SOURCE
     }
@@ -97,9 +165,177 @@ impl QuotaCollector for ClaudeLocalQuotaCollector {
     fn collect<'a>(
         &'a self,
         _provider: &'a UsageProviderStored,
+        interactive: bool,
     ) -> BoxFuture<'a, Result<SubscriptionQuota, String>> {
-        Box::pin(async move { crate::claude_quota::collect_local_quota() })
+        let oauth_stage = self.oauth_stage.clone();
+        let probe_stage = self.probe_stage.clone();
+        let local_stage = self.local_stage.clone();
+        Box::pin(async move {
+            let mut chain_errors = Vec::new();
+            for (label, stage) in [
+                ("oauth", &oauth_stage),
+                ("probe", &probe_stage),
+                ("local", &local_stage),
+            ] {
+                match stage(interactive).await {
+                    Ok(quota) if quota.success => return Ok(quota),
+                    Ok(quota) => {
+                        let error = quota
+                            .error
+                            .or(quota.credential_message)
+                            .unwrap_or_else(|| "quota collection failed".to_string());
+                        chain_errors.push(stage_error(label, &error));
+                    }
+                    Err(error) => chain_errors.push(stage_error(label, &error)),
+                }
+            }
+            Err(format!(
+                "claude quota chain failed: {}",
+                chain_errors.join(" → ")
+            ))
+        })
     }
+}
+
+/// 层摘要只保留稳定错误码的前缀段,截断长文案,避免链错误串夹带路径等细节。
+fn stage_error(label: &str, error: &str) -> String {
+    let cap = error
+        .char_indices()
+        .nth(64)
+        .map(|(index, _)| index)
+        .unwrap_or(error.len());
+    format!("{label}({})", &error[..cap])
+}
+
+// ── 用量活动信号(自适应刷新) ─────────────────────────────
+
+/// 一次用量活动爆发:记录最新标记时刻与爆发开始时刻。
+/// 间隔按「爆发已持续多久」分级拉伸(2→3→5 分钟),见 `activity_spacing_seconds`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ActivityMark {
+    last_mark_at: i64,
+    burst_started_at: i64,
+}
+
+/// 用量活动标记:provider_id → 最近一次用量写入的 Unix 秒。
+/// 写入路径(session 同步、事件摄入)没有 QuotaService 句柄,
+/// 用进程级静态表传递信号;调度器 tick 时消费(去抖后补刷一次并清除)。
+static SUBSCRIPTION_ACTIVITY: OnceLock<std::sync::RwLock<HashMap<String, ActivityMark>>> =
+    OnceLock::new();
+
+fn subscription_activity() -> &'static std::sync::RwLock<HashMap<String, ActivityMark>> {
+    SUBSCRIPTION_ACTIVITY.get_or_init(|| std::sync::RwLock::new(HashMap::new()))
+}
+
+/// 用量写入路径调用:给对应 Provider 打活动标记(触发一次补刷)。
+/// 标记间隔 ≥ [`ACTIVITY_BURST_RESET_GAP_SECS`] 视为旧爆发已结束,
+/// 新标记开启一次新爆发(间隔从 2 分钟重新起步)。
+pub(crate) fn mark_subscription_activity(provider_id: &str) {
+    let now = now_timestamp().unwrap_or(0);
+    mark_subscription_activity_at_impl(provider_id, now);
+}
+
+#[cfg(test)]
+fn mark_subscription_activity_at(provider_id: &str, now: i64) {
+    mark_subscription_activity_at_impl(provider_id, now);
+}
+
+fn mark_subscription_activity_at_impl(provider_id: &str, now: i64) {
+    if let Ok(mut map) = subscription_activity().write() {
+        match map.get_mut(provider_id) {
+            Some(mark) if now.saturating_sub(mark.last_mark_at) < ACTIVITY_BURST_RESET_GAP_SECS => {
+                // 延续当前爆发。
+                mark.last_mark_at = now;
+            }
+            _ => {
+                // 无标记或旧爆发已结束:开启新爆发。
+                map.insert(
+                    provider_id.to_string(),
+                    ActivityMark {
+                        last_mark_at: now,
+                        burst_started_at: now,
+                    },
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+fn set_activity_mark_at(provider_id: &str, last_mark_at: i64, burst_started_at: i64) {
+    if let Ok(mut map) = subscription_activity().write() {
+        map.insert(
+            provider_id.to_string(),
+            ActivityMark {
+                last_mark_at,
+                burst_started_at,
+            },
+        );
+    }
+}
+
+fn read_subscription_activity(provider_id: &str) -> Option<ActivityMark> {
+    subscription_activity()
+        .read()
+        .ok()?
+        .get(provider_id)
+        .copied()
+}
+
+fn clear_subscription_activity(provider_id: &str) {
+    if let Ok(mut map) = subscription_activity().write() {
+        map.remove(provider_id);
+    }
+}
+
+/// 爆发已持续时长对应的刷新间隔:前 10 分钟 2 分钟,10~30 分钟 3 分钟,
+/// 30 分钟以上 5 分钟封顶。纯函数,便于单测。
+fn activity_spacing_seconds(burst_elapsed: i64) -> i64 {
+    if burst_elapsed < ACTIVITY_STAGE_1_UNTIL_SECS {
+        ACTIVITY_MIN_SPACING_SECS
+    } else if burst_elapsed < ACTIVITY_STAGE_2_UNTIL_SECS {
+        ACTIVITY_MID_SPACING_SECS
+    } else {
+        ACTIVITY_MAX_SPACING_SECS
+    }
+}
+
+/// 空闲基线到期:距上次尝试超过间隔(或失败阶梯)。
+fn idle_due(state: Option<&QuotaFetchState>, interval: u64, now: i64) -> bool {
+    let Some(state) = state else { return true };
+    let Some(last_attempt) = state.last_attempt_at else {
+        return true;
+    };
+    let delay = quota_refresh_delay_seconds(state, interval);
+    now.saturating_sub(last_attempt) >= delay as i64
+}
+
+/// 活动触发到期:标记写入超过去抖窗口、距上次尝试超过当前爆发档位的间隔、
+/// 且失败阶梯已让路,才允许补刷。每次标记最多触发一次(触发即清)。
+fn activity_due(provider_id: &str, state: Option<&QuotaFetchState>, now: i64) -> bool {
+    let Some(mark) = read_subscription_activity(provider_id) else {
+        return false;
+    };
+    let Some(state) = state else {
+        return false;
+    };
+    let Some(last_attempt) = state.last_attempt_at else {
+        return false;
+    };
+    // 活动必须发生在最近一次尝试之后,且过完去抖窗口。
+    if last_attempt >= mark.last_mark_at
+        || now.saturating_sub(mark.last_mark_at) < ACTIVITY_DEBOUNCE_SECS
+    {
+        return false;
+    }
+    if state.consecutive_failures > 0 {
+        // 失败阶梯优先:退避期内不因活动补刷。
+        let backoff = quota_refresh_delay_seconds(state, 0) as i64;
+        return now.saturating_sub(last_attempt) >= backoff;
+    }
+    // 间隔随爆发持续时长拉伸;再活跃也至少隔当前档位这么久。
+    let spacing = activity_spacing_seconds(now.saturating_sub(mark.burst_started_at));
+    now.saturating_sub(last_attempt) >= spacing
 }
 
 struct CodingPlanQuotaCollector;
@@ -112,6 +348,7 @@ impl QuotaCollector for CodingPlanQuotaCollector {
     fn collect<'a>(
         &'a self,
         provider: &'a UsageProviderStored,
+        _interactive: bool,
     ) -> BoxFuture<'a, Result<SubscriptionQuota, String>> {
         Box::pin(async move {
             let empty_config = Value::Null;
@@ -140,10 +377,14 @@ impl QuotaCollector for CodingPlanQuotaCollector {
     }
 }
 
+/// 自管 OAuth 单层 collector。生产环境已由 `CodexChainCollector` 的第一层取代,
+/// 只剩单测直接构造它来验证「空账号库 → NotFound」这条契约。
+#[cfg(test)]
 struct ManagedCodexOAuthQuotaCollector {
     manager: Arc<RwLock<CodexOAuthManager>>,
 }
 
+#[cfg(test)]
 impl QuotaCollector for ManagedCodexOAuthQuotaCollector {
     fn source(&self) -> &'static str {
         MANAGED_CODEX_QUOTA_SOURCE
@@ -152,8 +393,97 @@ impl QuotaCollector for ManagedCodexOAuthQuotaCollector {
     fn collect<'a>(
         &'a self,
         _provider: &'a UsageProviderStored,
+        _interactive: bool,
     ) -> BoxFuture<'a, Result<SubscriptionQuota, String>> {
         Box::pin(async move { query_managed_codex_oauth_quota(&self.manager, None).await })
+    }
+}
+
+/// ChatGPT/Codex 订阅额度的三层回退链:自管 OAuth → CLI 凭据 → CLI 探测。
+///
+/// 链在 `codex_oauth` 这个 key 下替换原来的单层 collector;第三层
+/// (portable-pty `codex /status`)只在自管与 CLI 凭据都拿不到时才触发。
+/// 注意:降级到 CLI 凭据时,显示的账号可能与应用自管账号不同——这是
+/// 「有额度可看」对「精确账号」的取舍,且 CLI 凭据正是用户正在使用的账号。
+type CodexStage =
+    Arc<dyn Fn(bool) -> BoxFuture<'static, Result<SubscriptionQuota, String>> + Send + Sync>;
+
+struct CodexChainCollector {
+    managed_stage: CodexStage,
+    cli_stage: CodexStage,
+    probe_stage: CodexStage,
+}
+
+impl CodexChainCollector {
+    fn production(codex_oauth_manager: Arc<RwLock<CodexOAuthManager>>) -> Self {
+        let manager_for_stage = codex_oauth_manager.clone();
+        Self {
+            managed_stage: Arc::new(move |_interactive| {
+                let manager = manager_for_stage.clone();
+                Box::pin(async move { query_managed_codex_oauth_quota(&manager, None).await })
+            }),
+            cli_stage: Arc::new(|_interactive| {
+                Box::pin(async move { get_subscription_quota("codex").await })
+            }),
+            probe_stage: Arc::new(|interactive| {
+                Box::pin(
+                    async move { crate::usage::cli_probe::probe_codex_status(interactive).await },
+                )
+            }),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_stages(
+        managed_stage: CodexStage,
+        cli_stage: CodexStage,
+        probe_stage: CodexStage,
+    ) -> Self {
+        Self {
+            managed_stage,
+            cli_stage,
+            probe_stage,
+        }
+    }
+}
+
+impl QuotaCollector for CodexChainCollector {
+    fn source(&self) -> &'static str {
+        MANAGED_CODEX_QUOTA_SOURCE
+    }
+
+    fn collect<'a>(
+        &'a self,
+        _provider: &'a UsageProviderStored,
+        interactive: bool,
+    ) -> BoxFuture<'a, Result<SubscriptionQuota, String>> {
+        let managed_stage = self.managed_stage.clone();
+        let cli_stage = self.cli_stage.clone();
+        let probe_stage = self.probe_stage.clone();
+        Box::pin(async move {
+            let mut chain_errors = Vec::new();
+            for (label, stage) in [
+                ("managed", &managed_stage),
+                ("cli", &cli_stage),
+                ("probe", &probe_stage),
+            ] {
+                match stage(interactive).await {
+                    Ok(quota) if quota.success => return Ok(quota),
+                    Ok(quota) => {
+                        let error = quota
+                            .error
+                            .or(quota.credential_message)
+                            .unwrap_or_else(|| "quota collection failed".to_string());
+                        chain_errors.push(stage_error(label, &error));
+                    }
+                    Err(error) => chain_errors.push(stage_error(label, &error)),
+                }
+            }
+            Err(format!(
+                "codex quota chain failed: {}",
+                chain_errors.join(" → ")
+            ))
+        })
     }
 }
 
@@ -162,9 +492,17 @@ pub struct QuotaService {
     db: Arc<Database>,
     collectors: Arc<HashMap<String, Arc<dyn QuotaCollector>>>,
     in_flight: Arc<AsyncMutex<HashMap<String, Arc<QuotaFlight>>>>,
+    /// provider_id → (手动刷新时间, 上次结果)。冷却期内的重复手动刷新
+    /// 复用上次结果(成功或失败都缓存),避免狂点刷新打外部接口。
+    last_manual: Arc<RwLock<ManualRefreshCache>>,
+    /// 手动刷新冷却(秒),测试可调 0 禁用。
+    manual_refresh_cooldown_secs: i64,
 }
 
 type SharedQuotaRefreshResult = Result<QuotaRefreshResult, String>;
+
+/// provider_id → (尝试时刻, 该次结果)。
+type ManualRefreshCache = HashMap<String, (i64, SharedQuotaRefreshResult)>;
 
 struct QuotaFlight {
     result: watch::Sender<Option<SharedQuotaRefreshResult>>,
@@ -180,9 +518,9 @@ impl QuotaService {
         codex_oauth_manager: Arc<RwLock<CodexOAuthManager>>,
     ) -> Self {
         let mut collectors = Self::legacy_collectors();
-        collectors.push(Arc::new(ManagedCodexOAuthQuotaCollector {
-            manager: codex_oauth_manager,
-        }));
+        collectors.push(Arc::new(CodexChainCollector::production(
+            codex_oauth_manager,
+        )));
         Self::with_collectors(db, collectors)
     }
 
@@ -190,7 +528,7 @@ impl QuotaService {
         vec![
             Arc::new(SubscriptionQuotaCollector { source: "claude" }),
             Arc::new(SubscriptionQuotaCollector { source: "codex" }),
-            Arc::new(ClaudeLocalQuotaCollector),
+            Arc::new(ClaudeChainCollector::production()),
             Arc::new(CodingPlanQuotaCollector),
         ]
     }
@@ -204,21 +542,62 @@ impl QuotaService {
             db,
             collectors: Arc::new(collectors),
             in_flight: Arc::new(AsyncMutex::new(HashMap::new())),
+            last_manual: Arc::new(RwLock::new(HashMap::new())),
+            manual_refresh_cooldown_secs: MANUAL_REFRESH_MIN_INTERVAL_SECS,
         }
+    }
+
+    /// 测试用:调整手动刷新冷却(0 表示禁用)。
+    #[cfg(test)]
+    pub fn with_manual_refresh_cooldown(mut self, secs: i64) -> Self {
+        self.manual_refresh_cooldown_secs = secs;
+        self
+    }
+
+    /// 丢弃手动刷新的结果缓存。设置变更后调用:缓存里那条结论是按旧设置算
+    /// 出来的,继续复用会让用户以为改设置没生效(开完同意开关立刻刷新,还是
+    /// 看到 consent_required)。
+    pub async fn clear_manual_refresh_cache(&self) {
+        self.last_manual.write().await.clear();
     }
 
     pub async fn refresh_provider(
         &self,
         provider_id: &str,
     ) -> Result<QuotaRefreshResult, AppError> {
-        self.refresh_provider_at(provider_id, now_timestamp()?)
+        // 手动刷新是用户主动操作,允许触发同意门控的系统授权对话框;
+        // 60 秒内的重复点击复用上一次结果,不再向外部取数。
+        self.refresh_provider_manual_at(provider_id, now_timestamp()?)
             .await
+    }
+
+    pub(crate) async fn refresh_provider_manual_at(
+        &self,
+        provider_id: &str,
+        now: i64,
+    ) -> Result<QuotaRefreshResult, AppError> {
+        if let Some((attempted_at, cached)) = self.last_manual.read().await.get(provider_id) {
+            if now.saturating_sub(*attempted_at) < self.manual_refresh_cooldown_secs {
+                return cached.clone().map_err(AppError::Message);
+            }
+        }
+        let result = self.refresh_provider_at(provider_id, now, true).await;
+        let cached = match &result {
+            Ok(ok) => Ok(ok.clone()),
+            Err(error) => Err(error.to_string()),
+        };
+        self.last_manual
+            .write()
+            .await
+            .insert(provider_id.to_string(), (now, cached));
+        result
     }
 
     async fn refresh_provider_at(
         &self,
         provider_id: &str,
         attempted_at: i64,
+        interactive: bool,
     ) -> Result<QuotaRefreshResult, AppError> {
         let (flight, is_leader) = {
             let mut in_flight = self.in_flight.lock().await;
@@ -238,7 +617,7 @@ impl QuotaService {
             let leader_flight = flight.clone();
             tokio::spawn(async move {
                 let result = service
-                    .refresh_provider_once_at(&provider_id, attempted_at)
+                    .refresh_provider_once_at(&provider_id, attempted_at, interactive)
                     .await
                     .map_err(|error| error.to_string());
                 leader_flight.result.send_replace(Some(result));
@@ -268,6 +647,7 @@ impl QuotaService {
         &self,
         provider_id: &str,
         attempted_at: i64,
+        interactive: bool,
     ) -> Result<QuotaRefreshResult, AppError> {
         let provider = self
             .db
@@ -275,7 +655,7 @@ impl QuotaService {
             .ok_or_else(|| AppError::Message("usage provider not found".to_string()))?;
         validate_refresh_provider(&provider)?;
 
-        let normalized = match self.collect_normalized_quota(&provider).await {
+        let normalized = match self.collect_normalized_quota(&provider, interactive).await {
             Ok(normalized) => normalized,
             Err(error) => {
                 self.db
@@ -306,6 +686,7 @@ impl QuotaService {
     async fn collect_normalized_quota(
         &self,
         provider: &UsageProviderStored,
+        interactive: bool,
     ) -> Result<NormalizedQuota, AppError> {
         let quota_source = provider
             .quota_source
@@ -316,7 +697,7 @@ impl QuotaService {
             AppError::Message(format!("unsupported quota source: {quota_source}"))
         })?;
 
-        let quota = match collector.collect(provider).await {
+        let quota = match collector.collect(provider, interactive).await {
             Ok(quota) if quota.success => quota,
             Ok(quota) => {
                 let error = quota
@@ -360,8 +741,11 @@ impl QuotaService {
     }
 
     /// Runs one deterministic scheduling pass. Normal refreshes use the
-    /// configured interval. Failures retry after 30s, 1m, 5m, 10m, then 30m;
-    /// the fetch state only becomes stale when the 10-minute retry fails.
+    /// configured idle interval; usage activity marks trigger one extra
+    /// refresh after a short debounce (spaced at least 2 minutes apart).
+    /// Failures retry after 30s, 1m, 5m, 10m, then 30m and always outrank
+    /// activity; the fetch state only becomes stale when the 10-minute
+    /// retry fails.
     pub async fn refresh_due_at(&self, now: i64) -> Result<QuotaSchedulerCycle, AppError> {
         let mut cycle = QuotaSchedulerCycle::default();
         for view in self.db.list_usage_providers()? {
@@ -375,18 +759,16 @@ impl QuotaService {
                 continue;
             };
             let state = self.db.get_quota_fetch_state(&view.id)?;
-            let due = state.as_ref().is_none_or(|state| {
-                let Some(last_attempt) = state.last_attempt_at else {
-                    return true;
-                };
-                let delay = quota_refresh_delay_seconds(state, interval);
-                now.saturating_sub(last_attempt) >= delay as i64
-            });
+            let due = idle_due(state.as_ref(), interval, now)
+                || activity_due(&view.id, state.as_ref(), now);
             if !due {
                 continue;
             }
             cycle.attempted += 1;
-            if let Err(error) = self.refresh_provider_at(&view.id, now).await {
+            // 活动标记最多消费一次:无论因空闲还是活动到期,都清掉。
+            clear_subscription_activity(&view.id);
+            // 调度器路径是后台刷新,同意门控不应因此弹系统对话框。
+            if let Err(error) = self.refresh_provider_at(&view.id, now, false).await {
                 cycle.errors.push(format!("{}: {error}", view.id));
             }
         }
@@ -595,7 +977,7 @@ mod tests {
         CredentialStatus, ManualResetCredit, ManualResetCredits, QuotaTier, SubscriptionQuota,
         TIER_FIVE_HOUR, TIER_SEVEN_DAY,
     };
-    use crate::usage::domain::{BillingKind, TokenSource, UsageProviderInput};
+    use crate::usage::domain::{BillingKind, TokenSource, UsageProviderInput, UsageProviderStored};
     use crate::usage::system_providers::{CHATGPT_SUBSCRIPTION_ID, CLAUDE_SUBSCRIPTION_ID};
     use serde_json::json;
     use std::collections::VecDeque;
@@ -682,6 +1064,7 @@ mod tests {
         fn collect<'a>(
             &'a self,
             _provider: &'a UsageProviderStored,
+            _interactive: bool,
         ) -> BoxFuture<'a, Result<SubscriptionQuota, String>> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             let result = self
@@ -707,6 +1090,7 @@ mod tests {
         fn collect<'a>(
             &'a self,
             _provider: &'a UsageProviderStored,
+            _interactive: bool,
         ) -> BoxFuture<'a, Result<SubscriptionQuota, String>> {
             Box::pin(async move {
                 self.calls.fetch_add(1, Ordering::SeqCst);
@@ -765,8 +1149,8 @@ mod tests {
     }
 
     #[test]
-    fn interval_contract_defaults_to_five_minutes_and_zero_disables() {
-        assert_eq!(quota_interval_seconds(None).unwrap(), Some(300));
+    fn interval_contract_defaults_to_idle_fifteen_minutes_and_zero_disables() {
+        assert_eq!(quota_interval_seconds(None).unwrap(), Some(900));
         assert_eq!(quota_interval_seconds(Some(0)).unwrap(), None);
         assert!(quota_interval_seconds(Some(59)).is_err());
         assert_eq!(quota_interval_seconds(Some(60)).unwrap(), Some(60));
@@ -804,19 +1188,375 @@ mod tests {
         assert!(!service.collectors.contains_key("claude_oauth"));
         assert_eq!(Arc::strong_count(&manager), 2);
 
+        // 生产链的 collect 会读本机真实 ~/.codex/auth.json 并可能发网络请求,
+        // 不在单测里调用;这里直接验证链的第一层(自管 OAuth)在空账号库下
+        // 返回 NotFound。链结构本身由 CodexChainCollector 单测覆盖。
         let provider = db
             .get_usage_provider(crate::usage::system_providers::CHATGPT_SUBSCRIPTION_ID)
             .unwrap()
             .unwrap();
-        let quota = service.collectors[MANAGED_CODEX_QUOTA_SOURCE]
-            .collect(&provider)
-            .await
-            .unwrap();
+        let managed = ManagedCodexOAuthQuotaCollector { manager };
+        let quota = managed.collect(&provider, true).await.unwrap();
         assert!(!quota.success);
         assert!(matches!(
             quota.credential_status,
             CredentialStatus::NotFound
         ));
+    }
+
+    // ── Claude 回退链 ────────────────────────────────────
+
+    fn stored_provider() -> UsageProviderStored {
+        UsageProviderStored {
+            id: "sub".to_string(),
+            name: "sub".to_string(),
+            billing_kind: BillingKind::Subscription,
+            product_group_id: "claude".to_string(),
+            token_sources: vec![TokenSource::SessionLog],
+            quota_source: Some(CLAUDE_LOCAL_QUOTA_SOURCE.to_string()),
+            quota_interval_seconds: Some(300),
+            route_app_type: None,
+            route_config: None,
+            quota_config: None,
+            enabled: true,
+            needs_review: false,
+            legacy_app_type: None,
+            legacy_provider_id: None,
+            created_at: 0,
+            updated_at: 0,
+            system_preset_key: None,
+            daily_budget_usd: None,
+        }
+    }
+
+    fn chain_stage(
+        response: Result<SubscriptionQuota, String>,
+        calls: Arc<AtomicUsize>,
+    ) -> ClaudeStage {
+        Arc::new(move |_interactive| {
+            let response = response.clone();
+            let calls = calls.clone();
+            Box::pin(async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                response
+            })
+        })
+    }
+
+    #[tokio::test]
+    async fn claude_chain_returns_first_successful_stage() {
+        for winner in 0..3 {
+            let calls = [
+                Arc::new(AtomicUsize::new(0)),
+                Arc::new(AtomicUsize::new(0)),
+                Arc::new(AtomicUsize::new(0)),
+            ];
+            let stage = |index: usize| -> Result<SubscriptionQuota, String> {
+                if index == winner {
+                    Ok(successful_quota("claude"))
+                } else {
+                    Err(format!("stage-{index}-failed"))
+                }
+            };
+            let collector = ClaudeChainCollector::with_stages(
+                chain_stage(stage(0), calls[0].clone()),
+                chain_stage(stage(1), calls[1].clone()),
+                chain_stage(stage(2), calls[2].clone()),
+            );
+            let quota = collector
+                .collect(&stored_provider(), false)
+                .await
+                .expect("chain succeeds");
+            assert!(quota.success, "winner stage {winner}");
+            for (index, calls) in calls.iter().enumerate() {
+                assert_eq!(calls.load(Ordering::SeqCst), usize::from(index <= winner));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn claude_chain_summary_keeps_stage_codes_in_order() {
+        let collector = ClaudeChainCollector::with_stages(
+            chain_stage(
+                Ok(SubscriptionQuota::error(
+                    "claude_oauth",
+                    CredentialStatus::ConsentRequired,
+                    crate::usage::claude_oauth::CONSENT_ERROR_CODE.to_string(),
+                )),
+                Arc::new(AtomicUsize::new(0)),
+            ),
+            chain_stage(
+                Err("probe failed".to_string()),
+                Arc::new(AtomicUsize::new(0)),
+            ),
+            chain_stage(
+                Err("local stage failed".to_string()),
+                Arc::new(AtomicUsize::new(0)),
+            ),
+        );
+        let error = collector
+            .collect(&stored_provider(), false)
+            .await
+            .expect_err("all stages fail");
+        assert_eq!(
+            error,
+            "claude quota chain failed: \
+             oauth(claude_oauth_consent_required) → probe(probe failed) → local(local stage failed)"
+        );
+    }
+
+    // ── Codex 回退链 ────────────────────────────────────
+
+    #[tokio::test]
+    async fn codex_chain_returns_first_successful_stage() {
+        for winner in 0..3 {
+            let calls = [
+                Arc::new(AtomicUsize::new(0)),
+                Arc::new(AtomicUsize::new(0)),
+                Arc::new(AtomicUsize::new(0)),
+            ];
+            let stage = |index: usize| -> Result<SubscriptionQuota, String> {
+                if index == winner {
+                    Ok(successful_quota("codex"))
+                } else {
+                    Err(format!("stage-{index}-failed"))
+                }
+            };
+            let collector = CodexChainCollector::with_stages(
+                chain_stage(stage(0), calls[0].clone()),
+                chain_stage(stage(1), calls[1].clone()),
+                chain_stage(stage(2), calls[2].clone()),
+            );
+            let quota = collector
+                .collect(&stored_provider(), false)
+                .await
+                .expect("chain succeeds");
+            assert!(quota.success, "winner stage {winner}");
+            for (index, calls) in calls.iter().enumerate() {
+                assert_eq!(calls.load(Ordering::SeqCst), usize::from(index <= winner));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn codex_chain_summary_keeps_stage_codes_in_order() {
+        let collector = CodexChainCollector::with_stages(
+            chain_stage(
+                Ok(SubscriptionQuota::not_found("codex_oauth")),
+                Arc::new(AtomicUsize::new(0)),
+            ),
+            chain_stage(Err("cli failed".to_string()), Arc::new(AtomicUsize::new(0))),
+            chain_stage(
+                Err("probe failed".to_string()),
+                Arc::new(AtomicUsize::new(0)),
+            ),
+        );
+        let error = collector
+            .collect(&stored_provider(), false)
+            .await
+            .expect_err("all stages fail");
+        assert_eq!(
+            error,
+            "codex quota chain failed: managed(quota collection failed) → cli(cli failed) → probe(probe failed)"
+        );
+    }
+
+    // ── 手动刷新冷却 ────────────────────────────────────
+
+    #[tokio::test]
+    async fn manual_refresh_cooldown_reuses_result_within_sixty_seconds() {
+        let db = isolated_quota_test_db();
+        db.save_usage_provider(&provider("sub", BillingKind::Subscription, true))
+            .unwrap();
+        let collector = Arc::new(FakeCollector::new(vec![
+            Ok(successful_quota("claude")),
+            Ok(successful_quota("claude")),
+        ]));
+        let service = QuotaService::with_collectors(db, vec![collector.clone()]);
+
+        let first = service
+            .refresh_provider_manual_at("sub", 100)
+            .await
+            .unwrap();
+        assert_eq!(collector.calls.load(Ordering::SeqCst), 1);
+
+        // 60 秒内:复用上次结果,不采集。
+        let reused = service
+            .refresh_provider_manual_at("sub", 150)
+            .await
+            .unwrap();
+        assert_eq!(reused, first);
+        assert_eq!(collector.calls.load(Ordering::SeqCst), 1);
+
+        // 60 秒后:重新采集。
+        let second = service
+            .refresh_provider_manual_at("sub", 160)
+            .await
+            .unwrap();
+        assert!(second.snapshot.snapshot_id != first.snapshot.snapshot_id);
+        assert_eq!(collector.calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn manual_refresh_cooldown_caches_failures_too() {
+        let db = isolated_quota_test_db();
+        db.save_usage_provider(&provider("sub", BillingKind::Subscription, true))
+            .unwrap();
+        let collector = Arc::new(FakeCollector::new(vec![Err("boom".to_string())]));
+        let service = QuotaService::with_collectors(db, vec![collector.clone()]);
+
+        let first = service.refresh_provider_manual_at("sub", 100).await;
+        assert!(first.is_err());
+        // 冷却期内的重复点击复用失败的缓存,不再打采集器。
+        let second = service.refresh_provider_manual_at("sub", 130).await;
+        assert!(second.is_err());
+        assert_eq!(collector.calls.load(Ordering::SeqCst), 1);
+    }
+
+    // ── 活动自适应刷新 ──────────────────────────────────
+
+    #[tokio::test]
+    async fn activity_mark_triggers_one_refresh_after_debounce_and_spacing() {
+        let db = isolated_quota_test_db();
+        db.save_usage_provider(&provider("activity-sub", BillingKind::Subscription, true))
+            .unwrap();
+        let collector = Arc::new(FakeCollector::new(vec![
+            Ok(successful_quota("claude")),
+            Ok(successful_quota("claude")),
+            Ok(successful_quota("claude")),
+        ]));
+        let service = QuotaService::with_collectors(db, vec![collector.clone()]);
+        clear_subscription_activity("activity-sub");
+
+        // 空闲首次采集(t=100)。
+        assert_eq!(service.refresh_due_at(100).await.unwrap().attempted, 1);
+        assert_eq!(collector.calls.load(Ordering::SeqCst), 1);
+
+        // 活动标记发生在 t=250;去抖窗口(30s)内不到期。
+        mark_subscription_activity_at("activity-sub", 250);
+        assert_eq!(service.refresh_due_at(260).await.unwrap().attempted, 0);
+
+        // t=285:过完去抖且距上次尝试超过 120s → 补刷一次,标记被消费。
+        let cycle = service.refresh_due_at(285).await.unwrap();
+        assert_eq!(cycle.attempted, 1);
+        assert_eq!(collector.calls.load(Ordering::SeqCst), 2);
+
+        // 无新活动:空闲基线(夹具 300s,上次 285)未到,不刷。
+        assert_eq!(service.refresh_due_at(400).await.unwrap().attempted, 0);
+
+        // 新活动在 120s 活跃间隔内(距上次尝试 45s) → 不刷。
+        mark_subscription_activity_at("activity-sub", 310);
+        assert_eq!(service.refresh_due_at(330).await.unwrap().attempted, 0);
+
+        // 距上次尝试超过 120s 且过完去抖 → 补刷。
+        mark_subscription_activity_at("activity-sub", 420);
+        assert_eq!(service.refresh_due_at(450).await.unwrap().attempted, 1);
+        assert_eq!(collector.calls.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn activity_does_not_bypass_failure_backoff() {
+        // 与上一个活动测试用不同的 provider id:静态活动表是进程级共享的,
+        // 测试并行时同 id 的标记会互相干扰。
+        let db = isolated_quota_test_db();
+        db.save_usage_provider(&provider(
+            "activity-sub-failure",
+            BillingKind::Subscription,
+            true,
+        ))
+        .unwrap();
+        let collector = Arc::new(FakeCollector::new(vec![
+            Err("boom".to_string()),
+            Ok(successful_quota("claude")),
+        ]));
+        let service = QuotaService::with_collectors(db, vec![collector.clone()]);
+        clear_subscription_activity("activity-sub-failure");
+
+        // 首次失败(t=100) → 阶梯 30s。
+        let cycle = service.refresh_due_at(100).await.unwrap();
+        assert_eq!(cycle.attempted, 1);
+        assert_eq!(cycle.errors.len(), 1);
+
+        // 活动发生在 t=105,但失败阶梯 30s 未让路(t=120 < 130) → 不刷。
+        mark_subscription_activity_at("activity-sub-failure", 105);
+        assert_eq!(service.refresh_due_at(120).await.unwrap().attempted, 0);
+
+        // t=140:阶梯让路 + 去抖完成 → 补刷成功(消费第二个响应)。
+        let cycle = service.refresh_due_at(140).await.unwrap();
+        assert_eq!(cycle.attempted, 1);
+        assert_eq!(cycle.errors.len(), 0);
+        assert_eq!(collector.calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn activity_spacing_stretches_in_stages_with_burst_duration() {
+        // 前 10 分钟 2 分钟;10~30 分钟 3 分钟;30 分钟以上 5 分钟封顶。
+        assert_eq!(activity_spacing_seconds(0), 120);
+        assert_eq!(activity_spacing_seconds(9 * 60 + 59), 120);
+        assert_eq!(activity_spacing_seconds(10 * 60), 180);
+        assert_eq!(activity_spacing_seconds(29 * 60 + 59), 180);
+        assert_eq!(activity_spacing_seconds(30 * 60), 300);
+        assert_eq!(activity_spacing_seconds(10 * 60 * 60), 300);
+    }
+
+    #[tokio::test]
+    async fn activity_spacing_uses_burst_started_at_not_last_mark() {
+        // 独立 provider id:静态活动表进程级共享,避免与并行测试互踩。
+        let db = isolated_quota_test_db();
+        db.save_usage_provider(&provider(
+            "activity-ramp-sub",
+            BillingKind::Subscription,
+            true,
+        ))
+        .unwrap();
+        let collector = Arc::new(FakeCollector::new(vec![
+            Ok(successful_quota("claude")),
+            Ok(successful_quota("claude")),
+            Ok(successful_quota("claude")),
+            Ok(successful_quota("claude")),
+            Ok(successful_quota("claude")),
+        ]));
+        let service = QuotaService::with_collectors(db, vec![collector.clone()]);
+        clear_subscription_activity("activity-ramp-sub");
+
+        // 空闲节奏(夹具 300s)推进到 t=3000。
+        assert_eq!(service.refresh_due_at(0).await.unwrap().attempted, 1);
+        assert_eq!(service.refresh_due_at(3000).await.unwrap().attempted, 1);
+
+        // 长爆发:burst 从 1000 开始,标记在 3050(已持续 2000s+ → 5 分钟档)。
+        set_activity_mark_at("activity-ramp-sub", 3_050, 1_000);
+        // 距上次尝试 250s:2 分钟档会放行,5 分钟档不放行 → 拉伸生效。
+        assert_eq!(service.refresh_due_at(3_250).await.unwrap().attempted, 0);
+        // 距上次尝试 330s ≥ 300s → 放行。
+        assert_eq!(service.refresh_due_at(3_330).await.unwrap().attempted, 1);
+
+        // 空闲推进到 t=5100;中段爆发:burst 从 4000 开始,标记在 5150
+        // (已持续 1100s+ → 3 分钟档)。
+        assert_eq!(service.refresh_due_at(5100).await.unwrap().attempted, 1);
+        set_activity_mark_at("activity-ramp-sub", 5_150, 4_000);
+        // 距上次尝试 150s:2 分钟档会放行,3 分钟档不放行。
+        assert_eq!(service.refresh_due_at(5_250).await.unwrap().attempted, 0);
+        // 距上次尝试 200s ≥ 180s → 放行。
+        assert_eq!(service.refresh_due_at(5_300).await.unwrap().attempted, 1);
+        assert_eq!(collector.calls.load(Ordering::SeqCst), 5);
+    }
+
+    #[test]
+    fn activity_mark_extends_existing_burst_and_resets_after_gap() {
+        clear_subscription_activity("burst-sub");
+        // 新爆发:t=100 起步。
+        mark_subscription_activity_at("burst-sub", 100);
+        // 4 分钟后继续标记:延续爆发,burst 起点保持 100。
+        mark_subscription_activity_at("burst-sub", 340);
+        let mark = read_subscription_activity("burst-sub").expect("mark exists");
+        assert_eq!(mark.last_mark_at, 340);
+        assert_eq!(mark.burst_started_at, 100);
+        // 间隔 ≥ 5 分钟:旧爆发结束,新爆发重新起步。
+        mark_subscription_activity_at("burst-sub", 700);
+        let mark = read_subscription_activity("burst-sub").expect("mark exists");
+        assert_eq!(mark.last_mark_at, 700);
+        assert_eq!(mark.burst_started_at, 700);
+        clear_subscription_activity("burst-sub");
     }
 
     #[test]

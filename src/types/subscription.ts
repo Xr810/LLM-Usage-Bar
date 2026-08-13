@@ -1,5 +1,5 @@
 export type CredentialStatus =
-  "valid" | "expired" | "not_found" | "parse_error";
+  "valid" | "expired" | "not_found" | "parse_error" | "consent_required";
 
 export interface QuotaTier {
   name: string;

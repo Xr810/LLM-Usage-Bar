@@ -381,6 +381,20 @@ pub struct AppSettings {
     /// 是否启用 Claude 插件联动
     #[serde(default)]
     pub enable_claude_plugin_integration: bool,
+    /// 同意门控：是否允许读取 Claude Code 写在 macOS 钥匙串里的 OAuth 凭据，
+    /// 用于调用 Anthropic 官方额度接口（api.anthropic.com/api/oauth/usage）。
+    /// 默认关闭；升级绝不静默开启；设置页可随时撤销。
+    #[serde(default)]
+    pub claude_oauth_quota_enabled: bool,
+    /// 钥匙串读取的提示模式：never / onlyOnUserAction / always。
+    /// 默认 onlyOnUserAction：仅用户主动刷新额度时才尝试读钥匙串，
+    /// 后台定时刷新绝不触发 macOS 授权对话框（该层直接让位给回退链）。
+    #[serde(default = "default_claude_oauth_prompt_mode")]
+    pub claude_oauth_prompt_mode: String,
+    /// 用户在系统授权对话框上拒绝后的冷却截止（Unix 秒）。
+    /// 冷却期内不再尝试读取钥匙串，避免反复弹窗；由 OAuth 层自动写入。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude_oauth_denied_until: Option<i64>,
     /// 是否跳过 Claude Code 初次安装确认
     #[serde(default)]
     pub skip_claude_onboarding: bool,
@@ -539,6 +553,10 @@ fn default_usage_warning_remaining_percent() -> u8 {
     50
 }
 
+fn default_claude_oauth_prompt_mode() -> String {
+    "onlyOnUserAction".to_string()
+}
+
 fn default_usage_critical_remaining_percent() -> u8 {
     20
 }
@@ -550,6 +568,9 @@ impl Default for AppSettings {
             minimize_to_tray_on_close: true,
             use_app_window_controls: false,
             enable_claude_plugin_integration: false,
+            claude_oauth_quota_enabled: false,
+            claude_oauth_prompt_mode: default_claude_oauth_prompt_mode(),
+            claude_oauth_denied_until: None,
             skip_claude_onboarding: false,
             launch_on_startup: false,
             silent_startup: false,
@@ -1089,6 +1110,14 @@ pub fn update_webdav_sync_status(status: WebDavSyncStatus) -> Result<(), AppErro
         if let Some(sync) = current.webdav_sync.as_mut() {
             sync.status = status;
         }
+    })
+}
+
+/// 仅更新 Claude 钥匙串授权被拒后的冷却截止，不整体复写设置
+/// （避免与并发的设置保存互相覆盖）。
+pub fn set_claude_oauth_denied_until(until: Option<i64>) -> Result<(), AppError> {
+    mutate_settings(|current| {
+        current.claude_oauth_denied_until = until;
     })
 }
 
