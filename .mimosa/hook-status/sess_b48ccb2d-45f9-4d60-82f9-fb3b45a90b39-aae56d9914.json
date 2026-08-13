@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "mimosa-hook-status/v1",
+  "recordedAt": "2026-08-13T08:08:40.356Z",
+  "sessionId": "sess_b48ccb2d-45f9-4d60-82f9-fb3b45a90b39",
+  "event": "PostToolUse",
+  "toolName": "Edit",
+  "file": "/Users/max/.zcode/cli/memories/projects/llm-usage-bar-a9d5ed344d47a424/memory/local-routing-reconsideration.md",
+  "outcome": "clear",
+  "coverage": "complete",
+  "findingCount": 0,
+  "durationMs": 2,
+  "hostState": "hook_complete",
+  "reportHint": ".mimosa/reports/"
+}

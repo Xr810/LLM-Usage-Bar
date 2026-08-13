@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "mimosa-hook-status/v1",
+  "recordedAt": "2026-08-12T18:57:03.481Z",
+  "sessionId": "sess_52ff1735-4ab1-463f-9073-e2238698119f",
+  "event": "PostToolUse",
+  "toolName": "Write",
+  "file": "/Users/max/.zcode/cli/memories/projects/llm-usage-bar-a9d5ed344d47a424/memory/concurrent-sessions-share-main-worktree.md",
+  "outcome": "clear",
+  "coverage": "complete",
+  "findingCount": 0,
+  "durationMs": 22,
+  "hostState": "hook_complete",
+  "reportHint": ".mimosa/reports/"
+}

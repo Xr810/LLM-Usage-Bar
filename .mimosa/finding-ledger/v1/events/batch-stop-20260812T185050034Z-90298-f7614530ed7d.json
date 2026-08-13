@@ -1,0 +1,69 @@
+{
+  "schemaVersion": "mimosa-finding-ledger-batch/v1",
+  "batchId": "stop-20260812T185050034Z-90298-f7614530ed7d",
+  "runId": "20260812T185050034Z-90298-f7614530ed7d",
+  "runStatus": "inconclusive",
+  "coverage": {
+    "status": "partial",
+    "reasons": [
+      {
+        "code": "baseline_partial",
+        "stage": "baseline",
+        "target": ".",
+        "detail": "baseline capture had enumeration or snapshot errors",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "baseline",
+        "target": ".",
+        "detail": "baseline_partial: baseline capture had enumeration or snapshot errors",
+        "affectsCompletion": true
+      }
+    ]
+  },
+  "source": {
+    "component": "zcode-hook",
+    "operationId": "Stop"
+  },
+  "revision": "11d37b92233419c5c8e31144a618f57e4f99994b",
+  "diffHash": "11a5aa86d1600b0d26a50c197fa0b49050897d5525d3c9e2f017f290ec15290f",
+  "rulesVersion": "unavailable",
+  "sessionHash": "38e07e0be7bb6ce6fa36e97c383ac65e35ffeb10f51faca41a2199bfb733e449",
+  "reportRef": ".mimosa/reports/task-review-sess_35dc4b75-cbeb-4faf-ba17-c02fe3022bd8-20260812T185050034Z-90298-f7614530ed7d.json",
+  "events": [],
+  "observedFindingIds": [],
+  "verifiedFiles": [
+    {
+      "file": "src-tauri/src/usage/mod.rs",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "src-tauri/src/services/session_usage.rs",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "src-tauri/src/services/session_usage_codex.rs",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "src-tauri/src/services/session_usage_gemini.rs",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "src-tauri/src/services/session_usage_opencode.rs",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "src-tauri/src/commands/usage.rs",
+      "direct": "complete",
+      "projectContext": "partial"
+    }
+  ],
+  "recordedAt": "2026-08-12T18:50:50.242Z"
+}

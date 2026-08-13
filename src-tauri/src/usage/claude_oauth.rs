@@ -12,6 +12,14 @@
 //!
 //! 闸门判定是纯函数（`check_consent_gate`），钥匙串读取与 HTTP 请求全部与
 //! 凭据内容隔离：任何日志、错误码都不包含 token，响应解析只读白名单字段。
+//!
+//! **平台**：钥匙串只有 macOS 有。在其他平台上 `collect_claude_oauth_quota`
+//! 过完同意闸门就直接返回「本层不可用」，凭据解析、HTTP 取数、限流记忆整条路径
+//! 都构不到——这是设计使然，不是死代码。但 CI 的后端检查跑在 Linux 上
+//! (`ubuntu-22.04`)，clippy 在那里只看得到「没人调用」，于是 `-D warnings`
+//! 会把这二十来个符号全判成 dead_code。allow 只在非 macOS 生效，macOS 上仍然
+//! 是真实的未使用检查。
+#![cfg_attr(not(target_os = "macos"), allow(dead_code))]
 
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -415,14 +423,16 @@ pub(crate) async fn collect_claude_oauth_quota(
         ));
     }
 
+    // 钥匙串只有 macOS 有；其他平台该层不可用，由回退链直接降级。
+    // 写成尾表达式而不是 `return`：非 macOS 上这个块就是函数的最后一个表达式，
+    // 带 `return` 会被 clippy 的 needless_return 判成错误。
     #[cfg(not(target_os = "macos"))]
     {
-        // 钥匙串只有 macOS 有；其他平台该层不可用，由回退链直接降级。
-        return Ok(SubscriptionQuota::error(
+        Ok(SubscriptionQuota::error(
             TOOL_LABEL,
             CredentialStatus::NotFound,
             KEYCHAIN_UNAVAILABLE_ERROR_CODE.to_string(),
-        ));
+        ))
     }
 
     #[cfg(target_os = "macos")]

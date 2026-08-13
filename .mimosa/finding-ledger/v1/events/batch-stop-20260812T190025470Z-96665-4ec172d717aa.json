@@ -1,0 +1,39 @@
+{
+  "schemaVersion": "mimosa-finding-ledger-batch/v1",
+  "batchId": "stop-20260812T190025470Z-96665-4ec172d717aa",
+  "runId": "20260812T190025470Z-96665-4ec172d717aa",
+  "runStatus": "completed",
+  "coverage": {
+    "status": "complete",
+    "reasons": []
+  },
+  "source": {
+    "component": "zcode-hook",
+    "operationId": "Stop"
+  },
+  "revision": "abee0ff4188aa61dec617b5778cf0f649e3e1035",
+  "diffHash": "a088b7eae962c3af0fdc82351640f292073e9fe7c5bfc83009bede8b98aa3fe9",
+  "rulesVersion": "unavailable",
+  "sessionHash": "def4342f75c4e9ab9f2ea44b3d5e08ce3eeeeceb8e33ace9e8391b5347e60a09",
+  "reportRef": ".mimosa/reports/task-review-sess_58a91ea2-23a4-4258-90a4-608c3b130e54-20260812T190025470Z-96665-4ec172d717aa.json",
+  "events": [],
+  "observedFindingIds": [],
+  "verifiedFiles": [
+    {
+      "file": "src-tauri/src/usage/mod.rs",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "src-tauri/src/usage/watcher.rs",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "src-tauri/src/lib.rs",
+      "direct": "complete",
+      "projectContext": "partial"
+    }
+  ],
+  "recordedAt": "2026-08-12T19:00:25.659Z"
+}

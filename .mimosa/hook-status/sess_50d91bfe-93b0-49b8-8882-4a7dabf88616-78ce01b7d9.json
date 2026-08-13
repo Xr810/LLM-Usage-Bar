@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "mimosa-hook-status/v1",
+  "recordedAt": "2026-08-13T08:14:13.847Z",
+  "sessionId": "sess_50d91bfe-93b0-49b8-8882-4a7dabf88616",
+  "event": "PostToolUse",
+  "toolName": "Edit",
+  "file": "/Users/max/Documents/llm-usage-bar-oauth-chain/src-tauri/src/usage/quota.rs",
+  "outcome": "inconclusive",
+  "coverage": "partial",
+  "findingCount": 0,
+  "durationMs": 3,
+  "hostState": "hook_complete",
+  "reportHint": ".mimosa/reports/"
+}
