@@ -1,7 +1,10 @@
 # LLM Usage Bar — 全局交接文档(合并版)
 
-最后核实:2026-08-12(所有事实当天用 git / gh / sqlite3 逐条验证过,不是抄旧文档)
-最后更新:2026-08-12 —— 技术路线评审复核 + Swift 迁移线的真实状态与抢救记录,见 §11(重写了 §11.7)
+最后核实:2026-08-13(所有事实当天用 git / sqlite3 / grep 逐条验证过,不是抄旧文档)
+最后更新:2026-08-13 —— ①分支与 stash 收敛、docs 重排,见 §0 与 §11.7;②§11.3 重写:
+游标 N+1 与 tokio worker 数已由提交 `52bd4559` 修掉,该节改为「已完成 / 仍未做」两栏;
+③§11.3 第三次更新:文件监听替代轮询(`bf46de69` + `e4ece596`)与 Codex 日期分区剪枝
+(`d96543df` + 补漏 `96e08fd3`)已合入 main,两条移进「已完成」,该节只剩三条仍未做
 
 > **这是唯一的交接文档。** 它取代并吸收了以下分散文档,那些文件不要再单独更新:
 >
@@ -31,9 +34,10 @@
    > 找回方式见 §11.7 —— 那份**只存在于本机的 Swift 源码**现在钉在
    > `backup/swift-native-stash` 上(不再在 stash 里),动它之前必读 §11.7。
    >
-   > **2026-08-13 更新:本地只剩 2 个分支** —— `main` 和 `backup/swift-native-stash`。
-   > `codex/swift`(`50576652`)与 `pr-26-swift-merge`(`b841a53c`)已删除,`stash` 已清空,
-   > 理由与找回方式见 §11.7。
+> **2026-08-13 更新:本地还剩 3 个分支** —— `main`、`backup/swift-native-stash`、
+> `perf/window-visibility-events`(300ms 窗口轮询的事件化改造,待合,见 §11.3)。
+> `codex/swift`(`50576652`)与 `pr-26-swift-merge`(`b841a53c`)已删除,`stash` 已清空,
+> 理由与找回方式见 §11.7。
 
 2. **动数据库/想本地跑 app 之前,先对版本。** 生产库 2026-08-11 实测仍是 **v24**:
 
@@ -77,6 +81,7 @@
 | Provider 多 key 花费 | **✅ 已合入 main(2026-08-11,PR #24,merge commit `c686ef884`)** | 3 个提交;**SCHEMA_VERSION 24 → 26**(两个迁移,各带 validator);本机全套 + ubuntu CI 双绿(见 §10);分支本地与远端均已删 | 目视验证未做 → P4 |
 | 用量按模型/Agent 分类 | **✅ 已搬上 main(2026-08-07,提交 `e23894168`)** | Codex(max)在隔离 worktree 移植,Claude 逐 hunk 复核并独立重跑全套验证(Rust 1039/0、tsc、prettier、59+9 前端测试全绿) | 旧分支 `claude/usage-model-agent-classification-03acf1` 及其 worktree 已作废,可删(需 `-D`);目视验证仍欠 → P4 |
 | 红绿灯燃烧速度投影 | **✅ 已搬上 main(2026-08-07,提交 `bb8514def`,迁移重编号 v23→v24)** | Codex(max)移植 + 签名脚本修复一并带上;Claude 复核(DDL 范围、预测行无机密、阈值为常量)并独立重验(Rust 1066/0、前端 192+9 全绿) | 旧分支 `claude/traffic-light-logic-redesign-3fbc8e` 及 worktree 可删;**注意:新代码 SCHEMA_VERSION=24,装上后旧 3.16.5 打不开升级后的库,须一步到位** |
+| 性能优化线(§11.3) | `main` | 5 件完成 3 件:游标预载 + tokio worker 封顶(`52bd4559`)、Codex 日期分区剪枝(`d96543df` + 补漏 `96e08fd3`)、文件监听替代轮询(`bf46de69` + `e4ece596`);仍未做:300ms 窗口轮询、定时器唤醒方式、同步线程 QoS | 是(见 §11.3) |
 | 2026-08-07 checkpoint 文档 | `claude/llm-usage-monitoring-app-4a9554`(= main 的内容 + 1 个 docs 提交 `67676ef9e`) | 纯文档分支,内容已并入本文 | 可删分支和 worktree |
 | 本合并任务 | `claude/consolidate-error-issues-4d8721` | 即本文件所在分支 | 合并进 main 让后续 agent 能看到 |
 | 6 个 `codex/*` 旧线(7 月) | ~~`.worktrees/`~~ | **✅ 已清理(2026-08-07)**:6 个 worktree、6 个分支、3 个失效 bridge worktree 全部移除(删前核实 0 独有提交、工作区干净) | 否 |
@@ -680,41 +685,80 @@ Resets Aug 11 at 6pm (Asia/Singapore)
   12 分钟归因清楚**(用 Instruments Time Profiler 对主线程采样即可,它对 Rust 二进制
   完全可用)。
 
-### 11.3 根因
+### 11.3 根因(2026-08-13 更新:已修掉一半,进度见本节末尾的表)
 
-`lib.rs:1127` 的 60 秒同步定时器要遍历:
+`lib.rs` 的 60 秒同步定时器(现 `lib.rs:1138`,`SESSION_SYNC_INTERVAL_SECS = 60`)要遍历:
 
 ```
 ~/.claude/projects        71 个 jsonl,111 MB
 ~/.codex/sessions       1294 个 jsonl,2.2 GB
 ```
 
-同步**本身是增量的**(`session_usage.rs:234` 存 (mtime, line_offset) 游标,内容未变
-就跳过解析),**但游标是逐文件查库的** —— 每个文件一次独立 SQLite 查询。
+同步**本身是增量的**(存 (mtime, line_offset) 游标,内容未变就跳过解析),
+**但游标当时是逐文件查库的** —— 每个文件一次独立 SQLite 查询,而且查询发生在
+"mtime 未变则跳过"**之前**,所以跳过也省不掉查询。
 
 于是每 60 秒:~1,365 次 stat + ~1,365 次 SQLite 查询,折合**持续每秒 ~45 次磁盘
-操作**(1,365×2/60;上一版写 23 是只算了一类)。采样栈里 `pread` 高频出现,吻合。
-源码坐标:定时器 `lib.rs:1131`(`SESSION_SYNC_INTERVAL_SECS = 60`);逐文件
-先 `fs::metadata` 再查游标的顺序在 `session_usage.rs` 的 `sync_single_file`
-(查询发生在"mtime 未变则跳过"**之前**,所以跳过也省不掉查询)。
+操作**(1,365×2/60;更早一版写 23 是只算了一类)。采样栈里 `pread` 高频出现,吻合。
 
-**修法**:FSEvents(macOS)/ ReadDirectoryChangesW(Windows)文件监听替代轮询;
-游标改批量单次查询(更彻底:本 app 是 cursors 表唯一写者,启动时整表载入内存,
-热路径完全不碰 SQLite);tokio worker 数封顶(10 个对菜单栏 app 是浪费)。
-另有 `lib.rs:421` 一个 300ms 的常驻轮询(检查主窗口是否最小化),应改为事件驱动。
+> **2026-08-13 修正:上面这段的 SQLite 那一半已经不成立了。** 提交 `52bd4559`
+> 把四个 source 的游标全部改成"每趟同步预载一次"。别再照抄"~1,365 次 SQLite
+> 查询"这个数去论证任何事 —— 现在是每个 source 一次。
+> 文件系统那一半(1,294 次 `File::open`)**仍然每 60 秒发生一次**。
 
-**别重写已有的半成品**:`src-tauri/src/usage/watcher_state.rs`(445 行)已经实现了
-文件监听要用的 dirty-generation 调度骨架 —— 按源去抖、逐源失败退避(60s–86400s)、
-防重入,带完整单元测试,已在 `usage/mod.rs` 声明 —— **但全仓库零调用方,
-`Cargo.toml` 也还没加 `notify` 依赖**。修这条时应把它接上线,而不是另写一套。
+#### 已完成
 
-其余可叠加的功耗手段(2026-08-12 评审补充,均与选型正交):`tokio::time::interval`
-是精确唤醒,无法参与 macOS timer coalescing,平台正解是 `NSBackgroundActivityScheduler`
-或带 leeway 的 dispatch timer;FSEvents 自带 latency 参数(设 5–30s 天然替代 60s
-节流语义);Codex 的 1,294 个历史文件绝大多数永不再变,按日期分区剪枝连 stat 都省;
-同步线程设 QoS Background/Utility,让系统调度去 E-core 并配合 App Nap。
+**游标预载 + tokio worker 封顶(提交 `52bd4559`,2026-08-13):**
 
-**这一项与 UI 选型正交,选哪条路线都必须修。**
+- **游标批量预载**:新增 `SyncCursorMap`(`services/session_usage.rs:30`)与
+  `load_sync_cursors()`(同文件 `:503`)。Claude 用不可变预载 map(每个文件的
+  cursor key 唯一,趟内不可能失效);Codex 用可变 map + 第二张 `sync_cursor_details`
+  存完整记录供 resource-identity 判断,legacy 路径游标被提升时同步从 map 里删掉
+  (`services/session_usage_codex.rs:266-280`);gemini / opencode 一并预载。
+  `get_sync_state` 已降级为 test-only。
+- **tokio worker 数封顶**:`lib.rs:454-459` 显式建 2 worker 的 multi-thread runtime,
+  再 `tauri::async_runtime::set`,不再用 Tauri 的默认值(原来是 10 个)。
+- 该提交自述 `--lib 1094 passed / 0 failed`;它是从一个 `/var/folders` 下未提交的
+  Codex 委派 worktree 里抢救回来的,除 rebase 到当时的 main 外未作修改。
+
+**Codex 日期分区剪枝(提交 `d96543df`,补漏 `96e08fd3`,2026-08-13):**
+
+- `d96543df`:`sessions/YYYY/MM/DD` 分区,日期早于 fresh 窗口且「每个 .jsonl 都有
+  有效游标、文件 mtime 不晚于游标、目录 mtime 不晚于分区内最大游标」三条全满足才整
+  分区跳过,判断全程只 read_dir / stat,**不开任何会话文件**(游标预载后按
+  `resource_path` 建索引,见上)。模拟 1294 文件树实测:一趟同步 `File::open`
+  **1294 次 → 94 次**(窗口关到极端值时必须与改前逐字段一致,有测试断言)。
+  新增 `SessionSyncResult.files_pruned` 字段。
+- `96e08fd3` 补上一个真漏洞:`codex resume` 会往老分区的原 rollout 文件继续 append,
+  而 **append 不改父目录 mtime** —— 分区一旦被剪,续写部分就永久不再同步。实测 1296
+  个会话文件里 4 个最后一条记录晚于分区日期 2 天以上,最长 +63 天、续写部分累计
+  **2085 万 token** 会被静默丢弃;现在只剪「逐文件扫描也会全部跳过」的分区。
+
+**文件监听替代轮询(提交 `bf46de69` + `e4ece596`,2026-08-13):**
+
+- `bf46de69`:`src-tauri/Cargo.toml:29` 加 `notify = "8.2"` 依赖。
+- `e4ece596`:用文件系统事件(FSEvents / ReadDirectoryChangesW / inotify)驱动同步,
+  替代 60 秒全量轮询。新增 `src-tauri/src/usage/watcher.rs`(483 行),把原本
+  全仓库零调用方的 `usage/watcher_state.rs`(445 行 dirty-generation 调度骨架:
+  按源去抖、逐源失败退避 60s–86400s、防重入)接上线 —— `lib.rs:1139-1144` 建
+  `WatcherSchedule` + `start_usage_watcher`;15 分钟 `mark_all_dirty` 兜底;
+  退出路径调 `stop_usage_watcher()`(`lib.rs:1518`)。**旧结论
+  「`watcher_state.rs` 零调用方、`Cargo.toml` 没有 `notify`」已经作废,
+  不要再照做"接线"。**
+
+#### 仍未做
+
+- **300ms 常驻轮询**:`lib.rs:422`(`interval`,`from_millis(300)`;函数在 `:417`,
+  检查主窗口是否最小化)应改为事件驱动。2026-08-13 实测原封未动。注意它带
+  `#[cfg(all(target_os = "macos", not(test)))]`,**ubuntu CI 编译不到**。
+- **定时器唤醒方式**:`tokio::time::interval` 是精确唤醒,无法参与 macOS timer
+  coalescing,平台正解是 `NSBackgroundActivityScheduler` 或带 leeway 的 dispatch
+  timer;FSEvents 自带 latency 参数(设 5–30s 天然替代 60s 节流语义)。
+- **同步线程 QoS**:设 Background/Utility,让系统调度去 E-core 并配合 App Nap。
+
+**这一项与 UI 选型正交,选哪条路线都必须修** —— 方案 B 是绞杀者模式、Rust 采集层
+保留,所以这里的改动在 SwiftUI 迁移之后依然有效(唯一例外是那个 300ms 窗口轮询,
+它最终会随外壳一起被 SwiftUI 取代)。
 
 ### 11.4 Rust vs Swift 核心层基准测试
 
