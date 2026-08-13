@@ -1299,13 +1299,18 @@ mod tests {
         metadata_modified_nanos(&metadata) + 3_600_000_000_000
     }
 
-    /// 游标时间戳 = 文件 mtime，恰好满足规则 (c) 而不额外放宽规则 (d)
-    fn cursor_matching_file(path: &Path) -> i64 {
-        metadata_modified_nanos(&fs::metadata(path).unwrap())
-    }
-
     fn dir_mtime_nanos(dir: &Path) -> i64 {
         metadata_modified_nanos(&fs::metadata(dir).unwrap())
+    }
+
+    /// 显式设置文件/目录的 mtime（秒级）。
+    ///
+    /// 剪枝测试要造「目录比游标新」「文件被续写」这些场景。CI(ubuntu)文件系统的
+    /// mtime 分辨率可能是秒级,依赖「同一秒内真实操作的先后顺序」的断言测不出来
+    /// (macOS 上 APFS 是纳秒级所以本地全绿,ubuntu 上同秒事件判不出先后)。统一
+    /// 用显式时间戳,相邻值至少差 2 秒,任何分辨率下判定结果都确定。
+    fn set_mtime_seconds(path: &Path, seconds: i64) {
+        filetime::set_file_mtime(path, filetime::FileTime::from_unix_time(seconds, 0)).unwrap();
     }
 
     fn new_temp_dir(label: &str) -> PathBuf {
@@ -1383,16 +1388,17 @@ mod tests {
         let date = date_days_ago(30);
         let first = write_partition_file(&tmp, date, "first.jsonl");
         let second = write_partition_file(&tmp, date, "second.jsonl");
-        // 游标与文件 mtime 相等（规则 (c) 通过），随后触碰目录（新增再删除条目）
-        // 把目录 mtime 抬到「现在」，隔离出规则 (d) 单独生效
+        // 游标比文件 mtime 晚 2 秒(规则 (c) 通过),再把目录 mtime 显式抬到比最大
+        // 游标还新(规则 (d) 单独生效)。用显式时间戳而非「立刻写个临时文件再删」:
+        // 秒级分辨率的文件系统上,同秒内发生的目录触碰显示不出先后(见
+        // set_mtime_seconds 的注释)。
+        let base = metadata_modified_nanos(&fs::metadata(&first).unwrap()).max(0) / 1_000_000_000;
         let cursors = vec![
-            cursor_for_path(&first, cursor_matching_file(&first)),
-            cursor_for_path(&second, cursor_matching_file(&second)),
+            cursor_for_path(&first, (base + 2) * 1_000_000_000),
+            cursor_for_path(&second, (base + 2) * 1_000_000_000),
         ];
         let by_path = by_path_from_cursors(&cursors);
-        let scratch = partition_dir(&tmp, date).join("scratch.tmp");
-        fs::write(&scratch, "x").unwrap();
-        fs::remove_file(&scratch).unwrap();
+        set_mtime_seconds(&partition_dir(&tmp, date), base + 3);
 
         let (files, files_pruned) =
             collect_codex_session_files_with_window(&tmp, &by_path, CODEX_PARTITION_FRESH_DAYS);
@@ -1411,10 +1417,12 @@ mod tests {
         let untouched = write_partition_file(&tmp, date, "untouched.jsonl");
         let resumed = write_partition_file(&tmp, date, "resumed.jsonl");
 
-        // 两个文件都已成功同步：游标 = 各自当前 mtime
+        // 两个文件都已成功同步：游标 = 各自 mtime + 2 秒(规则 (c) 恰好通过,
+        // 目录 mtime 也早于游标,规则 (d) 同样通过)
+        let base = metadata_modified_nanos(&fs::metadata(&resumed).unwrap()).max(0) / 1_000_000_000;
         let cursors = vec![
-            cursor_for_path(&untouched, cursor_matching_file(&untouched)),
-            cursor_for_path(&resumed, cursor_matching_file(&resumed)),
+            cursor_for_path(&untouched, (base + 2) * 1_000_000_000),
+            cursor_for_path(&resumed, (base + 2) * 1_000_000_000),
         ];
         let by_path = by_path_from_cursors(&cursors);
 
@@ -1435,6 +1443,9 @@ mod tests {
             dir_mtime_before,
             "append 不应改变父目录 mtime——正因如此规则 (d) 兜不住这一场景"
         );
+        // 真实 append 已经发生,但秒级分辨率的文件系统上同秒内的 mtime 变化
+        // 测不出来,所以显式把文件 mtime 抬到游标之后,让规则 (c) 的判定确定化。
+        set_mtime_seconds(&resumed, base + 4);
 
         let (files, files_pruned) =
             collect_codex_session_files_with_window(&tmp, &by_path, CODEX_PARTITION_FRESH_DAYS);

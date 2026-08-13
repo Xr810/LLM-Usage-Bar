@@ -134,3 +134,6 @@ strip = "symbols"
 [dev-dependencies]
 serial_test = "4"
 tempfile = "3"
+# 剪枝测试需要显式设置 mtime（CI 文件系统的 mtime 分辨率可能是秒级，
+# 同秒内的先后顺序测不出来）
+filetime = "0.2"
