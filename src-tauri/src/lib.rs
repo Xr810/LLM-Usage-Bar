@@ -409,41 +409,57 @@ fn should_hide_minimized_main(dock_visible: bool, is_minimized: bool) -> bool {
     dock_visible && is_minimized
 }
 
-#[cfg(all(target_os = "macos", not(test)))]
-static STOP_MAIN_WINDOW_VISIBILITY_MONITOR: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+/// 事件路由：哪些窗口事件应触发主窗口最小化检查。
+/// 只认 `main` 窗口的 `Focused(false)`：tao 0.35.3 / tauri 2.11.5 没有专门的
+/// Minimized 事件，最小化一个处于 key 状态的窗口必然让它 resign key，因此失焦是
+/// 伴随最小化的可靠信号；失焦的其它原因由 `handle_minimized_main_window` 里的
+/// `is_minimized()` 判定过滤。抽成不带 cfg 的纯函数，测试里才能编译到。
+#[cfg(any(target_os = "macos", test))]
+fn classify_minimize_check_event(label: &str, event: &tauri::WindowEvent) -> bool {
+    label == "main" && matches!(event, tauri::WindowEvent::Focused(false))
+}
 
+/// 主窗口最小化后的隐藏处理：读取 Dock 可见性并按判定结果隐藏窗口、调整托盘策略。
+/// 事件回调与兜底定时器共用这段逻辑，判定语义与原来 300ms 轮询的循环体完全一致。
+#[cfg(all(target_os = "macos", not(test)))]
+fn handle_minimized_main_window(app: &tauri::AppHandle) {
+    let dock_visible = crate::tray::is_macos_dock_visible();
+    if !dock_visible {
+        return;
+    }
+    let Some(main) = app.get_webview_window("main") else {
+        return;
+    };
+    if should_hide_minimized_main(dock_visible, main.is_minimized().unwrap_or(false)) {
+        let _ = main.hide();
+        crate::tray::apply_tray_policy(app, false);
+    }
+}
+
+/// 主窗口最小化监控（原 300ms 常驻轮询已改为事件驱动）。
+///
+/// 事件驱动部分挂在 builder 级 `on_window_event`（见 `run()` 中的订阅）：tao 0.35.3
+/// 和 tauri 2.11.5 都没有专门的 Minimized/Occluded 窗口事件（`tauri::WindowEvent`
+/// 枚举见 tauri-2.11.5 src/app.rs:111；tao 的 macOS 窗口代理只订阅了
+/// windowShouldClose / windowDidResize / windowDidMove / windowDidBecomeKey /
+/// windowDidResignKey 等通知，见 tao-0.35.3 src/platform_impl/macos/window_delegate.rs）。
+/// 最小化一个处于 key 状态的窗口必然让它 resign key，因此 `Focused(false)` 是伴随
+/// 最小化的可靠信号；订阅挂在 builder 级而非 setup 里的窗口实例上，是因为轻量模式
+/// 会销毁并重建主窗口，builder 级监听对每次新建的窗口都生效。
+///
+/// 这里只保留一条 5 秒一次的慢速兜底检查，兜住事件覆盖不全的场景：窗口并非 key 时
+/// 被最小化（例如通过 Dock 图标右键菜单最小化）不会产生 Focused 变化。兜底频率
+/// 远低于原来的 300ms，常驻开销可忽略。
 #[cfg(all(target_os = "macos", not(test)))]
 fn start_main_window_visibility_monitor(app: tauri::AppHandle) {
-    use std::sync::atomic::Ordering;
-
-    STOP_MAIN_WINDOW_VISIBILITY_MONITOR.store(false, Ordering::Release);
     tauri::async_runtime::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_millis(300));
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
         interval.tick().await;
         loop {
             interval.tick().await;
-            if STOP_MAIN_WINDOW_VISIBILITY_MONITOR.load(Ordering::Acquire) {
-                break;
-            }
-            let dock_visible = crate::tray::is_macos_dock_visible();
-            if !dock_visible {
-                continue;
-            }
-            let Some(main) = app.get_webview_window("main") else {
-                continue;
-            };
-            if should_hide_minimized_main(dock_visible, main.is_minimized().unwrap_or(false)) {
-                let _ = main.hide();
-                crate::tray::apply_tray_policy(&app, false);
-            }
+            handle_minimized_main_window(&app);
         }
     });
-}
-
-#[cfg(all(target_os = "macos", not(test)))]
-fn stop_main_window_visibility_monitor() {
-    STOP_MAIN_WINDOW_VISIBILITY_MONITOR.store(true, std::sync::atomic::Ordering::Release);
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -487,6 +503,15 @@ pub fn run() {
         .plugin(tauri_plugin_deep_link::init())
         // 拦截窗口关闭：根据设置决定是否最小化到托盘
         .on_window_event(|window, event| {
+            // macOS：主窗口最小化后隐藏并切回托盘策略（事件驱动，替代原来的 300ms 轮询）。
+            // 最小化会伴随 Focused(false)（tao 在 windowDidResignKey 时发出），回调里
+            // 用 is_minimized() 确认真实状态，其它原因导致的失焦会被判定逻辑过滤掉。
+            #[cfg(all(target_os = "macos", not(test)))]
+            {
+                if classify_minimize_check_event(window.label(), event) {
+                    handle_minimized_main_window(window.app_handle());
+                }
+            }
             let event_kind = match event {
                 tauri::WindowEvent::Focused(false) => WindowEventKind::FocusLost,
                 tauri::WindowEvent::CloseRequested { .. } => WindowEventKind::CloseRequested,
@@ -1510,9 +1535,6 @@ pub fn run() {
                 ExitRequestAction::CleanupAndExit => {}
             }
 
-            #[cfg(all(target_os = "macos", not(test)))]
-            stop_main_window_visibility_monitor();
-
             // 停止文件监听与同步调度（驱动循环看到 is_shutdown 后退出，
             // 不留下永远跑不完的 spawn）；重启路径走 re-exec，无需显式清理。
             usage::watcher::stop_usage_watcher();
@@ -1542,23 +1564,16 @@ pub fn run() {
 
         #[cfg(target_os = "macos")]
         {
-            match event {
-                // macOS 在 Dock 图标被点击并重新激活应用时会触发 Reopen 事件，这里手动恢复主窗口
-                RunEvent::Reopen { .. } => {
-                    if let Err(error) = tray_popover::open_main_window(
-                        app_handle,
-                        tray_popover::MainWindowDestination::Usage {
-                            agent_module_id: None,
-                        },
-                    ) {
-                        log::error!("macOS reopen failed to reveal main window: {error}");
-                    }
+            // macOS 在 Dock 图标被点击并重新激活应用时会触发 Reopen 事件，这里手动恢复主窗口
+            if let RunEvent::Reopen { .. } = event {
+                if let Err(error) = tray_popover::open_main_window(
+                    app_handle,
+                    tray_popover::MainWindowDestination::Usage {
+                        agent_module_id: None,
+                    },
+                ) {
+                    log::error!("macOS reopen failed to reveal main window: {error}");
                 }
-                RunEvent::Exit => {
-                    #[cfg(all(target_os = "macos", not(test)))]
-                    stop_main_window_visibility_monitor();
-                }
-                _ => {}
             }
         }
 
@@ -1882,9 +1897,9 @@ pub fn restart_process(app_handle: &tauri::AppHandle) -> ! {
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_exit_request, classify_window_event_route, should_hide_minimized_main,
-        DatabaseRuntimePreflight, ExitRequestAction, PreparedDatabaseRuntime, WindowEventKind,
-        WindowEventRoute,
+        classify_exit_request, classify_minimize_check_event, classify_window_event_route,
+        should_hide_minimized_main, DatabaseRuntimePreflight, ExitRequestAction,
+        PreparedDatabaseRuntime, WindowEventKind, WindowEventRoute,
     };
     use crate::database::DatabaseIdentityOutcome;
     use crate::error::AppError;
@@ -2036,6 +2051,28 @@ mod tests {
         assert!(!should_hide_minimized_main(true, false));
         assert!(!should_hide_minimized_main(false, true));
         assert!(!should_hide_minimized_main(false, false));
+    }
+
+    #[test]
+    fn minimize_check_event_fires_only_for_main_window_focus_loss() {
+        use tauri::WindowEvent;
+
+        assert!(classify_minimize_check_event(
+            "main",
+            &WindowEvent::Focused(false)
+        ));
+        assert!(!classify_minimize_check_event(
+            "main",
+            &WindowEvent::Focused(true)
+        ));
+        assert!(!classify_minimize_check_event(
+            "main",
+            &WindowEvent::Resized(tauri::PhysicalSize::new(800, 600)),
+        ));
+        assert!(!classify_minimize_check_event(
+            crate::tray_popover::TRAY_POPOVER_LABEL,
+            &WindowEvent::Focused(false),
+        ));
     }
 
     #[test]
