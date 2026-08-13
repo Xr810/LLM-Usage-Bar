@@ -173,13 +173,10 @@ struct CodexAuthJson {
 struct CodexTokens {
     access_token: Option<String>,
     account_id: Option<String>,
-    /// Codex CLI 写的 refresh token,用于 access token 过期时自动续期。
-    refresh_token: Option<String>,
 }
 
-/// (access_token, account_id, refresh_token, status, message)
+/// (access_token, account_id, status, message)
 type CodexCredentials = (
-    Option<String>,
     Option<String>,
     Option<String>,
     CredentialStatus,
@@ -230,14 +227,13 @@ fn read_codex_credentials_from_file() -> CodexCredentials {
     let auth_path = crate::agent_paths::get_codex_auth_path();
 
     if !auth_path.exists() {
-        return (None, None, None, CredentialStatus::NotFound, None);
+        return (None, None, CredentialStatus::NotFound, None);
     }
 
     let content = match std::fs::read_to_string(&auth_path) {
         Ok(c) => c,
         Err(e) => {
             return (
-                None,
                 None,
                 None,
                 CredentialStatus::ParseError,
@@ -257,7 +253,6 @@ fn parse_codex_credentials_json(content: &str) -> CodexCredentials {
             return (
                 None,
                 None,
-                None,
                 CredentialStatus::ParseError,
                 Some(format!("Failed to parse Codex auth JSON: {e}")),
             );
@@ -269,7 +264,6 @@ fn parse_codex_credentials_json(content: &str) -> CodexCredentials {
         return (
             None,
             None,
-            None,
             CredentialStatus::NotFound,
             Some("Codex not using OAuth mode".to_string()),
         );
@@ -279,7 +273,6 @@ fn parse_codex_credentials_json(content: &str) -> CodexCredentials {
         Some(t) => t,
         None => {
             return (
-                None,
                 None,
                 None,
                 CredentialStatus::ParseError,
@@ -294,7 +287,6 @@ fn parse_codex_credentials_json(content: &str) -> CodexCredentials {
             return (
                 None,
                 None,
-                None,
                 CredentialStatus::ParseError,
                 Some("access_token is empty or missing".to_string()),
             );
@@ -307,7 +299,6 @@ fn parse_codex_credentials_json(content: &str) -> CodexCredentials {
             return (
                 Some(access_token),
                 tokens.account_id,
-                tokens.refresh_token,
                 CredentialStatus::Expired,
                 Some("Codex token may be stale (>8 days since last refresh)".to_string()),
             );
@@ -317,7 +308,6 @@ fn parse_codex_credentials_json(content: &str) -> CodexCredentials {
     (
         Some(access_token),
         tokens.account_id,
-        tokens.refresh_token,
         CredentialStatus::Valid,
         None,
     )
@@ -465,9 +455,12 @@ fn codex_usage_tiers(body: &CodexUsageResponse) -> Vec<QuotaTier> {
 
     let mut has_window = false;
     if let Some(rate_limit) = body.rate_limit.as_ref() {
-        for window in [rate_limit.primary_window.as_ref(), rate_limit.secondary_window.as_ref()]
-            .into_iter()
-            .flatten()
+        for window in [
+            rate_limit.primary_window.as_ref(),
+            rate_limit.secondary_window.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
         {
             if let Some(used) = window.used_percent {
                 has_window = true;
@@ -519,9 +512,12 @@ fn codex_usage_tiers(body: &CodexUsageResponse) -> Vec<QuotaTier> {
         let Some(rate_limit) = additional.rate_limit.as_ref() else {
             continue;
         };
-        for window in [rate_limit.primary_window.as_ref(), rate_limit.secondary_window.as_ref()]
-            .into_iter()
-            .flatten()
+        for window in [
+            rate_limit.primary_window.as_ref(),
+            rate_limit.secondary_window.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
         {
             let (Some(used), Some(window_seconds)) =
                 (window.used_percent, window.limit_window_seconds)
@@ -609,16 +605,31 @@ fn codex_chatgpt_base_url() -> String {
     let raw = std::fs::read_to_string(&config_path)
         .ok()
         .and_then(|content| {
-            content.parse::<toml::Value>().ok()?.get("chatgpt_base_url")?.as_str().map(str::to_string)
+            content
+                .parse::<toml::Value>()
+                .ok()?
+                .get("chatgpt_base_url")?
+                .as_str()
+                .map(str::to_string)
         })
-        .unwrap_or_else(|| "https://chatgpt.com/backend-api".to_string());
+        .unwrap_or_else(|| CHATGPT_OFFICIAL_BASE_URL.to_string());
     normalize_chatgpt_base_url(&raw)
 }
+
+/// 官方基地址。任何无法安全使用的配置值都回落到它。
+const CHATGPT_OFFICIAL_BASE_URL: &str = "https://chatgpt.com/backend-api";
 
 fn normalize_chatgpt_base_url(raw: &str) -> String {
     let mut base = raw.trim().to_string();
     if base.is_empty() {
-        return "https://chatgpt.com/backend-api".to_string();
+        return CHATGPT_OFFICIAL_BASE_URL.to_string();
+    }
+    // 这个地址会收到 ChatGPT 的 OAuth access token（Bearer 头）。配置文件是
+    // 不可信输入（中转商的安装脚本常改这个键），明文 http 会把 token 暴露在
+    // 网络上，非 http(s) 的值更是没有意义——一律回落官方地址。
+    if !base.starts_with("https://") {
+        log::warn!("chatgpt_base_url 不是 https，已回落到官方地址");
+        return CHATGPT_OFFICIAL_BASE_URL.to_string();
     }
     while base.ends_with('/') {
         base.pop();
@@ -752,14 +763,9 @@ pub(crate) async fn query_codex_quota(
         return Err("codex_quota_rate_limited".to_string());
     }
 
-    let resp = match codex_wham_get(
-        &client,
-        &codex_usage_url(&base),
-        access_token,
-        account_id,
-    )
-    .send()
-    .await
+    let resp = match codex_wham_get(&client, &codex_usage_url(&base), access_token, account_id)
+        .send()
+        .await
     {
         Ok(r) => r,
         Err(e) => return Err(format!("Network error: {e}")),
@@ -872,52 +878,13 @@ pub(crate) async fn query_codex_quota(
     })
 }
 
-/// 查询 Codex 额度,401/403(被折叠为 success=false + Expired)时用
-/// refresh token 续期后再试一次。与 CodexBar 的 CodexTokenRefresher 同款:
-/// 端点 `auth.openai.com/oauth/token`,client_id 为 Codex CLI 的公开客户端 ID。
-async fn query_codex_with_refresh_fallback(
-    token: &str,
-    account_id: Option<&str>,
-    refresh_token: Option<&str>,
-) -> Result<SubscriptionQuota, String> {
-    let expired_message = "Authentication failed. Please re-login with Codex CLI.";
-    let result = query_codex_quota(token, account_id, "codex", expired_message).await?;
-    if result.success || refresh_token.is_none() {
-        return Ok(result);
-    }
-    if matches!(result.credential_status, CredentialStatus::Expired) {
-        if let Some(new_token) = refresh_codex_cli_token(refresh_token.expect("checked above")).await
-        {
-            return query_codex_quota(&new_token, account_id, "codex", expired_message).await;
-        }
-    }
-    Ok(result)
-}
-
-/// 用 Codex CLI 的 refresh_token 续期 access_token。
-async fn refresh_codex_cli_token(refresh_token: &str) -> Option<String> {
-    // Codex CLI 的公开 OAuth client_id(非机密,与 CodexBar 引用一致)。
-    let client_id = ["app_EMoamEEZ73f0Ck", "XaXp7hrann"].concat();
-    let client = crate::http_client::get();
-    let response = client
-        .post("https://auth.openai.com/oauth/token")
-        .header("Content-Type", "application/json")
-        .timeout(Duration::from_secs(30))
-        .json(&serde_json::json!({
-            "client_id": client_id,
-            "grant_type": "refresh_token",
-            "refresh_token": refresh_token,
-            "scope": "openid profile email",
-        }))
-        .send()
-        .await
-        .ok()?;
-    if !response.status().is_success() {
-        return None;
-    }
-    let body: serde_json::Value = response.json().await.ok()?;
-    body.get("access_token")?.as_str().map(str::to_string)
-}
+// 说明:这里刻意**不**用 Codex CLI 的 refresh_token 去 `auth.openai.com/oauth/token`
+// 续期。OAuth refresh token 通常是轮换式的 —— 用一次就作废旧的,而服务端返回的
+// 新 token 需要写回 `~/.codex/auth.json`。本 app 是只读监控方,不该成为 auth.json
+// 的写入方;而"刷了却不回写"会让 Codex CLI 自己存的 refresh_token 变成陈旧值,
+// 把用户从 Codex CLI 里踢下线 —— 监控工具把被监控工具搞挂,收益不抵风险。
+// 凭据过期时直接报 Expired,由回退链的下一层(CLI 探测)出数,重新登录交给用户
+// 在 Codex CLI 侧完成。
 
 // ── Gemini 凭据读取 ──────────────────────────────────────
 
@@ -1398,7 +1365,7 @@ pub async fn get_subscription_quota(tool: &str) -> Result<SubscriptionQuota, Str
         // Do not read Claude OAuth credentials or call a private usage endpoint.
         "claude" => crate::claude_quota::collect_local_quota(),
         "codex" => {
-            let (token, account_id, refresh_token, status, message) = read_codex_credentials();
+            let (token, account_id, status, message) = read_codex_credentials();
 
             match status {
                 CredentialStatus::NotFound => Ok(SubscriptionQuota::not_found("codex")),
@@ -1408,22 +1375,7 @@ pub async fn get_subscription_quota(tool: &str) -> Result<SubscriptionQuota, Str
                     message.unwrap_or_else(|| "Failed to parse credentials".to_string()),
                 )),
                 CredentialStatus::Expired => {
-                    // 优先用 CLI 的 refresh_token 续期,免去用户重登录。
-                    if let Some(refresh_token) = refresh_token {
-                        if let Some(new_token) = refresh_codex_cli_token(&refresh_token).await {
-                            let result = query_codex_quota(
-                                &new_token,
-                                account_id.as_deref(),
-                                "codex",
-                                "Authentication failed. Please re-login with Codex CLI.",
-                            )
-                            .await?;
-                            if result.success {
-                                return Ok(result);
-                            }
-                        }
-                    }
-                    // 续期失败:即使可能过期也尝试调用 API
+                    // 即使可能过期也尝试调用 API
                     if let Some(token) = token {
                         let result = query_codex_quota(
                             &token,
@@ -1444,10 +1396,11 @@ pub async fn get_subscription_quota(tool: &str) -> Result<SubscriptionQuota, Str
                 }
                 CredentialStatus::Valid => {
                     let token = token.expect("token must be Some when status is Valid");
-                    query_codex_with_refresh_fallback(
+                    query_codex_quota(
                         &token,
                         account_id.as_deref(),
-                        refresh_token.as_deref(),
+                        "codex",
+                        "Authentication failed. Please re-login with Codex CLI.",
                     )
                     .await
                 }
@@ -1507,6 +1460,54 @@ fn now_millis() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chatgpt_base_url_falls_back_unless_https() {
+        // 明文 http / 非 http(s) / 空值都不允许携带 Bearer token 出去。
+        assert_eq!(
+            normalize_chatgpt_base_url("http://relay.example.com"),
+            CHATGPT_OFFICIAL_BASE_URL
+        );
+        assert_eq!(
+            normalize_chatgpt_base_url("relay.example.com"),
+            CHATGPT_OFFICIAL_BASE_URL
+        );
+        assert_eq!(
+            normalize_chatgpt_base_url("file:///etc/passwd"),
+            CHATGPT_OFFICIAL_BASE_URL
+        );
+        assert_eq!(normalize_chatgpt_base_url("   "), CHATGPT_OFFICIAL_BASE_URL);
+    }
+
+    #[test]
+    fn chatgpt_base_url_keeps_https_values_and_official_suffix() {
+        // 官方裸域补 /backend-api；已带后缀的不重复补。
+        assert_eq!(
+            normalize_chatgpt_base_url("https://chatgpt.com"),
+            CHATGPT_OFFICIAL_BASE_URL
+        );
+        assert_eq!(
+            normalize_chatgpt_base_url("https://chatgpt.com/backend-api/"),
+            CHATGPT_OFFICIAL_BASE_URL
+        );
+        // https 的第三方中转按原样保留（用户自己的配置）。
+        assert_eq!(
+            normalize_chatgpt_base_url("https://relay.example.com/v1/"),
+            "https://relay.example.com/v1"
+        );
+    }
+
+    #[test]
+    fn codex_usage_url_switches_on_backend_api_suffix() {
+        assert_eq!(
+            codex_usage_url(CHATGPT_OFFICIAL_BASE_URL),
+            "https://chatgpt.com/backend-api/wham/usage"
+        );
+        assert_eq!(
+            codex_usage_url("https://relay.example.com/v1"),
+            "https://relay.example.com/v1/api/codex/usage"
+        );
+    }
 
     #[test]
     fn window_seconds_map_to_expected_tier_names() {

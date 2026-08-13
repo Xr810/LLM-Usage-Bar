@@ -40,6 +40,10 @@ fn merge_settings_for_save(
     // 开关）后、前端 query 缓存刷新前的一次全量保存会把旧 marker 重放回来，
     // 重新开启时被"复活"的标记挡住而漏迁。
     incoming.local_migrations = existing.local_migrations.clone();
+    // claude_oauth_denied_until 同理是纯后端状态（钥匙串授权被拒后的冷却截止），
+    // 前端表单不携带该字段，按 incoming 透传会在任意一次保存设置时把冷却清掉，
+    // 于是被拒绝过的系统对话框又会重新弹出来。
+    incoming.claude_oauth_denied_until = existing.claude_oauth_denied_until;
     incoming
 }
 
@@ -52,12 +56,21 @@ pub async fn get_settings() -> Result<crate::settings::AppSettings, String> {
 /// 保存设置
 #[tauri::command]
 pub async fn save_settings(
-    _state: tauri::State<'_, crate::store::AppState>,
+    state: tauri::State<'_, crate::store::AppState>,
     settings: crate::settings::AppSettings,
 ) -> Result<bool, String> {
     let existing = crate::settings::get_settings();
     let merged = merge_settings_for_save(settings, &existing);
+    let consent_changed = merged.claude_oauth_quota_enabled != existing.claude_oauth_quota_enabled
+        || merged.claude_oauth_prompt_mode != existing.claude_oauth_prompt_mode;
     crate::settings::update_settings(merged).map_err(|e| e.to_string())?;
+
+    // 同意门控刚改过：手动刷新的 60 秒结果缓存里存的是按旧设置得到的结论
+    // （多半是 consent_required），不清掉的话用户开完开关立刻点刷新还会看到
+    // 那条旧错误，看上去像开关没生效。
+    if consent_changed {
+        state.quota_service.clear_manual_refresh_cache().await;
+    }
 
     Ok(true)
 }
@@ -304,6 +317,27 @@ mod tests {
                 .map(|v| v.secret_access_key.as_str()),
             Some("secret")
         );
+    }
+
+    /// 前端表单不携带 claude_oauth_denied_until。若按 incoming 透传，用户在
+    /// 系统对话框上点了拒绝之后，只要再改任何一项设置就会把 6 小时冷却清掉，
+    /// 下次刷新又弹一次框——正是这个冷却要防的事。
+    #[test]
+    fn save_settings_should_preserve_claude_oauth_denied_until() {
+        let existing = AppSettings {
+            claude_oauth_denied_until: Some(1_800_000_000),
+            ..AppSettings::default()
+        };
+
+        let incoming = AppSettings {
+            claude_oauth_quota_enabled: true,
+            ..AppSettings::default()
+        };
+        let merged = merge_settings_for_save(incoming, &existing);
+
+        assert_eq!(merged.claude_oauth_denied_until, Some(1_800_000_000));
+        // 用户自己能改的开关仍按 incoming 生效。
+        assert!(merged.claude_oauth_quota_enabled);
     }
 
     #[test]

@@ -31,6 +31,8 @@ const BACKGROUND_MIN_INTERVAL: Duration = Duration::from_secs(30 * 60);
 const INTERACTIVE_MIN_INTERVAL: Duration = Duration::from_secs(60);
 /// 探测失败后的退避(对交互与后台统一生效,避免反复拉起失败的 CLI)。
 const FAILURE_BACKOFF: Duration = Duration::from_secs(5 * 60);
+/// 催重绘的回车最多补发几次。见 `run_tty_probe` 里的说明。
+const MAX_REDRAW_PINGS: u8 = 3;
 
 /// 错误码(稳定、前端可映射;不带终端原文)。
 const THROTTLED_ERROR_CODE: &str = "claude_probe_throttled";
@@ -119,7 +121,11 @@ pub(crate) async fn probe_claude_usage(interactive: bool) -> Result<Subscription
         if let Some(dir) = claude_config_dir.as_deref() {
             env.push(("CLAUDE_CONFIG_DIR", dir.to_string_lossy().into_owned()));
         }
-        let env = if env.is_empty() { None } else { Some(env.as_slice()) };
+        let env = if env.is_empty() {
+            None
+        } else {
+            Some(env.as_slice())
+        };
         let text = run_tty_probe(
             &binary,
             &[
@@ -139,8 +145,7 @@ pub(crate) async fn probe_claude_usage(interactive: bool) -> Result<Subscription
             },
         )?;
         Ok(ProbeUsage {
-            tiers: parse_claude_usage_text(&text)
-                .ok_or_else(|| FAILED_ERROR_CODE.to_string())?,
+            tiers: parse_claude_usage_text(&text).ok_or_else(|| FAILED_ERROR_CODE.to_string())?,
         })
     })
     .await;
@@ -185,13 +190,11 @@ pub(crate) async fn probe_codex_status(interactive: bool) -> Result<Subscription
             b"/status\r",
             PROBE_TIMEOUT,
             |text| {
-                parse_codex_status_text(text).is_some()
-                    || text.contains("data not available yet")
+                parse_codex_status_text(text).is_some() || text.contains("data not available yet")
             },
         )?;
         Ok(ProbeUsage {
-            tiers: parse_codex_status_text(&text)
-                .ok_or_else(|| FAILED_ERROR_CODE.to_string())?,
+            tiers: parse_codex_status_text(&text).ok_or_else(|| FAILED_ERROR_CODE.to_string())?,
         })
     })
     .await;
@@ -205,20 +208,41 @@ pub(crate) async fn probe_codex_status(interactive: bool) -> Result<Subscription
     }
 }
 
+/// 在 `PATH` 里找可执行文件。从 Finder 启动的 GUI app 只继承
+/// `/usr/bin:/bin:/usr/sbin:/sbin`,所以这一步经常落空——落空后必须继续走
+/// 绝对路径候选,不能就此判定「没装」。
+fn find_in_path(bare: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join(bare))
+        .find(|candidate| candidate.is_file())
+}
+
+/// 候选里挑一个真能跑的:先 PATH(用户在终端里用的就是它),再逐个检查绝对
+/// 路径候选**自身**是否存在。注意不能按「父目录存在」筛选——裸名字的父目录
+/// 是空串,那样第一个候选永远命中,后面的绝对路径全成死代码。
+fn resolve_probe_binary(bare: &str, candidates: Vec<PathBuf>) -> Option<PathBuf> {
+    find_in_path(bare).or_else(|| {
+        candidates
+            .into_iter()
+            .filter(|candidate| {
+                candidate
+                    .parent()
+                    .is_some_and(|parent| !parent.as_os_str().is_empty())
+            })
+            .find(|candidate| candidate.is_file())
+    })
+}
+
 fn resolve_claude_binary(home: &std::path::Path) -> Option<PathBuf> {
-    crate::services::claude_cli_auth::claude_binary_candidates_for_home(home)
-        .into_iter()
-        .find(|candidate| {
-            // 裸名字("claude")走 PATH 解析,不检查存在性;带目录的候选必须真实存在。
-            candidate
-                .parent()
-                .filter(|parent| !parent.as_os_str().is_empty())
-                .is_none_or(|parent| parent.exists())
-        })
+    resolve_probe_binary(
+        "claude",
+        crate::services::claude_cli_auth::claude_binary_candidates_for_home(home),
+    )
 }
 
 fn resolve_codex_binary(home: &std::path::Path) -> Option<PathBuf> {
-    let mut candidates = vec![PathBuf::from("codex")];
+    let mut candidates = Vec::new();
     for relative in [
         ".local/bin/codex",
         ".local/share/pnpm/codex",
@@ -232,12 +256,7 @@ fn resolve_codex_binary(home: &std::path::Path) -> Option<PathBuf> {
         candidates.push(PathBuf::from("/opt/homebrew/bin/codex"));
         candidates.push(PathBuf::from("/usr/local/bin/codex"));
     }
-    candidates.into_iter().find(|candidate| {
-        candidate
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-            .is_none_or(|parent| parent.exists())
-    })
+    resolve_probe_binary("codex", candidates)
 }
 
 // ── PTY 探测(Claude / Codex 共用) ─────────────────────────
@@ -291,19 +310,38 @@ fn run_tty_probe(
         .take_writer()
         .map_err(|_| FAILED_ERROR_CODE.to_string())?;
 
+    // PTY 的 read 是阻塞的:子进程一旦不再输出,read 就永远不返回,循环里的
+    // deadline 检查也就永远轮不到——超时形同虚设,还会长期占住一个 blocking
+    // 线程。所以把读放到独立线程里,主循环只按超时收管道。
+    let (sender, receiver) = std::sync::mpsc::channel::<Vec<u8>>();
+    std::thread::spawn(move || {
+        let mut read_buf = [0u8; 8192];
+        loop {
+            match reader.read(&mut read_buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    if sender.send(read_buf[..n].to_vec()).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
     // 等 CLI 完成启动渲染,再发送命令。
     std::thread::sleep(Duration::from_millis(1_500));
     let _ = writer.write_all(initial_input);
 
     let deadline = Instant::now() + timeout;
     let mut last_ping = Instant::now();
+    let mut pings_sent = 0u8;
     let mut buffer = Vec::new();
-    let mut read_buf = [0u8; 8192];
     loop {
-        match reader.read(&mut read_buf) {
-            Ok(0) => break,
-            Ok(n) => buffer.extend_from_slice(&read_buf[..n]),
-            Err(_) => std::thread::sleep(Duration::from_millis(50)),
+        match receiver.recv_timeout(Duration::from_millis(100)) {
+            Ok(chunk) => buffer.extend_from_slice(&chunk),
+            // 读线程结束 = PTY 关闭,不会再有输出了。
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
         }
         let text = String::from_utf8_lossy(&buffer);
         if is_done(&text) {
@@ -312,9 +350,12 @@ fn run_tty_probe(
         if Instant::now() >= deadline {
             break;
         }
-        if last_ping.elapsed() >= Duration::from_millis(800) {
+        // 回车是催 TUI 重绘用的,但它同时也会「确认」CLI 可能正停在的对话框
+        // (信任目录、onboarding 等),所以只补发有限几次,不无限敲。
+        if pings_sent < MAX_REDRAW_PINGS && last_ping.elapsed() >= Duration::from_millis(800) {
             let _ = writer.write_all(b"\r");
             last_ping = Instant::now();
+            pings_sent += 1;
         }
         if child
             .try_wait()
@@ -323,9 +364,9 @@ fn run_tty_probe(
         {
             break;
         }
-        std::thread::sleep(Duration::from_millis(50));
     }
     let _ = child.kill();
+    // master 在函数结束时析构,读线程随之收到 EOF 退出,不会泄漏。
 
     Ok(String::from_utf8_lossy(&buffer).into_owned())
 }
@@ -416,7 +457,9 @@ pub(crate) fn parse_codex_status_text(raw: &str) -> Option<Vec<QuotaTier>> {
 
 /// 在 `label` 之后的短窗口内找第一个百分比。限制段长避免吃到下一个面板的数字。
 fn extract_percent_after(text: &str, label: &str, tier_name: &str, tiers: &mut Vec<QuotaTier>) {
-    let Some(start) = text.find(label) else { return };
+    let Some(start) = text.find(label) else {
+        return;
+    };
     let segment = &text[start..(start + 400).min(text.len())];
     let percent_re = regex::Regex::new(r"(\d+(?:\.\d+)?)%").expect("static percent regex");
     let Some(captures) = percent_re.captures(segment) else {
@@ -436,10 +479,14 @@ fn extract_percent_after(text: &str, label: &str, tier_name: &str, tiers: &mut V
 
 /// `Monthly credit limit: X of Y credits used` → 已用百分比 tier。
 fn extract_monthly_credit_limit(text: &str, tiers: &mut Vec<QuotaTier>) {
-    let Some(start) = text.find("Monthly credit limit") else { return };
+    let Some(start) = text.find("Monthly credit limit") else {
+        return;
+    };
     let segment = &text[start..(start + 300).min(text.len())];
     let used_re = regex::Regex::new(r"(\d[\d., ]*)\s+of\s+(\d[\d., ]*)").expect("static regex");
-    let Some(captures) = used_re.captures(segment) else { return };
+    let Some(captures) = used_re.captures(segment) else {
+        return;
+    };
     let parse = |value: &str| {
         value
             .replace([' ', ','], "")
@@ -475,6 +522,38 @@ fn now_millis() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── 可执行文件解析 ──────────────────────────────────
+
+    /// 回归:曾经按「父目录是否存在」筛选候选。裸名字的父目录是空串,
+    /// `is_none_or` 直接放行,于是永远命中第一个候选,后面所有绝对路径
+    /// 都是死代码——从 Finder 启动的 app PATH 里没有 claude/codex 时就废了。
+    #[test]
+    fn resolve_skips_candidates_whose_file_does_not_exist() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let missing = temp.path().join("nonexistent/tool");
+        let present_dir = temp.path().join("real");
+        std::fs::create_dir_all(&present_dir).expect("mkdir");
+        let present = present_dir.join("tool");
+        std::fs::write(&present, b"#!/bin/sh\n").expect("write");
+
+        // 用一个 PATH 里不可能存在的名字,强制走绝对路径候选。
+        let resolved = resolve_probe_binary(
+            "llm-usage-bar-no-such-binary",
+            vec![missing.clone(), present.clone()],
+        );
+        assert_eq!(resolved.as_deref(), Some(present.as_path()));
+    }
+
+    #[test]
+    fn resolve_returns_none_when_nothing_exists() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        assert!(resolve_probe_binary(
+            "llm-usage-bar-no-such-binary",
+            vec![temp.path().join("missing/tool")],
+        )
+        .is_none());
+    }
 
     // ── 探测闸门 ────────────────────────────────────────
 
@@ -540,7 +619,12 @@ mod tests {
         let names: Vec<&str> = tiers.iter().map(|t| t.name.as_str()).collect();
         assert_eq!(
             names,
-            [TIER_FIVE_HOUR, TIER_SEVEN_DAY, TIER_SEVEN_DAY_OPUS, TIER_SEVEN_DAY_SONNET]
+            [
+                TIER_FIVE_HOUR,
+                TIER_SEVEN_DAY,
+                TIER_SEVEN_DAY_OPUS,
+                TIER_SEVEN_DAY_SONNET
+            ]
         );
         assert_eq!(tiers[3].utilization, 40.0);
     }
@@ -573,7 +657,10 @@ mod tests {
         assert_eq!(five.utilization, 45.0);
         let weekly = tiers.iter().find(|t| t.name == TIER_SEVEN_DAY).unwrap();
         assert_eq!(weekly.utilization, 60.0);
-        let monthly = tiers.iter().find(|t| t.name == "codex_credit_limit").unwrap();
+        let monthly = tiers
+            .iter()
+            .find(|t| t.name == "codex_credit_limit")
+            .unwrap();
         assert_eq!(monthly.utilization, 30.0);
     }
 

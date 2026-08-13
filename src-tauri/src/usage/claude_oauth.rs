@@ -32,9 +32,15 @@ const KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
 const KEYCHAIN_DENY_COOLDOWN_SECS: i64 = 6 * 60 * 60;
 /// 429 且无 Retry-After 时的默认 block 时长（秒）。
 const RATE_LIMIT_DEFAULT_BLOCK_SECS: u64 = 5 * 60;
-/// 钥匙串读取超时（秒）。
+/// 用户主动刷新时的钥匙串读取超时（秒）。首次读取会弹 macOS 授权对话框，
+/// `security` 进程一直阻塞到用户点击为止——这个窗口必须留够人的反应时间，
+/// 否则用户还没来得及点 Allow 就被判成拒绝并写进 6 小时冷却。
 #[cfg(target_os = "macos")]
-const KEYCHAIN_READ_TIMEOUT_SECS: u64 = 2;
+const KEYCHAIN_READ_TIMEOUT_INTERACTIVE_SECS: u64 = 90;
+/// 后台路径的钥匙串读取超时（秒）。后台只会在已授权（Always Allow）时静默拿到
+/// 结果，一旦真弹框就说明这次读不该发生，短超时直接放弃，不占住调度线程。
+#[cfg(target_os = "macos")]
+const KEYCHAIN_READ_TIMEOUT_BACKGROUND_SECS: u64 = 2;
 
 const TOOL_LABEL: &str = "claude_oauth";
 
@@ -45,6 +51,7 @@ const DENIED_COOLDOWN_ERROR_CODE: &str = "claude_oauth_denied_cooldown";
 const KEYCHAIN_UNAVAILABLE_ERROR_CODE: &str = "claude_oauth_keychain_unavailable";
 const KEYCHAIN_NOT_FOUND_ERROR_CODE: &str = "claude_oauth_keychain_not_found";
 const KEYCHAIN_DENIED_ERROR_CODE: &str = "claude_oauth_keychain_denied";
+const KEYCHAIN_TIMEOUT_ERROR_CODE: &str = "claude_oauth_keychain_timeout";
 const TOKEN_EXPIRED_ERROR_CODE: &str = "claude_oauth_token_expired";
 const RATE_LIMITED_ERROR_CODE: &str = "claude_oauth_rate_limited";
 
@@ -114,13 +121,16 @@ pub(crate) struct ClaudeOAuthCredentials {
     pub expires_at_unix: Option<i64>,
 }
 
-/// 钥匙串读取结果。区分「条目不存在」（不算拒绝）与「被拒绝/失败」
-/// （需要记录冷却），避免把缺装状态误判成用户拒绝。
+/// 钥匙串读取结果。三种失败必须分开，因为只有 `Denied` 才写 6 小时冷却：
+/// - `NotFound`：条目不存在（用户从未用 Claude Code 登录），是常态；
+/// - `Denied`：`security` 真的返回了失败（用户在系统对话框点了拒绝）；
+/// - `TimedOut`：等超时了，用户既没允许也没拒绝——**不能**当成拒绝。
 #[cfg(target_os = "macos")]
 pub(crate) enum KeychainReadOutcome {
     Credentials(ClaudeOAuthCredentials),
     NotFound,
     Denied,
+    TimedOut,
 }
 
 /// `security find-generic-password` 的凭据 JSON 外壳。
@@ -146,18 +156,18 @@ struct ClaudeAiOauthPayload {
 fn parse_credential_payload(raw: &str) -> Option<ClaudeOAuthCredentials> {
     let payload: ClaudeCredentialPayload = serde_json::from_str(raw).ok()?;
     let inner = payload.claude_ai_oauth?;
-    let access_token = inner.access_token.filter(|token| !token.trim().is_empty())?;
+    let access_token = inner
+        .access_token
+        .filter(|token| !token.trim().is_empty())?;
     Some(ClaudeOAuthCredentials {
         access_token,
         refresh_token: inner.refresh_token,
-        expires_at_unix: inner
-            .expires_at
-            .map(|millis| (millis / 1000.0) as i64),
+        expires_at_unix: inner.expires_at.map(|millis| (millis / 1000.0) as i64),
     })
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) fn read_claude_keychain_credentials() -> KeychainReadOutcome {
+pub(crate) fn read_claude_keychain_credentials(interactive: bool) -> KeychainReadOutcome {
     use std::io::Read;
     use std::process::{Command, Stdio};
 
@@ -172,38 +182,52 @@ pub(crate) fn read_claude_keychain_credentials() -> KeychainReadOutcome {
         Err(_) => return KeychainReadOutcome::NotFound,
     };
 
-    let deadline = Instant::now() + Duration::from_secs(KEYCHAIN_READ_TIMEOUT_SECS);
+    // 管道必须在等待退出的同时抽干：`security` 写满管道缓冲区就会阻塞，
+    // 那样「先 wait 再 read」会把自己等到超时。
+    let stdout_reader = child.stdout.take().map(|mut out| {
+        std::thread::spawn(move || {
+            let mut buffer = Vec::new();
+            let _ = out.read_to_end(&mut buffer);
+            buffer
+        })
+    });
+    let stderr_reader = child.stderr.take().map(|mut err| {
+        std::thread::spawn(move || {
+            let mut buffer = String::new();
+            let _ = err.read_to_string(&mut buffer);
+            buffer
+        })
+    });
+
+    let timeout_secs = if interactive {
+        KEYCHAIN_READ_TIMEOUT_INTERACTIVE_SECS
+    } else {
+        KEYCHAIN_READ_TIMEOUT_BACKGROUND_SECS
+    };
+    let deadline = Instant::now() + Duration::from_secs(timeout_secs);
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break Some(status),
             Ok(None) if Instant::now() < deadline => {
-                std::thread::sleep(Duration::from_millis(20));
+                std::thread::sleep(Duration::from_millis(50));
             }
             _ => break None,
         }
     };
     let Some(status) = status else {
+        // 超时：用户没作答（或对话框没弹出来）。kill 掉进程收回资源，
+        // 但按「未表态」处理，不写拒绝冷却。
         let _ = child.kill();
         let _ = child.wait();
-        return KeychainReadOutcome::Denied;
+        return KeychainReadOutcome::TimedOut;
     };
 
-    let mut stdout = Vec::new();
-    let mut stderr = String::new();
-    let _ = child.stdout.take().and_then(|mut out| {
-        let mut buf = [0u8; 4096];
-        loop {
-            match out.read(&mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => stdout.extend_from_slice(&buf[..n]),
-            }
-        }
-        Some(())
-    });
-    let _ = child.stderr.take().and_then(|mut err| {
-        let _ = err.read_to_string(&mut stderr);
-        Some(())
-    });
+    let stdout = stdout_reader
+        .and_then(|handle| handle.join().ok())
+        .unwrap_or_default();
+    let stderr = stderr_reader
+        .and_then(|handle| handle.join().ok())
+        .unwrap_or_default();
 
     if !status.success() {
         // 条目不存在属于常态（用户从未用 Claude Code 登录），不记冷却。
@@ -223,9 +247,9 @@ pub(crate) fn read_claude_keychain_credentials() -> KeychainReadOutcome {
 /// 记录拒绝冷却到设置（幂等；失败只记日志，绝不影响额度链路）。
 #[cfg(target_os = "macos")]
 fn record_denied_cooldown(now: i64) {
-    let mut settings = crate::settings::get_settings();
-    settings.claude_oauth_denied_until = Some(now + KEYCHAIN_DENY_COOLDOWN_SECS);
-    if let Err(error) = crate::settings::update_settings(settings) {
+    if let Err(error) =
+        crate::settings::set_claude_oauth_denied_until(Some(now + KEYCHAIN_DENY_COOLDOWN_SECS))
+    {
         log::warn!("记录 Claude 钥匙串拒绝冷却失败: {error}");
     }
 }
@@ -337,7 +361,10 @@ fn record_rate_limited(retry_after_secs: Option<u64>) {
 }
 
 /// 解析 Retry-After：整数秒或 HTTP-date（GMT）。Codex wham 层复用同一实现。
-pub(crate) fn parse_retry_after(value: Option<&str>, now: chrono::DateTime<chrono::Utc>) -> Option<u64> {
+pub(crate) fn parse_retry_after(
+    value: Option<&str>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<u64> {
     let value = value?.trim();
     if let Ok(seconds) = value.parse::<u64>() {
         return Some(seconds);
@@ -367,12 +394,8 @@ pub(crate) async fn collect_claude_oauth_quota(
         now,
     ) {
         let (status, code) = match gate {
-            ConsentGateError::Disabled => {
-                (CredentialStatus::ConsentRequired, CONSENT_ERROR_CODE)
-            }
-            ConsentGateError::PromptBlocked => {
-                (CredentialStatus::Valid, PROMPT_BLOCKED_ERROR_CODE)
-            }
+            ConsentGateError::Disabled => (CredentialStatus::ConsentRequired, CONSENT_ERROR_CODE),
+            ConsentGateError::PromptBlocked => (CredentialStatus::Valid, PROMPT_BLOCKED_ERROR_CODE),
             ConsentGateError::DeniedCooldown { .. } => {
                 (CredentialStatus::Valid, DENIED_COOLDOWN_ERROR_CODE)
             }
@@ -404,7 +427,11 @@ pub(crate) async fn collect_claude_oauth_quota(
 
     #[cfg(target_os = "macos")]
     {
-        let outcome = match tokio::task::spawn_blocking(read_claude_keychain_credentials).await {
+        let outcome = match tokio::task::spawn_blocking(move || {
+            read_claude_keychain_credentials(interactive)
+        })
+        .await
+        {
             Ok(outcome) => outcome,
             Err(_) => {
                 return Ok(SubscriptionQuota::error(
@@ -429,6 +456,14 @@ pub(crate) async fn collect_claude_oauth_quota(
                     TOOL_LABEL,
                     CredentialStatus::Valid,
                     KEYCHAIN_DENIED_ERROR_CODE.to_string(),
+                ));
+            }
+            // 超时不是拒绝：不写冷却，下次刷新照常再试。
+            KeychainReadOutcome::TimedOut => {
+                return Ok(SubscriptionQuota::error(
+                    TOOL_LABEL,
+                    CredentialStatus::Valid,
+                    KEYCHAIN_TIMEOUT_ERROR_CODE.to_string(),
                 ));
             }
         };
@@ -484,8 +519,8 @@ async fn fetch_claude_oauth_usage(access_token: &str) -> Result<SubscriptionQuot
         .bytes()
         .await
         .map_err(|_| "claude_oauth_read_failed".to_string())?;
-    let body: ClaudeOAuthUsageResponse = serde_json::from_slice(&raw)
-        .map_err(|_| "claude_oauth_parse_failed".to_string())?;
+    let body: ClaudeOAuthUsageResponse =
+        serde_json::from_slice(&raw).map_err(|_| "claude_oauth_parse_failed".to_string())?;
 
     let tiers = tiers_from_response(&body);
     // 连 5 小时/7 天窗口都没有的响应没有展示价值,交给回退链。
@@ -590,7 +625,9 @@ mod tests {
     fn gate_denied_cooldown_expires() {
         assert_eq!(
             check_consent_gate(true, "always", Some(2_000), true, 1_000),
-            Err(ConsentGateError::DeniedCooldown { retry_in_secs: 1_000 })
+            Err(ConsentGateError::DeniedCooldown {
+                retry_in_secs: 1_000
+            })
         );
         // 恰好到点即放行。
         assert!(check_consent_gate(true, "always", Some(2_000), true, 2_000).is_ok());
@@ -640,12 +677,12 @@ mod tests {
         );
         let tiers = tiers_from_response(&body);
         assert_eq!(tiers.len(), 4);
-        let five = tiers.iter().find(|tier| tier.name == TIER_FIVE_HOUR).unwrap();
+        let five = tiers
+            .iter()
+            .find(|tier| tier.name == TIER_FIVE_HOUR)
+            .unwrap();
         assert_eq!(five.utilization, 42.5);
-        assert_eq!(
-            five.resets_at.as_deref(),
-            Some("2026-08-13T10:00:00Z")
-        );
+        assert_eq!(five.resets_at.as_deref(), Some("2026-08-13T10:00:00Z"));
         let extra = extra_usage_from_response(body.extra_usage).unwrap();
         assert!(!extra.is_enabled);
     }

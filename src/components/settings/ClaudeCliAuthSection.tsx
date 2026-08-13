@@ -30,7 +30,8 @@ export function ClaudeCliAuthSection() {
     }
   };
 
-  const oauthQuotaEnabled = settingsQuery.data?.claudeOauthQuotaEnabled ?? false;
+  const oauthQuotaEnabled =
+    settingsQuery.data?.claudeOauthQuotaEnabled ?? false;
 
   const saveConsent = (value: boolean) => {
     const current = settingsQuery.data;
@@ -203,7 +204,7 @@ export function ClaudeCliAuthSection() {
         })}
         message={t("usageDashboard.claudeOauthConsentMessage", {
           defaultValue:
-            "Enabling this lets LLM Usage Bar read the login that Claude Code stores in the macOS keychain, and use it to query Anthropic's official quota endpoint.\n\nIt reads nothing else, the credential never leaves this device, and you can turn this off here at any time. macOS may ask you to confirm access when the quota is refreshed.",
+            "Enabling this lets LLM Usage Bar read the login that Claude Code stores in the macOS keychain, and use it to query Anthropic's official quota endpoint.\n\nIt reads nothing else. The credential is sent only to Anthropic's own API as the request's authorization header, never to any third party, and it is not stored or logged by this app. You can turn this off here at any time. macOS may ask you to confirm access when the quota is refreshed.",
         })}
         checkboxLabel={t("usageDashboard.claudeOauthConsentCheckbox", {
           defaultValue:

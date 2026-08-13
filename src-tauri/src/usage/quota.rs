@@ -133,7 +133,9 @@ impl ClaudeChainCollector {
                 })
             }),
             probe_stage: Arc::new(|interactive| {
-                Box::pin(async move { crate::usage::cli_probe::probe_claude_usage(interactive).await })
+                Box::pin(
+                    async move { crate::usage::cli_probe::probe_claude_usage(interactive).await },
+                )
             }),
             local_stage: Arc::new(|_| {
                 Box::pin(async move { crate::claude_quota::collect_local_quota() })
@@ -142,7 +144,11 @@ impl ClaudeChainCollector {
     }
 
     #[cfg(test)]
-    fn with_stages(oauth_stage: ClaudeStage, probe_stage: ClaudeStage, local_stage: ClaudeStage) -> Self {
+    fn with_stages(
+        oauth_stage: ClaudeStage,
+        probe_stage: ClaudeStage,
+        local_stage: ClaudeStage,
+    ) -> Self {
         Self {
             oauth_stage,
             probe_stage,
@@ -183,14 +189,21 @@ impl QuotaCollector for ClaudeChainCollector {
                     Err(error) => chain_errors.push(stage_error(label, &error)),
                 }
             }
-            Err(format!("claude quota chain failed: {}", chain_errors.join(" → ")))
+            Err(format!(
+                "claude quota chain failed: {}",
+                chain_errors.join(" → ")
+            ))
         })
     }
 }
 
 /// 层摘要只保留稳定错误码的前缀段,截断长文案,避免链错误串夹带路径等细节。
 fn stage_error(label: &str, error: &str) -> String {
-    let cap = error.char_indices().nth(64).map(|(index, _)| index).unwrap_or(error.len());
+    let cap = error
+        .char_indices()
+        .nth(64)
+        .map(|(index, _)| index)
+        .unwrap_or(error.len());
     format!("{label}({})", &error[..cap])
 }
 
@@ -364,10 +377,14 @@ impl QuotaCollector for CodingPlanQuotaCollector {
     }
 }
 
+/// 自管 OAuth 单层 collector。生产环境已由 `CodexChainCollector` 的第一层取代,
+/// 只剩单测直接构造它来验证「空账号库 → NotFound」这条契约。
+#[cfg(test)]
 struct ManagedCodexOAuthQuotaCollector {
     manager: Arc<RwLock<CodexOAuthManager>>,
 }
 
+#[cfg(test)]
 impl QuotaCollector for ManagedCodexOAuthQuotaCollector {
     fn source(&self) -> &'static str {
         MANAGED_CODEX_QUOTA_SOURCE
@@ -417,7 +434,11 @@ impl CodexChainCollector {
     }
 
     #[cfg(test)]
-    fn with_stages(managed_stage: CodexStage, cli_stage: CodexStage, probe_stage: CodexStage) -> Self {
+    fn with_stages(
+        managed_stage: CodexStage,
+        cli_stage: CodexStage,
+        probe_stage: CodexStage,
+    ) -> Self {
         Self {
             managed_stage,
             cli_stage,
@@ -458,7 +479,10 @@ impl QuotaCollector for CodexChainCollector {
                     Err(error) => chain_errors.push(stage_error(label, &error)),
                 }
             }
-            Err(format!("codex quota chain failed: {}", chain_errors.join(" → ")))
+            Err(format!(
+                "codex quota chain failed: {}",
+                chain_errors.join(" → ")
+            ))
         })
     }
 }
@@ -470,12 +494,15 @@ pub struct QuotaService {
     in_flight: Arc<AsyncMutex<HashMap<String, Arc<QuotaFlight>>>>,
     /// provider_id → (手动刷新时间, 上次结果)。冷却期内的重复手动刷新
     /// 复用上次结果(成功或失败都缓存),避免狂点刷新打外部接口。
-    last_manual: Arc<RwLock<HashMap<String, (i64, Result<QuotaRefreshResult, String>)>>>,
+    last_manual: Arc<RwLock<ManualRefreshCache>>,
     /// 手动刷新冷却(秒),测试可调 0 禁用。
     manual_refresh_cooldown_secs: i64,
 }
 
 type SharedQuotaRefreshResult = Result<QuotaRefreshResult, String>;
+
+/// provider_id → (尝试时刻, 该次结果)。
+type ManualRefreshCache = HashMap<String, (i64, SharedQuotaRefreshResult)>;
 
 struct QuotaFlight {
     result: watch::Sender<Option<SharedQuotaRefreshResult>>,
@@ -525,6 +552,13 @@ impl QuotaService {
     pub fn with_manual_refresh_cooldown(mut self, secs: i64) -> Self {
         self.manual_refresh_cooldown_secs = secs;
         self
+    }
+
+    /// 丢弃手动刷新的结果缓存。设置变更后调用:缓存里那条结论是按旧设置算
+    /// 出来的,继续复用会让用户以为改设置没生效(开完同意开关立刻刷新,还是
+    /// 看到 consent_required)。
+    pub async fn clear_manual_refresh_cache(&self) {
+        self.last_manual.write().await.clear();
     }
 
     pub async fn refresh_provider(
@@ -1251,8 +1285,14 @@ mod tests {
                 )),
                 Arc::new(AtomicUsize::new(0)),
             ),
-            chain_stage(Err("probe failed".to_string()), Arc::new(AtomicUsize::new(0))),
-            chain_stage(Err("local stage failed".to_string()), Arc::new(AtomicUsize::new(0))),
+            chain_stage(
+                Err("probe failed".to_string()),
+                Arc::new(AtomicUsize::new(0)),
+            ),
+            chain_stage(
+                Err("local stage failed".to_string()),
+                Arc::new(AtomicUsize::new(0)),
+            ),
         );
         let error = collector
             .collect(&stored_provider(), false)
@@ -1306,7 +1346,10 @@ mod tests {
                 Arc::new(AtomicUsize::new(0)),
             ),
             chain_stage(Err("cli failed".to_string()), Arc::new(AtomicUsize::new(0))),
-            chain_stage(Err("probe failed".to_string()), Arc::new(AtomicUsize::new(0))),
+            chain_stage(
+                Err("probe failed".to_string()),
+                Arc::new(AtomicUsize::new(0)),
+            ),
         );
         let error = collector
             .collect(&stored_provider(), false)
@@ -1331,16 +1374,25 @@ mod tests {
         ]));
         let service = QuotaService::with_collectors(db, vec![collector.clone()]);
 
-        let first = service.refresh_provider_manual_at("sub", 100).await.unwrap();
+        let first = service
+            .refresh_provider_manual_at("sub", 100)
+            .await
+            .unwrap();
         assert_eq!(collector.calls.load(Ordering::SeqCst), 1);
 
         // 60 秒内:复用上次结果,不采集。
-        let reused = service.refresh_provider_manual_at("sub", 150).await.unwrap();
+        let reused = service
+            .refresh_provider_manual_at("sub", 150)
+            .await
+            .unwrap();
         assert_eq!(reused, first);
         assert_eq!(collector.calls.load(Ordering::SeqCst), 1);
 
         // 60 秒后:重新采集。
-        let second = service.refresh_provider_manual_at("sub", 160).await.unwrap();
+        let second = service
+            .refresh_provider_manual_at("sub", 160)
+            .await
+            .unwrap();
         assert!(second.snapshot.snapshot_id != first.snapshot.snapshot_id);
         assert_eq!(collector.calls.load(Ordering::SeqCst), 2);
     }
@@ -1407,8 +1459,12 @@ mod tests {
         // 与上一个活动测试用不同的 provider id:静态活动表是进程级共享的,
         // 测试并行时同 id 的标记会互相干扰。
         let db = isolated_quota_test_db();
-        db.save_usage_provider(&provider("activity-sub-failure", BillingKind::Subscription, true))
-            .unwrap();
+        db.save_usage_provider(&provider(
+            "activity-sub-failure",
+            BillingKind::Subscription,
+            true,
+        ))
+        .unwrap();
         let collector = Arc::new(FakeCollector::new(vec![
             Err("boom".to_string()),
             Ok(successful_quota("claude")),
@@ -1447,8 +1503,12 @@ mod tests {
     async fn activity_spacing_uses_burst_started_at_not_last_mark() {
         // 独立 provider id:静态活动表进程级共享,避免与并行测试互踩。
         let db = isolated_quota_test_db();
-        db.save_usage_provider(&provider("activity-ramp-sub", BillingKind::Subscription, true))
-            .unwrap();
+        db.save_usage_provider(&provider(
+            "activity-ramp-sub",
+            BillingKind::Subscription,
+            true,
+        ))
+        .unwrap();
         let collector = Arc::new(FakeCollector::new(vec![
             Ok(successful_quota("claude")),
             Ok(successful_quota("claude")),

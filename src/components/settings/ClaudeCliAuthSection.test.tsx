@@ -125,8 +125,6 @@ describe("ClaudeCliAuthSection", () => {
     expect(mocks.saveSettings).toHaveBeenCalledWith({
       claudeOauthQuotaEnabled: false,
     });
-    expect(
-      screen.queryByText("Allow reading Claude Code's login?"),
-    ).toBeNull();
+    expect(screen.queryByText("Allow reading Claude Code's login?")).toBeNull();
   });
 });

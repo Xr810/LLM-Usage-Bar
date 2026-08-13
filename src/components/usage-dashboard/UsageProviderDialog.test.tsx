@@ -116,9 +116,9 @@ describe("UsageProviderDialog", () => {
 
     expect(screen.queryByText("Usage module")).toBeNull();
     expect(screen.queryByText("codex", { selector: "option" })).toBeNull();
-    expect(screen.getByLabelText("Idle refresh interval (seconds)")).toHaveValue(
-      300,
-    );
+    expect(
+      screen.getByLabelText("Idle refresh interval (seconds)"),
+    ).toHaveValue(300);
 
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onSave).toHaveBeenCalledOnce());

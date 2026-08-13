@@ -60,6 +60,11 @@ const QUOTA_ERRORS: Record<string, { key: string; fallback: string }> = {
     fallback:
       "No Claude Code login was found in the system keychain. Sign in with Claude Code first.",
   },
+  claude_oauth_keychain_timeout: {
+    key: "usageDashboard.claudeOauthKeychainTimeout",
+    fallback:
+      "The system authorization dialog was not answered in time. Refresh again and allow access when macOS asks.",
+  },
 };
 
 /** Backend errors arrive as bare codes; anything unmapped keeps the old wording. */

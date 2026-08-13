@@ -1113,6 +1113,14 @@ pub fn update_webdav_sync_status(status: WebDavSyncStatus) -> Result<(), AppErro
     })
 }
 
+/// 仅更新 Claude 钥匙串授权被拒后的冷却截止，不整体复写设置
+/// （避免与并发的设置保存互相覆盖）。
+pub fn set_claude_oauth_denied_until(until: Option<i64>) -> Result<(), AppError> {
+    mutate_settings(|current| {
+        current.claude_oauth_denied_until = until;
+    })
+}
+
 // ===== S3 同步设置管理函数 =====
 
 pub fn get_s3_sync_settings() -> Option<S3SyncSettings> {
