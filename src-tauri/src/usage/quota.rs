@@ -233,6 +233,87 @@ impl QuotaCollector for ManagedCodexOAuthQuotaCollector {
     }
 }
 
+/// ChatGPT/Codex 订阅额度的三层回退链:自管 OAuth → CLI 凭据 → CLI 探测。
+///
+/// 链在 `codex_oauth` 这个 key 下替换原来的单层 collector;第三层
+/// (portable-pty `codex /status`)只在自管与 CLI 凭据都拿不到时才触发。
+/// 注意:降级到 CLI 凭据时,显示的账号可能与应用自管账号不同——这是
+/// 「有额度可看」对「精确账号」的取舍,且 CLI 凭据正是用户正在使用的账号。
+type CodexStage =
+    Arc<dyn Fn(bool) -> BoxFuture<'static, Result<SubscriptionQuota, String>> + Send + Sync>;
+
+struct CodexChainCollector {
+    managed_stage: CodexStage,
+    cli_stage: CodexStage,
+    probe_stage: CodexStage,
+}
+
+impl CodexChainCollector {
+    fn production(codex_oauth_manager: Arc<RwLock<CodexOAuthManager>>) -> Self {
+        let manager_for_stage = codex_oauth_manager.clone();
+        Self {
+            managed_stage: Arc::new(move |_interactive| {
+                let manager = manager_for_stage.clone();
+                Box::pin(async move { query_managed_codex_oauth_quota(&manager, None).await })
+            }),
+            cli_stage: Arc::new(|_interactive| {
+                Box::pin(async move { get_subscription_quota("codex").await })
+            }),
+            probe_stage: Arc::new(|interactive| {
+                Box::pin(
+                    async move { crate::usage::cli_probe::probe_codex_status(interactive).await },
+                )
+            }),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_stages(managed_stage: CodexStage, cli_stage: CodexStage, probe_stage: CodexStage) -> Self {
+        Self {
+            managed_stage,
+            cli_stage,
+            probe_stage,
+        }
+    }
+}
+
+impl QuotaCollector for CodexChainCollector {
+    fn source(&self) -> &'static str {
+        MANAGED_CODEX_QUOTA_SOURCE
+    }
+
+    fn collect<'a>(
+        &'a self,
+        _provider: &'a UsageProviderStored,
+        interactive: bool,
+    ) -> BoxFuture<'a, Result<SubscriptionQuota, String>> {
+        let managed_stage = self.managed_stage.clone();
+        let cli_stage = self.cli_stage.clone();
+        let probe_stage = self.probe_stage.clone();
+        Box::pin(async move {
+            let mut chain_errors = Vec::new();
+            for (label, stage) in [
+                ("managed", &managed_stage),
+                ("cli", &cli_stage),
+                ("probe", &probe_stage),
+            ] {
+                match stage(interactive).await {
+                    Ok(quota) if quota.success => return Ok(quota),
+                    Ok(quota) => {
+                        let error = quota
+                            .error
+                            .or(quota.credential_message)
+                            .unwrap_or_else(|| "quota collection failed".to_string());
+                        chain_errors.push(stage_error(label, &error));
+                    }
+                    Err(error) => chain_errors.push(stage_error(label, &error)),
+                }
+            }
+            Err(format!("codex quota chain failed: {}", chain_errors.join(" → ")))
+        })
+    }
+}
+
 #[derive(Clone)]
 pub struct QuotaService {
     db: Arc<Database>,
@@ -256,9 +337,9 @@ impl QuotaService {
         codex_oauth_manager: Arc<RwLock<CodexOAuthManager>>,
     ) -> Self {
         let mut collectors = Self::legacy_collectors();
-        collectors.push(Arc::new(ManagedCodexOAuthQuotaCollector {
-            manager: codex_oauth_manager,
-        }));
+        collectors.push(Arc::new(CodexChainCollector::production(
+            codex_oauth_manager,
+        )));
         Self::with_collectors(db, collectors)
     }
 
@@ -887,14 +968,15 @@ mod tests {
         assert!(!service.collectors.contains_key("claude_oauth"));
         assert_eq!(Arc::strong_count(&manager), 2);
 
+        // 生产链的 collect 会读本机真实 ~/.codex/auth.json 并可能发网络请求,
+        // 不在单测里调用;这里直接验证链的第一层(自管 OAuth)在空账号库下
+        // 返回 NotFound。链结构本身由 CodexChainCollector 单测覆盖。
         let provider = db
             .get_usage_provider(crate::usage::system_providers::CHATGPT_SUBSCRIPTION_ID)
             .unwrap()
             .unwrap();
-        let quota = service.collectors[MANAGED_CODEX_QUOTA_SOURCE]
-            .collect(&provider, true)
-            .await
-            .unwrap();
+        let managed = ManagedCodexOAuthQuotaCollector { manager };
+        let quota = managed.collect(&provider, true).await.unwrap();
         assert!(!quota.success);
         assert!(matches!(
             quota.credential_status,
@@ -994,6 +1076,59 @@ mod tests {
             error,
             "claude quota chain failed: \
              oauth(claude_oauth_consent_required) → probe(probe failed) → local(local stage failed)"
+        );
+    }
+
+    // ── Codex 回退链 ────────────────────────────────────
+
+    #[tokio::test]
+    async fn codex_chain_returns_first_successful_stage() {
+        for winner in 0..3 {
+            let calls = [
+                Arc::new(AtomicUsize::new(0)),
+                Arc::new(AtomicUsize::new(0)),
+                Arc::new(AtomicUsize::new(0)),
+            ];
+            let stage = |index: usize| -> Result<SubscriptionQuota, String> {
+                if index == winner {
+                    Ok(successful_quota("codex"))
+                } else {
+                    Err(format!("stage-{index}-failed"))
+                }
+            };
+            let collector = CodexChainCollector::with_stages(
+                chain_stage(stage(0), calls[0].clone()),
+                chain_stage(stage(1), calls[1].clone()),
+                chain_stage(stage(2), calls[2].clone()),
+            );
+            let quota = collector
+                .collect(&stored_provider(), false)
+                .await
+                .expect("chain succeeds");
+            assert!(quota.success, "winner stage {winner}");
+            for (index, calls) in calls.iter().enumerate() {
+                assert_eq!(calls.load(Ordering::SeqCst), usize::from(index <= winner));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn codex_chain_summary_keeps_stage_codes_in_order() {
+        let collector = CodexChainCollector::with_stages(
+            chain_stage(
+                Ok(SubscriptionQuota::not_found("codex_oauth")),
+                Arc::new(AtomicUsize::new(0)),
+            ),
+            chain_stage(Err("cli failed".to_string()), Arc::new(AtomicUsize::new(0))),
+            chain_stage(Err("probe failed".to_string()), Arc::new(AtomicUsize::new(0))),
+        );
+        let error = collector
+            .collect(&stored_provider(), false)
+            .await
+            .expect_err("all stages fail");
+        assert_eq!(
+            error,
+            "codex quota chain failed: managed(quota collection failed) → cli(cli failed) → probe(probe failed)"
         );
     }
 

@@ -4,8 +4,8 @@
 //! status-line 作为可验证的补充来源；其他工具沿用各自现有实现。
 
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
 
 use std::collections::HashMap;
@@ -645,6 +645,30 @@ fn codex_reset_credits_url(base: &str) -> String {
     format!("{base}/wham/rate-limit-reset-credits")
 }
 
+/// wham 接口 429 限流冷却(进程内,对齐 claude_oauth 层)。
+const CODEX_RATE_LIMIT_DEFAULT_BLOCK_SECS: u64 = 5 * 60;
+
+fn codex_rate_limit_block() -> &'static Mutex<Option<Instant>> {
+    static BLOCK: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
+    BLOCK.get_or_init(|| Mutex::new(None))
+}
+
+fn codex_is_rate_limited() -> bool {
+    codex_rate_limit_block()
+        .lock()
+        .map(|guard| guard.is_some_and(|until| until > Instant::now()))
+        .unwrap_or(false)
+}
+
+fn record_codex_rate_limited(retry_after_secs: Option<u64>) {
+    let secs = retry_after_secs
+        .unwrap_or(CODEX_RATE_LIMIT_DEFAULT_BLOCK_SECS)
+        .max(1);
+    if let Ok(mut guard) = codex_rate_limit_block().lock() {
+        *guard = Some(Instant::now() + Duration::from_secs(secs));
+    }
+}
+
 fn codex_wham_get(
     client: &reqwest::Client,
     url: &str,
@@ -723,6 +747,11 @@ pub(crate) async fn query_codex_quota(
     let client = crate::http_client::get();
     let base = codex_chatgpt_base_url();
 
+    if codex_is_rate_limited() {
+        // 429 冷却期内直接判失败,让回退链/调度器退避,不再打接口。
+        return Err("codex_quota_rate_limited".to_string());
+    }
+
     let resp = match codex_wham_get(
         &client,
         &codex_usage_url(&base),
@@ -743,6 +772,22 @@ pub(crate) async fn query_codex_quota(
             tool_label,
             CredentialStatus::Expired,
             format!("{expired_message} (HTTP {status})"),
+        ));
+    }
+
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        // 记录限流冷却;后续请求在冷却期内直接失败,让链降级、不再打接口。
+        let retry_after = crate::usage::claude_oauth::parse_retry_after(
+            resp.headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|value| value.to_str().ok()),
+            chrono::Utc::now(),
+        );
+        record_codex_rate_limited(retry_after);
+        return Ok(SubscriptionQuota::error(
+            tool_label,
+            CredentialStatus::Valid,
+            "codex_quota_rate_limited".to_string(),
         ));
     }
 

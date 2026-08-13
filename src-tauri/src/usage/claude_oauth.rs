@@ -336,8 +336,8 @@ fn record_rate_limited(retry_after_secs: Option<u64>) {
     }
 }
 
-/// 解析 Retry-After：整数秒或 HTTP-date（GMT）。
-fn parse_retry_after(value: Option<&str>, now: chrono::DateTime<chrono::Utc>) -> Option<u64> {
+/// 解析 Retry-After：整数秒或 HTTP-date（GMT）。Codex wham 层复用同一实现。
+pub(crate) fn parse_retry_after(value: Option<&str>, now: chrono::DateTime<chrono::Utc>) -> Option<u64> {
     let value = value?.trim();
     if let Ok(seconds) = value.parse::<u64>() {
         return Some(seconds);
