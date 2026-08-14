@@ -236,6 +236,14 @@ pub trait SessionLogParser {
         None
     }
 
+    /// 本轮有插入失败时,是否放弃推进这个文件的游标(下轮整文件重读)。
+    /// 默认 `false`——即 claude/codex 现在的行为(失败只记 log,游标照常推进)。
+    /// 去重按 request_id 幂等,所以整文件重读与只重试失败记录结果一致,
+    /// 只是多花一次解析。
+    fn retry_file_on_insert_failure(&self) -> bool {
+        false
+    }
+
     /// 一轮同步结束后的汇总日志。默认实现,各解析器可按需覆盖。
     fn log_summary(&self, result: &SessionSyncResult) {
         log::info!(
@@ -404,6 +412,7 @@ pub(crate) fn sync_file_with_parser(
 
     let mut imported: u32 = 0;
     let mut skipped: u32 = 0;
+    let mut had_insert_failure = false;
     for record in &output.records {
         match insert_usage_record(
             db,
@@ -418,12 +427,20 @@ pub(crate) fn sync_file_with_parser(
                 if bound_provider_id.is_some() {
                     return Err(e);
                 }
+                had_insert_failure = true;
                 if let Some(message) = parser.log_insert_failure(record, &e) {
                     errors.push(message);
                 }
                 skipped += 1;
             }
         }
+    }
+
+    // 插入失败驱动的文件级重试:解析器要求时,本轮有任何插入失败就不推进
+    // 游标(parser_state_json 同样不写),下轮整文件重读。去重按 request_id
+    // 幂等,重读不会重复入库。默认 false = claude/codex 现状。
+    if had_insert_failure && parser.retry_file_on_insert_failure() {
+        return Ok((imported, skipped));
     }
 
     update_sync_state_for_resource(
@@ -1074,13 +1091,14 @@ mod tests {
 
     // ── T14a 新增测试:五个新槽位的契约 ──
 
-    /// 新接口钩子的测试替身:可配置辅助变更源、下轮私有状态与插入失败消息,
-    /// 并记录每轮 parse 实际看到的私有状态(断言跨轮带回用)。
+    /// 新接口钩子的测试替身:可配置辅助变更源、下轮私有状态、插入失败消息与
+    /// 插入失败后的文件级重试要求,并记录每轮 parse 实际看到的私有状态。
     struct HookProbeParser {
         root: PathBuf,
         extra_sources: Vec<PathBuf>,
         next_state: Option<String>,
         insert_failure_message: Option<String>,
+        retry_on_insert_failure: bool,
         observed_states: std::cell::RefCell<Vec<Option<String>>>,
     }
 
@@ -1091,6 +1109,7 @@ mod tests {
                 extra_sources: Vec::new(),
                 next_state: None,
                 insert_failure_message: None,
+                retry_on_insert_failure: false,
                 observed_states: std::cell::RefCell::new(Vec::new()),
             }
         }
@@ -1107,6 +1126,11 @@ mod tests {
 
         fn with_insert_failure_message(mut self, message: Option<String>) -> Self {
             self.insert_failure_message = message;
+            self
+        }
+
+        fn with_retry_file_on_insert_failure(mut self, retry: bool) -> Self {
+            self.retry_on_insert_failure = retry;
             self
         }
     }
@@ -1175,6 +1199,10 @@ mod tests {
             self.insert_failure_message
                 .as_ref()
                 .map(|message| format!("{message} ({})", record.identity.log_label))
+        }
+
+        fn retry_file_on_insert_failure(&self) -> bool {
+            self.retry_on_insert_failure
         }
     }
 
@@ -1536,6 +1564,111 @@ mod tests {
             None
         )?);
         assert_eq!(subscription_activity_mark_count("t14a-sentinel-sub"), 1);
+        Ok(())
+    }
+
+    // ── T14b §0.1:retry_file_on_insert_failure 的两条契约 ──
+
+    /// 默认 `false` 时,插入失败游标照常推进——claude/codex 的现状不变。
+    #[test]
+    fn insert_failure_advances_the_cursor_when_retry_is_off_by_default() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let tmp = probe_temp_dir("retry-default");
+        fs::create_dir_all(&tmp).unwrap();
+        let file = tmp.join("session.jsonl");
+        fs::write(&file, "{\"n\":1}\n").unwrap();
+        {
+            let conn = lock_conn!(db.conn);
+            conn.execute_batch(
+                "CREATE TRIGGER t14a_fail_all
+                 BEFORE INSERT ON proxy_request_logs
+                 BEGIN SELECT RAISE(FAIL, 'forced t14a insert failure'); END",
+            )?;
+        }
+
+        // 探针没开重试(默认 false):插入失败只记 log,游标照常推进。
+        let parser = HookProbeParser::new(tmp.clone());
+        assert_eq!(sync_one_file(&db, &parser, &file, None)?, (0, 1));
+        let path_str = file.to_string_lossy().to_string();
+        let (last_modified, last_offset) = get_sync_state(&db, "t14a-probe", &path_str)?;
+        assert!(
+            last_modified > 0,
+            "默认 false 时游标必须照常推进,失败记录不重试"
+        );
+        assert_eq!(last_offset, 1, "水位线照常推进到文件行数");
+
+        {
+            let conn = lock_conn!(db.conn);
+            conn.execute_batch("DROP TRIGGER t14a_fail_all;")?;
+        }
+        fs::remove_dir_all(&tmp).ok();
+        Ok(())
+    }
+
+    /// 返回 `true` 时,插入失败后游标不推进;下一轮重读同一文件,已入库的
+    /// 记录不重复插入(证明重读是幂等的)。
+    #[test]
+    fn insert_failure_keeps_the_cursor_back_for_a_full_file_retry() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let tmp = probe_temp_dir("retry-file");
+        fs::create_dir_all(&tmp).unwrap();
+        let file = tmp.join("session.jsonl");
+        fs::write(&file, "{\"n\":1}\n{\"n\":2}\n").unwrap();
+        let path_str = file.to_string_lossy().to_string();
+
+        // 只让第二条插入失败,模拟「部分成功、部分失败」的一轮。
+        {
+            let conn = lock_conn!(db.conn);
+            conn.execute_batch(
+                "CREATE TRIGGER t14a_fail_second
+                 BEFORE INSERT ON proxy_request_logs
+                 WHEN NEW.request_id = 't14a-probe:2'
+                 BEGIN SELECT RAISE(FAIL, 'forced t14a insert failure'); END",
+            )?;
+        }
+
+        let parser = HookProbeParser::new(tmp.clone())
+            .with_insert_failure_message(Some("插入失败已上报".to_string()))
+            .with_retry_file_on_insert_failure(true);
+        assert_eq!(
+            sync_one_file(&db, &parser, &file, None)?,
+            (1, 1),
+            "第一条入库、第二条失败"
+        );
+        assert_eq!(
+            get_sync_state(&db, "t14a-probe", &path_str)?,
+            (0, 0),
+            "有插入失败且要求重试时,游标不得推进"
+        );
+
+        // 下一轮:触发器已拆,整文件重读。第一条按 request_id 去重不重复入库,
+        // 第二条补上。
+        {
+            let conn = lock_conn!(db.conn);
+            conn.execute_batch("DROP TRIGGER t14a_fail_second;")?;
+        }
+        let retry = HookProbeParser::new(tmp.clone()).with_retry_file_on_insert_failure(true);
+        assert_eq!(
+            sync_one_file(&db, &retry, &file, None)?,
+            (1, 1),
+            "重读幂等:第一条被去重跳过,第二条成功入库"
+        );
+
+        let (row_count, distinct_requests): (i64, i64) = {
+            let conn = lock_conn!(db.conn);
+            conn.query_row(
+                "SELECT COUNT(*), COUNT(DISTINCT request_id) FROM proxy_request_logs",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?
+        };
+        assert_eq!((row_count, distinct_requests), (2, 2), "重读不得重复插入");
+        assert!(
+            get_sync_state(&db, "t14a-probe", &path_str)?.0 > 0,
+            "整轮成功后游标才推进"
+        );
+
+        fs::remove_dir_all(&tmp).ok();
         Ok(())
     }
 }
