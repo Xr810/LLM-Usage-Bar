@@ -339,11 +339,34 @@ pub async fn inspect_router_pointer() -> Result<PointerStateView, String> {
     })
 }
 
+/// 写指针前的守卫判定(纯函数,不读全局状态)。
+///
+/// `listening` 由调用方传入:进程级的 LISTENING_PORT 是全局状态,测试之间会
+/// 互相污染,判定抽成纯函数才能用纯输入测。两种情况分别给用户能执行的下一步:
+/// - 没监听:最常见的原因是端口被占(上一次 app 没退干净),换端口或重启 app;
+/// - 端口不一致:改过 router.port 但没重启 app,重启后实际监听才对得上。
+fn pointer_enable_guard(configured_port: u16, listening: Option<u16>) -> Result<(), String> {
+    match listening {
+        None => Err(format!(
+            "router 没能在端口 {configured_port} 上启动,最常见的原因是端口被占用;\
+             请换一个端口或重启 app 后再启用"
+        )),
+        Some(actual) if actual != configured_port => Err(format!(
+            "配置的 router 端口是 {configured_port},实际监听的是 {actual};\
+             修改端口后需要重启 app 才能生效,重启后再启用"
+        )),
+        Some(_) => Ok(()),
+    }
+}
+
 /// 用户显式点「启用」时调用:写一次指针(决定 34,之后永不再改)。
+/// 写之前先确认 router 真的在监听——端口被占时 router 没起来,把指针写进去
+/// 会让 Codex 每个请求都变成「连接被拒」,而指针按设计不能再改回去。
 /// 写入成功后清掉缺口标记——指针刚被自己接管,缺口到此结束。
 #[tauri::command]
 pub async fn enable_router_pointer(state: tauri::State<'_, AppState>) -> Result<(), String> {
     let port = read_router_port(state.db.as_ref());
+    pointer_enable_guard(port, crate::router::server::listening_port())?;
     crate::router::pointer::point_codex_at_router(port).map_err(|e| e.to_string())?;
     if let Err(error) = apply_pointer_gap_marker(state.db.as_ref(), &PointerState::OursAndCurrent) {
         // 指针已经写成功,标记清不掉只是 UI 上缺口提示还在,不把成功改成失败。
@@ -622,5 +645,33 @@ mod tests {
         assert_eq!(get_router_mode_impl(&db).unwrap(), "auto");
         db.set_setting("router.mode", "manual:packyapi").unwrap();
         assert_eq!(get_router_mode_impl(&db).unwrap(), "manual:packyapi");
+    }
+
+    // T12 §3:守卫判定是纯函数,直接测三种输入,不读进程级全局状态。
+
+    /// 1. 没在监听:Err,信息里必须含配置的端口号。
+    #[test]
+    fn pointer_enable_guard_rejects_when_not_listening() {
+        let error = pointer_enable_guard(8788, None).unwrap_err();
+        assert!(
+            error.contains("8788"),
+            "错误信息必须含配置的端口号,实际是: {error}"
+        );
+    }
+
+    /// 2. 实际监听与配置一致:Ok。
+    #[test]
+    fn pointer_enable_guard_passes_when_port_matches() {
+        assert!(pointer_enable_guard(8788, Some(8788)).is_ok());
+    }
+
+    /// 3. 实际监听与配置不一致:Err,且信息里两个端口都必须出现——用户要能看出「配的是这个、实际是那个」。
+    #[test]
+    fn pointer_enable_guard_rejects_when_port_mismatches() {
+        let error = pointer_enable_guard(8788, Some(9000)).unwrap_err();
+        assert!(
+            error.contains("8788") && error.contains("9000"),
+            "错误信息必须同时含配置端口与实际监听端口,实际是: {error}"
+        );
     }
 }
