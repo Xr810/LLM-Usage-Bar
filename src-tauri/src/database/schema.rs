@@ -410,6 +410,11 @@ impl Database {
                         Self::migrate_v26_to_v27(conn)?;
                         Self::set_user_version(conn, 27)?;
                     }
+                    27 => {
+                        log::info!("迁移数据库从 v27 到 v28（router_providers 增加凭据来源列）");
+                        Self::migrate_v27_to_v28(conn)?;
+                        Self::set_user_version(conn, 28)?;
+                    }
                     _ => {
                         return Err(AppError::Database(format!(
                             "未知的数据库版本 {version}，无法迁移到 {SCHEMA_VERSION}"
@@ -1811,6 +1816,26 @@ impl Database {
                  ON router_attempts(provider_id, started_at);",
         )
         .map_err(|error| AppError::Database(format!("v26 -> v27 创建路由存储表失败: {error}")))
+    }
+
+    /// v27 -> v28 迁移:给 router_providers 加凭据来源两列。
+    ///
+    /// `auth_kind` 只记「凭据从哪来」,`credential_key_id` 只记「去哪把凭据取出来」
+    /// (provider_api_keys.id 的引用)——两列都不承载凭据本身,不破坏 T3
+    /// 「这三张表不存凭据」的规矩。
+    ///
+    /// 与 v26 -> v27 一样保持可重入:回卷 user_version 的迁移测试会把整条链
+    /// 重跑一遍,而内存库建库时已经带上了这两列,再 ALTER 会报重复列名,
+    /// 所以列已存在时跳过。
+    fn migrate_v27_to_v28(conn: &Connection) -> Result<(), AppError> {
+        if Self::has_column(conn, "router_providers", "auth_kind")? {
+            return Ok(());
+        }
+        conn.execute_batch(
+            "ALTER TABLE router_providers ADD COLUMN auth_kind TEXT NOT NULL DEFAULT 'none';
+             ALTER TABLE router_providers ADD COLUMN credential_key_id TEXT;",
+        )
+        .map_err(|error| AppError::Database(format!("v27 -> v28 添加路由凭据列失败: {error}")))
     }
 
     /// 插入默认模型定价数据

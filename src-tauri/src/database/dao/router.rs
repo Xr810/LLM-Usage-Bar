@@ -11,12 +11,24 @@ pub struct RouterProvider {
     pub wire_api: WireApi,
     pub priority: i64,
     pub enabled: bool,
+    /// 这家 provider 的凭据从哪来(T9)。只描述来源,不承载凭据本身。
+    pub auth_kind: RouterAuthKind,
+    /// `auth_kind = BearerKey` 时指向 provider_api_keys.id 的引用。
+    /// 它只是「去哪把凭据取出来」,不是凭据本身。
+    pub credential_key_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WireApi {
     Responses,
     ChatCompletions,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RouterAuthKind {
+    ChatgptOauth,
+    BearerKey,
+    None,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -77,6 +89,23 @@ fn wire_api_from_db(raw: &str) -> Result<WireApi, AppError> {
     }
 }
 
+fn auth_kind_to_db(kind: RouterAuthKind) -> &'static str {
+    match kind {
+        RouterAuthKind::ChatgptOauth => "chatgpt_oauth",
+        RouterAuthKind::BearerKey => "bearer_key",
+        RouterAuthKind::None => "none",
+    }
+}
+
+fn auth_kind_from_db(raw: &str) -> Result<RouterAuthKind, AppError> {
+    match raw {
+        "chatgpt_oauth" => Ok(RouterAuthKind::ChatgptOauth),
+        "bearer_key" => Ok(RouterAuthKind::BearerKey),
+        "none" => Ok(RouterAuthKind::None),
+        other => Err(AppError::Database(format!("非法 auth_kind 值: {other}"))),
+    }
+}
+
 /// 读回 attempt 行时把 outcome 字符串转回枚举(`outcome_to_db` 的反方向)。
 ///
 /// T3 误把这份放进了 tests 里,生产代码取不到;T6 按任务书 §4.3.1 提到生产区。
@@ -106,7 +135,8 @@ impl Database {
     pub fn list_router_providers(&self) -> Result<Vec<RouterProvider>, AppError> {
         let conn = lock_conn!(self.conn);
         let mut statement = conn.prepare(
-            "SELECT id, display_name, base_url, wire_api, priority, enabled
+            "SELECT id, display_name, base_url, wire_api, priority, enabled,
+                    auth_kind, credential_key_id
              FROM router_providers
              WHERE enabled = 1
              ORDER BY priority ASC, id ASC",
@@ -120,12 +150,14 @@ impl Database {
                     row.get::<_, String>(3)?,
                     row.get::<_, i64>(4)?,
                     row.get::<_, bool>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, Option<String>>(7)?,
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
         rows.into_iter()
             .map(
-                |(id, display_name, base_url, wire_raw, priority, enabled)| {
+                |(id, display_name, base_url, wire_raw, priority, enabled, auth_raw, key_id)| {
                     Ok(RouterProvider {
                         id,
                         display_name,
@@ -133,6 +165,8 @@ impl Database {
                         wire_api: wire_api_from_db(&wire_raw)?,
                         priority,
                         enabled,
+                        auth_kind: auth_kind_from_db(&auth_raw)?,
+                        credential_key_id: key_id,
                     })
                 },
             )
@@ -169,14 +203,16 @@ impl Database {
         conn.execute(
             "INSERT INTO router_providers (
                  id, display_name, base_url, wire_api, priority, enabled,
-                 created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)
+                 auth_kind, credential_key_id, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)
              ON CONFLICT(id) DO UPDATE SET
                  display_name = excluded.display_name,
                  base_url = excluded.base_url,
                  wire_api = excluded.wire_api,
                  priority = excluded.priority,
                  enabled = excluded.enabled,
+                 auth_kind = excluded.auth_kind,
+                 credential_key_id = excluded.credential_key_id,
                  updated_at = excluded.updated_at",
             params![
                 p.id,
@@ -185,6 +221,8 @@ impl Database {
                 wire_api_to_db(p.wire_api),
                 p.priority,
                 p.enabled,
+                auth_kind_to_db(p.auth_kind),
+                p.credential_key_id,
                 now,
             ],
         )?;
@@ -295,6 +333,8 @@ mod tests {
             wire_api: WireApi::Responses,
             priority,
             enabled,
+            auth_kind: RouterAuthKind::None,
+            credential_key_id: None,
         }
     }
 

@@ -39,7 +39,9 @@ pub(crate) use dao::provider_credentials::{
     ProviderCredentialSnapshot,
 };
 pub(crate) use dao::provider_key_usage::ProviderKeyUsageSnapshotInput;
-pub(crate) use dao::router::{AttemptOutcome, ModelRoute, RouterAttempt, RouterProvider, WireApi};
+pub(crate) use dao::router::{
+    AttemptOutcome, ModelRoute, RouterAttempt, RouterAuthKind, RouterProvider, WireApi,
+};
 pub use dao::usage_sync_cursors::UsageSyncCursor;
 pub(crate) use identity_migration::{prepare_database_identity, DatabaseIdentityOutcome};
 
@@ -56,7 +58,7 @@ use std::sync::Mutex;
 
 /// 当前 Schema 版本号
 /// 每次修改表结构时递增，并在 schema.rs 中添加相应的迁移逻辑
-pub(crate) const SCHEMA_VERSION: i32 = 27;
+pub(crate) const SCHEMA_VERSION: i32 = 28;
 
 /// 安全地序列化 JSON，避免 unwrap panic
 pub(crate) fn to_json_string<T: Serialize>(value: &T) -> Result<String, AppError> {

@@ -220,7 +220,8 @@ pub fn create_schema_v13_fixture_test_hook(path: &Path) -> Result<(), AppError> 
     // and credential-journal tables onto it — all tables introduced well after
     // v13, so the baseline below is untouched.
     // Reviewed for schema v27: v26 -> v27 只新增三张 router_* 表，与 v13 基线无关。
-    if database::SCHEMA_VERSION != 27
+    // Reviewed for schema v28: v27 -> v28 只给 router_providers 加两个可空/带默认的列，与 v13 基线无关。
+    if database::SCHEMA_VERSION != 28
         || product_identity::DATABASE_IDENTITY_SOURCE_SCHEMA_VERSION != 13
     {
         return Err(AppError::Database(
