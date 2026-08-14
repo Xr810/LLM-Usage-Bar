@@ -1,7 +1,10 @@
 # 模块化:一个 core + provider 模块 + 多个前端面板
 
-> **状态:讨论产物,未批准。** 2026-08-14 与用户讨论后整理,不是已批准的规格,
-> 也没有排期。与 [`2026-08-14-local-routing-design.md`](2026-08-14-local-routing-design.md)
+> **状态:2026-08-14 已批准。** §10 的第一步、第二步已拆成
+> [`../tasks/T1-ingest-pipeline.md`](../tasks/T1-ingest-pipeline.md) 与
+> [`../tasks/T2-subscription-split.md`](../tasks/T2-subscription-split.md) 落地;
+> 第三步(把 provider 概念请出数据库层)仍是远期,未排期。
+> 与 [`2026-08-14-local-routing-design.md`](2026-08-14-local-routing-design.md)
 > 正交——本地路由做不做、怎么做,都不影响这份的结论。
 
 ---

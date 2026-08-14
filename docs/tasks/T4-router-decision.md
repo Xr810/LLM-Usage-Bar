@@ -30,6 +30,9 @@
 use crate::database::dao::router::ModelRoute;
 
 /// 路由模式。自动:按顺序试、失败换下一家。手动:只用指定那家,不换。
+///
+/// **模式从哪来不归本任务管**——调用方(T6)从 `settings` 表的 `router.mode`
+/// 读出字符串再转成这个枚举。本文件里**不要**出现任何读配置的代码。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RouteMode {
     Auto,

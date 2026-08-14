@@ -90,14 +90,28 @@ pub fn classify(result: &AttemptResult, already_streaming: bool) -> Option<Failu
 
 | 输入 | kind | try_next | blacklist | cooldown |
 | --- | --- | --- | --- | --- |
-| `Http { status: 200..=299 }` | — | — | 返回 `None`(成功) | — |
-| `ConnectFailed` | `Connect` | ✅ | `WholeProvider` | 60 |
-| `FirstByteTimeout` | `Timeout` | ✅ | `WholeProvider` | 60 |
-| `Http { 429 }` | `RateLimited` | ✅ | `ThisRoute` | 60 |
-| `Http { 500..=599 }` | `ServerError` | ✅ | `ThisRoute` | 60 |
-| `Http { 404 }` **或** `Http { 400 }` 且 body 含模型不存在的迹象 | `ModelNotFound` | ✅ | `ThisRoute` | **600** |
-| 其余 `Http { 400..=499 }` | `RequestRejected` | ❌ | `None` | — |
-| `StreamBroken` | `StreamBroken` | ❌ | `None` | — |
+**按这个顺序判,先命中先返回**(429 和 404 都落在 4xx 区间里,顺序错了就归错类):
+
+| # | 输入 | kind | try_next | blacklist | cooldown |
+| --- | --- | --- | --- | --- | --- |
+| 1 | `Http { status: 200..=299 }` | — | — | 返回 `None`(成功) | — |
+| 2 | `ConnectFailed` | `Connect` | ✅ | `WholeProvider` | 60 |
+| 3 | `FirstByteTimeout` | `Timeout` | ✅ | `WholeProvider` | 60 |
+| 4 | `StreamBroken` | `StreamBroken` | ❌ | `None` | — |
+| 5 | `Http { 429 }` | `RateLimited` | ✅ | `ThisRoute` | 60 |
+| 6 | `Http { 404 }` **或** `Http { 400 }` 且 body 含模型不存在的迹象 | `ModelNotFound` | ✅ | `ThisRoute` | **600** |
+| 7 | 其余 `Http { 400..=499 }` | `RequestRejected` | ❌ | `None` | — |
+| 8 | `Http { 500..=599 }` | `ServerError` | ✅ | `ThisRoute` | 60 |
+| 9 | **其余一切 `Http`(1xx、3xx、≥600)** | `RequestRejected` | ❌ | `None` | — |
+
+### 3.0 第 9 行为什么要有
+
+上游正常工作时不该出现 1xx / 3xx —— reqwest 自己跟重定向,3xx 漏到这里说明
+**配置错了(base_url 指到了一个会重定向的地方)**,换一家不会更好,拉黑还会掩盖问题。
+所以归到「换一家也是同样的错」这一类,原样透传给客户端让用户看见。
+
+**这一行不是可选的**:没有它,`classify` 对 302 就没有定义好的返回值,
+实现者只能自己瞎猜或者 panic。
 
 ### 3.1 「模型不存在」怎么判
 
@@ -147,9 +161,13 @@ no such model
 | 14 | 429 但 `already_streaming = true` | **try_next 为 false** |
 | 15 | `StreamBroken` | 不换、不拉黑 |
 | 16 | 404 但 body 里没有任何关键词 | 仍然是 `ModelNotFound`(404 本身就够) |
+| 17 | 302 | `RequestRejected` / 不换 / 不拉黑(判定表第 9 行) |
+| 18 | 100 | `RequestRejected` / 不换 / 不拉黑 |
+| 19 | `ConnectFailed` 且 `already_streaming = true` | **try_next 为 false**,但仍然 `WholeProvider` 拉黑 60 秒 |
 
-第 13、14 条是这个任务最容易写错的地方:**已经吐字了就不能换,但该拉黑还是要拉黑**
-——下一次请求应该跳过这家。
+第 13、14、19 条是这个任务最容易写错的地方:**已经吐字了就不能换,但该拉黑还是要拉黑**
+——下一次请求应该跳过这家。注意第 19 条:`already_streaming` 的压制是**全局**的,
+不只作用于 HTTP 分支。
 
 ---
 
@@ -166,5 +184,5 @@ no such model
 
 - 文件建好并挂上 `pub mod failure;`
 - 签名与本文完全一致
-- 16 条测试全部通过
+- 19 条测试全部通过
 - 六项检查全绿,`test result:` 行贴进报告

@@ -47,8 +47,11 @@ pub fn point_codex_at_router(port: u16) -> Result<(), AppError>;
 - **原子写入**:写临时文件再 rename,不要直接截断原文件
 - **写完必须读回校验**:能被 TOML 解析、且 `model_provider` 确实是新值。
   校验失败就**用备份还原**并返回 `Err`
-- **绝不整体重写文件**。仓库里 `~/.local/bin/codex-provider` 那个脚本用 awk 只改
-  顶层一行、其余原样透传,思路照抄它
+- **绝不整体重写文件。** 用 `toml_edit`(已在依赖里,`0.25`)—— 它就是为
+  「保留注释和格式的就地改写」造的。**不要用 `toml` crate 反序列化再序列化回去**,
+  那会丢掉全部注释和键序
+- 只允许出现两种改动:替换顶层 `model_provider` 那一个键的值,
+  和追加一个 `[model_providers.llm_usage_bar_router]` 段。**别的一律不动**
 
 ### 3.2 写入内容
 
@@ -60,6 +63,10 @@ name = "LLM Usage Bar Router"
 base_url = "http://127.0.0.1:<port>/v1"
 wire_api = "responses"
 ```
+
+**`base_url` 末尾的 `/v1` 是硬契约**(README §2.2):Codex 会往它后面接
+`/responses`,而 T6 注册的正是 `POST /v1/responses`。**少写或多写这一段,
+两边就对不上了**,而且表现为一个本地 404,很难查。
 
 **注意 `requires_openai_auth` 与 `experimental_bearer_token` 不写在这里** ——
 那两个键是"直连某一家"时才需要的(见 `HANDOFF.md` §13),经由 router 时认证由

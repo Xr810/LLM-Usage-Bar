@@ -20,6 +20,32 @@
 照抄现有 `migrate_vN_to_vN1` 的写法(文件里有十几个例子),函数名
 `migrate_v26_to_v27`,并在版本分发的地方接上。**不要发明新的迁移机制。**
 
+### 1.0 改版本号会连带撞坏四处 —— 这四处也归你改
+
+**这是本任务唯一被授权越界的地方,除此之外仍然适用 README 铁律 3。**
+不改这四处,`pnpm rust -- test` 必挂,「六项全绿」不可能达成:
+
+| 文件 | 位置 | 怎么改 |
+| --- | --- | --- |
+| `src-tauri/src/lib.rs` | **219** | `if database::SCHEMA_VERSION != 26` → `!= 27` |
+| `src-tauri/src/lib.rs` | 210–218 的注释块 | **末尾追加一句** `// Reviewed for schema v27: v26 -> v27 只新增三张 router_* 表，与 v13 基线无关。` |
+| `src-tauri/src/database/tests.rs` | **3124** | `assert_eq!(..., 26)` → `27` |
+| `src-tauri/src/database/tests.rs` | **3180** | 同上 |
+| `src-tauri/src/database/tests.rs` | **3229** | 同上 |
+
+`lib.rs:219` 那个守卫是**故意**长这样的:它逼着每次动 schema 版本的人回去确认
+v13 fixture 构造器还成立。所以**必须补那句 review 注释**,不能只改数字。
+
+这四处**只改这些**,`tests.rs` 里其余断言(表名、列名、行数)一个字不动 ——
+它们仍然成立,因为 v26→v27 只加新表。
+
+### 1.1 新库也走迁移链,不要动 `create_tables_on_conn`
+
+`Database::memory()` 和全新安装都是 `user_version = 0` 起步,把整条迁移链走一遍
+(`schema.rs:251` 的 `while version < SCHEMA_VERSION`)。所以**三张表只写在
+`migrate_v26_to_v27` 里就够了**,不要再往 `create_tables_on_conn` 里抄一份 ——
+抄了就是两处定义,以后必然漂移。
+
 ### 表 1:`router_providers` —— 有哪些上游
 
 ```sql
@@ -209,6 +235,10 @@ pub struct RouterUsageSummary {
 - ❌ 不要碰 `config.toml`(那是 T7)
 - ❌ 不要改 `usage_events` 或任何现有的表
 - ❌ 不要在这三张表里存凭据、token、API key
+- ❌ **不要为「路由模式」建表或建列** —— 它存在现有 `settings` 表里,键
+  `router.mode`,由 T6 用 `get_setting` / `set_setting` 读写(见 README §2.2)
+- ❌ 不要动 `create_tables_on_conn`(理由见 §1.1)
+- ❌ 除 §1.0 那四处外,不要改任何其他文件
 - ❌ 不要加新依赖
 
 ---
@@ -216,7 +246,10 @@ pub struct RouterUsageSummary {
 ## 5. 完成的标准
 
 - `SCHEMA_VERSION` 已改为 27,迁移函数已接上版本分发
+- §1.0 的四处连带改动已完成,**其中包括那句 v27 的 review 注释**
 - 三张表 + 两个索引建出来了
 - 上面列的 DAO 方法全部实现,签名与本文一致
 - 七条测试全部通过
 - 六项检查全绿(README §0 第 6 条),并把 `test result:` 行贴进报告
+
+**T4、T5、T7 三个任务都在等这个合并。做完立刻报告,不要顺手往下做别的。**

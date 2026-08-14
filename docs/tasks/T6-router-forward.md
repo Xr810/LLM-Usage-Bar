@@ -21,6 +21,28 @@
   **不要 `reqwest::Client::new()`** —— 那样每次都新建连接池。
 - 异步运行时:已有的 tokio。**不要自己建 Runtime**,用 `tauri::async_runtime::spawn`。
 
+### 1.1 共享 client 有两个坑,都得绕(先读这条再写转发)
+
+看 `src-tauri/src/http_client.rs:245`:
+
+```rust
+Client::builder()
+    .timeout(Duration::from_secs(600))
+    .connect_timeout(Duration::from_secs(30))
+```
+
+**坑一:那个 600 秒是整个请求的总时长上限,包含流式响应体。**
+一次长对话的 SSE 流跑过 10 分钟就会被拦腰砍断,而且看起来像上游断流。
+转发**必须**用 `RequestBuilder::timeout(...)` 覆盖成一个足够大的值(建议
+**3600 秒**),或者在这条请求上关掉总超时。**不要去改全局 client 的配置** ——
+那会影响 app 里其他所有请求。
+
+**坑二:共享 client 没有 read_timeout,拿不到「首字节超时」这个信号。**
+T5 的 `AttemptResult::FirstByteTimeout` 要你自己造:用
+`tokio::time::timeout(Duration::from_secs(60), client.send()).await`
+包住「发出去到拿到响应头」这一段,超时了就产出 `FirstByteTimeout`。
+**首字节之后的流不要再套这个超时** —— 那是正常的长流。
+
 ---
 
 ## 2. 新建文件
@@ -36,27 +58,58 @@ src-tauri/src/router/server.rs     监听、路由、转发
 ## 3. 对外接口(照写)
 
 ```rust
+/// 上游认证头的提供方。**router 自己不持有任何凭据**——它只在要发请求的那一刻
+/// 问一次「这家的认证头是什么」，拿到就用，用完不留。
+///
+/// 返回的是要原样加到上游请求上的头（通常是一个 `Authorization`，
+/// 但某些 provider 需要多个，所以是 Vec）。
+/// 返回 `Ok(vec![])` 表示这家不需要认证头；返回 `Err` 表示凭据取不到，
+/// 调用方应把这个候选当作失败（`RequestRejected`，不换下一家没意义——
+/// 换一家是另一份凭据，所以这里**换**）。
+pub trait UpstreamAuth: Send + Sync {
+    fn headers_for(&self, provider_id: &str) -> Result<Vec<(String, String)>, AppError>;
+}
+
 /// 启动本地路由服务。绑定失败返回 Err，由调用方决定怎么提示。
 ///
 /// 必须在 app 启动流程的**早期**调用——先把端口开起来，再做其余初始化
 /// (设计文档决定 5②)。
-pub async fn start(db: Arc<Database>, port: u16) -> Result<(), AppError>;
+///
+/// `auth` 由启动方注入。**本任务不实现它**，只定义 trait 并在转发时调用；
+/// 测试里用一个返回固定头的假实现。真实实现由 provider 侧在别的任务里补。
+pub async fn start(
+    db: Arc<Database>,
+    port: u16,
+    auth: Arc<dyn UpstreamAuth>,
+) -> Result<(), AppError>;
 ```
 
 监听地址**固定为 `127.0.0.1`**,绝不监听 `0.0.0.0`。这是本机服务,暴露到网络上是
 安全问题。
 
+### 3.1 要注册的路由,只有一条
+
+```
+POST /v1/responses
+```
+
+**`/v1` 这个前缀不是可选的**:T7 会把 Codex 的 `base_url` 写成
+`http://127.0.0.1:<port>/v1`,Codex 再往后面接 `/responses`。少了前缀,
+Codex 打过来就是 404,而且是本地 404,排查起来很费时间。
+
+其余路径一律返回 404,**不要**做通配转发。
+
 ---
 
 ## 4. 请求处理流程(照做,不要自由发挥)
 
-Codex 会 POST 到 `{base_url}/responses`。
+Codex 会 POST 到 `{base_url}/responses`,即本机的 `/v1/responses`(见 §3.1)。
 
 ```
 1. 收到请求，读出 body（JSON）
 2. 从 body 里取 "model" 字段 → logical_model
 3. db.list_model_routes(logical_model)  →  routes
-4. 读当前拉黑状态 + 当前模式  →  blacklist, mode
+4. 读当前拉黑状态（内存，见 §5）+ 当前模式（见 §4.4）  →  blacklist, mode
 5. router::decision::candidates_for(&routes, &blacklist, &mode, now_ms)  →  candidates
 6. candidates 为空 → 返回 503 + 一句说明，记一条 outcome = "skipped"
 7. 依次遍历 candidates：
@@ -92,10 +145,29 @@ const MAX_BUFFERED_BODY: usize = 4 * 1024 * 1024; // 4 MB
 
 ### 4.3 认证
 
-**router 自己不持有任何凭据。** 每个 provider 的凭据怎么取,由 provider 侧负责。
-本任务里:把上游请求需要的认证头**由调用方注入**,你只负责转发。
+**router 自己不持有任何凭据。** 每个 provider 的凭据怎么取,由 §3 那个
+`UpstreamAuth` 负责,你在要发请求的那一刻调
+`auth.headers_for(&candidate.provider_id)`,把返回的头加到上游请求上。
 
 **绝对不要**把收到的 `Authorization` 头原样转给上游 —— 那是客户端的凭据,不是上游的。
+转发前**必须显式剥掉**客户端来的这几个头:`authorization`、`cookie`、
+`x-api-key`、`openai-organization`。**用白名单还是黑名单由你定,但报告里要写清楚
+最终转出去的头有哪些** —— 这是本任务唯一的安全面。
+
+`headers_for` 返回 `Err` 时:记一条 `failed` / `failure_kind = "auth_unavailable"`,
+**继续下一个候选**(换一家是另一份凭据,值得试)。
+
+### 4.4 模式从哪读
+
+```rust
+db.get_setting("router.mode")?   //  "auto" | "manual:<provider_id>"
+```
+
+**读不到、是空串、或者格式不认识,一律当 `Auto`。** 不要报错、不要写回默认值。
+理由:模式是用户的方向盘,拿不准的时候「自动」是唯一不会让他卡住的选择。
+
+`manual:` 后面的 provider_id **不做存在性校验** —— T4 的 `candidates_for` 对
+不存在的 provider 返回空 Vec,走第 6 步的 503,用户看得见。
 
 ---
 
@@ -143,17 +215,25 @@ axum 默认每个请求一个 task;**额外要求**:处理函数里任何可能 
 3. `wire_api` 不匹配的候选被跳过,并记了 `skipped`
 4. 队列为空时返回 503
 5. 拉黑写入后,同一 (provider, 模型) 在冷却期内不再出现在候选里(与 T4 联测)
+6. **客户端来的 `Authorization` 不出现在转出去的头里**,而 `UpstreamAuth`
+   返回的头出现了(§4.3 的安全面,必须有测试盯着)
+7. `router.mode` 是 `"manual:packyapi"` 时只试那一家;是垃圾字符串
+   (如 `"manual:"`、`"whatever"`)时**退回 auto**,不报错
 
 **不要为了测试去起真实的上游服务。** 把「发请求」这一步抽成一个可替换的函数,测试时
-喂假的响应。
+喂假的响应;`UpstreamAuth` 同样用假实现。
 
 ---
 
 ## 9. 完成的标准
 
-- `start()` 能在 `127.0.0.1` 上起来,收请求、按队列转发、失败换下一家
-- 流式透传,不整体缓存响应
+- `start()` 能在 `127.0.0.1` 上起来,只注册 `POST /v1/responses`,
+  收请求、按队列转发、失败换下一家
+- `UpstreamAuth` trait 已定义并在转发时调用;router 内部不出现任何凭据读取
+- 流式透传,不整体缓存响应;总超时已覆盖成 3600 秒,首字节超时用
+  `tokio::time::timeout` 单独造
 - 请求体缓存有 4 MB 上限
 - 无定时器、无 `unwrap`/`expect`(测试除外)
-- 上面 5 条测试通过
+- 上面 7 条测试通过
+- 报告里写明:**最终转给上游的头有哪些**
 - 六项检查全绿,`test result:` 行贴进报告
