@@ -1,0 +1,966 @@
+//! 会话日志摄入流水线(shared pipeline)。
+//!
+//! 盯文件变化 → 读文件 → 解析成用量记录 → 去重 → 写库,这五步里只有
+//! 「解析」是每家 agent 不同的;本模块拥有其余四步,agent 只提供
+//! [`SessionLogParser`] 一个解析器(`claude.rs` / `codex.rs`)。
+//!
+//! ## 为什么两个解析器都必须拿到整个文件而不是增量
+//!
+//! 两家的日志读取都是「整个文件重读」,游标里的 `line_offset` 只是行号
+//! 水位线:Claude 在解析前跳过水位线以下的行;Codex 的 `total_token_usage`
+//! 是从会话开始累计的值,必须从文件第一行开始重建 `prev_total` 基线,
+//! 跳过发生在算完基线之后。只给解析器增量文本会丢掉累计基线,第一条
+//! 记录会被当成「从 0 涨到当前累计值」。所以 [`LogFileContext::content`]
+//! 是整个文件的内容,增量由 `last_line_offset` 表达,跳过发生在解析器内部。
+
+use crate::database::{lock_conn, Database, UsageSyncCursor};
+use crate::error::AppError;
+use crate::services::usage_stats::{
+    effective_usage_log_filter, find_model_pricing, should_skip_session_insert, DedupKey,
+};
+use crate::usage::domain::{TokenSource, CLAUDE_CODE_AGENT_MODULE_ID, CODEX_AGENT_MODULE_ID};
+use crate::usage::ingestion::{LegacyLogInput, UsageIngestionInput, UsageIngestionService};
+use crate::usage::metering::calculator::CostCalculator;
+use crate::usage::metering::parser::TokenUsage;
+use crate::usage::session::validate_bound_session_agent;
+use rust_decimal::Decimal;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::fs;
+use std::io::Read;
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
+
+pub mod claude;
+pub mod codex;
+
+pub(crate) type SyncCursorMap = HashMap<String, (i64, i64)>;
+
+/// 同步结果
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionSyncResult {
+    pub imported: u32,
+    pub skipped: u32,
+    pub files_scanned: u32,
+    pub files_pruned: u32,
+    pub errors: Vec<String>,
+}
+
+/// 数据来源分布
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DataSourceSummary {
+    pub data_source: String,
+    pub request_count: u32,
+    pub total_cost_usd: String,
+}
+
+/// 流水线打开文件之后交给解析器的一切。
+///
+/// **`content` 是整个文件的内容,不是增量**——理由见模块顶部注释。
+/// 增量靠 `last_line_offset` 这条水位线表达,由解析器自己决定在哪一步跳过
+/// (Claude 在解析前跳,Codex 在重建累计基线之后跳)。
+pub struct LogFileContext<'a> {
+    pub path: &'a Path,
+    /// 已打开的句柄与元数据——Codex 要靠它算 device/inode 身份。
+    pub file: &'a fs::File,
+    pub metadata: &'a fs::Metadata,
+    pub content: &'a str,
+    /// 游标里记的行号水位线;`<=` 它的行已经入过库。
+    pub last_line_offset: i64,
+}
+
+/// 一条用量记录的去重身份。两家语义不同,**用枚举保持它们分开**,
+/// 不要压成一个「通用」字符串字段。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UsageIdentity {
+    /// Claude:assistant 消息的 message_id。
+    ClaudeMessage { message_id: String },
+    /// Codex:文件身份作用域 + 文件内事件序号。
+    CodexEvent { scope: String, event_index: u32 },
+}
+
+/// 一条从会话日志里解析出来的用量记录,已经归一化。
+///
+/// 字段以重构前实际写进库的那些为准——**没有新增或删减语义**。
+/// 这是纯重构,落库内容必须与重构前完全一致。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedUsage {
+    pub identity: UsageIdentity,
+    pub model: String,
+    pub input_tokens: u32,
+    pub output_tokens: u32,
+    pub cache_read_tokens: u32,
+    pub cache_creation_tokens: u32,
+    /// 事件发生时刻(秒)。解析不出来时由解析器按现有代码的兜底逻辑填。
+    pub occurred_at: i64,
+    /// 会话 ID。**注意两家用法不同**:写库时它进 legacy 字段,
+    /// 不能当跨源去重键——照抄现有代码的注释和用法。
+    pub session_id: Option<String>,
+    /// 这一行在文件里的行号,供流水线推进水位线。
+    pub line_offset: i64,
+}
+
+impl UsageIdentity {
+    /// 写库用的 request_id / event_id / upstream_correlation_id。
+    /// **三个都与重构前逐字节相同**,值照抄现有代码里的 format! 字面量。
+    pub fn request_id(&self) -> String {
+        match self {
+            UsageIdentity::ClaudeMessage { message_id } => format!(
+                "{}{message_id}",
+                crate::usage::metering::parser::SESSION_REQUEST_ID_PREFIX
+            ),
+            UsageIdentity::CodexEvent { scope, event_index } => {
+                format!("codex_session:{scope}:{event_index}")
+            }
+        }
+    }
+
+    pub fn event_id(&self) -> String {
+        match self {
+            UsageIdentity::ClaudeMessage { message_id } => format!("claude-session:{message_id}"),
+            UsageIdentity::CodexEvent { .. } => format!("codex-session:{}", self.request_id()),
+        }
+    }
+
+    pub fn upstream_correlation_id(&self) -> Option<String> {
+        match self {
+            UsageIdentity::ClaudeMessage { message_id } => Some(message_id.clone()),
+            UsageIdentity::CodexEvent { .. } => None,
+        }
+    }
+}
+
+/// 单文件游标决议结果:流水线据此判断「跳过 / 解析 / 写回」。
+#[derive(Debug, Clone)]
+pub struct FileCursor {
+    /// 游标键。Claude = 文件路径;Codex = 文件实体身份(device/inode 哈希)。
+    pub cursor_key: String,
+    /// 写进 cursor 表的 resource_identity。
+    pub resource_identity: Option<String>,
+    /// 需要从路径键提升为实体键的旧游标键(仅 Codex 首次升级时存在)。
+    pub legacy_cursor_key: Option<String>,
+    /// 上次成功同步的 mtime(纳秒)与行号水位线。
+    pub last_modified: i64,
+    pub last_offset: i64,
+    /// 写回时记录的 size_bytes。
+    pub size_bytes: i64,
+    /// 文件未变化(走跳过分支)时是否仍要写回游标。
+    /// Codex 用它做「路径键旧游标 → 实体键」的提升与 rename 后的路径刷新。
+    pub needs_update: bool,
+}
+
+/// 每个 agent 只需要实现这一个东西。
+pub trait SessionLogParser {
+    /// 这个 agent 的标识,如 "claude" / "codex"。
+    fn source(&self) -> &'static str;
+
+    /// 要扫哪些目录。
+    fn log_roots(&self, home: &Path) -> Vec<PathBuf>;
+
+    /// 判断一个文件要不要读(扩展名、命名规则等)。
+    fn is_log_file(&self, path: &Path) -> bool;
+
+    /// 扫描前的剪枝。Codex 用它做日期分区剪枝,Claude 直接返回 `files` 原样。
+    fn prune(&self, files: Vec<PathBuf>) -> Vec<PathBuf> {
+        files
+    }
+
+    /// 把一个文件解析成用量记录。返回的记录**已经排除了水位线以下的行**。
+    fn parse(&self, ctx: &LogFileContext<'_>) -> Result<Vec<ParsedUsage>, AppError>;
+
+    // ── 以下是流水线需要的钩子。任务书接口之外的最小补充(报告里说明):
+    // 两家在「游标怎么键控」上语义不同——Claude 按路径、Codex 按文件实体,
+    // 实体哈希的格式串含 provider 名,只能由各家解析器产出。默认实现
+    // 即 Claude 的行为;Codex 覆盖实现。──
+
+    /// 决议单个文件的游标。默认按路径键控,即 Claude 语义。
+    fn resolve_cursor(
+        &self,
+        path: &Path,
+        _file: &fs::File,
+        _metadata: &fs::Metadata,
+        cursors: &SyncCursorMap,
+        cursor_details: &HashMap<String, UsageSyncCursor>,
+    ) -> Result<FileCursor, AppError> {
+        let path_str = path.to_string_lossy().to_string();
+        let (last_modified, last_offset) = cursors.get(&path_str).copied().unwrap_or((0, 0));
+        let (resource_identity, size_bytes) =
+            cursor_details.get(&path_str).map_or((None, 0), |cursor| {
+                (cursor.resource_identity.clone(), cursor.size_bytes)
+            });
+        Ok(FileCursor {
+            cursor_key: path_str,
+            resource_identity,
+            legacy_cursor_key: None,
+            last_modified,
+            last_offset,
+            size_bytes,
+            needs_update: false,
+        })
+    }
+
+    /// 文件未变化(跳过解析)时的补充处理。默认什么都不做;
+    /// Codex 在这里把路径键旧游标提升为实体键游标。
+    fn on_unchanged(
+        &self,
+        db: &Database,
+        _path: &Path,
+        _file_modified: i64,
+        _metadata: &fs::Metadata,
+        _cursor: &FileCursor,
+    ) -> Result<(), AppError> {
+        let _ = db;
+        Ok(())
+    }
+
+    /// 单文件失败时的日志与错误串。默认即 Claude 的写法。
+    fn record_file_error(&self, path: &Path, error: &AppError, errors: &mut Vec<String>) {
+        let msg = format!("{}: {error}", path.display());
+        log::warn!("[SESSION-SYNC] 文件解析失败: {msg}");
+        errors.push(msg);
+    }
+
+    /// 单条记录插入失败时的日志。默认即 Claude 的写法。
+    fn log_insert_failure(&self, record: &ParsedUsage, error: &AppError) {
+        let display = match &record.identity {
+            UsageIdentity::ClaudeMessage { message_id } => message_id.clone(),
+            UsageIdentity::CodexEvent { .. } => record.identity.request_id(),
+        };
+        log::warn!("[SESSION-SYNC] 插入失败 ({display}): {error}");
+    }
+
+    /// 一轮同步结束后的汇总日志。默认即 Claude 的写法。
+    fn log_summary(&self, result: &SessionSyncResult) {
+        log::info!(
+            "[SESSION-SYNC] 同步完成: 导入 {} 条, 跳过 {} 条, 扫描 {} 个文件",
+            result.imported,
+            result.skipped,
+            result.files_scanned
+        );
+    }
+}
+
+/// 用给定解析器跑一轮共享流水线。
+///
+/// 返回统一形状的 [`SessionSyncResult`];两个 bound 入口把它照现有代码
+/// 原样转换成 `ProviderSessionSyncResult`。
+pub fn sync_with_parser(
+    db: &Database,
+    parser: &dyn SessionLogParser,
+    bound_provider_id: Option<&str>,
+) -> Result<SessionSyncResult, AppError> {
+    // 先预载游标再收集文件:游标决议只看内存里的两张表。
+    let cursor_list = db.list_usage_sync_cursors(parser.source())?;
+    let mut sync_cursors: SyncCursorMap = cursor_list
+        .iter()
+        .map(|cursor| {
+            (
+                cursor.cursor_key.clone(),
+                (cursor.modified_at_ns, cursor.line_offset),
+            )
+        })
+        .collect();
+    let cursor_details: HashMap<String, UsageSyncCursor> = cursor_list
+        .into_iter()
+        .map(|cursor| (cursor.cursor_key.clone(), cursor))
+        .collect();
+
+    let home = crate::config::get_home_dir();
+    let mut files: Vec<PathBuf> = Vec::new();
+    for root in parser.log_roots(&home) {
+        collect_log_files(&root, parser, &mut files);
+    }
+    let collected = files.len() as u32;
+    let files = parser.prune(files);
+    let files_pruned = collected.saturating_sub(files.len() as u32);
+
+    let mut result = SessionSyncResult {
+        imported: 0,
+        skipped: 0,
+        files_scanned: files.len() as u32,
+        files_pruned,
+        errors: vec![],
+    };
+
+    for file_path in &files {
+        match sync_file_with_parser(
+            db,
+            parser,
+            file_path,
+            bound_provider_id,
+            &mut sync_cursors,
+            &cursor_details,
+        ) {
+            Ok((imported, skipped)) => {
+                result.imported += imported;
+                result.skipped += skipped;
+            }
+            Err(e) => parser.record_file_error(file_path, &e, &mut result.errors),
+        }
+    }
+
+    if result.imported > 0 {
+        parser.log_summary(&result);
+    }
+
+    Ok(result)
+}
+
+/// 流水线的单文件一步(独立出来供测试与单文件调用复用)。
+///
+/// 顺序与重构前逐字一致:绑定校验 → 打开 → 同句柄取 metadata →
+/// 游标决议 → mtime 未变则跳过 → 整文件解析 → 去重写库 → 推进游标。
+/// 只有全部记录写库成功后才推进 offset,bound 路径下任何插入失败都会
+/// 让整文件回退(游标不动),下次同步重试。
+pub(crate) fn sync_file_with_parser(
+    db: &Database,
+    parser: &dyn SessionLogParser,
+    file_path: &Path,
+    bound_provider_id: Option<&str>,
+    sync_cursors: &mut SyncCursorMap,
+    cursor_details: &HashMap<String, UsageSyncCursor>,
+) -> Result<(u32, u32), AppError> {
+    if let Some(provider_id) = bound_provider_id {
+        validate_bound_session_agent(db, parser.source(), provider_id)?;
+    }
+    let file_path_str = file_path.to_string_lossy().to_string();
+
+    // 先打开文件,再从同一句柄取 metadata:路径若在 stat 与实际解析之间
+    // 被替换,游标和内容必须来自同一个文件实体(Codex 踩过的坑,对所有源成立)。
+    let file =
+        open_session_file(file_path).map_err(|e| AppError::Config(format!("无法打开文件: {e}")))?;
+    let metadata = file
+        .metadata()
+        .map_err(|e| AppError::Config(format!("无法读取文件元数据: {e}")))?;
+    let file_modified = metadata_modified_nanos(&metadata);
+
+    let cursor =
+        parser.resolve_cursor(file_path, &file, &metadata, sync_cursors, cursor_details)?;
+
+    // 文件未变化则跳过解析。Codex 借 on_unchanged 提升旧路径游标。
+    if file_modified <= cursor.last_modified {
+        parser.on_unchanged(db, file_path, file_modified, &metadata, &cursor)?;
+        if let Some(legacy) = &cursor.legacy_cursor_key {
+            sync_cursors.remove(legacy);
+        }
+        sync_cursors.insert(
+            cursor.cursor_key.clone(),
+            (cursor.last_modified, cursor.last_offset),
+        );
+        return Ok((0, 0));
+    }
+
+    // 整文件重读(不是增量)——见模块顶部注释。
+    let content = read_whole_file(&file)?;
+    let ctx = LogFileContext {
+        path: file_path,
+        file: &file,
+        metadata: &metadata,
+        content: &content,
+        last_line_offset: cursor.last_offset,
+    };
+    let records = parser.parse(&ctx)?;
+    // 水位线 = 全量行数。两家都按「整个文件」计数,而不是按解析出的
+    // 记录计数——文件尾部的非事件行也必须越过,否则下次同步会把它们
+    // 重新当新行处理(Claude 的 sessionId 提取会因此读到旧行)。
+    let line_count = content.lines().count() as i64;
+
+    let mut imported: u32 = 0;
+    let mut skipped: u32 = 0;
+    for record in &records {
+        let request_id = record.identity.request_id();
+        match insert_usage_record(db, record, &request_id, bound_provider_id) {
+            Ok(true) => imported += 1,
+            Ok(false) => skipped += 1,
+            Err(e) => {
+                if bound_provider_id.is_some() {
+                    return Err(e);
+                }
+                parser.log_insert_failure(record, &e);
+                skipped += 1;
+            }
+        }
+    }
+
+    update_sync_state_for_resource(
+        db,
+        parser.source(),
+        &cursor.cursor_key,
+        &file_path_str,
+        cursor.resource_identity.as_deref(),
+        cursor.legacy_cursor_key.as_deref(),
+        file_modified,
+        cursor.size_bytes,
+        line_count,
+    )?;
+    if let Some(legacy) = &cursor.legacy_cursor_key {
+        sync_cursors.remove(legacy);
+    }
+    sync_cursors.insert(cursor.cursor_key.clone(), (file_modified, line_count));
+
+    Ok((imported, skipped))
+}
+
+/// 递归收集 `root` 下解析器认可的文件。带深度上限,防符号链接环。
+fn collect_log_files(root: &Path, parser: &dyn SessionLogParser, files: &mut Vec<PathBuf>) {
+    collect_log_files_depth(root, parser, files, 0, 8);
+}
+
+fn collect_log_files_depth(
+    dir: &Path,
+    parser: &dyn SessionLogParser,
+    files: &mut Vec<PathBuf>,
+    depth: u32,
+    max_depth: u32,
+) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if depth < max_depth {
+                collect_log_files_depth(&path, parser, files, depth + 1, max_depth);
+            }
+        } else if parser.is_log_file(&path) {
+            files.push(path);
+        }
+    }
+}
+
+/// 把已打开的会话文件整个读进内存。
+///
+/// 用 `from_utf8_lossy` 而不是 `read_to_string`:旧实现用 `BufRead::lines()`
+/// 逐行容忍无效 UTF-8(坏行直接跳过),严格解码会把单行坏字节放大成
+/// 整文件失败。lossy 转换保住行边界与行数,坏行替换成 U+FFFD 后仍会被
+/// JSON 解析自然跳过——与旧行为等价。
+fn read_whole_file(file: &fs::File) -> Result<String, AppError> {
+    let mut bytes = Vec::new();
+    let mut reader = file;
+    reader
+        .read_to_end(&mut bytes)
+        .map_err(|e| AppError::Config(format!("无法读取文件: {e}")))?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// 打开会话文件;测试构建下累计文件打开次数(剪枝测试断言打开数)。
+fn open_session_file(path: &Path) -> std::io::Result<fs::File> {
+    #[cfg(test)]
+    CODEX_FILE_OPEN_COUNT.with(|count| count.set(count.get() + 1));
+    fs::File::open(path)
+}
+
+// 实测剪枝效果的 File::open 计数器(仅测试构建存在)。
+// 用 thread_local 而不是全局静态量,避免并行测试互相污染计数。
+#[cfg(test)]
+thread_local! {
+    static CODEX_FILE_OPEN_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_session_file_open_count() {
+    CODEX_FILE_OPEN_COUNT.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn session_file_open_count() -> u64 {
+    CODEX_FILE_OPEN_COUNT.with(|count| count.get())
+}
+
+/// 把一条已归一化的用量记录写进库(去重 + 插入),返回是否新插入。
+///
+/// 两家的写入 SQL 形状完全相同,只有 provider 常量、费用计算语义与
+/// 事件标识不同——这些由 [`UsageIdentity`] 枚举分开提供,不合并成
+/// 一个「通用」字段。
+pub(crate) fn insert_usage_record(
+    db: &Database,
+    parsed: &ParsedUsage,
+    request_id: &str,
+    bound_provider_id: Option<&str>,
+) -> Result<bool, AppError> {
+    if let Some(provider_id) = bound_provider_id {
+        insert_bound_usage_record(db, provider_id, parsed, request_id)
+    } else {
+        insert_legacy_usage_record(db, parsed, request_id)
+    }
+}
+
+/// 写库用的 provider 常量组。由身份枚举选出,不进数据库 schema。
+fn write_profile(identity: &UsageIdentity) -> ProviderWriteProfile<'_> {
+    match identity {
+        UsageIdentity::ClaudeMessage { .. } => ProviderWriteProfile {
+            app_type: "claude",
+            legacy_provider_id: "_session",
+            provider_type: "session_log",
+            insert_error_prefix: "插入会话日志",
+            calculator_app: None,
+            agent_module_id: CLAUDE_CODE_AGENT_MODULE_ID,
+            subscription_activity_id: crate::usage::system_providers::CLAUDE_SUBSCRIPTION_ID,
+        },
+        UsageIdentity::CodexEvent { .. } => ProviderWriteProfile {
+            app_type: "codex",
+            legacy_provider_id: "_codex_session",
+            provider_type: "codex_session",
+            insert_error_prefix: "插入 Codex 会话日志",
+            calculator_app: Some("codex"),
+            agent_module_id: CODEX_AGENT_MODULE_ID,
+            subscription_activity_id: crate::usage::system_providers::CHATGPT_SUBSCRIPTION_ID,
+        },
+    }
+}
+
+struct ProviderWriteProfile<'a> {
+    app_type: &'a str,
+    legacy_provider_id: &'a str,
+    provider_type: &'a str,
+    insert_error_prefix: &'a str,
+    calculator_app: Option<&'a str>,
+    agent_module_id: &'a str,
+    subscription_activity_id: &'a str,
+}
+
+/// bound 路径:经 UsageIngestionService 落库(usage_events + legacy 行)。
+fn insert_bound_usage_record(
+    db: &Database,
+    provider_id: &str,
+    parsed: &ParsedUsage,
+    request_id: &str,
+) -> Result<bool, AppError> {
+    let profile = write_profile(&parsed.identity);
+    let usage = TokenUsage {
+        input_tokens: parsed.input_tokens,
+        output_tokens: parsed.output_tokens,
+        cache_read_tokens: parsed.cache_read_tokens,
+        cache_creation_tokens: parsed.cache_creation_tokens,
+        model: Some(parsed.model.clone()),
+        message_id: match &parsed.identity {
+            UsageIdentity::ClaudeMessage { message_id } => Some(message_id.clone()),
+            UsageIdentity::CodexEvent { .. } => None,
+        },
+    };
+    let outcome = UsageIngestionService::new(db).ingest(&UsageIngestionInput {
+        event_id: parsed.identity.event_id(),
+        source: TokenSource::SessionLog,
+        provider_id: provider_id.to_string(),
+        agent_module_id: profile.agent_module_id.to_string(),
+        frozen_provider_context: None,
+        occurred_at: parsed.occurred_at,
+        model: parsed.model.clone(),
+        usage,
+        upstream_cost: None,
+        request_id: Some(request_id.to_string()),
+        // 会话日志的 transcript 会话 ID 识别的是「一次会话」而不是一次
+        // 请求,不能当跨源去重键。
+        session_id: None,
+        upstream_correlation_id: parsed.identity.upstream_correlation_id(),
+        legacy: Some(LegacyLogInput {
+            request_id: request_id.to_string(),
+            provider_id: profile.legacy_provider_id.to_string(),
+            app_type: profile.app_type.to_string(),
+            request_model: parsed.model.clone(),
+            pricing_model: parsed.model.clone(),
+            latency_ms: 0,
+            first_token_ms: None,
+            status_code: 200,
+            error_message: None,
+            session_id: parsed.session_id.clone(),
+            provider_type: Some(profile.provider_type.to_string()),
+            is_streaming: true,
+            cost_multiplier: Decimal::ONE,
+        }),
+    })?;
+    Ok(outcome.inserted)
+}
+
+/// 无绑定路径:直写 proxy_request_logs(SQL 与重构前逐字相同)。
+fn insert_legacy_usage_record(
+    db: &Database,
+    parsed: &ParsedUsage,
+    request_id: &str,
+) -> Result<bool, AppError> {
+    let conn = lock_conn!(db.conn);
+    let profile = write_profile(&parsed.identity);
+
+    let dedup_key = DedupKey {
+        app_type: profile.app_type,
+        model: &parsed.model,
+        input_tokens: parsed.input_tokens,
+        output_tokens: parsed.output_tokens,
+        cache_read_tokens: parsed.cache_read_tokens,
+        cache_creation_tokens: parsed.cache_creation_tokens,
+        created_at: parsed.occurred_at,
+    };
+    if should_skip_session_insert(&conn, request_id, &dedup_key)? {
+        return Ok(false);
+    }
+
+    let usage = TokenUsage {
+        input_tokens: parsed.input_tokens,
+        output_tokens: parsed.output_tokens,
+        cache_read_tokens: parsed.cache_read_tokens,
+        cache_creation_tokens: parsed.cache_creation_tokens,
+        model: Some(parsed.model.clone()),
+        message_id: None,
+    };
+
+    let pricing = find_model_pricing(&conn, &parsed.model);
+    let multiplier = Decimal::from(1);
+    let (input_cost, output_cost, cache_read_cost, cache_creation_cost, total_cost) = match pricing
+    {
+        Some(p) => {
+            let cost = match profile.calculator_app {
+                // Codex/OpenAI 的 input 字段包含 cache read,计费时要先扣掉;
+                // Claude 的 input 已经是 fresh input(不扣)。
+                Some(app) => CostCalculator::calculate_for_app(app, &usage, &p, multiplier),
+                None => CostCalculator::calculate(&usage, &p, multiplier),
+            };
+            (
+                cost.input_cost.to_string(),
+                cost.output_cost.to_string(),
+                cost.cache_read_cost.to_string(),
+                cost.cache_creation_cost.to_string(),
+                cost.total_cost.to_string(),
+            )
+        }
+        None => (
+            "0".to_string(),
+            "0".to_string(),
+            "0".to_string(),
+            "0".to_string(),
+            "0".to_string(),
+        ),
+    };
+
+    let inserted_rows = conn
+        .execute(
+            "INSERT OR IGNORE INTO proxy_request_logs (
+            request_id, provider_id, app_type, model, request_model,
+            input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
+            input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd, total_cost_usd,
+            latency_ms, first_token_ms, status_code, error_message, session_id,
+            provider_type, is_streaming, cost_multiplier, created_at, data_source
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)",
+            rusqlite::params![
+                request_id,
+                profile.legacy_provider_id,
+                profile.app_type,
+                parsed.model,
+                parsed.model,
+                parsed.input_tokens,
+                parsed.output_tokens,
+                parsed.cache_read_tokens,
+                parsed.cache_creation_tokens,
+                input_cost,
+                output_cost,
+                cache_read_cost,
+                cache_creation_cost,
+                total_cost,
+                0i64,               // latency_ms: 会话日志无此数据
+                Option::<i64>::None, // first_token_ms
+                200i64,             // status_code: 产生计费 token 即视为成功
+                Option::<String>::None, // error_message
+                parsed.session_id,
+                Some(profile.provider_type),
+                1i64,               // is_streaming
+                "1.0",              // cost_multiplier
+                parsed.occurred_at,
+                profile.provider_type,
+            ],
+        )
+        .map_err(|e| AppError::Database(format!("{}失败: {e}", profile.insert_error_prefix)))?;
+
+    // 仅在确实写入新行时通知前端,避免 INSERT OR IGNORE 跳过时产生空刷新
+    if inserted_rows > 0 {
+        crate::usage_events::notify_log_recorded();
+        // 用量活动 → 触发订阅额度的一次短去抖补刷。
+        crate::usage::quota::mark_subscription_activity(profile.subscription_activity_id);
+    }
+
+    Ok(true)
+}
+
+/// 当前 Unix 秒。解析不出事件时间时的兜底,与重构前各家 `current_timestamp` 相同。
+pub(crate) fn current_timestamp() -> i64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// 事件发生时刻(秒)。解析不出时兜底当前时间——照抄重构前两家的逻辑。
+pub(crate) fn occurred_at_secs(timestamp: Option<&str>) -> i64 {
+    timestamp
+        .and_then(|timestamp| chrono::DateTime::parse_from_rfc3339(timestamp).ok())
+        .map(|timestamp| timestamp.timestamp())
+        .unwrap_or_else(current_timestamp)
+}
+
+/// 获取 v14 `usage_sync_cursors` 中某条目的同步进度。
+///
+/// Shared by all session_usage_* parsers.
+#[cfg(test)]
+pub(crate) fn get_sync_state(
+    db: &Database,
+    source: &str,
+    cursor_key: &str,
+) -> Result<(i64, i64), AppError> {
+    Ok(db
+        .get_usage_sync_cursor(source, cursor_key)?
+        .map(|cursor| (cursor.modified_at_ns, cursor.line_offset))
+        .unwrap_or((0, 0)))
+}
+
+pub(crate) fn load_sync_cursors(db: &Database, source: &str) -> Result<SyncCursorMap, AppError> {
+    Ok(db
+        .list_usage_sync_cursors(source)?
+        .into_iter()
+        .map(|cursor| {
+            (
+                cursor.cursor_key,
+                (cursor.modified_at_ns, cursor.line_offset),
+            )
+        })
+        .collect())
+}
+
+/// 返回文件 mtime 的纳秒时间戳。
+///
+/// v13 `session_log_sync.last_modified` 旧数据是秒级时间戳;迁移后的新写入
+/// 使用纳秒值,旧值会自然触发一次增量重扫,并继续依赖行 offset 避免重复导入。
+pub(crate) fn metadata_modified_nanos(metadata: &fs::Metadata) -> i64 {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos().min(i64::MAX as u128) as i64)
+        .unwrap_or(0)
+}
+
+/// 更新 v14 `usage_sync_cursors` 中某条目的同步进度。
+///
+/// Shared by all session_usage_* parsers.
+pub(crate) fn update_sync_state(
+    db: &Database,
+    source: &str,
+    cursor_key: &str,
+    last_modified: i64,
+    last_offset: i64,
+) -> Result<(), AppError> {
+    let existing = db.get_usage_sync_cursor(source, cursor_key)?;
+    let resource_identity = existing
+        .as_ref()
+        .and_then(|cursor| cursor.resource_identity.as_deref());
+    let size_bytes = existing
+        .as_ref()
+        .map(|cursor| cursor.size_bytes)
+        .unwrap_or(0);
+    update_sync_state_for_resource(
+        db,
+        source,
+        cursor_key,
+        cursor_key,
+        resource_identity,
+        None,
+        last_modified,
+        size_bytes,
+        last_offset,
+    )
+}
+
+/// 更新以稳定资源标识为 key 的同步进度,同时保留当前展示路径。
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn update_sync_state_for_resource(
+    db: &Database,
+    source: &str,
+    cursor_key: &str,
+    resource_path: &str,
+    resource_identity: Option<&str>,
+    legacy_cursor_key: Option<&str>,
+    last_modified: i64,
+    size_bytes: i64,
+    last_offset: i64,
+) -> Result<(), AppError> {
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
+    let existing = db.get_usage_sync_cursor(source, cursor_key)?;
+    let legacy_existing = if existing.is_none() {
+        match legacy_cursor_key {
+            Some(legacy_cursor_key) => db.get_usage_sync_cursor(source, legacy_cursor_key)?,
+            None => None,
+        }
+    } else {
+        None
+    };
+    let previous = existing.as_ref().or(legacy_existing.as_ref());
+    let cursor = UsageSyncCursor {
+        source: source.to_string(),
+        cursor_key: cursor_key.to_string(),
+        resource_path: Some(resource_path.to_string()),
+        resource_identity: resource_identity
+            .map(str::to_string)
+            .or_else(|| previous.and_then(|cursor| cursor.resource_identity.clone())),
+        modified_at_ns: last_modified,
+        size_bytes,
+        byte_offset: previous.map(|cursor| cursor.byte_offset).unwrap_or(0),
+        line_offset: last_offset,
+        parser_state_json: previous.and_then(|cursor| cursor.parser_state_json.clone()),
+        last_success_at: now,
+    };
+    match legacy_cursor_key {
+        Some(legacy_cursor_key) => db.promote_usage_sync_cursor(source, legacy_cursor_key, &cursor),
+        None => db.put_usage_sync_cursor(&cursor),
+    }
+}
+
+/// 查询数据来源分布统计
+pub fn get_data_source_breakdown(db: &Database) -> Result<Vec<DataSourceSummary>, AppError> {
+    let conn = lock_conn!(db.conn);
+
+    let effective_filter = effective_usage_log_filter("l");
+    let sql = format!(
+        "SELECT COALESCE(l.data_source, 'proxy') as ds, COUNT(*) as cnt,
+                COALESCE(SUM(CAST(l.total_cost_usd AS REAL)), 0) as cost
+         FROM proxy_request_logs l
+         WHERE {effective_filter}
+         GROUP BY ds
+         ORDER BY cnt DESC"
+    );
+
+    let mut stmt = conn.prepare(&sql)?;
+
+    let rows = stmt.query_map([], |row| {
+        Ok(DataSourceSummary {
+            data_source: row.get(0)?,
+            request_count: row.get::<_, i64>(1)? as u32,
+            total_cost_usd: format!("{:.6}", row.get::<_, f64>(2)?),
+        })
+    })?;
+
+    let mut summaries = Vec::new();
+    for row in rows {
+        summaries.push(row.map_err(|e| AppError::Database(e.to_string()))?);
+    }
+
+    Ok(summaries)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::services::ingest::claude::ClaudeParser;
+    use crate::services::ingest::codex::CodexParser;
+
+    fn sync_one_file(
+        db: &Database,
+        parser: &dyn SessionLogParser,
+        file_path: &Path,
+        bound_provider_id: Option<&str>,
+    ) -> Result<(u32, u32), AppError> {
+        let source = parser.source();
+        let cursor_list = db.list_usage_sync_cursors(source)?;
+        let mut sync_cursors: SyncCursorMap = cursor_list
+            .iter()
+            .map(|cursor| {
+                (
+                    cursor.cursor_key.clone(),
+                    (cursor.modified_at_ns, cursor.line_offset),
+                )
+            })
+            .collect();
+        let cursor_details: HashMap<String, UsageSyncCursor> = cursor_list
+            .into_iter()
+            .map(|cursor| (cursor.cursor_key.clone(), cursor))
+            .collect();
+        sync_file_with_parser(
+            db,
+            parser,
+            file_path,
+            bound_provider_id,
+            &mut sync_cursors,
+            &cursor_details,
+        )
+    }
+
+    /// 同一份流水线喂两个不同 parser:各自的解析与写库结果互不串味。
+    #[test]
+    fn pipeline_keeps_the_two_parsers_apart() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let tmp = std::env::temp_dir().join(format!(
+            "llm-usage-bar-pipeline-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&tmp).unwrap();
+        let claude_file = tmp.join("claude.jsonl");
+        let codex_file = tmp.join("codex.jsonl");
+
+        let claude_line = r#"{"type":"assistant","message":{"id":"msg_pipeline","model":"claude-opus-4-6","usage":{"input_tokens":3,"output_tokens":5,"cache_read_input_tokens":1,"cache_creation_input_tokens":2},"stop_reason":"end_turn"},"timestamp":"2026-04-05T12:00:00Z","sessionId":"session-pipeline"}"#;
+        let codex_line = r#"{"timestamp":"2026-07-14T00:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"cached_input_tokens":4,"output_tokens":2}}}}"#;
+        fs::write(&claude_file, format!("{claude_line}\n")).unwrap();
+        fs::write(&codex_file, format!("{codex_line}\n")).unwrap();
+
+        // 正确配对:各导 1 条。
+        let codex_parser = CodexParser::new(PathBuf::from("/unused"), Vec::new(), 2);
+        assert_eq!(sync_one_file(&db, &ClaudeParser, &claude_file, None)?.0, 1);
+        assert_eq!(sync_one_file(&db, &codex_parser, &codex_file, None)?.0, 1);
+
+        // 交叉喂:Claude 的行 Codex 不认,Codex 的行 Claude 不认。
+        assert_eq!(sync_one_file(&db, &codex_parser, &claude_file, None)?.0, 0);
+        assert_eq!(sync_one_file(&db, &ClaudeParser, &codex_file, None)?.0, 0);
+
+        let conn = lock_conn!(db.conn);
+        let rows: Vec<(String, String)> = {
+            let mut stmt = conn
+                .prepare("SELECT app_type, request_id FROM proxy_request_logs ORDER BY request_id")
+                .unwrap();
+            stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        // 两个 parser 只能各自写入自己的记录,且 app_type / request_id 互不串味。
+        assert_eq!(rows.len(), 2);
+        // 按 (app_type, request_id) 排序后逐一比对,不依赖 request_id 的字典序。
+        let mut by_app = rows.clone();
+        by_app.sort();
+        assert_eq!(
+            by_app[0],
+            ("claude".to_string(), "session:msg_pipeline".to_string())
+        );
+        assert_eq!(by_app[1].0, "codex");
+        assert!(
+            by_app[1].1.starts_with("codex_session:file-"),
+            "codex 记录必须用文件作用域身份,不能用 Claude 的 session: 前缀"
+        );
+        drop(conn);
+
+        fs::remove_dir_all(&tmp).ok();
+        Ok(())
+    }
+
+    /// 两家的 request_id / event_id 与重构前逐字节相同(直接断言字面量)。
+    #[test]
+    fn usage_identity_strings_match_pre_refactor_literals() {
+        let claude = UsageIdentity::ClaudeMessage {
+            message_id: "msg_abc".to_string(),
+        };
+        assert_eq!(claude.request_id(), "session:msg_abc");
+        assert_eq!(claude.event_id(), "claude-session:msg_abc");
+        assert_eq!(claude.upstream_correlation_id().as_deref(), Some("msg_abc"));
+
+        let codex = UsageIdentity::CodexEvent {
+            scope: "session-scope".to_string(),
+            event_index: 3,
+        };
+        assert_eq!(codex.request_id(), "codex_session:session-scope:3");
+        assert_eq!(
+            codex.event_id(),
+            "codex-session:codex_session:session-scope:3"
+        );
+        assert_eq!(codex.upstream_correlation_id(), None);
+    }
+}
