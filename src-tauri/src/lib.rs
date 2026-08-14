@@ -830,6 +830,35 @@ pub fn run() {
                 quota_service,
             );
 
+            // —— T10:本地 router 启动接线 ——
+            // 决定 5②:先把监听端口开起来,再做其余初始化。绑定失败只记 log::error、
+            // 不中止 setup——端口被占是常见情况(上次没退干净、别的软件占了),
+            // 不能因此打不开界面(任务书 §1.4)。
+            let router_port = crate::commands::read_router_port(&app_state.db);
+            let router_auth: Arc<dyn crate::router::server::UpstreamAuth> =
+                Arc::new(crate::router::auth::RouterUpstreamAuth::new(
+                    app_state.db.clone(),
+                    app_state.binding_credential_service.clone(),
+                ));
+            let router_db = app_state.db.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(error) =
+                    crate::router::server::start(router_db, router_port, router_auth).await
+                {
+                    log::error!("[ROUTER] 启动失败: {error}");
+                }
+            });
+
+            // 启动时只读指针,绝不写(决定 34/36):发现指针不是自己写的只记缺口
+            // 标记、不静默覆盖;真正写指针只有 enable_router_pointer 一条路,
+            // 由用户显式点「启用」触发。
+            let router_pointer_state = crate::router::pointer::inspect_pointer();
+            if let Err(error) =
+                crate::commands::apply_pointer_gap_marker(&app_state.db, &router_pointer_state)
+            {
+                log::warn!("记录 router 指针缺口标记失败: {error}");
+            }
+
             // 1.5. 自动导入 live 配置 + seed 官方预设供应商（Claude / Codex / Gemini）
             //
             // 先 import 后 seed 是有意为之：先把用户手动配置的 settings.json / auth.json / .env
@@ -1506,6 +1535,16 @@ pub fn run() {
             commands::auth_remove_account,
             commands::auth_set_default_account,
             commands::auth_logout,
+            // Local router commands (T10)
+            commands::list_router_providers,
+            commands::upsert_router_provider,
+            commands::delete_router_provider,
+            commands::set_model_routes,
+            commands::get_router_mode,
+            commands::set_router_mode,
+            commands::inspect_router_pointer,
+            commands::enable_router_pointer,
+            commands::recent_router_attempts,
             // Copilot OAuth commands (multi-account support)
             // OMO commands
             // Workspace files (OpenClaw)
