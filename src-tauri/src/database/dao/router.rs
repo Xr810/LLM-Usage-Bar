@@ -77,6 +77,22 @@ fn wire_api_from_db(raw: &str) -> Result<WireApi, AppError> {
     }
 }
 
+/// 读回 attempt 行时把 outcome 字符串转回枚举(`outcome_to_db` 的反方向)。
+///
+/// T3 误把这份放进了 tests 里,生产代码取不到;T6 按任务书 §4.3.1 提到生产区。
+/// 生产侧目前只有写没有读——读回方是后续的面板分账任务,落地后删掉这个 allow。
+#[allow(dead_code)]
+fn outcome_from_db(raw: &str) -> Result<AttemptOutcome, AppError> {
+    match raw {
+        "success" => Ok(AttemptOutcome::Success),
+        "failed" => Ok(AttemptOutcome::Failed),
+        "skipped" => Ok(AttemptOutcome::Skipped),
+        other => Err(AppError::Database(format!(
+            "非法 attempt outcome 值: {other}"
+        ))),
+    }
+}
+
 fn outcome_to_db(outcome: AttemptOutcome) -> &'static str {
     match outcome {
         AttemptOutcome::Success => "success",
@@ -270,17 +286,6 @@ impl Database {
 mod tests {
     use super::*;
     use crate::database::Database;
-
-    fn outcome_from_db(raw: &str) -> Result<AttemptOutcome, AppError> {
-        match raw {
-            "success" => Ok(AttemptOutcome::Success),
-            "failed" => Ok(AttemptOutcome::Failed),
-            "skipped" => Ok(AttemptOutcome::Skipped),
-            other => Err(AppError::Database(format!(
-                "非法 attempt outcome 值: {other}"
-            ))),
-        }
-    }
 
     fn provider(id: &str, priority: i64, enabled: bool) -> RouterProvider {
         RouterProvider {
