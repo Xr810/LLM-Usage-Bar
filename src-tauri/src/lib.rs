@@ -24,6 +24,7 @@ pub mod product_identity;
 mod prompt;
 mod provider;
 mod provider_defaults;
+mod router;
 mod services;
 mod settings;
 mod store;
