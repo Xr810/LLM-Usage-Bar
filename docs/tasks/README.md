@@ -130,6 +130,7 @@
 | [T15](T15-provider-out-of-store.md) | provider 请出数据库层(可拆部分) | T13 | ✅ 与 T14 |
 | [T16](T16-api-transport-split.md) | api 与传输解耦 | T14 T15 | ❌ 单独做 |
 | [T17](T17-module-rearrange.md) | 按职责重排目录 | T14 T15 T16 | ❌ 单独做 |
+| [T18](T18-flaky-test-hunt.md) | 定位偶发失败的测试(纯诊断) | 无 | ✅ 与全部 |
 
 **UI 不在此列** —— 设置界面、菜单栏状态由项目所有者自己实现。
 

@@ -57,6 +57,79 @@ claude/codex 的现状,并且要有测试证明这一点。
 
 ---
 
+## 0.2 第二轮的决定(2026-08-15,已授权改接口)
+
+T14b 第一轮把 §0.1 的钩子做完了,并在迁移本体上停下来报告了两处「没有旧值可抄」
+和一处内存回归。**它停得对。** 以下是决定,照做。
+
+### 决定一:`event_id` 与 `agent_module_id` 改成可选,不要发明值
+
+gemini 与 opencode **都是 unbound-only,从不写 `usage_events`** ——
+这两个字段对它们**根本到不了数据库**。它们是必填字段,但对这两家是死字段。
+
+**不要编一个 `"gemini-session:..."`。** 编出来的值将来如果有人给 gemini 补上
+bound 路径,它就变成了 `usage_events` 的去重键 —— 一个当初随手编的、看起来
+很合理的错值,比留空危险得多。
+
+```rust
+pub struct UsageIdentity {
+    // …
+    /// bound 路径的 event_id。unbound-only 的解析器填 `None`。
+    pub event_id: Option<String>,
+}
+
+pub(crate) struct ProviderWriteProfile {
+    // …
+    /// bound 路径要用的 agent module id。unbound-only 的解析器填 `None`。
+    pub(crate) agent_module_id: Option<&'static str>,
+}
+```
+
+**bound 路径遇到 `None` 返回 `Err`**(那是调用方配置错误:给一个 unbound-only
+的解析器走了 bound 入口),不要静默跳过。claude/codex 一律填 `Some(原值)`,
+行为不变。
+
+这与 T14a 对 `subscription_activity_id` 的处理是同一个模式:**让类型说实话。**
+
+### 决定二:解析器可以声明「不需要流水线读文件内容」
+
+opencode 的「日志」是一个 SQLite 库,它的 `parse` 自己开连接读。
+流水线把整个 `.db` 读成 lossy String 是纯浪费,大库上是内存回归。
+
+```rust
+/// 流水线要不要把文件内容读进来交给 `parse`。
+/// 默认 `true`。自己开连接读的解析器(如 SQLite 类日志)返回 `false`,
+/// 此时 `LogFileContext.content` 是空串。
+fn needs_file_content(&self) -> bool { true }
+```
+
+返回 `false` 时流水线**不读文件内容**,但**仍然打开文件句柄**
+(`LogFileContext.file` / `metadata` 要留着 —— 变更判定和实体身份还要用)。
+
+**必须有测试**:返回 `false` 时,一个内容为垃圾二进制的文件不会导致任何
+读取或解码错误,`parse` 拿到的 `content` 是空串。
+
+### 决定三:以下差异**接受**,写进报告即可,不要再想办法消除
+
+| # | 差异 | 为什么接受 |
+| --- | --- | --- |
+| ① | gemini 游标 `line_offset` 旧值是「带 token 的消息数」,流水线写行数 | 两家重读都不读这个水位线,**功能零差异**。游标表里存的数不同,没有任何读者 |
+| ② | opencode 单会话失败的错误串进不了 `result.errors` | 解析器捕获并跳过坏会话即可;**哪些记录入库**与旧代码一致,只有错误串的聚合形状不同 |
+| ③ | `query_sessions` 失败旧代码上抛 `Err`,流水线变成 errors 一条 + `Ok` | 调用方的退避判定对两者等价 |
+| ⑤ | gemini 坏 UTF-8 文件 lossy vs 严格 | 边角情况,旧行为本身也不是有意设计的 |
+
+**这四条都要在报告里如实列出**,但不要为了消除它们再改接口。
+
+### 顺带:任务书自身的两处错误已确认
+
+- §2.1 里 `parse` 的签名还是 T14a 之前的 `Result<Vec<ParsedUsage>>` ——
+  现在是 `Result<ParseOutput>`,以 T14a 落地的为准
+- §4.2 要求「gemini/opencode 的 event_id 与重构前逐字节相同」——
+  **前提不成立**,那个字符串重构前不存在。该条改为:两家的 `event_id` 填 `None`,
+  并断言它确实是 `None`
+
+---
+
 ## 1. 先读三样东西
 
 1. `src-tauri/src/services/ingest/mod.rs` —— 流水线本体与 `SessionLogParser`
