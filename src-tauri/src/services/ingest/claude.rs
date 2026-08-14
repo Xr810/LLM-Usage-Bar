@@ -10,10 +10,13 @@ use crate::config::get_claude_config_dir;
 use crate::database::Database;
 use crate::error::AppError;
 use crate::services::ingest::{
-    occurred_at_secs, sync_with_parser, LogFileContext, ParsedUsage, SessionLogParser,
-    SessionSyncResult, UsageIdentity,
+    occurred_at_secs, sync_with_parser, LogFileContext, ParsedUsage, ProviderWriteProfile,
+    SessionLogParser, SessionSyncResult, UsageIdentity,
 };
+use crate::usage::domain::CLAUDE_CODE_AGENT_MODULE_ID;
+use crate::usage::metering::parser::SESSION_REQUEST_ID_PREFIX;
 use crate::usage::session::{validate_bound_session_agent, ProviderSessionSyncResult};
+use crate::usage::system_providers::CLAUDE_SUBSCRIPTION_ID;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -41,6 +44,18 @@ pub struct ClaudeParser;
 impl SessionLogParser for ClaudeParser {
     fn source(&self) -> &'static str {
         "claude"
+    }
+
+    fn write_profile(&self) -> ProviderWriteProfile {
+        ProviderWriteProfile {
+            app_type: "claude",
+            legacy_provider_id: "_session",
+            provider_type: "session_log",
+            insert_error_prefix: "插入会话日志",
+            calculator_app: None,
+            agent_module_id: CLAUDE_CODE_AGENT_MODULE_ID,
+            subscription_activity_id: CLAUDE_SUBSCRIPTION_ID,
+        }
     }
 
     fn log_roots(&self, _home: &Path) -> Vec<PathBuf> {
@@ -238,8 +253,12 @@ fn parse_claude_log_file(ctx: &LogFileContext<'_>) -> Result<Vec<ParsedUsage>, A
         }
 
         records.push(ParsedUsage {
-            identity: UsageIdentity::ClaudeMessage {
-                message_id: msg.message_id.clone(),
+            identity: UsageIdentity {
+                request_id: format!("{SESSION_REQUEST_ID_PREFIX}{}", msg.message_id),
+                event_id: format!("claude-session:{}", msg.message_id),
+                upstream_correlation_id: Some(msg.message_id.clone()),
+                message_id: Some(msg.message_id.clone()),
+                log_label: msg.message_id.clone(),
             },
             model: msg.model.clone(),
             input_tokens: msg.input_tokens,
@@ -266,9 +285,14 @@ fn insert_session_log_entry(
 ) -> Result<bool, AppError> {
     insert_usage_record(
         db,
+        &ClaudeParser.write_profile(),
         &ParsedUsage {
-            identity: UsageIdentity::ClaudeMessage {
-                message_id: msg.message_id.clone(),
+            identity: UsageIdentity {
+                request_id: format!("{SESSION_REQUEST_ID_PREFIX}{}", msg.message_id),
+                event_id: format!("claude-session:{}", msg.message_id),
+                upstream_correlation_id: Some(msg.message_id.clone()),
+                message_id: Some(msg.message_id.clone()),
+                log_label: msg.message_id.clone(),
             },
             model: msg.model.clone(),
             input_tokens: msg.input_tokens,
@@ -304,9 +328,11 @@ fn sync_single_file(
         .into_iter()
         .map(|cursor| (cursor.cursor_key.clone(), cursor))
         .collect();
+    let profile = ClaudeParser.write_profile();
     sync_file_with_parser(
         db,
         &ClaudeParser,
+        &profile,
         file_path,
         bound_provider_id,
         &mut sync_cursors,
