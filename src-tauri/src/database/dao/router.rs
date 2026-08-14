@@ -284,6 +284,24 @@ impl Database {
         Ok(conn.last_insert_rowid())
     }
 
+    /// 把一次尝试的 token 数回填上去。行不存在时不报错——那一行可能因为
+    /// 写库失败根本没进去，为此让一个已经成功的请求失败不划算。
+    pub fn update_router_attempt_tokens(
+        &self,
+        id: i64,
+        input_tokens: i64,
+        output_tokens: i64,
+    ) -> Result<(), AppError> {
+        let conn = lock_conn!(self.conn);
+        conn.execute(
+            "UPDATE router_attempts
+             SET input_tokens = ?2, output_tokens = ?3
+             WHERE id = ?1",
+            params![id, input_tokens, output_tokens],
+        )?;
+        Ok(())
+    }
+
     /// 按 provider 汇总某段时间的用量，供分账面板使用。
     ///
     /// 时间范围是半开区间 `[start_at, end_at)`，按 `started_at`（epoch 毫秒）过滤。

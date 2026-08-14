@@ -450,10 +450,10 @@ struct AttemptRecord<'a> {
     duration_ms: Option<i64>,
 }
 
-/// 记一次尝试。写失败只记日志——转发服务不能因为记账失败而拒绝用户请求。
-/// input/output token 暂记 None:任务书没要求解析 SSE 里的 usage(那是 17′
-/// 的分账语义),留给后续任务。
-fn record_attempt(db: &Database, record: AttemptRecord<'_>) {
+/// 记一次尝试,返回新行的 id。写失败只记日志并返回 None——转发服务不能因为
+/// 记账失败而拒绝用户请求;回填方(T13)拿不到 id 就放弃回填,同样只当记账失败。
+/// input/output token 暂记 None,由流式扫描器抓到 usage 后回填(T13)。
+fn record_attempt(db: &Database, record: AttemptRecord<'_>) -> Option<i64> {
     let attempt = RouterAttempt {
         started_at: record.started_at,
         logical_model: record.logical_model.to_string(),
@@ -465,8 +465,12 @@ fn record_attempt(db: &Database, record: AttemptRecord<'_>) {
         output_tokens: None,
         duration_ms: record.duration_ms,
     };
-    if let Err(error) = db.record_router_attempt(&attempt) {
-        log::error!("记录 router attempt 失败: {error}");
+    match db.record_router_attempt(&attempt) {
+        Ok(id) => Some(id),
+        Err(error) => {
+            log::error!("记录 router attempt 失败: {error}");
+            None
+        }
     }
 }
 
@@ -799,6 +803,10 @@ async fn try_one_candidate(
 /// 2xx:记 attempt(success) 后把响应流式透传给客户端,绝不整体读进内存(§4.1)。
 /// 若流在吐字之后中断,再补记一条 failed/stream_broken(不换家、不拉黑,错误
 /// 只能以「流到此结束」的形式透传)。
+///
+/// 透传的同时旁路扫 usage(T13):每个 chunk 原样发下游、再喂扫描器,扫描器只
+/// 保留「当前这个未完成的事件」;扫到 `response.completed` 里的 usage 就把
+/// token 回填到本次尝试的那一行。抓不到就保持 None,不猜不估。
 fn stream_upstream_success(
     state: &RouterState,
     response: reqwest::Response,
@@ -808,7 +816,8 @@ fn stream_upstream_success(
 ) -> Result<Response, AppError> {
     let status = response.status();
     let content_type = response.headers().get(header::CONTENT_TYPE).cloned();
-    record_attempt(
+    // T13:把新行的 id 留出来,扫描到 usage 后回填到这一行(§2.1)。
+    let attempt_id = record_attempt(
         &state.db,
         AttemptRecord {
             started_at: attempt_start,
@@ -827,10 +836,37 @@ fn stream_upstream_success(
     let stream = async_stream::stream! {
         let mut inner = response.bytes_stream();
         let mut broken = false;
+        // T13 旁路扫描状态:观察者不挡路——chunk 先发给下游、再喂扫描器,
+        // 顺序不能反,否则就是在给用户加延迟(§2.3)。
+        let mut scanner = SseScanner::new();
+        // 非流式兜底(§2.5):响应不是 SSE 时 usage 在顶层,整份 body 才是有意义
+        // 的解析单位;但只在上限内留副本,超过 MAX_SSE_EVENT_BYTES 就放弃回填。
+        let mut buffered: Vec<u8> = Vec::new();
+        let mut buffered_overflow = false;
+        let mut captured = false;
         while let Some(chunk) = inner.next().await {
             match chunk {
                 Ok(bytes) => {
-                    yield Ok::<Bytes, std::convert::Infallible>(bytes);
+                    yield Ok::<Bytes, std::convert::Infallible>(bytes.clone());
+                    if !captured {
+                        for event in scanner.feed(&bytes) {
+                            if let Some((input_tokens, output_tokens)) =
+                                usage_from_completed_event(&event)
+                            {
+                                captured = true;
+                                backfill_attempt_tokens(&db, attempt_id, input_tokens, output_tokens);
+                                break;
+                            }
+                        }
+                    }
+                    if !captured && !buffered_overflow {
+                        if bytes.len() <= MAX_SSE_EVENT_BYTES - buffered.len() {
+                            buffered.extend_from_slice(&bytes);
+                        } else {
+                            buffered.clear();
+                            buffered_overflow = true;
+                        }
+                    }
                 }
                 Err(error) => {
                     broken = true;
@@ -841,6 +877,7 @@ fn stream_upstream_success(
         }
         if broken {
             // 已经吐字之后断流:错误只能透传(流到此结束),不换家、不拉黑(T5 判定表第 4 行)。
+            // 断流不回填,两列保持 None(§2.4)。
             record_attempt(
                 &db,
                 AttemptRecord {
@@ -853,6 +890,11 @@ fn stream_upstream_success(
                     duration_ms: Some(now_millis() - attempt_start),
                 },
             );
+        } else if !captured && !buffered_overflow {
+            // 非流式响应:整个 body 已在手里且没超上限,直接解析顶层 usage(§2.5)。
+            if let Some((input_tokens, output_tokens)) = usage_from_body_json(&buffered) {
+                backfill_attempt_tokens(&db, attempt_id, input_tokens, output_tokens);
+            }
         }
     };
     let mut builder = Response::builder().status(status);
@@ -862,6 +904,136 @@ fn stream_upstream_success(
     builder
         .body(Body::from_stream(stream))
         .map_err(|error| AppError::InvalidInput(format!("构建流式响应失败: {error}")))
+}
+
+/// 增量 SSE 扫描器的内部缓冲上限(§2.3):当前事件超过它就整件丢弃、继续找
+/// 下一个,绝不能因为上游发了一个畸形的超大事件把内存吃光。非流式响应回填时
+/// 也共用这个上限(§2.5)。
+const MAX_SSE_EVENT_BYTES: usize = 256 * 1024;
+
+/// T13:增量 SSE 扫描器——喂字节,吐出完整事件的 `data:` 内容。
+///
+/// 为什么必须增量:2xx 响应是直接透传的流,不能整体缓存;而 SSE 的 chunk 边界
+/// 与事件边界毫无关系,usage 的 JSON 被切在中间是常态。所以只保留「当前这个
+/// 未完成的事件」,事件一完整(空行)就交出去,用完就丢。
+struct SseScanner {
+    /// 当前事件已收集的 data 内容(多个 data: 行按 SSE 规范用 \n 连接)。
+    data: Vec<u8>,
+    /// 当前事件已确认超上限:data 已被丢弃,但事件边界仍要认,好跳到下一个。
+    overflow: bool,
+    /// 尚未见到 \n 的当前行。
+    line: Vec<u8>,
+    /// 当前行已确认超上限:剩余字节不再收,直到 \n 重置——避免超长单行被反复
+    /// 「收到上限→清空」地空转。
+    line_overflow: bool,
+}
+
+impl SseScanner {
+    fn new() -> Self {
+        Self {
+            data: Vec::new(),
+            overflow: false,
+            line: Vec::new(),
+            line_overflow: false,
+        }
+    }
+
+    /// 喂一段字节,返回这段字节里完整结束的事件的 data 内容(可能有多个)。
+    /// 数据超上限的事件被整件丢弃;只关心 data: 字段——usage 的 JSON 就在
+    /// data 里,`event:` 字段名不需要(JSON 里自带 `type`)。
+    fn feed(&mut self, chunk: &[u8]) -> Vec<String> {
+        let mut completed = Vec::new();
+        for &byte in chunk {
+            if byte == b'\n' {
+                self.line_overflow = false;
+                let mut line = std::mem::take(&mut self.line);
+                // 兼容 CRLF:行尾的 \r 不是行内容的一部分。
+                if line.last() == Some(&b'\r') {
+                    line.pop();
+                }
+                if line.is_empty() {
+                    // 空行 = 事件边界:把当前事件交出去(超上限的已丢弃),重新开始。
+                    if !self.overflow && !self.data.is_empty() {
+                        completed.push(String::from_utf8_lossy(&self.data).into_owned());
+                    }
+                    self.data.clear();
+                    self.overflow = false;
+                } else if !self.overflow {
+                    self.consume_line(&line);
+                }
+                continue;
+            }
+            if !self.line_overflow {
+                self.line.push(byte);
+                if self.line.len() > MAX_SSE_EVENT_BYTES {
+                    // 单行就超上限,整个事件必然超上限:数据丢弃,边界照认。
+                    self.overflow = true;
+                    self.line.clear();
+                    self.line_overflow = true;
+                }
+            }
+        }
+        completed
+    }
+
+    /// 处理一行非空字段行:只认 `data:` 前缀。多行 data 按规范用 \n 连接;
+    /// 累计超过上限则丢弃整个事件的数据(事件边界照认)。
+    fn consume_line(&mut self, line: &[u8]) {
+        let Some(value) = line.strip_prefix(b"data:") else {
+            return;
+        };
+        // SSE 规范:冒号后紧跟一个空格时,那一个空格不属于数据。
+        let value = value.strip_prefix(b" ").unwrap_or(value);
+        if self.data.len() + 1 + value.len() > MAX_SSE_EVENT_BYTES {
+            self.overflow = true;
+            self.data.clear();
+            return;
+        }
+        if !self.data.is_empty() {
+            self.data.push(b'\n');
+        }
+        self.data.extend_from_slice(value);
+    }
+}
+
+/// 从 `response.completed` 事件的 data JSON 里取 usage。取不到(不是该事件、
+/// 没有 usage 字段、token 缺失或不是整数)一律 None——不猜(§2.4)。
+fn usage_from_completed_event(data: &str) -> Option<(i64, i64)> {
+    let value: serde_json::Value = serde_json::from_str(data).ok()?;
+    if value.get("type").and_then(serde_json::Value::as_str) != Some("response.completed") {
+        return None;
+    }
+    let usage = value.get("response")?.get("usage")?;
+    let input_tokens = usage.get("input_tokens")?.as_i64()?;
+    let output_tokens = usage.get("output_tokens")?.as_i64()?;
+    Some((input_tokens, output_tokens))
+}
+
+/// 非流式响应:body 整个在手(且 ≤ 上限)时解析顶层 usage(§2.5)。解析不了
+/// 或字段缺失一律 None,不猜。
+fn usage_from_body_json(body: &[u8]) -> Option<(i64, i64)> {
+    let value: serde_json::Value = serde_json::from_slice(body).ok()?;
+    let usage = value.get("usage")?;
+    let input_tokens = usage.get("input_tokens")?.as_i64()?;
+    let output_tokens = usage.get("output_tokens")?.as_i64()?;
+    Some((input_tokens, output_tokens))
+}
+
+/// 把抓到的 usage 回填到那一次尝试。回填失败只记日志——请求已经成功,记账失败
+/// 不能变成用户可见的错误(§2.4)。一次请求只回填一次:拿到第一个
+/// `response.completed` 就不再找,由调用方控制。
+fn backfill_attempt_tokens(
+    db: &Database,
+    attempt_id: Option<i64>,
+    input_tokens: i64,
+    output_tokens: i64,
+) {
+    let Some(attempt_id) = attempt_id else {
+        return;
+    };
+    if let Err(error) = db.update_router_attempt_tokens(attempt_id, input_tokens, output_tokens) {
+        log::error!("回填 router attempt token 失败: {error}");
+    }
 }
 
 /// 非 2xx 响应的错误体:取一小段给 classify 做「模型不存在」判断,
@@ -1138,6 +1310,39 @@ mod tests {
         rows
     }
 
+    /// 读回 router_attempts 的 token 列:(input_tokens, output_tokens),按 id 升序。
+    fn attempt_tokens(db: &Database) -> Vec<(Option<i64>, Option<i64>)> {
+        let conn = db.conn.lock().unwrap();
+        let mut statement = conn
+            .prepare("SELECT input_tokens, output_tokens FROM router_attempts ORDER BY id")
+            .unwrap();
+        statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    }
+
+    /// 拼一个单行 data 的 SSE 事件。
+    fn sse_event(data_json: &str) -> String {
+        format!("data: {data_json}\n\n")
+    }
+
+    /// 把一段字节按 1,2,3,4,5,6,7,1,2... 的节奏切成不规则小块:
+    /// 模拟真实网络里与事件边界无关的 chunk 划分。
+    fn split_varied(bytes: &[u8]) -> Vec<Vec<u8>> {
+        let mut chunks = Vec::new();
+        let mut rest = bytes;
+        let mut size = 1usize;
+        while !rest.is_empty() {
+            let take = size.min(rest.len());
+            chunks.push(rest[..take].to_vec());
+            rest = &rest[take..];
+            size = size % 7 + 1;
+        }
+        chunks
+    }
+
     struct FakeAuth {
         headers: Vec<(String, String)>,
         fail_for: Option<String>,
@@ -1162,6 +1367,13 @@ mod tests {
             status: u16,
             headers: Vec<(String, String)>,
             body: Vec<u8>,
+        },
+        /// T13:分块响应,每块作为一个独立 chunk 交给 bytes_stream——
+        /// 用来验证「SSE 的 chunk 边界与事件边界毫无关系」。
+        RespondChunked {
+            status: u16,
+            headers: Vec<(String, String)>,
+            chunks: Vec<Vec<u8>>,
         },
         Fail(SendFailure),
     }
@@ -1210,6 +1422,23 @@ mod tests {
                     builder = builder.header(name.as_str(), value.as_str());
                 }
                 let response = builder.body(reqwest::Body::from(body)).unwrap();
+                Ok(reqwest::Response::from(response))
+            }
+            Some(ScriptedOutcome::RespondChunked {
+                status,
+                headers,
+                chunks,
+            }) => {
+                let mut builder = axum::http::Response::builder().status(status);
+                for (name, value) in &headers {
+                    builder = builder.header(name.as_str(), value.as_str());
+                }
+                let body = reqwest::Body::wrap_stream(futures::stream::iter(
+                    chunks
+                        .into_iter()
+                        .map(|chunk| Ok::<Bytes, reqwest::Error>(Bytes::from(chunk))),
+                ));
+                let response = builder.body(body).unwrap();
                 Ok(reqwest::Response::from(response))
             }
         }
@@ -1663,5 +1892,250 @@ mod tests {
         let address = first.local_addr().unwrap();
         assert_eq!(address.ip(), std::net::IpAddr::from([127, 0, 0, 1]));
         assert!(bind_loopback(address.port()).await.is_err());
+    }
+
+    // —— T13:token 回填 ——
+
+    /// 1. SSE 流里有 response.completed 带 usage:那一行的两列被回填成对应值。
+    #[tokio::test]
+    async fn sse_completed_event_backfills_tokens_into_attempt() {
+        let db = memory_db();
+        seed_route(&db, "packyapi", WireApi::Responses, 1, MODEL);
+        let body = format!(
+            "{}{}{}",
+            sse_event(r#"{"type":"response.output_item.added","output_index":0}"#),
+            sse_event(
+                r#"{"type":"response.completed","response":{"id":"resp_1","usage":{"input_tokens":123,"output_tokens":456}}}"#
+            ),
+            sse_event(r#"{"type":"response.done"}"#),
+        );
+        let sender = fake_sender(vec![ScriptedOutcome::Respond {
+            status: 200,
+            headers: vec![("content-type".to_string(), "text/event-stream".to_string())],
+            body: body.clone().into_bytes(),
+        }]);
+        let router = test_router(test_state(db.clone(), ok_auth(), sender));
+
+        let (status, _, out) = post_json(router, json_body(json!({"model": MODEL})), &[]).await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(out.as_ref(), body.as_bytes());
+        assert_eq!(
+            attempt_tokens(&db),
+            vec![(Some(123), Some(456))],
+            "response.completed 里的 usage 要回填到那一行"
+        );
+    }
+
+    /// 2. usage 跨两个 chunk 被切开(在 JSON 中间断开):仍能拼回来并正确回填。
+    /// SSE 的 chunk 边界与事件边界毫无关系,切在 JSON 中间是常态。
+    #[tokio::test]
+    async fn usage_split_across_chunks_is_reassembled_and_backfilled() {
+        let db = memory_db();
+        seed_route(&db, "packyapi", WireApi::Responses, 1, MODEL);
+        let completed = r#"data: {"type":"response.completed","response":{"id":"resp_1","usage":{"input_tokens":123,"output_tokens":4567}}}"#;
+        let done = "\n\ndata: {\"type\":\"response.done\"}\n\n";
+        // 切点故意落在数字 4567 的中间:两个 chunk 都各带半截 JSON。
+        let split_at = completed.find("4567").unwrap() + 2;
+        let chunks = vec![
+            completed.as_bytes()[..split_at].to_vec(),
+            completed.as_bytes()[split_at..].to_vec(),
+            done.as_bytes().to_vec(),
+        ];
+        let whole: Vec<u8> = chunks.concat();
+        let sender = fake_sender(vec![ScriptedOutcome::RespondChunked {
+            status: 200,
+            headers: vec![("content-type".to_string(), "text/event-stream".to_string())],
+            chunks,
+        }]);
+        let router = test_router(test_state(db.clone(), ok_auth(), sender));
+
+        let (status, _, out) = post_json(router, json_body(json!({"model": MODEL})), &[]).await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(out.as_ref(), whole.as_slice());
+        assert_eq!(
+            attempt_tokens(&db),
+            vec![(Some(123), Some(4567))],
+            "跨 chunk 切开的 usage 必须拼回来回填"
+        );
+    }
+
+    /// 2b. 扫描器本身的跨块重组:与请求链路无关地直接喂字节,把事件 JSON 从
+    /// 数字中间切开,证明重组逻辑不依赖任何网络层的 chunk 行为。
+    #[test]
+    fn scanner_reassembles_event_data_split_mid_json() {
+        let mut scanner = SseScanner::new();
+        let event = "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":42,\"output_tokens\":777}}}";
+        let boundary = "\n\n";
+
+        // 第一口:前半段(在 777 中间断开),什么都没完成。
+        let split_at = event.find("777").unwrap() + 1;
+        let first = scanner.feed(&event.as_bytes()[..split_at]);
+        assert!(first.is_empty(), "事件没结束就不该吐出来");
+
+        // 第二口:后半段 + 事件边界 → 完整事件一次吐出。
+        let mut tail = event[split_at..].to_string();
+        tail.push_str(boundary);
+        let completed = scanner.feed(tail.as_bytes());
+        assert_eq!(completed.len(), 1);
+        assert_eq!(
+            usage_from_completed_event(&completed[0]),
+            Some((42, 777)),
+            "拼回来的 data 必须能解析出 usage"
+        );
+    }
+
+    /// 3. 流里没有 response.completed:两列保持 None,不报错。
+    #[tokio::test]
+    async fn stream_without_completed_event_keeps_token_columns_none() {
+        let db = memory_db();
+        seed_route(&db, "packyapi", WireApi::Responses, 1, MODEL);
+        let body = format!(
+            "{}{}",
+            sse_event(r#"{"type":"response.output_item.added","output_index":0}"#),
+            sse_event(r#"{"type":"response.done"}"#),
+        );
+        let sender = fake_sender(vec![ScriptedOutcome::Respond {
+            status: 200,
+            headers: vec![("content-type".to_string(), "text/event-stream".to_string())],
+            body: body.clone().into_bytes(),
+        }]);
+        let router = test_router(test_state(db.clone(), ok_auth(), sender));
+
+        let (status, _, out) = post_json(router, json_body(json!({"model": MODEL})), &[]).await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(out.as_ref(), body.as_bytes());
+        assert_eq!(attempt_tokens(&db), vec![(None, None)], "抓不到就不回填");
+    }
+
+    /// 4. response.completed 里没有 usage 字段:两列保持 None,不 panic。
+    #[tokio::test]
+    async fn completed_event_without_usage_keeps_token_columns_none() {
+        let db = memory_db();
+        seed_route(&db, "packyapi", WireApi::Responses, 1, MODEL);
+        let body = format!(
+            "{}{}",
+            sse_event(r#"{"type":"response.completed","response":{"id":"resp_1"}}"#),
+            sse_event(r#"{"type":"response.done"}"#),
+        );
+        let sender = fake_sender(vec![ScriptedOutcome::Respond {
+            status: 200,
+            headers: vec![("content-type".to_string(), "text/event-stream".to_string())],
+            body: body.clone().into_bytes(),
+        }]);
+        let router = test_router(test_state(db.clone(), ok_auth(), sender));
+
+        let (status, _, out) = post_json(router, json_body(json!({"model": MODEL})), &[]).await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(out.as_ref(), body.as_bytes());
+        assert_eq!(
+            attempt_tokens(&db),
+            vec![(None, None)],
+            "没有 usage 就不回填"
+        );
+    }
+
+    /// 5. 非流式响应,顶层有 usage:正确回填。
+    #[tokio::test]
+    async fn non_streaming_body_with_top_level_usage_is_backfilled() {
+        let db = memory_db();
+        seed_route(&db, "packyapi", WireApi::Responses, 1, MODEL);
+        let body: &[u8] = br#"{"id":"resp_1","object":"response","usage":{"input_tokens":10,"output_tokens":20}}"#;
+        let sender = fake_sender(vec![ScriptedOutcome::Respond {
+            status: 200,
+            headers: vec![("content-type".to_string(), "application/json".to_string())],
+            body: body.to_vec(),
+        }]);
+        let router = test_router(test_state(db.clone(), ok_auth(), sender));
+
+        let (status, _, out) = post_json(
+            router,
+            json_body(json!({"model": MODEL, "stream": false})),
+            &[],
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(out.as_ref(), body);
+        assert_eq!(
+            attempt_tokens(&db),
+            vec![(Some(10), Some(20))],
+            "非流式响应的顶层 usage 要回填"
+        );
+    }
+
+    /// 6. 单个事件超过 MAX_SSE_EVENT_BYTES:丢弃它继续找,不 OOM、不 panic。
+    #[tokio::test]
+    async fn oversized_event_is_dropped_and_later_usage_is_still_captured() {
+        let db = memory_db();
+        seed_route(&db, "packyapi", WireApi::Responses, 1, MODEL);
+        let giant_pad = "a".repeat(MAX_SSE_EVENT_BYTES + 10_000);
+        let body = format!(
+            "{}{}",
+            sse_event(&format!(
+                r#"{{"type":"response.output_item.added","pad":"{giant_pad}"}}"#
+            )),
+            sse_event(
+                r#"{"type":"response.completed","response":{"usage":{"input_tokens":7,"output_tokens":8}}}"#
+            ),
+        );
+        let sender = fake_sender(vec![ScriptedOutcome::Respond {
+            status: 200,
+            headers: vec![("content-type".to_string(), "text/event-stream".to_string())],
+            body: body.clone().into_bytes(),
+        }]);
+        let router = test_router(test_state(db.clone(), ok_auth(), sender));
+
+        let (status, _, out) = post_json(router, json_body(json!({"model": MODEL})), &[]).await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(out.as_ref(), body.as_bytes());
+        assert_eq!(
+            attempt_tokens(&db),
+            vec![(Some(7), Some(8))],
+            "超限事件被丢弃后,后面的 usage 事件仍然要扫到"
+        );
+    }
+
+    /// 7. 透传的字节与上游发的逐字节相同:多事件流按不规则边界切块,
+    /// 下游收到的字节序列必须与上游发出的完全一致。
+    #[tokio::test]
+    async fn passthrough_bytes_are_identical_to_upstream() {
+        let db = memory_db();
+        seed_route(&db, "packyapi", WireApi::Responses, 1, MODEL);
+        let whole: Vec<u8> = format!(
+            "{}{}{}{}",
+            sse_event(r#"{"type":"response.created"}"#),
+            sse_event(r#"{"type":"response.output_item.added","output_index":0}"#),
+            sse_event(
+                r#"{"type":"response.completed","response":{"usage":{"input_tokens":7,"output_tokens":89}}}"#
+            ),
+            sse_event(r#"{"type":"response.done"}"#),
+        )
+        .into_bytes();
+        let chunks = split_varied(&whole);
+        let sender = fake_sender(vec![ScriptedOutcome::RespondChunked {
+            status: 200,
+            headers: vec![("content-type".to_string(), "text/event-stream".to_string())],
+            chunks,
+        }]);
+        let router = test_router(test_state(db.clone(), ok_auth(), sender));
+
+        let (status, _, out) = post_json(router, json_body(json!({"model": MODEL})), &[]).await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            out.as_ref(),
+            whole.as_slice(),
+            "透传字节必须与上游逐字节相同,多一个少一个都是 bug"
+        );
+        assert_eq!(
+            attempt_tokens(&db),
+            vec![(Some(7), Some(89))],
+            "旁路扫描不能影响透传,也不能因此漏掉 usage"
+        );
     }
 }
