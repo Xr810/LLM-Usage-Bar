@@ -11,6 +11,12 @@
 CI 前端红修复、main 上 CI 双绿;⑦任务 7 归因实测写入 §11.2,任务 6(QoS + 定时器
 唤醒)落地,§11.3 五项全部完成
 
+最后更新:2026-08-14 —— ①`feat/claude-oauth-chain` 审核后合入(三层额度回退链 + 活动
+自适应刷新),审出的 8 个问题与 CI 四红修于 `87700b17`;②Codex「官方登录 + 第三方
+provider」的真正开关查明,见 §13;③本地路由与模块化两条设计线成形,见下方文档地图;
+④重新构建安装(旧的 8/07 构建实测约 5,360 秒 CPU/天,早于 §11.3 那批优化)
+
+
 > **这是唯一的交接文档。** 它取代并吸收了以下分散文档,那些文件不要再单独更新:
 >
 > | 被取代的文档 | 原位置 | 状态 |
@@ -21,6 +27,22 @@ CI 前端红修复、main 上 CI 双绿;⑦任务 7 归因实测写入 §11.2,�
 > | `HANDOFF.md` 报告(一)(二) | worktree `usage-model-agent-classification-03acf1`(报告二未提交) | 内容已并入本文 §4、§5 |
 >
 > 交接方式:后续 agent 把新发现**追加到本文件**,不要另开新文档。
+
+> **文档地图(2026-08-14)** —— **你只需要打开这一份**。下面几份各管一摊,需要时再点进去;
+> 它们不是「另开的新文档」,而是**尚未批准的设计稿**,与本文「记录既成事实」的职责不同,
+> 所以刻意分开放:
+>
+> | 文档 | 管什么 | 状态 |
+> | --- | --- | --- |
+> | **本文** | 现状、坑、已完成的事。**接手先读它** | 事实 |
+> | [`docs/design/2026-08-14-local-routing-design.md`](docs/design/2026-08-14-local-routing-design.md) | 本地路由与多 provider 故障转移 | **讨论中,未批准,不要据此开工** |
+> | [`docs/design/2026-08-14-modular-core-and-providers.md`](docs/design/2026-08-14-modular-core-and-providers.md) | core / provider 模块 / 前端面板的划分 | **讨论中,未批准** |
+> | [`docs/design/2026-08-13-native-hig-restyle-plan.md`](docs/design/2026-08-13-native-hig-restyle-plan.md) | SwiftUI 界面的 HIG 改造 | 计划,未批准 |
+> | [`docs/design/tech-route-review-2026-08-12.md`](docs/design/tech-route-review-2026-08-12.md) | 语言与 UI 选型评审 | 结论:方案 B(Rust 核心 + SwiftUI 壳) |
+> | `docs/archive/` | 已被取代的旧稿,只在追溯「当初怎么想的」时读 | 归档 |
+>
+> **区分「事实」与「设计稿」是有意的**:把未批准的设想写进这份大家当事实读的文档,
+> 迟早有人照着开工。设计稿开头都标着状态,点进去第一眼就能看到。
 
 ---
 
