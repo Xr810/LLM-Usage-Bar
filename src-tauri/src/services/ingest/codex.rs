@@ -22,7 +22,7 @@ use crate::database::{Database, UsageSyncCursor};
 use crate::error::AppError;
 use crate::services::ingest::{
     metadata_modified_nanos, occurred_at_secs, sync_with_parser, update_sync_state_for_resource,
-    FileCursor, LogFileContext, ParsedUsage, ProviderWriteProfile, SessionLogParser,
+    FileCursor, LogFileContext, ParseOutput, ParsedUsage, ProviderWriteProfile, SessionLogParser,
     SessionSyncResult, SyncCursorMap, UsageIdentity,
 };
 use crate::usage::domain::CODEX_AGENT_MODULE_ID;
@@ -255,7 +255,7 @@ impl SessionLogParser for CodexParser {
             insert_error_prefix: "插入 Codex 会话日志",
             calculator_app: Some("codex"),
             agent_module_id: CODEX_AGENT_MODULE_ID,
-            subscription_activity_id: CHATGPT_SUBSCRIPTION_ID,
+            subscription_activity_id: Some(CHATGPT_SUBSCRIPTION_ID),
         }
     }
 
@@ -279,7 +279,7 @@ impl SessionLogParser for CodexParser {
         collect_codex_session_files_with_window(&self.codex_dir, &by_path, self.fresh_days).0
     }
 
-    fn parse(&self, ctx: &LogFileContext<'_>) -> Result<Vec<ParsedUsage>, AppError> {
+    fn parse(&self, ctx: &LogFileContext<'_>) -> Result<ParseOutput, AppError> {
         parse_codex_log_file(ctx)
     }
 
@@ -363,6 +363,7 @@ impl SessionLogParser for CodexParser {
             cursor.last_modified.max(file_modified),
             file_size,
             cursor.last_offset,
+            None,
         )
     }
 
@@ -372,11 +373,12 @@ impl SessionLogParser for CodexParser {
         errors.push(msg);
     }
 
-    fn log_insert_failure(&self, record: &ParsedUsage, error: &AppError) {
+    fn log_insert_failure(&self, record: &ParsedUsage, error: &AppError) -> Option<String> {
         log::warn!(
             "[CODEX-SYNC] 插入失败 ({}): {error}",
             record.identity.log_label
         );
+        None
     }
 
     fn log_summary(&self, result: &SessionSyncResult) {
@@ -684,7 +686,7 @@ fn collect_jsonl_recursive(dir: &Path, files: &mut Vec<PathBuf>, depth: u32, max
 /// 跳过发生在**重建累计基线之后**(Codex 的位置):即使水位线以下的行
 /// 早已入过库,也仍要先解析它们、推进 `prev_total` 与 `event_index`,
 /// 这样水位线之上的第一条记录的 delta 才是「当前累计 - 上一行累计」。
-fn parse_codex_log_file(ctx: &LogFileContext<'_>) -> Result<Vec<ParsedUsage>, AppError> {
+fn parse_codex_log_file(ctx: &LogFileContext<'_>) -> Result<ParseOutput, AppError> {
     let file_identity = codex_file_identity(ctx.path, ctx.file, ctx.metadata)?;
     let mut state = FileParseState {
         session_id: None,
@@ -850,13 +852,17 @@ fn parse_codex_log_file(ctx: &LogFileContext<'_>) -> Result<Vec<ParsedUsage>, Ap
                     occurred_at: occurred_at_secs(timestamp.as_deref()),
                     session_id: state.session_id.clone(),
                     line_offset,
+                    upstream_total_cost: None,
                 });
             }
             _ => {}
         }
     }
 
-    Ok(records)
+    Ok(ParseOutput {
+        records,
+        next_state: None,
+    })
 }
 
 #[cfg(test)]
@@ -885,6 +891,7 @@ fn sync_single_codex_file(
         CODEX_PARTITION_FRESH_DAYS,
     );
     let profile = parser.write_profile();
+    let mut errors = Vec::new();
     sync_file_with_parser(
         db,
         &parser,
@@ -893,6 +900,7 @@ fn sync_single_codex_file(
         bound_provider_id,
         &mut sync_cursors,
         &cursor_details,
+        &mut errors,
     )
 }
 
@@ -933,6 +941,7 @@ fn insert_codex_session_entry(
             occurred_at: occurred_at_secs(timestamp),
             session_id: session_id.map(str::to_string),
             line_offset: 0,
+            upstream_total_cost: None,
         },
         request_id,
         None,
@@ -1961,10 +1970,11 @@ mod tests {
             metadata: &metadata,
             content: &content,
             last_line_offset: 2, // 水位线设在第 2 行
+            parser_state: None,
         };
 
         let parser = CodexParser::new(tmp.clone(), Vec::new(), CODEX_PARTITION_FRESH_DAYS);
-        let records = parser.parse(&ctx)?;
+        let records = parser.parse(&ctx)?.records;
         assert_eq!(records.len(), 1, "只有第三行在水位线之上");
         let record = &records[0];
         assert_eq!(
