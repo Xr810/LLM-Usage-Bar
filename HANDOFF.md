@@ -40,6 +40,7 @@ provider」的真正开关查明,见 §13;③本地路由与模块化两条设�
 > | [`docs/design/2026-08-13-native-hig-restyle-plan.md`](docs/design/2026-08-13-native-hig-restyle-plan.md) | SwiftUI 界面的 HIG 改造 | 计划,未批准 |
 > | [`docs/design/tech-route-review-2026-08-12.md`](docs/design/tech-route-review-2026-08-12.md) | 语言与 UI 选型评审 | 结论:方案 B(Rust 核心 + SwiftUI 壳) |
 > | `docs/archive/` | 已被取代的旧稿,只在追溯「当初怎么想的」时读 | 归档 |
+> | [`docs/tasks/`](docs/tasks/README.md) | **给外部 AI agent 的实施任务书**(T1–T7,含依赖与并行分组) | 可执行 |
 >
 > **区分「事实」与「设计稿」是有意的**:把未批准的设想写进这份大家当事实读的文档,
 > 迟早有人照着开工。设计稿开头都标着状态,点进去第一眼就能看到。
