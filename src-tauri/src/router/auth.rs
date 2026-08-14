@@ -6,6 +6,8 @@
 
 use std::sync::Arc;
 
+use futures::future::BoxFuture;
+
 use crate::credentials::BindingCredentialService;
 use crate::database::{Database, RouterAuthKind};
 use crate::error::AppError;
@@ -27,7 +29,18 @@ impl RouterUpstreamAuth {
 }
 
 impl UpstreamAuth for RouterUpstreamAuth {
-    fn headers_for(&self, provider_id: &str) -> Result<Vec<(String, String)>, AppError> {
+    fn headers_for<'a>(
+        &'a self,
+        provider_id: &'a str,
+    ) -> BoxFuture<'a, Result<Vec<(String, String)>, AppError>> {
+        Box::pin(async move { self.resolve_headers(provider_id).await })
+    }
+}
+
+impl RouterUpstreamAuth {
+    /// trait 方法只负责装箱,判定逻辑放这里——嵌在 `Box::pin` 里的一大段
+    /// async 块很难读,而这一段是安全面,必须好读。
+    async fn resolve_headers(&self, provider_id: &str) -> Result<Vec<(String, String)>, AppError> {
         let provider = self
             .db
             .list_router_providers()?
@@ -54,17 +67,30 @@ impl UpstreamAuth for RouterUpstreamAuth {
                 }
             }
             RouterAuthKind::BearerKey => {
-                let _key_id = provider.credential_key_id.ok_or_else(|| {
+                let key_id = provider.credential_key_id.ok_or_else(|| {
                     AppError::Message("bearer_key 认证缺少 credential_key_id".to_string())
                 })?;
-                // 取 key 的同步入口尚不存在:resolve_provider_api_key 是 async,
-                // 而 headers_for 是同步的(T6 定的签名),router 又正跑在 tokio
-                // worker 上不能 block_on。在凭据体系补出同步入口之前这里直接
-                // 拒绝,而不是绕过版本校验与指纹比对自己去读 CredentialStore。
-                // 待接入口:BindingCredentialService 的同步取 key 方法。下面这行
-                // 只是占住 credentials 字段的读取,同步入口落地后删掉。
-                let _ = &self.credentials;
-                Err(AppError::Message("待接同步凭据入口".to_string()))
+                // 版本从当前快照取:router 要的是「此刻这把 key」,不是界面上
+                // 某个时刻看到的那把,所以这里没有一个外部传进来的期望版本。
+                // 这不会削弱校验——resolve_provider_api_key 取回凭据之后还会
+                // 再比对一次版本、槽位与指纹,轮换发生在这两步之间仍然会被拒。
+                let version = self
+                    .db
+                    .provider_credential_snapshot(&key_id)?
+                    .ok_or_else(|| AppError::Message(format!("凭据不存在: {key_id}")))?
+                    .credential_version;
+                let credential = self
+                    .credentials
+                    .resolve_provider_api_key(&key_id, version)
+                    .await?;
+                let key = std::str::from_utf8(credential.expose_secret())
+                    .map_err(|_| AppError::Message("凭据不是合法 UTF-8".to_string()))?;
+                // 拼完立刻 drop 掉带 Zeroizing 的那份。头本身是普通 String——
+                // trait 的返回类型如此(T6 定的),这一段无法零化,所以调用方
+                // 用完就丢、不要存(server.rs 的转发循环就是这么用的)。
+                let header = format!("Bearer {key}");
+                drop(credential);
+                Ok(vec![("Authorization".to_string(), header)])
             }
         }
     }
@@ -73,7 +99,7 @@ impl UpstreamAuth for RouterUpstreamAuth {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::credentials::{CredentialStore, CredentialStoreError};
+    use crate::credentials::{CredentialStore, CredentialStoreError, SecretString};
     use crate::database::{RouterProvider, WireApi};
     use std::collections::HashMap;
     use std::sync::Mutex;
@@ -118,6 +144,24 @@ mod tests {
         )
     }
 
+    /// 造一把真的 provider key:建行 + 经凭据体系存进假 store。
+    /// 走的是生产入口,所以指纹、版本、槽位都是真的——测试里手搓这三样
+    /// 等于把要验的东西自己伪造一遍。
+    async fn seed_real_key(
+        db: &Database,
+        credentials: &BindingCredentialService,
+        plaintext: &str,
+    ) -> String {
+        let key_id = db
+            .create_provider_api_key("system-openrouter-api", "router test key")
+            .unwrap();
+        credentials
+            .set_provider_api_key(&key_id, 0, SecretString::new(plaintext.to_string()))
+            .await
+            .unwrap();
+        key_id
+    }
+
     fn upsert_provider(
         db: &Database,
         id: &str,
@@ -138,68 +182,74 @@ mod tests {
     }
 
     // 1. auth_kind = none → 空头。
-    #[test]
-    fn auth_none_returns_empty_headers() {
+    #[tokio::test]
+    async fn auth_none_returns_empty_headers() {
         let db = memory_db();
         upsert_provider(&db, "no-auth", RouterAuthKind::None, None);
 
-        let headers = auth(db).headers_for("no-auth").unwrap();
+        let headers = auth(db).headers_for("no-auth").await.unwrap();
 
         assert_eq!(headers, Vec::<(String, String)>::new());
     }
 
-    // 2. bearer_key 且 key 存在。
-    //
-    // 任务书期望「恰好一个头,值是 Bearer <明文>」,但取 key 的同步入口尚不存在
-    // (resolve_provider_api_key 是 async,headers_for 是同步且不能 block_on),
-    // 当前契约是返回占位错误。凭据体系补出同步入口后,此测试要改成断言
-    // `[("Authorization", "Bearer <明文>")]`,并把「不走同步入口就取不到 key」
-    // 的断言删掉。
-    #[test]
-    fn bearer_key_with_existing_key_waits_for_sync_entry() {
+    // 2. bearer_key 且 key 存在 → 恰好一个头,值是 Bearer <明文>。
+    #[tokio::test]
+    async fn bearer_key_with_existing_key_returns_the_bearer_header() {
+        const PLAINTEXT: &str = "sk-lub-router-bearer-1a2b3c4d";
         let db = memory_db();
-        upsert_provider(&db, "keyed", RouterAuthKind::BearerKey, Some("key-1"));
+        let credentials = Arc::new(BindingCredentialService::new(
+            db.clone(),
+            Arc::new(MemoryCredentialStore::default()),
+        ));
+        let key_id = seed_real_key(&db, &credentials, PLAINTEXT).await;
+        upsert_provider(&db, "keyed", RouterAuthKind::BearerKey, Some(&key_id));
 
-        let error = auth(db).headers_for("keyed").unwrap_err();
+        let headers = RouterUpstreamAuth::new(db, credentials)
+            .headers_for("keyed")
+            .await
+            .unwrap();
 
-        assert_eq!(error.to_string(), "待接同步凭据入口");
+        assert_eq!(
+            headers,
+            vec![("Authorization".to_string(), format!("Bearer {PLAINTEXT}"))]
+        );
     }
 
     // 3. bearer_key 但 credential_key_id 是 None → Err。
-    #[test]
-    fn bearer_key_without_credential_key_id_is_an_error() {
+    #[tokio::test]
+    async fn bearer_key_without_credential_key_id_is_an_error() {
         let db = memory_db();
         upsert_provider(&db, "keyless", RouterAuthKind::BearerKey, None);
 
-        let error = auth(db).headers_for("keyless").unwrap_err();
+        let error = auth(db).headers_for("keyless").await.unwrap_err();
 
         assert!(error.to_string().contains("credential_key_id"));
     }
 
     // 4. bearer_key 但那把 key 已被删(表里不存在)→ Err,不 panic。
-    #[test]
-    fn bearer_key_pointing_at_deleted_key_is_an_error_without_panic() {
+    #[tokio::test]
+    async fn bearer_key_pointing_at_deleted_key_is_an_error_without_panic() {
         let db = memory_db();
         upsert_provider(&db, "ghost", RouterAuthKind::BearerKey, Some("deleted-key"));
 
-        let error = auth(db).headers_for("ghost").unwrap_err();
+        let error = auth(db).headers_for("ghost").await.unwrap_err();
 
-        assert_eq!(error.to_string(), "待接同步凭据入口");
+        assert!(error.to_string().contains("凭据不存在"));
     }
 
     // 5. provider_id 在表里不存在 → Err,绝不是空头。
-    #[test]
-    fn unknown_provider_id_is_an_error_not_empty_headers() {
+    #[tokio::test]
+    async fn unknown_provider_id_is_an_error_not_empty_headers() {
         let db = memory_db();
 
-        let error = auth(db).headers_for("nobody").unwrap_err();
+        let error = auth(db).headers_for("nobody").await.unwrap_err();
 
         assert!(error.to_string().contains("不存在"));
     }
 
     // 6. 库里 auth_kind 是非法字符串 → 读取返回 Err,不 panic。
-    #[test]
-    fn invalid_auth_kind_in_db_is_an_error_without_panic() {
+    #[tokio::test]
+    async fn invalid_auth_kind_in_db_is_an_error_without_panic() {
         let db = memory_db();
         {
             let conn = db.conn.lock().unwrap();
@@ -216,7 +266,7 @@ mod tests {
             .unwrap();
         }
 
-        let error = auth(db).headers_for("broken").unwrap_err();
+        let error = auth(db).headers_for("broken").await.unwrap_err();
 
         assert!(error.to_string().contains("auth_kind"));
     }
@@ -239,21 +289,24 @@ mod tests {
 
     // 8. 安全测试:错误信息里不含凭据明文。
     //
-    // 构造一把已知内容的 key,让它按第 4 条那样失败,断言 err.to_string()
-    // 里搜不到明文。占位错误本身是固定串,这测试对未来的同步实现是护栏。
-    #[test]
-    fn error_message_never_contains_the_credential_plaintext() {
+    // 走的是**真实的 resolve 失败路径**:先按生产入口存一把已知明文的 key
+    // (于是指纹、槽位、版本都是真的),再把 store 里那条抹掉,让
+    // resolve_provider_api_key 在「行还在、秘密没了」这个状态上失败。
+    // 这是最容易把明文带进错误信息的一条分支,所以盯它。
+    #[tokio::test]
+    async fn error_message_never_contains_the_credential_plaintext() {
         const PLAINTEXT: &str = "sk-lub-security-probe-9f3a7c1e2b4d5f6a";
         let db = memory_db();
         let store = Arc::new(MemoryCredentialStore::default());
-        store
-            .put("probe-slot", PLAINTEXT.as_bytes())
-            .expect("seed fake credential store");
-        let service = Arc::new(BindingCredentialService::new(db.clone(), store));
-        upsert_provider(&db, "probe", RouterAuthKind::BearerKey, Some("probe-key"));
+        let service = Arc::new(BindingCredentialService::new(db.clone(), store.clone()));
+        let key_id = seed_real_key(&db, &service, PLAINTEXT).await;
+        upsert_provider(&db, "probe", RouterAuthKind::BearerKey, Some(&key_id));
+        // 抹掉秘密但留下 key 行:resolve 会走到「取不到/对不上」而不是「不存在」。
+        store.items.lock().unwrap().clear();
 
         let error = RouterUpstreamAuth::new(db, service)
             .headers_for("probe")
+            .await
             .unwrap_err();
         let rendered = error.to_string();
 

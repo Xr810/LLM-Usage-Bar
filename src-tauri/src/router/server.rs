@@ -20,6 +20,7 @@ use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::Response;
 use axum::routing::post;
 use axum::Router;
+use futures::future::BoxFuture;
 use futures::stream::StreamExt;
 
 use crate::database::{AttemptOutcome, Database, RouterAttempt, RouterProvider, WireApi};
@@ -48,8 +49,15 @@ const ERROR_DRAIN_MAX: usize = 1024 * 1024;
 /// 返回 `Ok(vec![])` 表示这家不需要认证头；返回 `Err` 表示凭据取不到，
 /// 调用方应把这个候选当作失败（记 `auth_unavailable`），并继续下一个候选——
 /// 换一家是另一份凭据，值得试。
+/// 返回 future 而不是直接返回值:取凭据要走 `CredentialService`,那条路径是
+/// async(底层 `spawn_blocking` 读钥匙串)。同步签名会逼实现方 `block_on`,
+/// 而 router 就跑在 tokio worker 上——那是死锁。形状照抄仓库既有的
+/// `QuotaCollector`(`usage/quota.rs:86`)。
 pub trait UpstreamAuth: Send + Sync {
-    fn headers_for(&self, provider_id: &str) -> Result<Vec<(String, String)>, AppError>;
+    fn headers_for<'a>(
+        &'a self,
+        provider_id: &'a str,
+    ) -> BoxFuture<'a, Result<Vec<(String, String)>, AppError>>;
 }
 
 /// 启动本地路由服务。绑定失败返回 Err，由调用方决定怎么提示。
@@ -648,7 +656,7 @@ async fn try_one_candidate(
         return Ok(Step::Skipped);
     }
     // 认证头:要发的那一刻才问,拿到就用,用完不留(§4.3)。
-    let auth_headers = match state.auth.headers_for(&candidate.provider_id) {
+    let auth_headers = match state.auth.headers_for(&candidate.provider_id).await {
         Ok(headers) => headers,
         Err(error) => {
             log::warn!("取 {} 的上游认证头失败: {error}", candidate.provider_id);
@@ -1136,11 +1144,16 @@ mod tests {
     }
 
     impl UpstreamAuth for FakeAuth {
-        fn headers_for(&self, provider_id: &str) -> Result<Vec<(String, String)>, AppError> {
-            if self.fail_for.as_deref() == Some(provider_id) {
-                return Err(AppError::Message(format!("{provider_id} 没有可用凭据")));
-            }
-            Ok(self.headers.clone())
+        fn headers_for<'a>(
+            &'a self,
+            provider_id: &'a str,
+        ) -> BoxFuture<'a, Result<Vec<(String, String)>, AppError>> {
+            Box::pin(async move {
+                if self.fail_for.as_deref() == Some(provider_id) {
+                    return Err(AppError::Message(format!("{provider_id} 没有可用凭据")));
+                }
+                Ok(self.headers.clone())
+            })
         }
     }
 
