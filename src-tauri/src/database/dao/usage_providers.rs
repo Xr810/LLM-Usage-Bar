@@ -5,8 +5,8 @@ use crate::database::{lock_conn, to_json_string, Database};
 use crate::error::AppError;
 use crate::usage::budget_migration::canonicalize_daily_budget;
 use crate::usage::domain::{
-    BillingKind, BindingCredentialStatus, ProviderApiKeyView, RouteBinding,
-    SystemProviderKeyUsageView, TokenSource, UsageProviderInput, UsageProviderStored,
+    session_agent_module_id, BillingKind, BindingCredentialStatus, ProviderApiKeyView,
+    RouteBinding, SystemProviderKeyUsageView, TokenSource, UsageProviderInput, UsageProviderStored,
     UsageProviderView, UsageSourceBinding,
 };
 use crate::usage::system_providers::{system_binding_route_protocol, system_provider_definitions};
@@ -14,11 +14,17 @@ use rusqlite::{params, types::Type, OptionalExtension, Row};
 use rust_decimal::Decimal;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
 use url::Url;
 
-const SUPPORTED_SESSION_SOURCES: [&str; 2] = ["claude", "codex"];
+/// 会话源是否受支持：直接问 model 层的「本地会话解析器归属」映射，
+/// 不在 store 里维护一份具体 agent 名的清单——加一家带会话日志的 agent
+/// 只需扩展 model 层映射，store 自动接受。
+fn is_supported_session_source(source: &str) -> bool {
+    session_agent_module_id(source).is_some()
+}
 
 fn now_timestamp() -> Result<i64, AppError> {
     SystemTime::now()
@@ -76,14 +82,6 @@ const PROVIDER_COLUMNS: &str = "id, name, billing_kind, product_group_id, token_
     quota_source, quota_interval_seconds, route_app_type, route_config, quota_config,
     enabled, needs_review, legacy_app_type, legacy_provider_id, created_at, updated_at,
     system_preset_key, daily_budget_usd";
-
-const PROVIDER_ORDER_BY: &str = "CASE system_preset_key
-    WHEN 'chatgpt-subscription' THEN 0
-    WHEN 'claude-subscription' THEN 1
-    WHEN 'openai-api' THEN 2
-    WHEN 'anthropic-api' THEN 3
-    WHEN 'openrouter-api' THEN 4
-    ELSE 5 END, CASE WHEN system_preset_key IS NULL THEN id ELSE '' END";
 
 fn provider_api_key_view(
     conn: &rusqlite::Connection,
@@ -378,7 +376,7 @@ fn validate_session_source_bindings(
         return Ok(None);
     };
     for source in requested {
-        if !SUPPORTED_SESSION_SOURCES.contains(&source.as_str()) {
+        if !is_supported_session_source(source) {
             return Err(AppError::Message(format!(
                 "unsupported usage source: {source}"
             )));
@@ -389,13 +387,14 @@ fn validate_session_source_bindings(
             "session source bindings require session_log token support".to_string(),
         ));
     }
-    Ok(Some(
-        SUPPORTED_SESSION_SOURCES
-            .iter()
-            .filter(|source| requested.iter().any(|requested| requested == **source))
-            .map(|source| (*source).to_string())
-            .collect(),
-    ))
+    // 去重并保持请求顺序；最终入库顺序由读取侧 ORDER BY source 决定，无需在此枚举全量来源。
+    let mut normalized: Vec<String> = Vec::with_capacity(requested.len());
+    for source in requested {
+        if !normalized.iter().any(|existing| existing == source) {
+            normalized.push(source.clone());
+        }
+    }
+    Ok(Some(normalized))
 }
 
 fn source_bindings_for_provider(
@@ -417,11 +416,27 @@ impl Database {
     pub fn list_usage_providers(&self) -> Result<Vec<UsageProviderView>, AppError> {
         let conn = lock_conn!(self.conn);
         let mut statement = conn.prepare(&format!(
-            "SELECT {PROVIDER_COLUMNS} FROM usage_providers ORDER BY {PROVIDER_ORDER_BY}"
+            "SELECT {PROVIDER_COLUMNS} FROM usage_providers ORDER BY id"
         ))?;
-        let providers = statement
+        let mut providers: Vec<UsageProviderStored> = statement
             .query_map([], provider_from_row)?
             .collect::<Result<Vec<_>, _>>()?;
+        // 展示顺序从内置目录派生（单一事实源）：系统 preset 按目录里的定义顺序，
+        // 自定义 provider 排在最后、按 id 排序。store 不再点名任何一家 preset。
+        let preset_positions: HashMap<String, usize> = system_provider_definitions()
+            .into_iter()
+            .enumerate()
+            .map(|(index, definition)| (definition.preset_key.to_string(), index))
+            .collect();
+        providers.sort_by_key(|provider| {
+            let rank = provider
+                .system_preset_key
+                .as_deref()
+                .and_then(|key| preset_positions.get(key))
+                .copied()
+                .unwrap_or(usize::MAX);
+            (rank, provider.id.clone())
+        });
         providers
             .iter()
             .map(|provider| {
@@ -548,23 +563,38 @@ impl Database {
         )?;
 
         if let Some(requested) = requested_session_sources.as_ref() {
-            for source in SUPPORTED_SESSION_SOURCES {
-                if requested.iter().any(|requested| requested == source) {
-                    transaction.execute(
-                        "INSERT INTO usage_source_bindings (source, provider_id, updated_at)
-                         VALUES (?1, ?2, ?3)
-                         ON CONFLICT(source) DO UPDATE SET
-                            provider_id = excluded.provider_id,
-                            updated_at = excluded.updated_at",
-                        params![source, input.id, now],
-                    )?;
-                } else {
-                    transaction.execute(
+            // 请求的来源逐个 upsert；未再请求的旧绑定用差集 DELETE 清掉。
+            // 与旧实现遍历全量会话源清单等价，但不再需要 store 维护那份清单。
+            for source in requested {
+                transaction.execute(
+                    "INSERT INTO usage_source_bindings (source, provider_id, updated_at)
+                     VALUES (?1, ?2, ?3)
+                     ON CONFLICT(source) DO UPDATE SET
+                        provider_id = excluded.provider_id,
+                        updated_at = excluded.updated_at",
+                    params![source, input.id, now],
+                )?;
+            }
+            if requested.is_empty() {
+                transaction.execute(
+                    "DELETE FROM usage_source_bindings WHERE provider_id = ?1",
+                    [&input.id],
+                )?;
+            } else {
+                let placeholders = (2..=requested.len() + 1)
+                    .map(|index| format!("?{index}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                transaction.execute(
+                    &format!(
                         "DELETE FROM usage_source_bindings
-                         WHERE source = ?1 AND provider_id = ?2",
-                        params![source, input.id],
-                    )?;
-                }
+                         WHERE provider_id = ?1 AND source NOT IN ({placeholders})"
+                    ),
+                    rusqlite::params_from_iter(
+                        std::iter::once(input.id.as_str())
+                            .chain(requested.iter().map(String::as_str)),
+                    ),
+                )?;
             }
         }
 
@@ -796,7 +826,7 @@ impl Database {
         source_key: &str,
         provider_id: &str,
     ) -> Result<UsageSourceBinding, AppError> {
-        if !SUPPORTED_SESSION_SOURCES.contains(&source_key) {
+        if !is_supported_session_source(source_key) {
             return Err(AppError::Message(format!(
                 "unsupported usage source: {source_key}"
             )));
@@ -845,7 +875,7 @@ impl Database {
         provider_id: &str,
         operation: impl FnOnce() -> Result<T, AppError>,
     ) -> Result<Option<T>, AppError> {
-        if !SUPPORTED_SESSION_SOURCES.contains(&source_key) {
+        if !is_supported_session_source(source_key) {
             return Err(AppError::Message(format!(
                 "unsupported usage source: {source_key}"
             )));

@@ -2,9 +2,11 @@ use crate::database::{lock_conn, Database};
 use crate::error::AppError;
 use crate::usage::domain::{
     AgentProviderBindingInput, AgentProviderBindingView, BillingKind, BindingCredentialStatus,
-    TokenSource,
+    SystemProviderAuthKind, TokenSource,
 };
-use crate::usage::system_providers::{is_fixed_api_preset, system_binding_route_protocol};
+use crate::usage::system_providers::{
+    is_fixed_api_preset, system_binding_route_protocol, system_provider_definition,
+};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde_json::Value;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -503,20 +505,25 @@ pub(crate) fn resolve_direct_credential_placement(
 }
 
 pub(crate) fn binding_auth_mode(record: &BindingRecord) -> BindingAuthMode {
-    match record.system_preset_key.as_deref() {
-        Some("chatgpt-subscription") => return BindingAuthMode::ManagedAuth,
-        Some("claude-subscription") => return BindingAuthMode::SessionOnly,
-        preset if is_fixed_api_preset(preset) => {
-            return if preset
-                .and_then(|preset| system_binding_route_protocol(preset, &record.agent_module_id))
-                .is_some()
-            {
-                BindingAuthMode::DirectApiKey
-            } else {
-                BindingAuthMode::Unsupported
-            };
+    // 系统 preset 的认证模式从内置目录的 auth_kind 派生，store 不点名任何一家
+    // preset：目录（usage::system_providers）是唯一事实源，加一家只需要在目录里
+    // 声明 auth_kind，这里的分支自动跟随。
+    if let Some(preset) = record.system_preset_key.as_deref() {
+        if let Some(definition) = system_provider_definition(preset) {
+            match definition.auth_kind {
+                SystemProviderAuthKind::CodexOauth => return BindingAuthMode::ManagedAuth,
+                SystemProviderAuthKind::ClaudeCli => return BindingAuthMode::SessionOnly,
+                SystemProviderAuthKind::ProviderApiKey => {
+                    return if system_binding_route_protocol(preset, &record.agent_module_id)
+                        .is_some()
+                    {
+                        BindingAuthMode::DirectApiKey
+                    } else {
+                        BindingAuthMode::Unsupported
+                    };
+                }
+            }
         }
-        _ => {}
     }
     let has_session = record.token_sources.contains(&TokenSource::SessionLog);
     let has_proxy = record.token_sources.contains(&TokenSource::Proxy);

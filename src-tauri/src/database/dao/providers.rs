@@ -586,17 +586,17 @@ impl Database {
         Ok(max.map(|v| (v + 1) as usize).unwrap_or(0))
     }
 
-    /// 启动时调用：补齐缺失的官方预设供应商（Claude / Codex / Gemini）。
+    /// 启动时调用：补齐缺失的内置官方预设供应商（清单见 providers_seed 的内置目录）。
     ///
     /// 使用 settings flag `official_providers_seeded` 保证每个数据库只执行一次：
-    /// - 全新用户：seed 三条官方预设
+    /// - 全新用户：seed 内置目录中的各条官方预设
     /// - 老用户升级：同样会触发一次（flag 不存在），追加到末尾，不影响已有排序
     /// - 用户删除 seed 后：不再重建（flag 已为 true），尊重用户意图
     ///
     /// 与 `Database::save_provider` 的 UPSERT 语义配合，即使被意外重复调用
     /// 也不会覆盖用户当前激活的供应商（is_current 字段会被保留）。
     pub fn init_default_official_providers(&self) -> Result<usize, AppError> {
-        use crate::database::dao::providers_seed::OFFICIAL_SEEDS;
+        use crate::database::dao::providers_seed::BUILTIN_PROVIDER_CATALOG;
 
         if self
             .get_bool_flag("official_providers_seeded")
@@ -608,7 +608,7 @@ impl Database {
         let mut inserted = 0_usize;
         let now_ms = chrono::Utc::now().timestamp_millis();
 
-        for seed in OFFICIAL_SEEDS {
+        for seed in BUILTIN_PROVIDER_CATALOG {
             let app_type_str = seed.app_type.as_str();
 
             // 若该 id 已存在（极端情况：用户曾手动用过同 id），跳过
@@ -663,9 +663,9 @@ impl Database {
         seed_id: &str,
         app_type: crate::app_config::AppType,
     ) -> Result<bool, AppError> {
-        use crate::database::dao::providers_seed::OFFICIAL_SEEDS;
+        use crate::database::dao::providers_seed::BUILTIN_PROVIDER_CATALOG;
 
-        let seed = OFFICIAL_SEEDS
+        let seed = BUILTIN_PROVIDER_CATALOG
             .iter()
             .find(|s| s.id == seed_id && s.app_type == app_type)
             .ok_or_else(|| {
