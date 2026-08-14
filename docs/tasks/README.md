@@ -80,7 +80,15 @@
   ├─ T6  HTTP 转发层
   └─ T8  把 provider 的名字请出 core（依赖 T1，与 T6 零文件重叠）
         ↑ T6 T8 可同时开
+
+第四批（装配。前面交付的是零件，这一批才让它们能跑）
+  T9  router 的凭据解析（UpstreamAuth 的真实实现）
+   ↓  必须串行：T9 改 schema 与 RouterProvider，T10 要暴露这些字段
+  T10 接进 app 启动流程 + 一组 tauri 命令
 ```
+
+**第四批做完,「Codex 真的走一次本地 router」才第一次成立。** 在那之前
+`start()` / `point_codex_at_router()` / 三张表全都没有生产调用方。
 
 **第二批的三个会在两个文件上撞车,这是预期内的**:`src-tauri/src/router/mod.rs`
 和 `src-tauri/src/lib.rs` 的 `mod router;` 那一行。三个分支都要建/改它们。
@@ -96,6 +104,8 @@
 | [T7](T7-pointer-escape.md) | 指针写入 + 逃生命令 | T3 | ✅ 与 T4 T5 |
 | [T6](T6-router-forward.md) | HTTP 转发层 | T3 T4 T5 | ✅ 与 T8 |
 | [T8](T8-core-provider-names.md) | 把 provider 名字请出 core | T1 | ✅ 与 T6 |
+| [T9](T9-upstream-auth.md) | router 的凭据解析 | T3 T6 | ❌ 单独做 |
+| [T10](T10-wire-up.md) | 接进 app + tauri 命令 | T9 | ❌ 单独做 |
 
 **UI 不在此列** —— 设置界面、菜单栏状态由项目所有者自己实现。
 
