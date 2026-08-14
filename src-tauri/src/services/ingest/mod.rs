@@ -2,12 +2,12 @@
 //!
 //! 盯文件变化 → 读文件 → 解析成用量记录 → 去重 → 写库,这五步里只有
 //! 「解析」是每家 agent 不同的;本模块拥有其余四步,agent 只提供
-//! [`SessionLogParser`] 一个解析器(`claude.rs` / `codex.rs`)。
+//! [`SessionLogParser`] 一个解析器(见各解析器模块)。
 //!
 //! ## 为什么两个解析器都必须拿到整个文件而不是增量
 //!
 //! 两家的日志读取都是「整个文件重读」,游标里的 `line_offset` 只是行号
-//! 水位线:Claude 在解析前跳过水位线以下的行;Codex 的 `total_token_usage`
+//! 水位线:一家在解析前跳过水位线以下的行;另一家的 `total_token_usage`
 //! 是从会话开始累计的值,必须从文件第一行开始重建 `prev_total` 基线,
 //! 跳过发生在算完基线之后。只给解析器增量文本会丢掉累计基线,第一条
 //! 记录会被当成「从 0 涨到当前累计值」。所以 [`LogFileContext::content`]
@@ -18,7 +18,7 @@ use crate::error::AppError;
 use crate::services::usage_stats::{
     effective_usage_log_filter, find_model_pricing, should_skip_session_insert, DedupKey,
 };
-use crate::usage::domain::{TokenSource, CLAUDE_CODE_AGENT_MODULE_ID, CODEX_AGENT_MODULE_ID};
+use crate::usage::domain::TokenSource;
 use crate::usage::ingestion::{LegacyLogInput, UsageIngestionInput, UsageIngestionService};
 use crate::usage::metering::calculator::CostCalculator;
 use crate::usage::metering::parser::TokenUsage;
@@ -60,10 +60,10 @@ pub struct DataSourceSummary {
 ///
 /// **`content` 是整个文件的内容,不是增量**——理由见模块顶部注释。
 /// 增量靠 `last_line_offset` 这条水位线表达,由解析器自己决定在哪一步跳过
-/// (Claude 在解析前跳,Codex 在重建累计基线之后跳)。
+/// (有的在解析前跳,有的在重建累计基线之后跳)。
 pub struct LogFileContext<'a> {
     pub path: &'a Path,
-    /// 已打开的句柄与元数据——Codex 要靠它算 device/inode 身份。
+    /// 已打开的句柄与元数据——实体键控的解析器要靠它算 device/inode 身份。
     pub file: &'a fs::File,
     pub metadata: &'a fs::Metadata,
     pub content: &'a str,
@@ -71,14 +71,20 @@ pub struct LogFileContext<'a> {
     pub last_line_offset: i64,
 }
 
-/// 一条用量记录的去重身份。两家语义不同,**用枚举保持它们分开**,
-/// 不要压成一个「通用」字符串字段。
+/// 一条用量记录的身份。**字符串由解析器拼好交进来**,core 不知道
+/// 也不需要知道它们长什么样。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum UsageIdentity {
-    /// Claude:assistant 消息的 message_id。
-    ClaudeMessage { message_id: String },
-    /// Codex:文件身份作用域 + 文件内事件序号。
-    CodexEvent { scope: String, event_index: u32 },
+pub struct UsageIdentity {
+    /// legacy 表的 request_id。
+    pub request_id: String,
+    /// usage_events 的 event_id。
+    pub event_id: String,
+    /// 上游关联 ID;没有就是 None。
+    pub upstream_correlation_id: Option<String>,
+    /// 写进 legacy 行 `message_id` 列的值;没有就是 None。
+    pub message_id: Option<String>,
+    /// 仅用于日志的短标识(插入失败时打这个)。
+    pub log_label: String,
 }
 
 /// 一条从会话日志里解析出来的用量记录,已经归一化。
@@ -102,44 +108,14 @@ pub struct ParsedUsage {
     pub line_offset: i64,
 }
 
-impl UsageIdentity {
-    /// 写库用的 request_id / event_id / upstream_correlation_id。
-    /// **三个都与重构前逐字节相同**,值照抄现有代码里的 format! 字面量。
-    pub fn request_id(&self) -> String {
-        match self {
-            UsageIdentity::ClaudeMessage { message_id } => format!(
-                "{}{message_id}",
-                crate::usage::metering::parser::SESSION_REQUEST_ID_PREFIX
-            ),
-            UsageIdentity::CodexEvent { scope, event_index } => {
-                format!("codex_session:{scope}:{event_index}")
-            }
-        }
-    }
-
-    pub fn event_id(&self) -> String {
-        match self {
-            UsageIdentity::ClaudeMessage { message_id } => format!("claude-session:{message_id}"),
-            UsageIdentity::CodexEvent { .. } => format!("codex-session:{}", self.request_id()),
-        }
-    }
-
-    pub fn upstream_correlation_id(&self) -> Option<String> {
-        match self {
-            UsageIdentity::ClaudeMessage { message_id } => Some(message_id.clone()),
-            UsageIdentity::CodexEvent { .. } => None,
-        }
-    }
-}
-
 /// 单文件游标决议结果:流水线据此判断「跳过 / 解析 / 写回」。
 #[derive(Debug, Clone)]
 pub struct FileCursor {
-    /// 游标键。Claude = 文件路径;Codex = 文件实体身份(device/inode 哈希)。
+    /// 游标键。按路径,或按文件实体身份(device/inode 哈希),由解析器决定。
     pub cursor_key: String,
     /// 写进 cursor 表的 resource_identity。
     pub resource_identity: Option<String>,
-    /// 需要从路径键提升为实体键的旧游标键(仅 Codex 首次升级时存在)。
+    /// 需要从路径键提升为实体键的旧游标键(仅首次升级时存在)。
     pub legacy_cursor_key: Option<String>,
     /// 上次成功同步的 mtime(纳秒)与行号水位线。
     pub last_modified: i64,
@@ -147,14 +123,18 @@ pub struct FileCursor {
     /// 写回时记录的 size_bytes。
     pub size_bytes: i64,
     /// 文件未变化(走跳过分支)时是否仍要写回游标。
-    /// Codex 用它做「路径键旧游标 → 实体键」的提升与 rename 后的路径刷新。
+    /// 用于「路径键旧游标 → 实体键」的提升与 rename 后的路径刷新。
     pub needs_update: bool,
 }
 
 /// 每个 agent 只需要实现这一个东西。
 pub trait SessionLogParser {
-    /// 这个 agent 的标识,如 "claude" / "codex"。
+    /// 这个 agent 的标识,由各解析器返回自己的名字。
     fn source(&self) -> &'static str;
+
+    /// 这个 agent 写库时用的一组常量。**必填**:新接一个 agent 时,
+    /// 编译器会在这里逼你把它们说清楚,而不是让你漏掉 core 里的某个 match。
+    fn write_profile(&self) -> ProviderWriteProfile;
 
     /// 要扫哪些目录。
     fn log_roots(&self, home: &Path) -> Vec<PathBuf>;
@@ -162,7 +142,7 @@ pub trait SessionLogParser {
     /// 判断一个文件要不要读(扩展名、命名规则等)。
     fn is_log_file(&self, path: &Path) -> bool;
 
-    /// 扫描前的剪枝。Codex 用它做日期分区剪枝,Claude 直接返回 `files` 原样。
+    /// 扫描前的剪枝。有日期分区的 agent 用它做剪枝,没有的直接返回 `files` 原样。
     fn prune(&self, files: Vec<PathBuf>) -> Vec<PathBuf> {
         files
     }
@@ -171,11 +151,11 @@ pub trait SessionLogParser {
     fn parse(&self, ctx: &LogFileContext<'_>) -> Result<Vec<ParsedUsage>, AppError>;
 
     // ── 以下是流水线需要的钩子。任务书接口之外的最小补充(报告里说明):
-    // 两家在「游标怎么键控」上语义不同——Claude 按路径、Codex 按文件实体,
+    // 各家在「游标怎么键控」上语义不同——有的按路径、有的按文件实体,
     // 实体哈希的格式串含 provider 名,只能由各家解析器产出。默认实现
-    // 即 Claude 的行为;Codex 覆盖实现。──
+    // 按路径键控;实体键控的解析器覆盖实现。──
 
-    /// 决议单个文件的游标。默认按路径键控,即 Claude 语义。
+    /// 决议单个文件的游标。默认按路径键控。
     fn resolve_cursor(
         &self,
         path: &Path,
@@ -202,7 +182,7 @@ pub trait SessionLogParser {
     }
 
     /// 文件未变化(跳过解析)时的补充处理。默认什么都不做;
-    /// Codex 在这里把路径键旧游标提升为实体键游标。
+    /// 实体键控的解析器在这里把路径键旧游标提升为实体键游标。
     fn on_unchanged(
         &self,
         db: &Database,
@@ -215,23 +195,22 @@ pub trait SessionLogParser {
         Ok(())
     }
 
-    /// 单文件失败时的日志与错误串。默认即 Claude 的写法。
+    /// 单文件失败时的日志与错误串。默认实现,各解析器可按需覆盖。
     fn record_file_error(&self, path: &Path, error: &AppError, errors: &mut Vec<String>) {
         let msg = format!("{}: {error}", path.display());
         log::warn!("[SESSION-SYNC] 文件解析失败: {msg}");
         errors.push(msg);
     }
 
-    /// 单条记录插入失败时的日志。默认即 Claude 的写法。
+    /// 单条记录插入失败时的日志。默认实现,各解析器可按需覆盖。
     fn log_insert_failure(&self, record: &ParsedUsage, error: &AppError) {
-        let display = match &record.identity {
-            UsageIdentity::ClaudeMessage { message_id } => message_id.clone(),
-            UsageIdentity::CodexEvent { .. } => record.identity.request_id(),
-        };
-        log::warn!("[SESSION-SYNC] 插入失败 ({display}): {error}");
+        log::warn!(
+            "[SESSION-SYNC] 插入失败 ({}): {error}",
+            record.identity.log_label
+        );
     }
 
-    /// 一轮同步结束后的汇总日志。默认即 Claude 的写法。
+    /// 一轮同步结束后的汇总日志。默认实现,各解析器可按需覆盖。
     fn log_summary(&self, result: &SessionSyncResult) {
         log::info!(
             "[SESSION-SYNC] 同步完成: 导入 {} 条, 跳过 {} 条, 扫描 {} 个文件",
@@ -284,10 +263,14 @@ pub fn sync_with_parser(
         errors: vec![],
     };
 
+    // 写库 profile 在整个循环里只取一次:它由解析器说了算,不随记录变化。
+    let profile = parser.write_profile();
+
     for file_path in &files {
         match sync_file_with_parser(
             db,
             parser,
+            &profile,
             file_path,
             bound_provider_id,
             &mut sync_cursors,
@@ -317,6 +300,7 @@ pub fn sync_with_parser(
 pub(crate) fn sync_file_with_parser(
     db: &Database,
     parser: &dyn SessionLogParser,
+    profile: &ProviderWriteProfile,
     file_path: &Path,
     bound_provider_id: Option<&str>,
     sync_cursors: &mut SyncCursorMap,
@@ -328,7 +312,7 @@ pub(crate) fn sync_file_with_parser(
     let file_path_str = file_path.to_string_lossy().to_string();
 
     // 先打开文件,再从同一句柄取 metadata:路径若在 stat 与实际解析之间
-    // 被替换,游标和内容必须来自同一个文件实体(Codex 踩过的坑,对所有源成立)。
+    // 被替换,游标和内容必须来自同一个文件实体(有解析器踩过的坑,对所有源成立)。
     let file =
         open_session_file(file_path).map_err(|e| AppError::Config(format!("无法打开文件: {e}")))?;
     let metadata = file
@@ -339,7 +323,7 @@ pub(crate) fn sync_file_with_parser(
     let cursor =
         parser.resolve_cursor(file_path, &file, &metadata, sync_cursors, cursor_details)?;
 
-    // 文件未变化则跳过解析。Codex 借 on_unchanged 提升旧路径游标。
+    // 文件未变化则跳过解析。解析器借 on_unchanged 提升旧路径游标。
     if file_modified <= cursor.last_modified {
         parser.on_unchanged(db, file_path, file_modified, &metadata, &cursor)?;
         if let Some(legacy) = &cursor.legacy_cursor_key {
@@ -364,14 +348,19 @@ pub(crate) fn sync_file_with_parser(
     let records = parser.parse(&ctx)?;
     // 水位线 = 全量行数。两家都按「整个文件」计数,而不是按解析出的
     // 记录计数——文件尾部的非事件行也必须越过,否则下次同步会把它们
-    // 重新当新行处理(Claude 的 sessionId 提取会因此读到旧行)。
+    // 重新当新行处理(按行提取 sessionId 的解析器会因此读到旧行)。
     let line_count = content.lines().count() as i64;
 
     let mut imported: u32 = 0;
     let mut skipped: u32 = 0;
     for record in &records {
-        let request_id = record.identity.request_id();
-        match insert_usage_record(db, record, &request_id, bound_provider_id) {
+        match insert_usage_record(
+            db,
+            profile,
+            record,
+            &record.identity.request_id,
+            bound_provider_id,
+        ) {
             Ok(true) => imported += 1,
             Ok(false) => skipped += 1,
             Err(e) => {
@@ -448,7 +437,7 @@ fn read_whole_file(file: &fs::File) -> Result<String, AppError> {
 /// 打开会话文件;测试构建下累计文件打开次数(剪枝测试断言打开数)。
 fn open_session_file(path: &Path) -> std::io::Result<fs::File> {
     #[cfg(test)]
-    CODEX_FILE_OPEN_COUNT.with(|count| count.set(count.get() + 1));
+    SESSION_FILE_OPEN_COUNT.with(|count| count.set(count.get() + 1));
     fs::File::open(path)
 }
 
@@ -456,92 +445,69 @@ fn open_session_file(path: &Path) -> std::io::Result<fs::File> {
 // 用 thread_local 而不是全局静态量,避免并行测试互相污染计数。
 #[cfg(test)]
 thread_local! {
-    static CODEX_FILE_OPEN_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static SESSION_FILE_OPEN_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
 pub(crate) fn reset_session_file_open_count() {
-    CODEX_FILE_OPEN_COUNT.with(|count| count.set(0));
+    SESSION_FILE_OPEN_COUNT.with(|count| count.set(0));
 }
 
 #[cfg(test)]
 pub(crate) fn session_file_open_count() -> u64 {
-    CODEX_FILE_OPEN_COUNT.with(|count| count.get())
+    SESSION_FILE_OPEN_COUNT.with(|count| count.get())
 }
 
 /// 把一条已归一化的用量记录写进库(去重 + 插入),返回是否新插入。
 ///
 /// 两家的写入 SQL 形状完全相同,只有 provider 常量、费用计算语义与
-/// 事件标识不同——这些由 [`UsageIdentity`] 枚举分开提供,不合并成
-/// 一个「通用」字段。
+/// 事件标识不同——provider 常量由调用方传入的 [`ProviderWriteProfile`]
+/// 提供,事件标识已经拼在 [`UsageIdentity`] 的字段里。
 pub(crate) fn insert_usage_record(
     db: &Database,
+    profile: &ProviderWriteProfile,
     parsed: &ParsedUsage,
     request_id: &str,
     bound_provider_id: Option<&str>,
 ) -> Result<bool, AppError> {
     if let Some(provider_id) = bound_provider_id {
-        insert_bound_usage_record(db, provider_id, parsed, request_id)
+        insert_bound_usage_record(db, provider_id, profile, parsed, request_id)
     } else {
-        insert_legacy_usage_record(db, parsed, request_id)
+        insert_legacy_usage_record(db, profile, parsed, request_id)
     }
 }
 
-/// 写库用的 provider 常量组。由身份枚举选出,不进数据库 schema。
-fn write_profile(identity: &UsageIdentity) -> ProviderWriteProfile<'_> {
-    match identity {
-        UsageIdentity::ClaudeMessage { .. } => ProviderWriteProfile {
-            app_type: "claude",
-            legacy_provider_id: "_session",
-            provider_type: "session_log",
-            insert_error_prefix: "插入会话日志",
-            calculator_app: None,
-            agent_module_id: CLAUDE_CODE_AGENT_MODULE_ID,
-            subscription_activity_id: crate::usage::system_providers::CLAUDE_SUBSCRIPTION_ID,
-        },
-        UsageIdentity::CodexEvent { .. } => ProviderWriteProfile {
-            app_type: "codex",
-            legacy_provider_id: "_codex_session",
-            provider_type: "codex_session",
-            insert_error_prefix: "插入 Codex 会话日志",
-            calculator_app: Some("codex"),
-            agent_module_id: CODEX_AGENT_MODULE_ID,
-            subscription_activity_id: crate::usage::system_providers::CHATGPT_SUBSCRIPTION_ID,
-        },
-    }
-}
-
-struct ProviderWriteProfile<'a> {
-    app_type: &'a str,
-    legacy_provider_id: &'a str,
-    provider_type: &'a str,
-    insert_error_prefix: &'a str,
-    calculator_app: Option<&'a str>,
-    agent_module_id: &'a str,
-    subscription_activity_id: &'a str,
+/// 写库用的 provider 常量组。**core 不知道它们的具体值**,由解析器在
+/// [`SessionLogParser::write_profile`] 里给出——这是「core 需要知道哪些
+/// 参数」的契约,不进数据库 schema。
+pub(crate) struct ProviderWriteProfile {
+    pub(crate) app_type: &'static str,
+    pub(crate) legacy_provider_id: &'static str,
+    pub(crate) provider_type: &'static str,
+    pub(crate) insert_error_prefix: &'static str,
+    pub(crate) calculator_app: Option<&'static str>,
+    pub(crate) agent_module_id: &'static str,
+    pub(crate) subscription_activity_id: &'static str,
 }
 
 /// bound 路径:经 UsageIngestionService 落库(usage_events + legacy 行)。
 fn insert_bound_usage_record(
     db: &Database,
     provider_id: &str,
+    profile: &ProviderWriteProfile,
     parsed: &ParsedUsage,
     request_id: &str,
 ) -> Result<bool, AppError> {
-    let profile = write_profile(&parsed.identity);
     let usage = TokenUsage {
         input_tokens: parsed.input_tokens,
         output_tokens: parsed.output_tokens,
         cache_read_tokens: parsed.cache_read_tokens,
         cache_creation_tokens: parsed.cache_creation_tokens,
         model: Some(parsed.model.clone()),
-        message_id: match &parsed.identity {
-            UsageIdentity::ClaudeMessage { message_id } => Some(message_id.clone()),
-            UsageIdentity::CodexEvent { .. } => None,
-        },
+        message_id: parsed.identity.message_id.clone(),
     };
     let outcome = UsageIngestionService::new(db).ingest(&UsageIngestionInput {
-        event_id: parsed.identity.event_id(),
+        event_id: parsed.identity.event_id.clone(),
         source: TokenSource::SessionLog,
         provider_id: provider_id.to_string(),
         agent_module_id: profile.agent_module_id.to_string(),
@@ -554,7 +520,7 @@ fn insert_bound_usage_record(
         // 会话日志的 transcript 会话 ID 识别的是「一次会话」而不是一次
         // 请求,不能当跨源去重键。
         session_id: None,
-        upstream_correlation_id: parsed.identity.upstream_correlation_id(),
+        upstream_correlation_id: parsed.identity.upstream_correlation_id.clone(),
         legacy: Some(LegacyLogInput {
             request_id: request_id.to_string(),
             provider_id: profile.legacy_provider_id.to_string(),
@@ -577,11 +543,11 @@ fn insert_bound_usage_record(
 /// 无绑定路径:直写 proxy_request_logs(SQL 与重构前逐字相同)。
 fn insert_legacy_usage_record(
     db: &Database,
+    profile: &ProviderWriteProfile,
     parsed: &ParsedUsage,
     request_id: &str,
 ) -> Result<bool, AppError> {
     let conn = lock_conn!(db.conn);
-    let profile = write_profile(&parsed.identity);
 
     let dedup_key = DedupKey {
         app_type: profile.app_type,
@@ -611,8 +577,8 @@ fn insert_legacy_usage_record(
     {
         Some(p) => {
             let cost = match profile.calculator_app {
-                // Codex/OpenAI 的 input 字段包含 cache read,计费时要先扣掉;
-                // Claude 的 input 已经是 fresh input(不扣)。
+                // 有的上游 app 的 input 字段包含 cache read,计费时要先扣掉;
+                // 有的 app 的 input 已经是 fresh input(不扣)。
                 Some(app) => CostCalculator::calculate_for_app(app, &usage, &p, multiplier),
                 None => CostCalculator::calculate(&usage, &p, multiplier),
             };
@@ -876,9 +842,11 @@ mod tests {
             .into_iter()
             .map(|cursor| (cursor.cursor_key.clone(), cursor))
             .collect();
+        let profile = parser.write_profile();
         sync_file_with_parser(
             db,
             parser,
+            &profile,
             file_path,
             bound_provider_id,
             &mut sync_cursors,
@@ -945,22 +913,33 @@ mod tests {
     /// 两家的 request_id / event_id 与重构前逐字节相同(直接断言字面量)。
     #[test]
     fn usage_identity_strings_match_pre_refactor_literals() {
-        let claude = UsageIdentity::ClaudeMessage {
-            message_id: "msg_abc".to_string(),
+        let claude = UsageIdentity {
+            request_id: format!(
+                "{}{}",
+                crate::usage::metering::parser::SESSION_REQUEST_ID_PREFIX,
+                "msg_abc"
+            ),
+            event_id: "claude-session:msg_abc".to_string(),
+            upstream_correlation_id: Some("msg_abc".to_string()),
+            message_id: Some("msg_abc".to_string()),
+            log_label: "msg_abc".to_string(),
         };
-        assert_eq!(claude.request_id(), "session:msg_abc");
-        assert_eq!(claude.event_id(), "claude-session:msg_abc");
-        assert_eq!(claude.upstream_correlation_id().as_deref(), Some("msg_abc"));
+        assert_eq!(claude.request_id, "session:msg_abc");
+        assert_eq!(claude.event_id, "claude-session:msg_abc");
+        assert_eq!(claude.upstream_correlation_id.as_deref(), Some("msg_abc"));
 
-        let codex = UsageIdentity::CodexEvent {
-            scope: "session-scope".to_string(),
-            event_index: 3,
+        let codex = UsageIdentity {
+            request_id: "codex_session:session-scope:3".to_string(),
+            event_id: "codex-session:codex_session:session-scope:3".to_string(),
+            upstream_correlation_id: None,
+            message_id: None,
+            log_label: "codex_session:session-scope:3".to_string(),
         };
-        assert_eq!(codex.request_id(), "codex_session:session-scope:3");
+        assert_eq!(codex.request_id, "codex_session:session-scope:3");
         assert_eq!(
-            codex.event_id(),
+            codex.event_id,
             "codex-session:codex_session:session-scope:3"
         );
-        assert_eq!(codex.upstream_correlation_id(), None);
+        assert_eq!(codex.upstream_correlation_id, None);
     }
 }

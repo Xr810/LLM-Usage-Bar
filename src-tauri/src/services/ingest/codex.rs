@@ -22,10 +22,12 @@ use crate::database::{Database, UsageSyncCursor};
 use crate::error::AppError;
 use crate::services::ingest::{
     metadata_modified_nanos, occurred_at_secs, sync_with_parser, update_sync_state_for_resource,
-    FileCursor, LogFileContext, ParsedUsage, SessionLogParser, SessionSyncResult, SyncCursorMap,
-    UsageIdentity,
+    FileCursor, LogFileContext, ParsedUsage, ProviderWriteProfile, SessionLogParser,
+    SessionSyncResult, SyncCursorMap, UsageIdentity,
 };
+use crate::usage::domain::CODEX_AGENT_MODULE_ID;
 use crate::usage::session::{validate_bound_session_agent, ProviderSessionSyncResult};
+use crate::usage::system_providers::CHATGPT_SUBSCRIPTION_ID;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
@@ -245,6 +247,18 @@ impl SessionLogParser for CodexParser {
         "codex"
     }
 
+    fn write_profile(&self) -> ProviderWriteProfile {
+        ProviderWriteProfile {
+            app_type: "codex",
+            legacy_provider_id: "_codex_session",
+            provider_type: "codex_session",
+            insert_error_prefix: "插入 Codex 会话日志",
+            calculator_app: Some("codex"),
+            agent_module_id: CODEX_AGENT_MODULE_ID,
+            subscription_activity_id: CHATGPT_SUBSCRIPTION_ID,
+        }
+    }
+
     fn log_roots(&self, _home: &Path) -> Vec<PathBuf> {
         vec![self.codex_dir.clone()]
     }
@@ -361,7 +375,7 @@ impl SessionLogParser for CodexParser {
     fn log_insert_failure(&self, record: &ParsedUsage, error: &AppError) {
         log::warn!(
             "[CODEX-SYNC] 插入失败 ({}): {error}",
-            record.identity.request_id()
+            record.identity.log_label
         );
     }
 
@@ -819,10 +833,14 @@ fn parse_codex_log_file(ctx: &LogFileContext<'_>) -> Result<Vec<ParsedUsage>, Ap
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
 
+                let request_id = format!("codex_session:{request_scope}:{}", state.event_index);
                 records.push(ParsedUsage {
-                    identity: UsageIdentity::CodexEvent {
-                        scope: request_scope,
-                        event_index: state.event_index,
+                    identity: UsageIdentity {
+                        request_id: request_id.clone(),
+                        event_id: format!("codex-session:{request_id}"),
+                        upstream_correlation_id: None,
+                        message_id: None,
+                        log_label: request_id,
                     },
                     model: state.current_model.clone(),
                     input_tokens: delta.input,
@@ -866,9 +884,11 @@ fn sync_single_codex_file(
         Vec::new(),
         CODEX_PARTITION_FRESH_DAYS,
     );
+    let profile = parser.write_profile();
     sync_file_with_parser(
         db,
         &parser,
+        &profile,
         file_path,
         bound_provider_id,
         &mut sync_cursors,
@@ -888,12 +908,22 @@ fn insert_codex_session_entry(
     session_id: Option<&str>,
     timestamp: Option<&str>,
 ) -> Result<bool, AppError> {
+    let parser = CodexParser::new(
+        PathBuf::from("/unused"),
+        Vec::new(),
+        CODEX_PARTITION_FRESH_DAYS,
+    );
+    let identity_request_id = "codex_session:test-scope:1".to_string();
     insert_usage_record(
         db,
+        &parser.write_profile(),
         &ParsedUsage {
-            identity: UsageIdentity::CodexEvent {
-                scope: "test-scope".to_string(),
-                event_index: 1,
+            identity: UsageIdentity {
+                request_id: identity_request_id.clone(),
+                event_id: format!("codex-session:{identity_request_id}"),
+                upstream_correlation_id: None,
+                message_id: None,
+                log_label: identity_request_id,
             },
             model: model.to_string(),
             input_tokens: delta.input,
@@ -1943,11 +1973,18 @@ mod tests {
         );
         assert_eq!(record.output_tokens, 200);
         assert_eq!(record.cache_read_tokens, 200);
-        let UsageIdentity::CodexEvent { event_index, .. } = &record.identity else {
-            panic!("Codex 解析器必须产出 CodexEvent 身份");
-        };
+        // UsageIdentity 现在是结构体,序号不再单列:request_id 的格式是
+        // codex_session:<scope>:<index>,从最后一段取回 event_index。
+        let event_index: u32 = record
+            .identity
+            .request_id
+            .rsplit(':')
+            .next()
+            .expect("Codex 解析器必须产出 CodexEvent 身份")
+            .parse()
+            .expect("Codex 解析器必须产出 CodexEvent 身份");
         assert_eq!(
-            *event_index, 3,
+            event_index, 3,
             "水位线以下的事件也要消费序号,第三行必须是第 3 号事件"
         );
 
