@@ -26,6 +26,37 @@ src-tauri/src/services/session_usage_opencode.rs  579 行  ❌ 还在各写各�
 
 ---
 
+## 0.1 T14a 留下的一个口,由你补(已授权改接口)
+
+T14a 把 O1/O2/O4/O5 闭合了,**O3 还差一处**:opencode 原来是「某条消息插入失败 →
+该会话水位不推进 → 下轮重试」。插入发生在 `parse` 之后,`log_insert_failure`
+拿不到 db,回写不了会话水位。
+
+**决定(2026-08-15):不做会话级重试,做文件级重试。**
+
+```rust
+/// 本轮有插入失败时,是否放弃推进这个文件的游标(下轮整文件重读)。
+/// 默认 `false`——即 claude/codex 现在的行为(失败只记 log,游标照常推进)。
+fn retry_file_on_insert_failure(&self) -> bool { false }
+```
+
+流水线在一个文件处理完之后:**若本轮有任何插入失败,且解析器返回 `true`,
+就不推进这个文件的游标**(`parser_state_json` 同样不写)。
+
+### 为什么粗一档是可以接受的
+
+**因为去重是幂等的** —— `should_skip_session_insert` 按 request_id 短路,
+已入库的记录重读不会重复插入。所以整文件重读与只重试出错会话**结果完全一致**,
+只是多花一次解析。opencode 的日志是个 SQLite 库,重读成本本来就低。
+
+**为什么不选「接受不重试」**:插入失败后水位照常推进,那条用量记录就**永久丢了**。
+这是个用量统计应用,静默丢数据比慢一轮严重得多。
+
+**这是本任务唯一被授权改 `ingest/mod.rs` 接口的地方。** 默认值必须等价于
+claude/codex 的现状,并且要有测试证明这一点。
+
+---
+
 ## 1. 先读三样东西
 
 1. `src-tauri/src/services/ingest/mod.rs` —— 流水线本体与 `SessionLogParser`
@@ -88,12 +119,18 @@ fn parse(&self, ctx: &LogFileContext<'_>) -> Result<Vec<ParsedUsage>, AppError>;
 1. 四个 parser 喂同一份流水线,各自的解析结果互不串味(扩展 T1 那条已有的两家版本)
 2. gemini / opencode 各自的 `request_id` / `event_id` 与重构前逐字节相同
    (直接断言字面量)
+3. `retry_file_on_insert_failure` 默认 `false` 时,插入失败游标照常推进
+   (claude/codex 行为不变)
+4. 返回 `true` 时,插入失败后游标**不推进**;下一轮重读同一文件,
+   已入库的记录**不重复插入**(证明重读是幂等的)
+5. opencode 的上游费用直通:`msg.cost > 0` 的消息落库的五个费用列是
+   `("0","0","0","0",cost)`,与重构前逐字节相同
 
 ---
 
 ## 5. 明确不要做的事
 
-- ❌ 不要改 `SessionLogParser` 接口 —— 表达不了就停下来报告
+- ❌ 除 §0.1 那一个钩子外,不要改 `SessionLogParser` 接口 —— 还有表达不了的就停下来报告
 - ❌ 不要动 `claude.rs` / `codex.rs` / `ingest/mod.rs` 的现有逻辑
   (只在 `mod.rs` 加两行 `pub mod`)
 - ❌ 不要删除原来那两个文件
