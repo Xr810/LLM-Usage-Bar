@@ -1089,6 +1089,13 @@ experimental_bearer_token = "..."    # 模型请求的实际认证
 router 现在只剩「自动故障转移」与「纵深防御」两条理由,且用户要求先权衡其能耗与内存
 代价(该文件 §8,尚未展开)。
 
+**逃生门(设计决定 37,已落地)**:app 挂掉时用
+`scripts/codex-unroute.sh <provider_id>`(如 `./scripts/codex-unroute.sh packyapi`)
+把 `~/.codex/config.toml` 的顶层 `model_provider` 改回直连:优先还原最近一份
+`config.toml.bak-*-before-router` 备份(T7 写指针前留下的),没有备份才改键值;
+两条路都会先把当前文件备份成 `config.toml.bak-<时间戳>-before-unroute`。
+脚本只碰 `config.toml`,不碰 `auth.json`。
+
 ---
 
 ## 14. 两份 08-13 设计草案的入库时机(记录一笔)
