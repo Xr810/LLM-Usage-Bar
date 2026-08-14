@@ -88,13 +88,20 @@ src-tauri/src/services/subscription/gemini.rs   Gemini 的全部
 **测试**:文件末尾的 9 个测试跟着**它们测的那个函数**走。测的是共享类型的留
 `mod.rs`。搬过去之后 `use super::*` 可能不够,补 `use` 即可,**断言一个字不改**。
 
-### 1.1 `pub use` 转出清单(漏一个就编译不过)
+### 1.1 `pub use` 转出清单
 
 `mod.rs` 里必须有,否则 `src/usage/quota.rs:6` 的 `use` 会断:
 
 ```rust
-pub(crate) use codex::{query_codex_quota, query_managed_codex_oauth_quota};
+pub(crate) use codex::query_managed_codex_oauth_quota;
 ```
+
+**只转这一个。** `query_codex_quota` 虽然也是 `pub(crate)`,但模块外没有任何
+调用方(`codex_oauth.rs` 里只有一句提到它的注释),转出去反而会触发
+`unused_imports`,在 `-D warnings` 下直接挂。
+
+**可见性照原样保留**:`query_codex_quota` 在 `codex.rs` 里仍然是 `pub(crate) fn`,
+只是不从 `mod.rs` 转出 —— 没人用那条路径,所以不算破坏兼容。
 
 搬完先只跑 `pnpm rust -- check`,编译过了再往下做。**编译错误就是你的转出清单还缺项**,
 不要去改调用方。

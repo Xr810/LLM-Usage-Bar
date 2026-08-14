@@ -216,7 +216,8 @@ pub fn create_schema_v13_fixture_test_hook(path: &Path) -> Result<(), AppError> 
     // for schema v26: v25 -> v26 adds provider_api_keys and re-keys the snapshot
     // and credential-journal tables onto it — all tables introduced well after
     // v13, so the baseline below is untouched.
-    if database::SCHEMA_VERSION != 26
+    // Reviewed for schema v27: v26 -> v27 只新增三张 router_* 表，与 v13 基线无关。
+    if database::SCHEMA_VERSION != 27
         || product_identity::DATABASE_IDENTITY_SOURCE_SCHEMA_VERSION != 13
     {
         return Err(AppError::Database(

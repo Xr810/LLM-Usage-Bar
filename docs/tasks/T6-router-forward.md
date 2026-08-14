@@ -157,6 +157,18 @@ const MAX_BUFFERED_BODY: usize = 4 * 1024 * 1024; // 4 MB
 `headers_for` 返回 `Err` 时:记一条 `failed` / `failure_kind = "auth_unavailable"`,
 **继续下一个候选**(换一家是另一份凭据,值得试)。
 
+### 4.3.1 T3 留下的一个缺口,由你补上
+
+T3 的 `dao/router.rs` 里只有 `outcome_to_db`(枚举 → 字符串),**没有反方向**
+—— `outcome_from_db` 被误放进了 `#[cfg(test)] mod tests` 里,生产代码取不到。
+
+你要记 attempt,迟早要把行读回来。**把 `outcome_from_db` 从 tests 里提到
+`dao/router.rs` 的生产代码区**(与 `wire_api_from_db` 并排),签名
+`fn outcome_from_db(raw: &str) -> Result<AttemptOutcome, AppError>`,
+非法值返回 `AppError` 不 panic;测试里那份删掉,改用生产的那个。
+
+**这是本任务唯一授权你改 `dao/router.rs` 的地方**,别的一行不要动。
+
 ### 4.4 模式从哪读
 
 ```rust

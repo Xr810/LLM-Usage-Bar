@@ -404,6 +404,12 @@ impl Database {
                         Self::migrate_v25_to_v26(conn)?;
                         Self::set_user_version(conn, 26)?;
                     }
+                    26 => {
+                        log::info!("迁移数据库从 v26 到 v27（添加本地路由存储表）");
+                        Self::validate_schema_v26_complete(conn)?;
+                        Self::migrate_v26_to_v27(conn)?;
+                        Self::set_user_version(conn, 27)?;
+                    }
                     _ => {
                         return Err(AppError::Database(format!(
                             "未知的数据库版本 {version}，无法迁移到 {SCHEMA_VERSION}"
@@ -1760,6 +1766,51 @@ impl Database {
             }
         }
         Ok(())
+    }
+
+    /// v26 -> v27 迁移:添加本地路由的三张存储表。
+    ///
+    /// 只负责建表,不做任何路由逻辑(决策在 T4、转发在 T6)。
+    /// 新库与内存库都从 user_version=0 走完整条迁移链,所以三张表只在这里
+    /// 定义一次,不往 create_tables_on_conn 里抄第二份。
+    fn migrate_v26_to_v27(conn: &Connection) -> Result<(), AppError> {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS router_providers (
+                 id            TEXT PRIMARY KEY,      -- 稳定标识，如 packyapi、official
+                 display_name  TEXT NOT NULL,
+                 base_url      TEXT NOT NULL,
+                 wire_api      TEXT NOT NULL,         -- responses | chat_completions
+                 priority      INTEGER NOT NULL,      -- 越小越优先，全局顺序（v1 只有全局）
+                 enabled       INTEGER NOT NULL DEFAULT 1,
+                 created_at    INTEGER NOT NULL,
+                 updated_at    INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS router_model_map (
+                 provider_id     TEXT NOT NULL,
+                 logical_model   TEXT NOT NULL,       -- Codex 发来的那个名字，如 gpt-5.6-sol
+                 upstream_model  TEXT NOT NULL,       -- 该家的真实 ID，可能与 logical 相同
+                 created_at      INTEGER NOT NULL,
+                 PRIMARY KEY (provider_id, logical_model),
+                 FOREIGN KEY (provider_id) REFERENCES router_providers(id) ON DELETE CASCADE
+             );
+             CREATE TABLE IF NOT EXISTS router_attempts (
+                 id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                 started_at     INTEGER NOT NULL,     -- epoch 毫秒
+                 logical_model  TEXT NOT NULL,
+                 provider_id    TEXT NOT NULL,
+                 outcome        TEXT NOT NULL,        -- success | failed | skipped
+                 failure_kind   TEXT,                 -- 失败时填，取值见 T5
+                 http_status    INTEGER,
+                 input_tokens   INTEGER,
+                 output_tokens  INTEGER,
+                 duration_ms    INTEGER
+             );
+             CREATE INDEX IF NOT EXISTS idx_router_attempts_started
+                 ON router_attempts(started_at);
+             CREATE INDEX IF NOT EXISTS idx_router_attempts_provider
+                 ON router_attempts(provider_id, started_at);",
+        )
+        .map_err(|error| AppError::Database(format!("v26 -> v27 创建路由存储表失败: {error}")))
     }
 
     /// 插入默认模型定价数据
