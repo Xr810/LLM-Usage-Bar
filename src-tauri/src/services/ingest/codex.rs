@@ -254,7 +254,7 @@ impl SessionLogParser for CodexParser {
             provider_type: "codex_session",
             insert_error_prefix: "插入 Codex 会话日志",
             calculator_app: Some("codex"),
-            agent_module_id: CODEX_AGENT_MODULE_ID,
+            agent_module_id: Some(CODEX_AGENT_MODULE_ID),
             subscription_activity_id: Some(CHATGPT_SUBSCRIPTION_ID),
         }
     }
@@ -839,7 +839,7 @@ fn parse_codex_log_file(ctx: &LogFileContext<'_>) -> Result<ParseOutput, AppErro
                 records.push(ParsedUsage {
                     identity: UsageIdentity {
                         request_id: request_id.clone(),
-                        event_id: format!("codex-session:{request_id}"),
+                        event_id: Some(format!("codex-session:{request_id}")),
                         upstream_correlation_id: None,
                         message_id: None,
                         log_label: request_id,
@@ -928,7 +928,7 @@ fn insert_codex_session_entry(
         &ParsedUsage {
             identity: UsageIdentity {
                 request_id: identity_request_id.clone(),
-                event_id: format!("codex-session:{identity_request_id}"),
+                event_id: Some(format!("codex-session:{identity_request_id}")),
                 upstream_correlation_id: None,
                 message_id: None,
                 log_label: identity_request_id,
