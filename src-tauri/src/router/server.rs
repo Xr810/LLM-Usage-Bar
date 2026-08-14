@@ -11,6 +11,7 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -60,6 +61,23 @@ pub trait UpstreamAuth: Send + Sync {
     ) -> BoxFuture<'a, Result<Vec<(String, String)>, AppError>>;
 }
 
+/// 已经成功绑定的端口。`start()` 绑定成功后写入，失败时保持 None。
+///
+/// 用 AtomicU16 而不是 Mutex：这是一个只写一次、之后频繁读的标量，
+/// 而且读的一方（tauri 命令）不该有任何机会阻塞在 router 的锁上。
+static LISTENING_PORT: AtomicU16 = AtomicU16::new(0);
+
+/// router 当前监听的端口；`None` 表示没起来。
+///
+/// 0 是「未绑定」的哨兵值——端口 0 在 bind 语义里是「随便给一个」，
+/// 而我们永远显式指定端口，所以它不会是一个真实的监听端口。
+pub fn listening_port() -> Option<u16> {
+    match LISTENING_PORT.load(Ordering::Relaxed) {
+        0 => None,
+        port => Some(port),
+    }
+}
+
 /// 启动本地路由服务。绑定失败返回 Err，由调用方决定怎么提示。
 ///
 /// 必须在 app 启动流程的**早期**调用——先把端口开起来，再做其余初始化
@@ -82,12 +100,18 @@ pub async fn start(
     let address = listener
         .local_addr()
         .map_err(|error| AppError::Config(format!("读取监听地址失败: {error}")))?;
+    // 绑定成功之后、serve 之前公布端口：守卫读到的是「已经绑定」的事实，
+    // 不是「即将绑定」的意图。绑定失败走上面的 `?` 直接返回，不会写。
+    LISTENING_PORT.store(port, Ordering::Relaxed);
     let app = build_router(state);
     tauri::async_runtime::spawn(async move {
         log::info!("本地 router 已启动: http://{address}/v1/responses");
         if let Err(error) = axum::serve(listener, app).await {
             log::error!("本地 router 服务退出: {error}");
         }
+        // serve 返回（正常退出或出错）之后服务已不在监听：清掉公布值，
+        // 否则 listening_port() 会继续谎报「router 活着」，守卫形同虚设。
+        LISTENING_PORT.store(0, Ordering::Relaxed);
     });
     Ok(())
 }
