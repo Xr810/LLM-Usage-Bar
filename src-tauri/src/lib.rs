@@ -24,6 +24,8 @@ pub mod product_identity;
 mod prompt;
 mod provider;
 mod provider_defaults;
+// router 用 pub 而不是 mod:T4/T5/T7 往里面放的 pub 入口在启动层接线
+// 之前没有调用点,私有模块会触发 dead_code(clippy -D warnings 直接挂)。
 pub mod router;
 mod services;
 mod settings;
