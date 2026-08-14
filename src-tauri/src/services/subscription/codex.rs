@@ -28,7 +28,7 @@ struct CodexTokens {
 }
 
 /// (access_token, account_id, status, message)
-type CodexCredentials = (
+pub(crate) type CodexCredentials = (
     Option<String>,
     Option<String>,
     CredentialStatus,
@@ -42,7 +42,9 @@ type CodexCredentials = (
 /// 2. 凭据文件 ~/.codex/auth.json
 ///
 /// 仅 auth_mode == "chatgpt" (OAuth) 时有效，API key 模式不支持用量查询。
-fn read_codex_credentials() -> CodexCredentials {
+/// T9 的 router 凭据解析(`router/auth.rs`)也要走这一个入口取 ChatGPT 的
+/// access token,因此可见性提到 `pub(crate)`。
+pub(crate) fn read_codex_credentials() -> CodexCredentials {
     #[cfg(target_os = "macos")]
     {
         if let Some(result) = read_codex_credentials_from_keychain() {

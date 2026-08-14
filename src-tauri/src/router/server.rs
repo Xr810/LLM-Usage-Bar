@@ -1018,7 +1018,7 @@ fn now_millis() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::database::ModelRoute;
+    use crate::database::{ModelRoute, RouterAuthKind};
     use axum::body::to_bytes;
     use axum::http::Request;
     use serde_json::json;
@@ -1045,6 +1045,8 @@ mod tests {
             wire_api,
             priority,
             enabled: true,
+            auth_kind: RouterAuthKind::None,
+            credential_key_id: None,
         })
         .unwrap();
         db.upsert_model_route(&ModelRoute {

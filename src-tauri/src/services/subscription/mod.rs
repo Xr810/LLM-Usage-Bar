@@ -6,7 +6,7 @@
 //! 本模块只保留共享类型、tier 常量与分发入口；Codex / Gemini 的凭据读取和
 //! 接口查询分别在 `codex` / `gemini` 子模块里。
 
-mod codex;
+pub(crate) mod codex;
 mod gemini;
 
 use serde::{Deserialize, Serialize};
