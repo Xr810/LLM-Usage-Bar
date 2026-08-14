@@ -92,8 +92,10 @@
         ↑ 同一个文件的两段，互不越界即可
 
 第六批（后端完全体。前五批把功能做完，这一批把结构做对）
-  T14 gemini/opencode 迁到共享流水线   ┐ 可同时开
-  T15 provider 请出数据库层             ┘ (services/ vs database/)
+  T14a 扩解析器接口(费用直通/辅助 mtime/跨轮状态/错误粒度/订阅可选) ┐ 可同时开
+  T15  provider 请出数据库层                                        ┘
+   ↓
+  T14b gemini/opencode 迁到共享流水线(接口扩完才可能做到逐字节相同)
    ↓
   T16 api 与传输解耦（先只拆 router 那一组，把形状立起来）
    ↓
@@ -123,7 +125,8 @@
 | [T10](T10-wire-up.md) | 接进 app + tauri 命令 | T9 | ❌ 单独做 |
 | [T12](T12-enable-guard.md) | 启用前确认 router 在监听 | T10 T11 | ✅ 与 T13 |
 | [T13](T13-attempt-tokens.md) | 把 token 记进 router_attempts | T6 T10 T11 | ✅ 与 T12 |
-| [T14](T14-migrate-remaining-parsers.md) | gemini/opencode 迁到共享流水线 | T1 T8 | ✅ 与 T15 |
+| [T14a](T14a-extend-parser-interface.md) | 扩接口到能表达四家 | T8 T13 | ✅ 与 T15 |
+| [T14b](T14-migrate-remaining-parsers.md) | gemini/opencode 迁到共享流水线 | T14a | ❌ 等 T14a |
 | [T15](T15-provider-out-of-store.md) | provider 请出数据库层(可拆部分) | T13 | ✅ 与 T14 |
 | [T16](T16-api-transport-split.md) | api 与传输解耦 | T14 T15 | ❌ 单独做 |
 | [T17](T17-module-rearrange.md) | 按职责重排目录 | T14 T15 T16 | ❌ 单独做 |
