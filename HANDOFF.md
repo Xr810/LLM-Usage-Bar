@@ -1027,3 +1027,41 @@ SQLite 层(两侧同一个 C 库)、HTTP 层(I/O 等待为主)。后两者判断
   可看」对「账号精确」的取舍,原分支已在注释里写明。
 - wham 的 `credits`(点数余额)仍未解析:`SubscriptionQuota` 没有承载余额的字段,
   加了要动 30+ 处构造字面量,留到下次扩展该结构时一并做。
+
+---
+
+## 13. Codex「官方登录 + 第三方 provider」的真正开关(2026-08-14 实测)
+
+在用户本机逐步实测确认的操作性结论,任何要碰 Codex 配置的人先看这条。
+
+**要让 Codex 同时具备①官方远程操作 ②官方插件 ③模型走第三方,`config.toml` 里
+必须同时有两个键:**
+
+```toml
+[model_providers.<任意 id>]
+name = "packyapi"
+base_url = "https://www.packyapi.ai/v1"
+wire_api = "responses"
+requires_openai_auth = true          # 维持官方会话 → 远程 + 插件可用
+experimental_bearer_token = "..."    # 模型请求的实际认证
+```
+
+- 只有 `experimental_bearer_token`:模型能用,**远程与插件不可用**(用户此前的状态)
+- 只有 `requires_openai_auth`:远程与插件可用,但模型请求带官方 OAuth token 发给
+  第三方,被拒 `401 无效的令牌`
+- `auth.json` 全程不需要动;provider **id 不是关键**(`openrouter` / `custom` 都行)
+
+**实测:官方 OAuth token 不会外泄给第三方。** 把 `base_url` 指向本地一次性监听抓一次
+真实请求,`Authorization` 里是中转的 bearer token;官方 access / id / refresh token
+与 account_id 一个都没出现。(`x-oai-attestation` 头未纳入比对,内容未知。)
+
+**副作用提醒**:打开 `requires_openai_auth` 后 Codex 才会真的走 OAuth 续期。如果
+`~/.codex/auth.json` 是从旧备份恢复来的,里面的 refresh token 可能已被用掉,会报
+`refresh token was already used`——重新登录即可。这与本 app 无关:app 的托管 OAuth
+账号管理器(`credentials/codex_oauth_auth.rs`)用自己的 `codex_oauth_auth.json`,
+不碰 CLI 的 `auth.json`。
+
+**对本地路由方案的影响**:见 `docs/design/2026-08-14-router-decisions-wip.md` §7。
+简言之——router 原来的第一理由(官方登录 + 自己的 provider)已被证明纯配置可达成,
+router 现在只剩「自动故障转移」与「纵深防御」两条理由,且用户要求先权衡其能耗与内存
+代价(该文件 §8,尚未展开)。
