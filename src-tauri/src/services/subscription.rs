@@ -1357,9 +1357,100 @@ async fn query_gemini_quota(access_token: &str) -> Result<SubscriptionQuota, Str
     })
 }
 
+/// Codex 的订阅额度采集：读 CLI 凭据 → 按凭据状态分流 → 查 wham 接口。
+///
+/// 与 Gemini 的差别在 `Expired`：Codex 不做 token 续期（refresh token 是轮换式的，
+/// 本 app 只读不写 `auth.json`，刷了不回写会把用户从 Codex CLI 踢下线），过期就
+/// 拿旧 token 试一把，不成就如实报过期。
+async fn collect_codex_quota() -> Result<SubscriptionQuota, String> {
+    const TOOL: &str = "codex";
+    const EXPIRED_MESSAGE: &str = "Authentication failed. Please re-login with Codex CLI.";
+    let (token, account_id, status, message) = read_codex_credentials();
+
+    match status {
+        CredentialStatus::NotFound => Ok(SubscriptionQuota::not_found(TOOL)),
+        CredentialStatus::ParseError => Ok(SubscriptionQuota::error(
+            TOOL,
+            CredentialStatus::ParseError,
+            message.unwrap_or_else(|| "Failed to parse credentials".to_string()),
+        )),
+        CredentialStatus::Expired => {
+            // 即使可能过期也尝试调用 API
+            if let Some(token) = token {
+                let result =
+                    query_codex_quota(&token, account_id.as_deref(), TOOL, EXPIRED_MESSAGE).await?;
+                if result.success {
+                    return Ok(result);
+                }
+            }
+            Ok(SubscriptionQuota::error(
+                TOOL,
+                CredentialStatus::Expired,
+                message.unwrap_or_else(|| "Codex OAuth token may be stale".to_string()),
+            ))
+        }
+        CredentialStatus::Valid => {
+            let token = token.expect("token must be Some when status is Valid");
+            query_codex_quota(&token, account_id.as_deref(), TOOL, EXPIRED_MESSAGE).await
+        }
+        _ => Ok(SubscriptionQuota::not_found(TOOL)),
+    }
+}
+
+/// Gemini 的订阅额度采集：读 OAuth 凭据 → 按凭据状态分流 → 查配额接口。
+///
+/// `Expired` 分支会先用 refresh token 续期（Gemini 的 access token 只有约 1 小时，
+/// 而这里的凭据文件本来就由本 app 之外的 Gemini CLI 维护同一份格式），续期失败
+/// 再拿旧 token 试一把。
+async fn collect_gemini_quota() -> Result<SubscriptionQuota, String> {
+    const TOOL: &str = "gemini";
+    let (token, refresh_token, status, message) = read_gemini_credentials();
+
+    match status {
+        CredentialStatus::NotFound => Ok(SubscriptionQuota::not_found(TOOL)),
+        CredentialStatus::ParseError => Ok(SubscriptionQuota::error(
+            TOOL,
+            CredentialStatus::ParseError,
+            message.unwrap_or_else(|| "Failed to parse credentials".to_string()),
+        )),
+        CredentialStatus::Expired => {
+            // Gemini access_token 仅 ~1h 有效，尝试用 refresh_token 刷新
+            if let Some(ref rt) = refresh_token {
+                if let Some(new_token) = refresh_gemini_token(rt).await {
+                    return query_gemini_quota(&new_token).await;
+                }
+            }
+            // 刷新失败，尝试用旧 token
+            if let Some(ref token) = token {
+                let result = query_gemini_quota(token).await?;
+                if result.success {
+                    return Ok(result);
+                }
+            }
+            Ok(SubscriptionQuota::error(
+                TOOL,
+                CredentialStatus::Expired,
+                message.unwrap_or_else(|| "Gemini OAuth token has expired".to_string()),
+            ))
+        }
+        CredentialStatus::Valid => {
+            let token = token.expect("token must be Some when status is Valid");
+            query_gemini_quota(&token).await
+        }
+        _ => Ok(SubscriptionQuota::not_found(TOOL)),
+    }
+}
+
 // ── 入口函数 ──────────────────────────────────────────────
 
-/// 查询指定 CLI 工具的官方订阅额度
+/// 查询指定 CLI 工具的官方订阅额度。
+///
+/// 这里只做分发：每个工具的凭据读取与接口查询都在自己的采集函数里
+/// （Claude 更进一步，整个在 `claude_quota` 模块）。加一个工具＝写一个
+/// `collect_*_quota` 再在下面加一行，不必往这个函数里塞逻辑——它一度装着
+/// Codex 与 Gemini 各四十行的内联实现。
+///
+/// `tool` 来自前端的字符串，认不出来的一律当作"没有这个工具的额度"。
 ///
 /// 瞬时传输失败以 `Err` 传播（前端 reject → retry + 保留上次成功值）。Expired
 /// 分支的"过期也试一把"重试同样用 `?` 传播瞬时错误——不能折叠成"已过期"，
@@ -1369,86 +1460,8 @@ pub async fn get_subscription_quota(tool: &str) -> Result<SubscriptionQuota, Str
         // Claude Pro/Max only uses local data emitted by official Claude apps.
         // Do not read Claude OAuth credentials or call a private usage endpoint.
         "claude" => crate::claude_quota::collect_local_quota(),
-        "codex" => {
-            let (token, account_id, status, message) = read_codex_credentials();
-
-            match status {
-                CredentialStatus::NotFound => Ok(SubscriptionQuota::not_found("codex")),
-                CredentialStatus::ParseError => Ok(SubscriptionQuota::error(
-                    "codex",
-                    CredentialStatus::ParseError,
-                    message.unwrap_or_else(|| "Failed to parse credentials".to_string()),
-                )),
-                CredentialStatus::Expired => {
-                    // 即使可能过期也尝试调用 API
-                    if let Some(token) = token {
-                        let result = query_codex_quota(
-                            &token,
-                            account_id.as_deref(),
-                            "codex",
-                            "Authentication failed. Please re-login with Codex CLI.",
-                        )
-                        .await?;
-                        if result.success {
-                            return Ok(result);
-                        }
-                    }
-                    Ok(SubscriptionQuota::error(
-                        "codex",
-                        CredentialStatus::Expired,
-                        message.unwrap_or_else(|| "Codex OAuth token may be stale".to_string()),
-                    ))
-                }
-                CredentialStatus::Valid => {
-                    let token = token.expect("token must be Some when status is Valid");
-                    query_codex_quota(
-                        &token,
-                        account_id.as_deref(),
-                        "codex",
-                        "Authentication failed. Please re-login with Codex CLI.",
-                    )
-                    .await
-                }
-                _ => Ok(SubscriptionQuota::not_found("codex")),
-            }
-        }
-        "gemini" => {
-            let (token, refresh_token, status, message) = read_gemini_credentials();
-
-            match status {
-                CredentialStatus::NotFound => Ok(SubscriptionQuota::not_found("gemini")),
-                CredentialStatus::ParseError => Ok(SubscriptionQuota::error(
-                    "gemini",
-                    CredentialStatus::ParseError,
-                    message.unwrap_or_else(|| "Failed to parse credentials".to_string()),
-                )),
-                CredentialStatus::Expired => {
-                    // Gemini access_token 仅 ~1h 有效，尝试用 refresh_token 刷新
-                    if let Some(ref rt) = refresh_token {
-                        if let Some(new_token) = refresh_gemini_token(rt).await {
-                            return query_gemini_quota(&new_token).await;
-                        }
-                    }
-                    // 刷新失败，尝试用旧 token
-                    if let Some(ref token) = token {
-                        let result = query_gemini_quota(token).await?;
-                        if result.success {
-                            return Ok(result);
-                        }
-                    }
-                    Ok(SubscriptionQuota::error(
-                        "gemini",
-                        CredentialStatus::Expired,
-                        message.unwrap_or_else(|| "Gemini OAuth token has expired".to_string()),
-                    ))
-                }
-                CredentialStatus::Valid => {
-                    let token = token.expect("token must be Some when status is Valid");
-                    query_gemini_quota(&token).await
-                }
-                _ => Ok(SubscriptionQuota::not_found("gemini")),
-            }
-        }
+        "codex" => collect_codex_quota().await,
+        "gemini" => collect_gemini_quota().await,
         _ => Ok(SubscriptionQuota::not_found(tool)),
     }
 }
@@ -1465,6 +1478,22 @@ fn now_millis() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `tool` 是前端传进来的任意字符串，认不出来必须是确定性的「没有这个工具的
+    /// 额度」，而不是报错——否则前端会把它当成瞬时失败去重试。走 `_` 分支不碰
+    /// 任何凭据、不发网络请求，可以安全地在单测里调。
+    #[tokio::test]
+    async fn unknown_tool_reports_not_found_without_touching_credentials() {
+        let quota = get_subscription_quota("definitely-not-a-tool")
+            .await
+            .expect("未知工具是确定性结果，不是传输失败");
+        assert_eq!(quota.tool, "definitely-not-a-tool");
+        assert!(!quota.success);
+        assert!(matches!(
+            quota.credential_status,
+            CredentialStatus::NotFound
+        ));
+    }
 
     /// 24 处构造点现在靠 `skeleton` 兜住那些它们不关心的字段。改动这里的任何一个
     /// 默认值，等于一次性改掉那 24 处的行为——所以把它钉死，让改动必须先过这一关。
