@@ -1,7 +1,7 @@
 # 模块化:一个 core + provider 模块 + 多个前端面板
 
 > **状态:讨论产物,未批准。** 2026-08-14 与用户讨论后整理,不是已批准的规格,
-> 也没有排期。与 [`2026-08-14-router-decisions-wip.md`](2026-08-14-router-decisions-wip.md)
+> 也没有排期。与 [`2026-08-14-local-routing-design.md`](2026-08-14-local-routing-design.md)
 > 正交——本地路由做不做、怎么做,都不影响这份的结论。
 
 ---
@@ -367,7 +367,7 @@ webview 仍然活着,**定时器在没人看得见的情况下继续每 5 分钟
 
 ## 11. 与其他文档的关系
 
-- 与 [`2026-08-14-router-decisions-wip.md`](2026-08-14-router-decisions-wip.md) **正交**:
+- 与 [`2026-08-14-local-routing-design.md`](2026-08-14-local-routing-design.md) **正交**:
   路由做不做都不影响本文结论;反过来,本文第 3 节的划线里已经把「路由决策」归给 core,
   意味着 router 若要做,它属于 core 而不是某个 provider 模块。
 - 与 `tech-route-review-2026-08-12.md` 的方案 B(Rust 核心 + SwiftUI 壳)一致:

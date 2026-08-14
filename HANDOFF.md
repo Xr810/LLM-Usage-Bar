@@ -1061,7 +1061,7 @@ experimental_bearer_token = "..."    # 模型请求的实际认证
 账号管理器(`credentials/codex_oauth_auth.rs`)用自己的 `codex_oauth_auth.json`,
 不碰 CLI 的 `auth.json`。
 
-**对本地路由方案的影响**:见 `docs/design/2026-08-14-router-decisions-wip.md` §7。
+**对本地路由方案的影响**:见 `docs/design/2026-08-14-local-routing-design.md` §2.1。
 简言之——router 原来的第一理由(官方登录 + 自己的 provider)已被证明纯配置可达成,
 router 现在只剩「自动故障转移」与「纵深防御」两条理由,且用户要求先权衡其能耗与内存
 代价(该文件 §8,尚未展开)。
