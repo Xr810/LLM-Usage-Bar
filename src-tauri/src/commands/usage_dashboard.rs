@@ -1279,7 +1279,7 @@ mod tests {
     };
     use crate::database::Database;
     use crate::services::subscription::{
-        CredentialStatus, QuotaTier, SubscriptionQuota, TIER_FIVE_HOUR, TIER_SEVEN_DAY,
+        QuotaTier, SubscriptionQuota, TIER_FIVE_HOUR, TIER_SEVEN_DAY,
     };
     use crate::services::system_provider_connection::{
         ModelListClientError, SystemProviderConnectionClient, SystemProviderConnectionFuture,

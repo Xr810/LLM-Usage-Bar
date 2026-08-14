@@ -649,9 +649,9 @@ mod tests {
     use super::{format_script_summary, format_subscription_summary, tray_website_url, TRAY_ID};
     use crate::provider::{UsageData, UsageResult};
     use crate::services::subscription::{
-        CredentialStatus, QuotaTier, SubscriptionQuota, TIER_FIVE_HOUR, TIER_GEMINI_FLASH,
-        TIER_GEMINI_FLASH_LITE, TIER_GEMINI_PRO, TIER_MONTHLY, TIER_SEVEN_DAY, TIER_SEVEN_DAY_OPUS,
-        TIER_SEVEN_DAY_SONNET, TIER_THIRTY_DAY, TIER_WEEKLY_LIMIT,
+        QuotaTier, SubscriptionQuota, TIER_FIVE_HOUR, TIER_GEMINI_FLASH, TIER_GEMINI_FLASH_LITE,
+        TIER_GEMINI_PRO, TIER_MONTHLY, TIER_SEVEN_DAY, TIER_SEVEN_DAY_OPUS, TIER_SEVEN_DAY_SONNET,
+        TIER_THIRTY_DAY, TIER_WEEKLY_LIMIT,
     };
 
     #[test]

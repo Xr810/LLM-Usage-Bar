@@ -87,7 +87,6 @@ impl UsageCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::subscription::CredentialStatus;
 
     fn fake_quota() -> SubscriptionQuota {
         SubscriptionQuota {
