@@ -13,6 +13,7 @@ pub mod provider_model_pricing;
 pub mod providers;
 pub mod providers_seed;
 pub mod quota;
+pub mod router;
 pub mod settings;
 pub mod usage_events;
 pub mod usage_providers;

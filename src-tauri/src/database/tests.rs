@@ -3121,7 +3121,7 @@ fn schema_migration_v24_through_v26_adds_key_scoped_usage_snapshots() {
 
     Database::apply_schema_migrations_on_conn(&conn).expect("migrate v24 through current schema");
 
-    assert_eq!(Database::get_user_version(&conn).unwrap(), 26);
+    assert_eq!(Database::get_user_version(&conn).unwrap(), 27);
     assert!(Database::table_exists(&conn, "provider_key_usage_snapshots").unwrap());
     for column in [
         "key_id",
@@ -3177,7 +3177,7 @@ fn schema_migration_v25_to_v26_preserves_the_configured_keychain_slot() {
 
     Database::apply_schema_migrations_on_conn(&conn).expect("migrate v25 to v26");
 
-    assert_eq!(Database::get_user_version(&conn).unwrap(), 26);
+    assert_eq!(Database::get_user_version(&conn).unwrap(), 27);
     assert_eq!(
         conn.query_row("SELECT COUNT(*) FROM provider_api_keys", [], |row| row
             .get::<_, i64>(0),)
@@ -3226,7 +3226,7 @@ fn schema_migration_is_a_no_op_for_an_already_migrated_v26_database() {
 
     Database::apply_schema_migrations_on_conn(&conn).expect("reopen schema v26");
 
-    assert_eq!(Database::get_user_version(&conn).unwrap(), 26);
+    assert_eq!(Database::get_user_version(&conn).unwrap(), 27);
     assert_eq!(
         conn.query_row(
             "SELECT usage_total_usd, fetched_at
