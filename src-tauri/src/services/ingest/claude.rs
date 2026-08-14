@@ -10,8 +10,8 @@ use crate::config::get_claude_config_dir;
 use crate::database::Database;
 use crate::error::AppError;
 use crate::services::ingest::{
-    occurred_at_secs, sync_with_parser, LogFileContext, ParsedUsage, ProviderWriteProfile,
-    SessionLogParser, SessionSyncResult, UsageIdentity,
+    occurred_at_secs, sync_with_parser, LogFileContext, ParseOutput, ParsedUsage,
+    ProviderWriteProfile, SessionLogParser, SessionSyncResult, UsageIdentity,
 };
 use crate::usage::domain::CLAUDE_CODE_AGENT_MODULE_ID;
 use crate::usage::metering::parser::SESSION_REQUEST_ID_PREFIX;
@@ -54,7 +54,7 @@ impl SessionLogParser for ClaudeParser {
             insert_error_prefix: "插入会话日志",
             calculator_app: None,
             agent_module_id: CLAUDE_CODE_AGENT_MODULE_ID,
-            subscription_activity_id: CLAUDE_SUBSCRIPTION_ID,
+            subscription_activity_id: Some(CLAUDE_SUBSCRIPTION_ID),
         }
     }
 
@@ -68,7 +68,7 @@ impl SessionLogParser for ClaudeParser {
 
     // prune 用默认实现:Claude 无剪枝,原样返回。
 
-    fn parse(&self, ctx: &LogFileContext<'_>) -> Result<Vec<ParsedUsage>, AppError> {
+    fn parse(&self, ctx: &LogFileContext<'_>) -> Result<ParseOutput, AppError> {
         parse_claude_log_file(ctx)
     }
 }
@@ -124,7 +124,7 @@ struct ParsedAssistantUsage {
 ///
 /// 跳过发生在**解析之前**(Claude 的位置):水位线以下的行既不提取
 /// sessionId 也不产生记录。
-fn parse_claude_log_file(ctx: &LogFileContext<'_>) -> Result<Vec<ParsedUsage>, AppError> {
+fn parse_claude_log_file(ctx: &LogFileContext<'_>) -> Result<ParseOutput, AppError> {
     let mut messages: HashMap<String, ParsedAssistantUsage> = HashMap::new();
     let mut current_session_id: Option<String> = None;
     let mut line_offset: i64 = 0;
@@ -268,10 +268,14 @@ fn parse_claude_log_file(ctx: &LogFileContext<'_>) -> Result<Vec<ParsedUsage>, A
             occurred_at: occurred_at_secs(msg.timestamp.as_deref()),
             session_id: msg.session_id.clone(),
             line_offset: msg.line_offset,
+            upstream_total_cost: None,
         });
     }
 
-    Ok(records)
+    Ok(ParseOutput {
+        records,
+        next_state: None,
+    })
 }
 
 /// 旧签名的测试适配器:把内部表示转成 ParsedUsage 后走统一写库。
@@ -302,6 +306,7 @@ fn insert_session_log_entry(
             occurred_at: occurred_at_secs(msg.timestamp.as_deref()),
             session_id: msg.session_id.clone(),
             line_offset: msg.line_offset,
+            upstream_total_cost: None,
         },
         request_id,
         None,
@@ -329,6 +334,7 @@ fn sync_single_file(
         .map(|cursor| (cursor.cursor_key.clone(), cursor))
         .collect();
     let profile = ClaudeParser.write_profile();
+    let mut errors = Vec::new();
     sync_file_with_parser(
         db,
         &ClaudeParser,
@@ -337,6 +343,7 @@ fn sync_single_file(
         bound_provider_id,
         &mut sync_cursors,
         &cursor_details,
+        &mut errors,
     )
 }
 

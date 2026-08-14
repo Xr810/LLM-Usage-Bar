@@ -21,6 +21,7 @@ use crate::services::usage_stats::{
 use crate::usage::domain::TokenSource;
 use crate::usage::ingestion::{LegacyLogInput, UsageIngestionInput, UsageIngestionService};
 use crate::usage::metering::calculator::CostCalculator;
+use crate::usage::metering::cost_parser::UpstreamCost;
 use crate::usage::metering::parser::TokenUsage;
 use crate::usage::session::validate_bound_session_agent;
 use rust_decimal::Decimal;
@@ -69,6 +70,12 @@ pub struct LogFileContext<'a> {
     pub content: &'a str,
     /// 游标里记的行号水位线;`<=` 它的行已经入过库。
     pub last_line_offset: i64,
+    /// 上一轮这个解析器存下的私有状态;首次为 None。
+    /// 流水线只存不看,内容格式由解析器自己定。
+    // T14b 迁入 gemini/opencode 之前没有任何非测试解析器读它:这是给
+    // 解析器实现的接口字段,不是死代码。
+    #[allow(dead_code)]
+    pub parser_state: Option<&'a str>,
 }
 
 /// 一条用量记录的身份。**字符串由解析器拼好交进来**,core 不知道
@@ -106,6 +113,16 @@ pub struct ParsedUsage {
     pub session_id: Option<String>,
     /// 这一行在文件里的行号,供流水线推进水位线。
     pub line_offset: i64,
+    /// 上游已经算好的总费用。`Some` 时直接落库、不再查定价表。
+    /// 类型与写库列一致——照抄现在 total_cost_usd 那一列用的类型。
+    pub upstream_total_cost: Option<String>,
+}
+
+/// `parse` 的产物:归一化用量记录 + 要求流水线下轮带回的私有状态。
+pub struct ParseOutput {
+    pub records: Vec<ParsedUsage>,
+    /// 要求下次带回来的状态。`None` 表示保持上一轮的值不变。
+    pub next_state: Option<String>,
 }
 
 /// 单文件游标决议结果:流水线据此判断「跳过 / 解析 / 写回」。
@@ -142,13 +159,19 @@ pub trait SessionLogParser {
     /// 判断一个文件要不要读(扩展名、命名规则等)。
     fn is_log_file(&self, path: &Path) -> bool;
 
+    /// 除了日志文件本身,还有哪些文件的 mtime 也算「这个文件变了」。
+    /// 默认空。SQLite 类日志用它把 `-wal` 纳进来。
+    fn extra_change_sources(&self, _path: &Path) -> Vec<PathBuf> {
+        Vec::new()
+    }
+
     /// 扫描前的剪枝。有日期分区的 agent 用它做剪枝,没有的直接返回 `files` 原样。
     fn prune(&self, files: Vec<PathBuf>) -> Vec<PathBuf> {
         files
     }
 
     /// 把一个文件解析成用量记录。返回的记录**已经排除了水位线以下的行**。
-    fn parse(&self, ctx: &LogFileContext<'_>) -> Result<Vec<ParsedUsage>, AppError>;
+    fn parse(&self, ctx: &LogFileContext<'_>) -> Result<ParseOutput, AppError>;
 
     // ── 以下是流水线需要的钩子。任务书接口之外的最小补充(报告里说明):
     // 各家在「游标怎么键控」上语义不同——有的按路径、有的按文件实体,
@@ -202,12 +225,15 @@ pub trait SessionLogParser {
         errors.push(msg);
     }
 
-    /// 单条记录插入失败时的日志。默认实现,各解析器可按需覆盖。
-    fn log_insert_failure(&self, record: &ParsedUsage, error: &AppError) {
+    /// 单条记录插入失败时的处理。返回 `Some(msg)` 表示这条也要进
+    /// `SessionSyncResult::errors`;返回 `None` 表示只记日志。
+    /// 默认实现返回 `None`——即 claude/codex 现在的行为。
+    fn log_insert_failure(&self, record: &ParsedUsage, error: &AppError) -> Option<String> {
         log::warn!(
             "[SESSION-SYNC] 插入失败 ({}): {error}",
             record.identity.log_label
         );
+        None
     }
 
     /// 一轮同步结束后的汇总日志。默认实现,各解析器可按需覆盖。
@@ -275,6 +301,7 @@ pub fn sync_with_parser(
             bound_provider_id,
             &mut sync_cursors,
             &cursor_details,
+            &mut result.errors,
         ) {
             Ok((imported, skipped)) => {
                 result.imported += imported;
@@ -297,6 +324,10 @@ pub fn sync_with_parser(
 /// 游标决议 → mtime 未变则跳过 → 整文件解析 → 去重写库 → 推进游标。
 /// 只有全部记录写库成功后才推进 offset,bound 路径下任何插入失败都会
 /// 让整文件回退(游标不动),下次同步重试。
+///
+/// `errors` 承接解析器要求进 `SessionSyncResult::errors` 的插入失败消息
+/// (`log_insert_failure` 返回 `Some` 时)。
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn sync_file_with_parser(
     db: &Database,
     parser: &dyn SessionLogParser,
@@ -305,6 +336,7 @@ pub(crate) fn sync_file_with_parser(
     bound_provider_id: Option<&str>,
     sync_cursors: &mut SyncCursorMap,
     cursor_details: &HashMap<String, UsageSyncCursor>,
+    errors: &mut Vec<String>,
 ) -> Result<(u32, u32), AppError> {
     if let Some(provider_id) = bound_provider_id {
         validate_bound_session_agent(db, parser.source(), provider_id)?;
@@ -318,7 +350,14 @@ pub(crate) fn sync_file_with_parser(
     let metadata = file
         .metadata()
         .map_err(|e| AppError::Config(format!("无法读取文件元数据: {e}")))?;
-    let file_modified = metadata_modified_nanos(&metadata);
+    // 变更判定 = 主文件与解析器声明的辅助变更源(如 SQLite 的 -wal)里最晚的
+    // mtime。默认没有辅助源,claude/codex 的判定值与原来一模一样。
+    let mut file_modified = metadata_modified_nanos(&metadata);
+    for extra in parser.extra_change_sources(file_path) {
+        if let Ok(extra_metadata) = fs::metadata(&extra) {
+            file_modified = file_modified.max(metadata_modified_nanos(&extra_metadata));
+        }
+    }
 
     let cursor =
         parser.resolve_cursor(file_path, &file, &metadata, sync_cursors, cursor_details)?;
@@ -338,14 +377,26 @@ pub(crate) fn sync_file_with_parser(
 
     // 整文件重读(不是增量)——见模块顶部注释。
     let content = read_whole_file(&file)?;
+    // 私有状态跟着游标键走:实体键控的解析器在首次升级时,旧状态还挂在
+    // 路径键旧游标下——与 update_sync_state_for_resource 的保留逻辑对齐。
+    let parser_state = cursor_details
+        .get(&cursor.cursor_key)
+        .or_else(|| {
+            cursor
+                .legacy_cursor_key
+                .as_deref()
+                .and_then(|key| cursor_details.get(key))
+        })
+        .and_then(|cursor| cursor.parser_state_json.as_deref());
     let ctx = LogFileContext {
         path: file_path,
         file: &file,
         metadata: &metadata,
         content: &content,
         last_line_offset: cursor.last_offset,
+        parser_state,
     };
-    let records = parser.parse(&ctx)?;
+    let output = parser.parse(&ctx)?;
     // 水位线 = 全量行数。两家都按「整个文件」计数,而不是按解析出的
     // 记录计数——文件尾部的非事件行也必须越过,否则下次同步会把它们
     // 重新当新行处理(按行提取 sessionId 的解析器会因此读到旧行)。
@@ -353,7 +404,7 @@ pub(crate) fn sync_file_with_parser(
 
     let mut imported: u32 = 0;
     let mut skipped: u32 = 0;
-    for record in &records {
+    for record in &output.records {
         match insert_usage_record(
             db,
             profile,
@@ -367,7 +418,9 @@ pub(crate) fn sync_file_with_parser(
                 if bound_provider_id.is_some() {
                     return Err(e);
                 }
-                parser.log_insert_failure(record, &e);
+                if let Some(message) = parser.log_insert_failure(record, &e) {
+                    errors.push(message);
+                }
                 skipped += 1;
             }
         }
@@ -383,6 +436,7 @@ pub(crate) fn sync_file_with_parser(
         file_modified,
         cursor.size_bytes,
         line_count,
+        output.next_state.as_deref(),
     )?;
     if let Some(legacy) = &cursor.legacy_cursor_key {
         sync_cursors.remove(legacy);
@@ -458,6 +512,33 @@ pub(crate) fn session_file_open_count() -> u64 {
     SESSION_FILE_OPEN_COUNT.with(|count| count.get())
 }
 
+// 订阅活动标记的测试计数器(仅测试构建存在):按订阅 id 记录流水线决定
+// 调 mark_subscription_activity 的次数。真实调用在 quota 的全局内存表里,
+// 没有对外读接口,所以用这个紧挨着调用点的替身断言「None 时不调」。
+#[cfg(test)]
+thread_local! {
+    static SUBSCRIPTION_ACTIVITY_MARKS: std::cell::RefCell<HashMap<&'static str, u64>> =
+        std::cell::RefCell::new(HashMap::new());
+}
+
+#[cfg(test)]
+fn record_subscription_activity_mark(subscription_id: &'static str) {
+    SUBSCRIPTION_ACTIVITY_MARKS.with(|marks| {
+        *marks.borrow_mut().entry(subscription_id).or_insert(0) += 1;
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn reset_subscription_activity_marks() {
+    SUBSCRIPTION_ACTIVITY_MARKS.with(|marks| marks.borrow_mut().clear());
+}
+
+#[cfg(test)]
+pub(crate) fn subscription_activity_mark_count(subscription_id: &'static str) -> u64 {
+    SUBSCRIPTION_ACTIVITY_MARKS
+        .with(|marks| marks.borrow().get(subscription_id).copied().unwrap_or(0))
+}
+
 /// 把一条已归一化的用量记录写进库(去重 + 插入),返回是否新插入。
 ///
 /// 两家的写入 SQL 形状完全相同,只有 provider 常量、费用计算语义与
@@ -487,7 +568,9 @@ pub(crate) struct ProviderWriteProfile {
     pub(crate) insert_error_prefix: &'static str,
     pub(crate) calculator_app: Option<&'static str>,
     pub(crate) agent_module_id: &'static str,
-    pub(crate) subscription_activity_id: &'static str,
+    /// `None` 表示这家没有订阅概念,插入后**不调**
+    /// `mark_subscription_activity`。
+    pub(crate) subscription_activity_id: Option<&'static str>,
 }
 
 /// bound 路径:经 UsageIngestionService 落库(usage_events + legacy 行)。
@@ -515,7 +598,22 @@ fn insert_bound_usage_record(
         occurred_at: parsed.occurred_at,
         model: parsed.model.clone(),
         usage,
-        upstream_cost: None,
+        upstream_cost: parsed
+            .upstream_total_cost
+            .as_deref()
+            .map(|cost| {
+                use std::str::FromStr;
+                Decimal::from_str(cost)
+                    .map(|total| UpstreamCost {
+                        input_cost: None,
+                        output_cost: None,
+                        cache_read_cost: None,
+                        cache_creation_cost: None,
+                        total_cost: Some(total),
+                    })
+                    .map_err(|_| AppError::Message(format!("上游总费用无法解析为金额: {cost}")))
+            })
+            .transpose()?,
         request_id: Some(request_id.to_string()),
         // 会话日志的 transcript 会话 ID 识别的是「一次会话」而不是一次
         // 请求,不能当跨源去重键。
@@ -571,32 +669,48 @@ fn insert_legacy_usage_record(
         message_id: None,
     };
 
-    let pricing = find_model_pricing(&conn, &parsed.model);
-    let multiplier = Decimal::from(1);
-    let (input_cost, output_cost, cache_read_cost, cache_creation_cost, total_cost) = match pricing
+    // 上游已经算好的总费用优先:直接落库、不查定价表,形状逐字节照抄
+    // opencode 现在写的那五个值(其余四列是 "0")。None 时与重构前一样
+    // 从定价表计算。
+    let (input_cost, output_cost, cache_read_cost, cache_creation_cost, total_cost) = match parsed
+        .upstream_total_cost
+        .as_deref()
     {
-        Some(p) => {
-            let cost = match profile.calculator_app {
-                // 有的上游 app 的 input 字段包含 cache read,计费时要先扣掉;
-                // 有的 app 的 input 已经是 fresh input(不扣)。
-                Some(app) => CostCalculator::calculate_for_app(app, &usage, &p, multiplier),
-                None => CostCalculator::calculate(&usage, &p, multiplier),
-            };
-            (
-                cost.input_cost.to_string(),
-                cost.output_cost.to_string(),
-                cost.cache_read_cost.to_string(),
-                cost.cache_creation_cost.to_string(),
-                cost.total_cost.to_string(),
-            )
-        }
-        None => (
+        Some(cost) => (
             "0".to_string(),
             "0".to_string(),
             "0".to_string(),
             "0".to_string(),
-            "0".to_string(),
+            cost.to_string(),
         ),
+        None => {
+            let pricing = find_model_pricing(&conn, &parsed.model);
+            let multiplier = Decimal::from(1);
+            match pricing {
+                Some(p) => {
+                    let cost = match profile.calculator_app {
+                        // 有的上游 app 的 input 字段包含 cache read,计费时要先扣掉;
+                        // 有的 app 的 input 已经是 fresh input(不扣)。
+                        Some(app) => CostCalculator::calculate_for_app(app, &usage, &p, multiplier),
+                        None => CostCalculator::calculate(&usage, &p, multiplier),
+                    };
+                    (
+                        cost.input_cost.to_string(),
+                        cost.output_cost.to_string(),
+                        cost.cache_read_cost.to_string(),
+                        cost.cache_creation_cost.to_string(),
+                        cost.total_cost.to_string(),
+                    )
+                }
+                None => (
+                    "0".to_string(),
+                    "0".to_string(),
+                    "0".to_string(),
+                    "0".to_string(),
+                    "0".to_string(),
+                ),
+            }
+        }
     };
 
     let inserted_rows = conn
@@ -640,8 +754,13 @@ fn insert_legacy_usage_record(
     // 仅在确实写入新行时通知前端,避免 INSERT OR IGNORE 跳过时产生空刷新
     if inserted_rows > 0 {
         crate::usage_events::notify_log_recorded();
-        // 用量活动 → 触发订阅额度的一次短去抖补刷。
-        crate::usage::quota::mark_subscription_activity(profile.subscription_activity_id);
+        // 用量活动 → 触发订阅额度的一次短去抖补刷。没有订阅概念的来源
+        // (write_profile 里为 None)跳过这一步。
+        if let Some(subscription_id) = profile.subscription_activity_id {
+            #[cfg(test)]
+            record_subscription_activity_mark(subscription_id);
+            crate::usage::quota::mark_subscription_activity(subscription_id);
+        }
     }
 
     Ok(true)
@@ -732,10 +851,15 @@ pub(crate) fn update_sync_state(
         last_modified,
         size_bytes,
         last_offset,
+        None,
     )
 }
 
 /// 更新以稳定资源标识为 key 的同步进度,同时保留当前展示路径。
+///
+/// `parser_state_json` 是解析器下轮要带回来的私有状态:传 `Some` 时覆盖,
+/// 传 `None` 时保持游标里原有的值(与「parse 返回 next_state: None 表示
+/// 保持上一轮」的契约一致)。
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn update_sync_state_for_resource(
     db: &Database,
@@ -747,6 +871,7 @@ pub(crate) fn update_sync_state_for_resource(
     last_modified: i64,
     size_bytes: i64,
     last_offset: i64,
+    parser_state_json: Option<&str>,
 ) -> Result<(), AppError> {
     let now = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -774,7 +899,9 @@ pub(crate) fn update_sync_state_for_resource(
         size_bytes,
         byte_offset: previous.map(|cursor| cursor.byte_offset).unwrap_or(0),
         line_offset: last_offset,
-        parser_state_json: previous.and_then(|cursor| cursor.parser_state_json.clone()),
+        parser_state_json: parser_state_json
+            .map(str::to_string)
+            .or_else(|| previous.and_then(|cursor| cursor.parser_state_json.clone())),
         last_success_at: now,
     };
     match legacy_cursor_key {
@@ -843,6 +970,7 @@ mod tests {
             .map(|cursor| (cursor.cursor_key.clone(), cursor))
             .collect();
         let profile = parser.write_profile();
+        let mut errors = Vec::new();
         sync_file_with_parser(
             db,
             parser,
@@ -851,6 +979,7 @@ mod tests {
             bound_provider_id,
             &mut sync_cursors,
             &cursor_details,
+            &mut errors,
         )
     }
 
@@ -941,5 +1070,472 @@ mod tests {
             "codex-session:codex_session:session-scope:3"
         );
         assert_eq!(codex.upstream_correlation_id, None);
+    }
+
+    // ── T14a 新增测试:五个新槽位的契约 ──
+
+    /// 新接口钩子的测试替身:可配置辅助变更源、下轮私有状态与插入失败消息,
+    /// 并记录每轮 parse 实际看到的私有状态(断言跨轮带回用)。
+    struct HookProbeParser {
+        root: PathBuf,
+        extra_sources: Vec<PathBuf>,
+        next_state: Option<String>,
+        insert_failure_message: Option<String>,
+        observed_states: std::cell::RefCell<Vec<Option<String>>>,
+    }
+
+    impl HookProbeParser {
+        fn new(root: PathBuf) -> Self {
+            Self {
+                root,
+                extra_sources: Vec::new(),
+                next_state: None,
+                insert_failure_message: None,
+                observed_states: std::cell::RefCell::new(Vec::new()),
+            }
+        }
+
+        fn with_extra_sources(mut self, sources: Vec<PathBuf>) -> Self {
+            self.extra_sources = sources;
+            self
+        }
+
+        fn with_next_state(mut self, state: Option<String>) -> Self {
+            self.next_state = state;
+            self
+        }
+
+        fn with_insert_failure_message(mut self, message: Option<String>) -> Self {
+            self.insert_failure_message = message;
+            self
+        }
+    }
+
+    impl SessionLogParser for HookProbeParser {
+        fn source(&self) -> &'static str {
+            "t14a-probe"
+        }
+
+        fn write_profile(&self) -> ProviderWriteProfile {
+            probe_write_profile()
+        }
+
+        fn log_roots(&self, _home: &Path) -> Vec<PathBuf> {
+            vec![self.root.clone()]
+        }
+
+        fn is_log_file(&self, path: &Path) -> bool {
+            path.extension().and_then(|e| e.to_str()) == Some("jsonl")
+        }
+
+        fn extra_change_sources(&self, _path: &Path) -> Vec<PathBuf> {
+            self.extra_sources.clone()
+        }
+
+        fn parse(&self, ctx: &LogFileContext<'_>) -> Result<ParseOutput, AppError> {
+            self.observed_states
+                .borrow_mut()
+                .push(ctx.parser_state.map(str::to_string));
+            let mut records = Vec::new();
+            for (index, line) in ctx.content.lines().enumerate() {
+                if line.trim().is_empty() {
+                    continue;
+                }
+                let request_id = format!("t14a-probe:{}", index + 1);
+                records.push(ParsedUsage {
+                    identity: UsageIdentity {
+                        request_id: request_id.clone(),
+                        event_id: format!("t14a-probe:{request_id}"),
+                        upstream_correlation_id: None,
+                        message_id: None,
+                        log_label: request_id,
+                    },
+                    model: "t14a-probe-model".to_string(),
+                    input_tokens: 1,
+                    output_tokens: 1,
+                    cache_read_tokens: 0,
+                    cache_creation_tokens: 0,
+                    occurred_at: 1_000,
+                    session_id: None,
+                    line_offset: (index + 1) as i64,
+                    upstream_total_cost: None,
+                });
+            }
+            Ok(ParseOutput {
+                records,
+                next_state: self.next_state.clone(),
+            })
+        }
+
+        fn log_insert_failure(&self, record: &ParsedUsage, error: &AppError) -> Option<String> {
+            log::warn!(
+                "[T14A-PROBE] 插入失败 ({}): {error}",
+                record.identity.log_label
+            );
+            self.insert_failure_message
+                .as_ref()
+                .map(|message| format!("{message} ({})", record.identity.log_label))
+        }
+    }
+
+    /// 探针的写库常量:没有订阅概念(subscription_activity_id 为 None)。
+    fn probe_write_profile() -> ProviderWriteProfile {
+        ProviderWriteProfile {
+            app_type: "t14a-probe",
+            legacy_provider_id: "_t14a_probe",
+            provider_type: "t14a_probe",
+            insert_error_prefix: "插入 T14a 探针日志",
+            calculator_app: None,
+            agent_module_id: "t14a-probe",
+            subscription_activity_id: None,
+        }
+    }
+
+    /// 单条探针记录(legacy 路径直插测试用)。
+    fn probe_record(request_id: &str) -> ParsedUsage {
+        ParsedUsage {
+            identity: UsageIdentity {
+                request_id: request_id.to_string(),
+                event_id: format!("t14a-probe:{request_id}"),
+                upstream_correlation_id: None,
+                message_id: None,
+                log_label: request_id.to_string(),
+            },
+            model: "t14a-probe-model".to_string(),
+            input_tokens: 1,
+            output_tokens: 1,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+            occurred_at: 1_000,
+            session_id: None,
+            line_offset: 1,
+            upstream_total_cost: None,
+        }
+    }
+
+    fn probe_temp_dir(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "llm-usage-bar-t14a-{label}-{}",
+            uuid::Uuid::new_v4()
+        ))
+    }
+
+    /// 显式设置 mtime(秒级),让「谁更新更晚」的判定不依赖文件系统分辨率。
+    fn set_mtime_seconds(path: &Path, seconds: i64) {
+        filetime::set_file_mtime(path, filetime::FileTime::from_unix_time(seconds, 0)).unwrap();
+    }
+
+    /// 定价行故意给非零费率:若实现误查定价表,费用列必然与 "0"/"1.25" 不同。
+    fn insert_t14a_pricing_row(db: &Database) -> Result<(), AppError> {
+        let conn = lock_conn!(db.conn);
+        conn.execute(
+            "INSERT INTO model_pricing (
+                model_id, display_name, input_cost_per_million, output_cost_per_million,
+                cache_read_cost_per_million, cache_creation_cost_per_million
+            ) VALUES ('t14a-cost-model', 'T14a 探针', '1', '2', '0.5', '0.25')",
+            [],
+        )?;
+        Ok(())
+    }
+
+    fn legacy_cost_columns(
+        db: &Database,
+        request_id: &str,
+    ) -> Result<(String, String, String, String, String), AppError> {
+        let conn = lock_conn!(db.conn);
+        Ok(conn.query_row(
+            "SELECT input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd, total_cost_usd
+             FROM proxy_request_logs WHERE request_id = ?1",
+            [request_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )?)
+    }
+
+    /// `upstream_total_cost = Some` 时:五个费用列是 ("0","0","0","0",cost),
+    /// 即使定价表里有该模型的定价也不查。
+    #[test]
+    fn upstream_total_cost_wins_without_consulting_the_pricing_table() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        insert_t14a_pricing_row(&db)?;
+
+        let profile = probe_write_profile();
+        let mut record = probe_record("t14a-upstream-cost");
+        record.model = "t14a-cost-model".to_string();
+        record.upstream_total_cost = Some("1.25".to_string());
+
+        assert!(insert_usage_record(
+            &db,
+            &profile,
+            &record,
+            "t14a-upstream-cost",
+            None
+        )?);
+        let (input, output, cache_read, cache_creation, total) =
+            legacy_cost_columns(&db, "t14a-upstream-cost")?;
+        assert_eq!(
+            (
+                input.as_str(),
+                output.as_str(),
+                cache_read.as_str(),
+                cache_creation.as_str(),
+                total.as_str()
+            ),
+            ("0", "0", "0", "0", "1.25")
+        );
+        Ok(())
+    }
+
+    /// `upstream_total_cost = None` 时:费用仍走定价表,与本任务之前完全相同。
+    #[test]
+    fn missing_upstream_cost_still_prices_through_the_table() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        insert_t14a_pricing_row(&db)?;
+
+        let profile = probe_write_profile();
+        let mut record = probe_record("t14a-priced");
+        record.model = "t14a-cost-model".to_string();
+
+        assert!(insert_usage_record(
+            &db,
+            &profile,
+            &record,
+            "t14a-priced",
+            None
+        )?);
+
+        // 期望值 = 重构前的定价表路径:find_model_pricing + CostCalculator::calculate
+        // (calculator_app 为 None 时)。直接调用同一组函数,钉死「None 仍走定价表」。
+        let pricing = {
+            let conn = lock_conn!(db.conn);
+            find_model_pricing(&conn, "t14a-cost-model").expect("定价行必须可查")
+        };
+        let usage = TokenUsage {
+            input_tokens: record.input_tokens,
+            output_tokens: record.output_tokens,
+            cache_read_tokens: record.cache_read_tokens,
+            cache_creation_tokens: record.cache_creation_tokens,
+            model: Some(record.model.clone()),
+            message_id: None,
+        };
+        let expected = CostCalculator::calculate(&usage, &pricing, Decimal::from(1));
+        let (input, output, cache_read, cache_creation, total) =
+            legacy_cost_columns(&db, "t14a-priced")?;
+        assert_eq!(
+            (input, output, cache_read, cache_creation, total),
+            (
+                expected.input_cost.to_string(),
+                expected.output_cost.to_string(),
+                expected.cache_read_cost.to_string(),
+                expected.cache_creation_cost.to_string(),
+                expected.total_cost.to_string(),
+            )
+        );
+        Ok(())
+    }
+
+    /// `extra_change_sources` 返回一个更新更晚的文件时,file_modified 取到的是
+    /// 那个更晚的值:辅助文件不动时旧窗口内不重扫,只有它变新才触发重扫。
+    #[test]
+    fn extra_change_sources_extend_the_change_detection_window() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let tmp = probe_temp_dir("extra-mtime");
+        fs::create_dir_all(&tmp).unwrap();
+        let file = tmp.join("session.jsonl");
+        let extra = tmp.join("opencode.db-wal");
+        let base = 1_700_000_000i64;
+        fs::write(&file, "{\"n\":1}\n").unwrap();
+        fs::write(&extra, "wal").unwrap();
+        set_mtime_seconds(&file, base);
+        set_mtime_seconds(&extra, base + 10);
+
+        let parser = HookProbeParser::new(tmp.clone()).with_extra_sources(vec![extra.clone()]);
+        assert_eq!(
+            sync_one_file(&db, &parser, &file, None)?.0,
+            1,
+            "首轮:主文件与辅助文件的最新 mtime 成为游标"
+        );
+
+        // 主文件在旧窗口内变新(仍早于辅助文件),辅助文件不动 → 必须跳过。
+        fs::write(&file, "{\"n\":1}\n{\"n\":2}\n").unwrap();
+        set_mtime_seconds(&file, base + 5);
+        assert_eq!(
+            sync_one_file(&db, &parser, &file, None)?.0,
+            0,
+            "主文件 mtime 仍在旧窗口内,不应重扫"
+        );
+
+        // 只有辅助文件变新 → 也要重扫:file_modified 取到的是那个更晚的值。
+        set_mtime_seconds(&extra, base + 20);
+        assert_eq!(
+            sync_one_file(&db, &parser, &file, None)?.0,
+            1,
+            "辅助文件更晚时 file_modified 必须取到那个值"
+        );
+        fs::remove_dir_all(&tmp).ok();
+        Ok(())
+    }
+
+    /// `next_state = Some(x)` 会被写进游标的 parser_state_json;下一轮
+    /// ctx.parser_state 读到 Some(x)。
+    #[test]
+    fn parser_state_round_trips_through_the_cursor() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let tmp = probe_temp_dir("state-roundtrip");
+        fs::create_dir_all(&tmp).unwrap();
+        let file = tmp.join("session.jsonl");
+        let base = 1_700_000_000i64;
+        fs::write(&file, "{\"n\":1}\n").unwrap();
+        set_mtime_seconds(&file, base);
+
+        let parser =
+            HookProbeParser::new(tmp.clone()).with_next_state(Some("{\"round\":1}".to_string()));
+        assert_eq!(sync_one_file(&db, &parser, &file, None)?.0, 1);
+        assert_eq!(
+            parser.observed_states.borrow().as_slice(),
+            &[None],
+            "首轮没有任何上一轮状态"
+        );
+        let path_str = file.to_string_lossy().to_string();
+        let cursor = db
+            .get_usage_sync_cursor("t14a-probe", &path_str)?
+            .expect("游标必须存在");
+        assert_eq!(cursor.parser_state_json.as_deref(), Some("{\"round\":1}"));
+
+        // 第二轮:文件变新 → 重扫,上一轮存的状态原样带回。
+        fs::write(&file, "{\"n\":1}\n{\"n\":2}\n").unwrap();
+        set_mtime_seconds(&file, base + 5);
+        let second = HookProbeParser::new(tmp.clone());
+        assert_eq!(
+            sync_one_file(&db, &second, &file, None)?.0,
+            1,
+            "第二行是新记录"
+        );
+        assert_eq!(
+            second.observed_states.borrow().as_slice(),
+            &[Some("{\"round\":1}".to_string())],
+            "上一轮存下的状态必须原样带回"
+        );
+        fs::remove_dir_all(&tmp).ok();
+        Ok(())
+    }
+
+    /// `next_state = None` 时游标里原有的 parser_state_json 不被清掉。
+    #[test]
+    fn next_state_none_keeps_the_existing_parser_state() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let tmp = probe_temp_dir("state-keep");
+        fs::create_dir_all(&tmp).unwrap();
+        let file = tmp.join("session.jsonl");
+        let base = 1_700_000_000i64;
+        fs::write(&file, "{\"n\":1}\n").unwrap();
+        set_mtime_seconds(&file, base);
+
+        // 预置:游标里已有上一轮留下的私有状态。
+        let path_str = file.to_string_lossy().to_string();
+        db.put_usage_sync_cursor(&UsageSyncCursor {
+            source: "t14a-probe".to_string(),
+            cursor_key: path_str.clone(),
+            resource_path: Some(path_str.clone()),
+            resource_identity: None,
+            modified_at_ns: 0, // 保证本轮触发重扫
+            size_bytes: 0,
+            byte_offset: 0,
+            line_offset: 0,
+            parser_state_json: Some("{\"seed\":true}".to_string()),
+            last_success_at: 1,
+        })?;
+
+        let parser = HookProbeParser::new(tmp.clone());
+        sync_one_file(&db, &parser, &file, None)?;
+        let cursor = db
+            .get_usage_sync_cursor("t14a-probe", &path_str)?
+            .expect("游标必须存在");
+        assert_eq!(
+            cursor.parser_state_json.as_deref(),
+            Some("{\"seed\":true}"),
+            "next_state 为 None 时旧状态必须原样保留"
+        );
+        fs::remove_dir_all(&tmp).ok();
+        Ok(())
+    }
+
+    /// `log_insert_failure` 返回 Some 时,那条消息出现在 result.errors 里。
+    #[test]
+    fn insert_failure_messages_land_in_result_errors_when_hook_returns_some() -> Result<(), AppError>
+    {
+        let db = Database::memory()?;
+        let tmp = probe_temp_dir("insert-error");
+        fs::create_dir_all(&tmp).unwrap();
+        fs::write(tmp.join("session.jsonl"), "{\"n\":1}\n").unwrap();
+        {
+            let conn = lock_conn!(db.conn);
+            conn.execute_batch(
+                "CREATE TRIGGER t14a_fail_insert
+                 BEFORE INSERT ON proxy_request_logs
+                 BEGIN SELECT RAISE(FAIL, 'forced t14a insert failure'); END",
+            )?;
+        }
+
+        let parser = HookProbeParser::new(tmp.clone())
+            .with_insert_failure_message(Some("插入失败已上报".to_string()));
+        let result = sync_with_parser(&db, &parser, None)?;
+        assert_eq!((result.imported, result.skipped), (0, 1));
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|message| message.contains("插入失败已上报")),
+            "hook 返回的消息必须出现在 errors 里: {:?}",
+            result.errors
+        );
+
+        {
+            let conn = lock_conn!(db.conn);
+            conn.execute_batch("DROP TRIGGER t14a_fail_insert;")?;
+        }
+        fs::remove_dir_all(&tmp).ok();
+        Ok(())
+    }
+
+    /// `subscription_activity_id = None` 时不调 mark_subscription_activity;
+    /// `Some(id)` 时只给那个 id 记一次。
+    #[test]
+    fn subscription_activity_is_only_marked_when_the_profile_has_one() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        reset_subscription_activity_marks();
+
+        let no_subscription = probe_write_profile();
+        assert!(insert_usage_record(
+            &db,
+            &no_subscription,
+            &probe_record("t14a-sub-none"),
+            "t14a-sub-none",
+            None
+        )?);
+        assert_eq!(
+            subscription_activity_mark_count("t14a-sentinel-sub"),
+            0,
+            "没有订阅概念时不得打任何标记"
+        );
+
+        let mut with_subscription = probe_write_profile();
+        with_subscription.subscription_activity_id = Some("t14a-sentinel-sub");
+        assert!(insert_usage_record(
+            &db,
+            &with_subscription,
+            &probe_record("t14a-sub-some"),
+            "t14a-sub-some",
+            None
+        )?);
+        assert_eq!(subscription_activity_mark_count("t14a-sentinel-sub"), 1);
+        Ok(())
     }
 }
