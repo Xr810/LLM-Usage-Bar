@@ -85,6 +85,11 @@
   T9  router 的凭据解析（UpstreamAuth 的真实实现）
    ↓  必须串行：T9 改 schema 与 RouterProvider，T10 要暴露这些字段
   T10 接进 app 启动流程 + 一组 tauri 命令
+
+第五批（补第四批留下的两个洞，可同时开）
+  ├─ T12 启用前确认 router 在监听（server.rs 第 110 行之前 + commands/router.rs）
+  └─ T13 把 token 记进 router_attempts（server.rs 第 110 行之后）
+        ↑ 同一个文件的两段，互不越界即可
 ```
 
 **第四批做完,「Codex 真的走一次本地 router」才第一次成立。** 在那之前
@@ -106,6 +111,8 @@
 | [T8](T8-core-provider-names.md) | 把 provider 名字请出 core | T1 | ✅ 与 T6 |
 | [T9](T9-upstream-auth.md) | router 的凭据解析 | T3 T6 | ❌ 单独做 |
 | [T10](T10-wire-up.md) | 接进 app + tauri 命令 | T9 | ❌ 单独做 |
+| [T12](T12-enable-guard.md) | 启用前确认 router 在监听 | T10 T11 | ✅ 与 T13 |
+| [T13](T13-attempt-tokens.md) | 把 token 记进 router_attempts | T6 T10 T11 | ✅ 与 T12 |
 
 **UI 不在此列** —— 设置界面、菜单栏状态由项目所有者自己实现。
 
