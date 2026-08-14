@@ -34,6 +34,8 @@ use std::time::SystemTime;
 
 pub mod claude;
 pub mod codex;
+pub mod gemini;
+pub mod opencode;
 
 pub(crate) type SyncCursorMap = HashMap<String, (i64, i64)>;
 
@@ -84,8 +86,8 @@ pub struct LogFileContext<'a> {
 pub struct UsageIdentity {
     /// legacy 表的 request_id。
     pub request_id: String,
-    /// usage_events 的 event_id。
-    pub event_id: String,
+    /// bound 路径的 event_id。unbound-only 的解析器填 `None`。
+    pub event_id: Option<String>,
     /// 上游关联 ID;没有就是 None。
     pub upstream_correlation_id: Option<String>,
     /// 写进 legacy 行 `message_id` 列的值;没有就是 None。
@@ -170,6 +172,13 @@ pub trait SessionLogParser {
         files
     }
 
+    /// 流水线要不要把文件内容读进来交给 `parse`。
+    /// 默认 `true`。自己开连接读的解析器(如 SQLite 类日志)返回 `false`,
+    /// 此时 `LogFileContext.content` 是空串,句柄与 metadata 仍然可用。
+    fn needs_file_content(&self) -> bool {
+        true
+    }
+
     /// 把一个文件解析成用量记录。返回的记录**已经排除了水位线以下的行**。
     fn parse(&self, ctx: &LogFileContext<'_>) -> Result<ParseOutput, AppError>;
 
@@ -234,6 +243,14 @@ pub trait SessionLogParser {
             record.identity.log_label
         );
         None
+    }
+
+    /// 本轮有插入失败时,是否放弃推进这个文件的游标(下轮整文件重读)。
+    /// 默认 `false`——即 claude/codex 现在的行为(失败只记 log,游标照常推进)。
+    /// 去重按 request_id 幂等,所以整文件重读与只重试失败记录结果一致,
+    /// 只是多花一次解析。
+    fn retry_file_on_insert_failure(&self) -> bool {
+        false
     }
 
     /// 一轮同步结束后的汇总日志。默认实现,各解析器可按需覆盖。
@@ -375,8 +392,14 @@ pub(crate) fn sync_file_with_parser(
         return Ok((0, 0));
     }
 
-    // 整文件重读(不是增量)——见模块顶部注释。
-    let content = read_whole_file(&file)?;
+    // 整文件重读(不是增量)——见模块顶部注释。needs_file_content 为 false 的
+    // 解析器(如 SQLite 类日志)自己开连接读,这里不读内容、content 给空串;
+    // 句柄与 metadata 仍来自同一个文件实体,变更判定和实体身份照常可用。
+    let content = if parser.needs_file_content() {
+        read_whole_file(&file)?
+    } else {
+        String::new()
+    };
     // 私有状态跟着游标键走:实体键控的解析器在首次升级时,旧状态还挂在
     // 路径键旧游标下——与 update_sync_state_for_resource 的保留逻辑对齐。
     let parser_state = cursor_details
@@ -404,6 +427,7 @@ pub(crate) fn sync_file_with_parser(
 
     let mut imported: u32 = 0;
     let mut skipped: u32 = 0;
+    let mut had_insert_failure = false;
     for record in &output.records {
         match insert_usage_record(
             db,
@@ -418,12 +442,20 @@ pub(crate) fn sync_file_with_parser(
                 if bound_provider_id.is_some() {
                     return Err(e);
                 }
+                had_insert_failure = true;
                 if let Some(message) = parser.log_insert_failure(record, &e) {
                     errors.push(message);
                 }
                 skipped += 1;
             }
         }
+    }
+
+    // 插入失败驱动的文件级重试:解析器要求时,本轮有任何插入失败就不推进
+    // 游标(parser_state_json 同样不写),下轮整文件重读。去重按 request_id
+    // 幂等,重读不会重复入库。默认 false = claude/codex 现状。
+    if had_insert_failure && parser.retry_file_on_insert_failure() {
+        return Ok((imported, skipped));
     }
 
     update_sync_state_for_resource(
@@ -567,7 +599,8 @@ pub(crate) struct ProviderWriteProfile {
     pub(crate) provider_type: &'static str,
     pub(crate) insert_error_prefix: &'static str,
     pub(crate) calculator_app: Option<&'static str>,
-    pub(crate) agent_module_id: &'static str,
+    /// bound 路径要用的 agent module id。unbound-only 的解析器填 `None`。
+    pub(crate) agent_module_id: Option<&'static str>,
     /// `None` 表示这家没有订阅概念,插入后**不调**
     /// `mark_subscription_activity`。
     pub(crate) subscription_activity_id: Option<&'static str>,
@@ -589,11 +622,21 @@ fn insert_bound_usage_record(
         model: Some(parsed.model.clone()),
         message_id: parsed.identity.message_id.clone(),
     };
+    // bound 路径需要这两个身份字段:unbound-only 的解析器填 None,
+    // 走到这里是调用方配置错误(给 unbound-only 的来源走了 bound 入口),
+    // 直接报错而不是静默编一个值。
+    let event_id =
+        parsed.identity.event_id.clone().ok_or_else(|| {
+            AppError::Config("该解析器未提供 event_id,不能走 bound 路径".to_string())
+        })?;
+    let agent_module_id = profile.agent_module_id.ok_or_else(|| {
+        AppError::Config("该解析器未提供 agent module id,不能走 bound 路径".to_string())
+    })?;
     let outcome = UsageIngestionService::new(db).ingest(&UsageIngestionInput {
-        event_id: parsed.identity.event_id.clone(),
+        event_id,
         source: TokenSource::SessionLog,
         provider_id: provider_id.to_string(),
-        agent_module_id: profile.agent_module_id.to_string(),
+        agent_module_id: agent_module_id.to_string(),
         frozen_provider_context: None,
         occurred_at: parsed.occurred_at,
         model: parsed.model.clone(),
@@ -797,6 +840,11 @@ pub(crate) fn get_sync_state(
         .unwrap_or((0, 0)))
 }
 
+/// 预载某来源的全部游标(键 → (mtime, 行水位))。
+///
+/// T14b 之后生产解析器都走 `sync_with_parser`(内部自行预载),这个函数
+/// 只剩 claude.rs 的测试在用;保留给测试与后续来源,先压掉 dead_code。
+#[allow(dead_code)]
 pub(crate) fn load_sync_cursors(db: &Database, source: &str) -> Result<SyncCursorMap, AppError> {
     Ok(db
         .list_usage_sync_cursors(source)?
@@ -825,7 +873,9 @@ pub(crate) fn metadata_modified_nanos(metadata: &fs::Metadata) -> i64 {
 
 /// 更新 v14 `usage_sync_cursors` 中某条目的同步进度。
 ///
-/// Shared by all session_usage_* parsers.
+/// T14b 之后生产解析器都走 `sync_with_parser`(内部自行写回),这个函数
+/// 只剩 claude.rs 的测试在用;保留给测试与后续来源,先压掉 dead_code。
+#[allow(dead_code)]
 pub(crate) fn update_sync_state(
     db: &Database,
     source: &str,
@@ -947,6 +997,8 @@ mod tests {
     use super::*;
     use crate::services::ingest::claude::ClaudeParser;
     use crate::services::ingest::codex::CodexParser;
+    use crate::services::ingest::gemini::GeminiParser;
+    use crate::services::ingest::opencode::OpenCodeParser;
 
     fn sync_one_file(
         db: &Database,
@@ -983,9 +1035,9 @@ mod tests {
         )
     }
 
-    /// 同一份流水线喂两个不同 parser:各自的解析与写库结果互不串味。
+    /// 同一份流水线喂四个不同 parser:各自的解析与写库结果互不串味。
     #[test]
-    fn pipeline_keeps_the_two_parsers_apart() -> Result<(), AppError> {
+    fn pipeline_keeps_all_four_parsers_apart() -> Result<(), AppError> {
         let db = Database::memory()?;
         let tmp = std::env::temp_dir().join(format!(
             "llm-usage-bar-pipeline-test-{}",
@@ -994,20 +1046,55 @@ mod tests {
         fs::create_dir_all(&tmp).unwrap();
         let claude_file = tmp.join("claude.jsonl");
         let codex_file = tmp.join("codex.jsonl");
+        let gemini_file = tmp.join("gemini.json");
+        let opencode_db = tmp.join("opencode.db");
 
         let claude_line = r#"{"type":"assistant","message":{"id":"msg_pipeline","model":"claude-opus-4-6","usage":{"input_tokens":3,"output_tokens":5,"cache_read_input_tokens":1,"cache_creation_input_tokens":2},"stop_reason":"end_turn"},"timestamp":"2026-04-05T12:00:00Z","sessionId":"session-pipeline"}"#;
         let codex_line = r#"{"timestamp":"2026-07-14T00:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"cached_input_tokens":4,"output_tokens":2}}}}"#;
+        let gemini_json = r#"{"sessionId":"session-gemini","messages":[{"type":"gemini","tokens":{"input":7,"output":3,"cached":1,"thoughts":2},"id":"gm_pipeline","model":"gemini-2.5-pro","timestamp":"2026-04-05T12:00:00Z"}]}"#;
         fs::write(&claude_file, format!("{claude_line}\n")).unwrap();
         fs::write(&codex_file, format!("{codex_line}\n")).unwrap();
+        fs::write(&gemini_file, gemini_json).unwrap();
+        write_opencode_test_db(
+            &opencode_db,
+            &[("s-opencode", 100)],
+            &[(
+                "m_pipeline",
+                "s-opencode",
+                r#"{"role":"assistant","tokens":{"input":100,"output":20},"modelID":"m-test","time":{"created":1000,"completed":2000}}"#,
+                90,
+                200,
+            )],
+        );
 
         // 正确配对:各导 1 条。
         let codex_parser = CodexParser::new(PathBuf::from("/unused"), Vec::new(), 2);
+        let gemini_parser = GeminiParser::new(tmp.clone());
+        let opencode_parser = OpenCodeParser::new(opencode_db.clone());
         assert_eq!(sync_one_file(&db, &ClaudeParser, &claude_file, None)?.0, 1);
         assert_eq!(sync_one_file(&db, &codex_parser, &codex_file, None)?.0, 1);
+        assert_eq!(sync_one_file(&db, &gemini_parser, &gemini_file, None)?.0, 1);
+        assert_eq!(
+            sync_one_file(&db, &opencode_parser, &opencode_db, None)?.0,
+            1
+        );
 
-        // 交叉喂:Claude 的行 Codex 不认,Codex 的行 Claude 不认。
+        // 交叉喂:文本类三家互不认对方的行。
         assert_eq!(sync_one_file(&db, &codex_parser, &claude_file, None)?.0, 0);
         assert_eq!(sync_one_file(&db, &ClaudeParser, &codex_file, None)?.0, 0);
+        assert_eq!(sync_one_file(&db, &ClaudeParser, &gemini_file, None)?.0, 0);
+        assert_eq!(sync_one_file(&db, &codex_parser, &gemini_file, None)?.0, 0);
+        assert_eq!(sync_one_file(&db, &gemini_parser, &claude_file, None)?.0, 0);
+        assert_eq!(sync_one_file(&db, &gemini_parser, &codex_file, None)?.0, 0);
+
+        // opencode 的「文件」是 SQLite 库:喂给文本三家,Claude/Codex 一行也
+        // 解析不出来;Gemini 整文件 JSON 解析失败(与旧实现一样报错、零导入)。
+        assert_eq!(sync_one_file(&db, &ClaudeParser, &opencode_db, None)?.0, 0);
+        assert_eq!(sync_one_file(&db, &codex_parser, &opencode_db, None)?.0, 0);
+        assert!(sync_one_file(&db, &gemini_parser, &opencode_db, None).is_err());
+        // 非 SQLite 文件喂给 opencode:打不开数据库(与旧实现一样报错、零导入)。
+        assert!(sync_one_file(&db, &opencode_parser, &claude_file, None).is_err());
+        assert!(sync_one_file(&db, &opencode_parser, &gemini_file, None).is_err());
 
         let conn = lock_conn!(db.conn);
         let rows: Vec<(String, String)> = {
@@ -1019,8 +1106,8 @@ mod tests {
                 .collect::<Result<Vec<_>, _>>()
                 .unwrap()
         };
-        // 两个 parser 只能各自写入自己的记录,且 app_type / request_id 互不串味。
-        assert_eq!(rows.len(), 2);
+        // 四个 parser 只能各自写入自己的记录,且 app_type / request_id 互不串味。
+        assert_eq!(rows.len(), 4);
         // 按 (app_type, request_id) 排序后逐一比对,不依赖 request_id 的字典序。
         let mut by_app = rows.clone();
         by_app.sort();
@@ -1032,6 +1119,20 @@ mod tests {
         assert!(
             by_app[1].1.starts_with("codex_session:file-"),
             "codex 记录必须用文件作用域身份,不能用 Claude 的 session: 前缀"
+        );
+        assert_eq!(
+            by_app[2],
+            (
+                "gemini".to_string(),
+                "gemini_session:session-gemini:gm_pipeline".to_string()
+            )
+        );
+        assert_eq!(
+            by_app[3],
+            (
+                "opencode".to_string(),
+                "opencode_session:s-opencode:m_pipeline".to_string()
+            )
         );
         drop(conn);
 
@@ -1048,40 +1149,44 @@ mod tests {
                 crate::usage::metering::parser::SESSION_REQUEST_ID_PREFIX,
                 "msg_abc"
             ),
-            event_id: "claude-session:msg_abc".to_string(),
+            event_id: Some("claude-session:msg_abc".to_string()),
             upstream_correlation_id: Some("msg_abc".to_string()),
             message_id: Some("msg_abc".to_string()),
             log_label: "msg_abc".to_string(),
         };
         assert_eq!(claude.request_id, "session:msg_abc");
-        assert_eq!(claude.event_id, "claude-session:msg_abc");
+        assert_eq!(claude.event_id.as_deref(), Some("claude-session:msg_abc"));
         assert_eq!(claude.upstream_correlation_id.as_deref(), Some("msg_abc"));
 
         let codex = UsageIdentity {
             request_id: "codex_session:session-scope:3".to_string(),
-            event_id: "codex-session:codex_session:session-scope:3".to_string(),
+            event_id: Some("codex-session:codex_session:session-scope:3".to_string()),
             upstream_correlation_id: None,
             message_id: None,
             log_label: "codex_session:session-scope:3".to_string(),
         };
         assert_eq!(codex.request_id, "codex_session:session-scope:3");
         assert_eq!(
-            codex.event_id,
-            "codex-session:codex_session:session-scope:3"
+            codex.event_id.as_deref(),
+            Some("codex-session:codex_session:session-scope:3")
         );
         assert_eq!(codex.upstream_correlation_id, None);
     }
 
     // ── T14a 新增测试:五个新槽位的契约 ──
 
-    /// 新接口钩子的测试替身:可配置辅助变更源、下轮私有状态与插入失败消息,
-    /// 并记录每轮 parse 实际看到的私有状态(断言跨轮带回用)。
+    /// 新接口钩子的测试替身:可配置辅助变更源、下轮私有状态、插入失败消息、
+    /// 插入失败后的文件级重试要求与「是否需要文件内容」,并记录每轮 parse
+    /// 实际看到的私有状态与内容长度。
     struct HookProbeParser {
         root: PathBuf,
         extra_sources: Vec<PathBuf>,
         next_state: Option<String>,
         insert_failure_message: Option<String>,
+        retry_on_insert_failure: bool,
+        needs_content: bool,
         observed_states: std::cell::RefCell<Vec<Option<String>>>,
+        observed_content_lens: std::cell::RefCell<Vec<usize>>,
     }
 
     impl HookProbeParser {
@@ -1091,7 +1196,10 @@ mod tests {
                 extra_sources: Vec::new(),
                 next_state: None,
                 insert_failure_message: None,
+                retry_on_insert_failure: false,
+                needs_content: true,
                 observed_states: std::cell::RefCell::new(Vec::new()),
+                observed_content_lens: std::cell::RefCell::new(Vec::new()),
             }
         }
 
@@ -1107,6 +1215,16 @@ mod tests {
 
         fn with_insert_failure_message(mut self, message: Option<String>) -> Self {
             self.insert_failure_message = message;
+            self
+        }
+
+        fn with_retry_file_on_insert_failure(mut self, retry: bool) -> Self {
+            self.retry_on_insert_failure = retry;
+            self
+        }
+
+        fn with_needs_file_content(mut self, needs: bool) -> Self {
+            self.needs_content = needs;
             self
         }
     }
@@ -1132,10 +1250,17 @@ mod tests {
             self.extra_sources.clone()
         }
 
+        fn needs_file_content(&self) -> bool {
+            self.needs_content
+        }
+
         fn parse(&self, ctx: &LogFileContext<'_>) -> Result<ParseOutput, AppError> {
             self.observed_states
                 .borrow_mut()
                 .push(ctx.parser_state.map(str::to_string));
+            self.observed_content_lens
+                .borrow_mut()
+                .push(ctx.content.len());
             let mut records = Vec::new();
             for (index, line) in ctx.content.lines().enumerate() {
                 if line.trim().is_empty() {
@@ -1145,7 +1270,7 @@ mod tests {
                 records.push(ParsedUsage {
                     identity: UsageIdentity {
                         request_id: request_id.clone(),
-                        event_id: format!("t14a-probe:{request_id}"),
+                        event_id: None,
                         upstream_correlation_id: None,
                         message_id: None,
                         log_label: request_id,
@@ -1176,6 +1301,10 @@ mod tests {
                 .as_ref()
                 .map(|message| format!("{message} ({})", record.identity.log_label))
         }
+
+        fn retry_file_on_insert_failure(&self) -> bool {
+            self.retry_on_insert_failure
+        }
     }
 
     /// 探针的写库常量:没有订阅概念(subscription_activity_id 为 None)。
@@ -1186,7 +1315,7 @@ mod tests {
             provider_type: "t14a_probe",
             insert_error_prefix: "插入 T14a 探针日志",
             calculator_app: None,
-            agent_module_id: "t14a-probe",
+            agent_module_id: None,
             subscription_activity_id: None,
         }
     }
@@ -1196,7 +1325,7 @@ mod tests {
         ParsedUsage {
             identity: UsageIdentity {
                 request_id: request_id.to_string(),
-                event_id: format!("t14a-probe:{request_id}"),
+                event_id: None,
                 upstream_correlation_id: None,
                 message_id: None,
                 log_label: request_id.to_string(),
@@ -1536,6 +1665,285 @@ mod tests {
             None
         )?);
         assert_eq!(subscription_activity_mark_count("t14a-sentinel-sub"), 1);
+        Ok(())
+    }
+
+    // ── T14b §0.1:retry_file_on_insert_failure 的两条契约 ──
+
+    /// 默认 `false` 时,插入失败游标照常推进——claude/codex 的现状不变。
+    #[test]
+    fn insert_failure_advances_the_cursor_when_retry_is_off_by_default() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let tmp = probe_temp_dir("retry-default");
+        fs::create_dir_all(&tmp).unwrap();
+        let file = tmp.join("session.jsonl");
+        fs::write(&file, "{\"n\":1}\n").unwrap();
+        {
+            let conn = lock_conn!(db.conn);
+            conn.execute_batch(
+                "CREATE TRIGGER t14a_fail_all
+                 BEFORE INSERT ON proxy_request_logs
+                 BEGIN SELECT RAISE(FAIL, 'forced t14a insert failure'); END",
+            )?;
+        }
+
+        // 探针没开重试(默认 false):插入失败只记 log,游标照常推进。
+        let parser = HookProbeParser::new(tmp.clone());
+        assert_eq!(sync_one_file(&db, &parser, &file, None)?, (0, 1));
+        let path_str = file.to_string_lossy().to_string();
+        let (last_modified, last_offset) = get_sync_state(&db, "t14a-probe", &path_str)?;
+        assert!(
+            last_modified > 0,
+            "默认 false 时游标必须照常推进,失败记录不重试"
+        );
+        assert_eq!(last_offset, 1, "水位线照常推进到文件行数");
+
+        {
+            let conn = lock_conn!(db.conn);
+            conn.execute_batch("DROP TRIGGER t14a_fail_all;")?;
+        }
+        fs::remove_dir_all(&tmp).ok();
+        Ok(())
+    }
+
+    /// 返回 `true` 时,插入失败后游标不推进;下一轮重读同一文件,已入库的
+    /// 记录不重复插入(证明重读是幂等的)。
+    #[test]
+    fn insert_failure_keeps_the_cursor_back_for_a_full_file_retry() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let tmp = probe_temp_dir("retry-file");
+        fs::create_dir_all(&tmp).unwrap();
+        let file = tmp.join("session.jsonl");
+        fs::write(&file, "{\"n\":1}\n{\"n\":2}\n").unwrap();
+        let path_str = file.to_string_lossy().to_string();
+
+        // 只让第二条插入失败,模拟「部分成功、部分失败」的一轮。
+        {
+            let conn = lock_conn!(db.conn);
+            conn.execute_batch(
+                "CREATE TRIGGER t14a_fail_second
+                 BEFORE INSERT ON proxy_request_logs
+                 WHEN NEW.request_id = 't14a-probe:2'
+                 BEGIN SELECT RAISE(FAIL, 'forced t14a insert failure'); END",
+            )?;
+        }
+
+        let parser = HookProbeParser::new(tmp.clone())
+            .with_insert_failure_message(Some("插入失败已上报".to_string()))
+            .with_retry_file_on_insert_failure(true);
+        assert_eq!(
+            sync_one_file(&db, &parser, &file, None)?,
+            (1, 1),
+            "第一条入库、第二条失败"
+        );
+        assert_eq!(
+            get_sync_state(&db, "t14a-probe", &path_str)?,
+            (0, 0),
+            "有插入失败且要求重试时,游标不得推进"
+        );
+
+        // 下一轮:触发器已拆,整文件重读。第一条按 request_id 去重不重复入库,
+        // 第二条补上。
+        {
+            let conn = lock_conn!(db.conn);
+            conn.execute_batch("DROP TRIGGER t14a_fail_second;")?;
+        }
+        let retry = HookProbeParser::new(tmp.clone()).with_retry_file_on_insert_failure(true);
+        assert_eq!(
+            sync_one_file(&db, &retry, &file, None)?,
+            (1, 1),
+            "重读幂等:第一条被去重跳过,第二条成功入库"
+        );
+
+        let (row_count, distinct_requests): (i64, i64) = {
+            let conn = lock_conn!(db.conn);
+            conn.query_row(
+                "SELECT COUNT(*), COUNT(DISTINCT request_id) FROM proxy_request_logs",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?
+        };
+        assert_eq!((row_count, distinct_requests), (2, 2), "重读不得重复插入");
+        assert!(
+            get_sync_state(&db, "t14a-probe", &path_str)?.0 > 0,
+            "整轮成功后游标才推进"
+        );
+
+        fs::remove_dir_all(&tmp).ok();
+        Ok(())
+    }
+
+    // ── T14b §0.2 与 §4 的新增测试 ──
+
+    /// 造一个最小 opencode.db:一张 session 表 + 一张 message 表。
+    /// messages 每条为 (id, session_id, data_json, time_created, time_updated)。
+    fn write_opencode_test_db(
+        path: &Path,
+        sessions: &[(&str, i64)],
+        messages: &[(&str, &str, &str, i64, i64)],
+    ) {
+        let conn = rusqlite::Connection::open(path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE session (id TEXT PRIMARY KEY, time_updated INTEGER);
+             CREATE TABLE message (
+                 id TEXT PRIMARY KEY,
+                 session_id TEXT,
+                 time_created INTEGER,
+                 time_updated INTEGER,
+                 data TEXT
+             );",
+        )
+        .unwrap();
+        for (id, time_updated) in sessions {
+            conn.execute(
+                "INSERT INTO session VALUES (?1, ?2)",
+                rusqlite::params![id, time_updated],
+            )
+            .unwrap();
+        }
+        for (id, session_id, data, created, updated) in messages {
+            conn.execute(
+                "INSERT INTO message VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![id, session_id, created, updated, data],
+            )
+            .unwrap();
+        }
+    }
+
+    /// gemini / opencode 的 request_id 与重构前逐字节相同;event_id 按 §0.2
+    /// 决定一填 None(重构前不存在这个字符串,不发明)。
+    #[test]
+    fn gemini_and_opencode_identities_match_pre_refactor_literals() -> Result<(), AppError> {
+        let tmp = probe_temp_dir("identity-literals");
+        fs::create_dir_all(&tmp).unwrap();
+
+        // gemini:直接喂一个单消息文件给 parse。
+        let gemini_file = tmp.join("gemini.json");
+        let gemini_json = r#"{"sessionId":"session-gemini","messages":[{"type":"gemini","tokens":{"input":7,"output":3,"cached":1,"thoughts":2},"id":"gm1","model":"gemini-2.5-pro","timestamp":"2026-04-05T12:00:00Z"}]}"#;
+        fs::write(&gemini_file, gemini_json).unwrap();
+        let file = fs::File::open(&gemini_file).unwrap();
+        let metadata = file.metadata().unwrap();
+        let content = fs::read_to_string(&gemini_file).unwrap();
+        let ctx = LogFileContext {
+            path: &gemini_file,
+            file: &file,
+            metadata: &metadata,
+            content: &content,
+            last_line_offset: 0,
+            parser_state: None,
+        };
+        let gemini_records = GeminiParser::new(tmp.clone()).parse(&ctx)?.records;
+        assert_eq!(gemini_records.len(), 1);
+        assert_eq!(
+            gemini_records[0].identity.request_id,
+            "gemini_session:session-gemini:gm1"
+        );
+        assert_eq!(gemini_records[0].identity.event_id, None);
+
+        // opencode:造一个真实的最小库,直接喂给 parse。
+        let opencode_db = tmp.join("opencode.db");
+        write_opencode_test_db(
+            &opencode_db,
+            &[("s1", 100)],
+            &[(
+                "m1",
+                "s1",
+                r#"{"role":"assistant","tokens":{"input":100,"output":20},"modelID":"m-test","time":{"created":1000,"completed":2000}}"#,
+                90,
+                200,
+            )],
+        );
+        let file = fs::File::open(&opencode_db).unwrap();
+        let metadata = file.metadata().unwrap();
+        let ctx = LogFileContext {
+            path: &opencode_db,
+            file: &file,
+            metadata: &metadata,
+            content: "",
+            last_line_offset: 0,
+            parser_state: None,
+        };
+        let opencode_records = OpenCodeParser::new(opencode_db.clone())
+            .parse(&ctx)?
+            .records;
+        assert_eq!(opencode_records.len(), 1);
+        assert_eq!(
+            opencode_records[0].identity.request_id,
+            "opencode_session:s1:m1"
+        );
+        assert_eq!(opencode_records[0].identity.event_id, None);
+
+        fs::remove_dir_all(&tmp).ok();
+        Ok(())
+    }
+
+    /// opencode 的上游费用直通:msg.cost > 0 时五个费用列是
+    /// ("0","0","0","0",cost),与重构前逐字节相同。
+    #[test]
+    fn opencode_upstream_cost_writes_the_five_columns_verbatim() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let tmp = probe_temp_dir("opencode-cost");
+        fs::create_dir_all(&tmp).unwrap();
+        let opencode_db = tmp.join("opencode.db");
+        write_opencode_test_db(
+            &opencode_db,
+            &[("s1", 100)],
+            &[(
+                "m1",
+                "s1",
+                r#"{"role":"assistant","cost":0.0023113,"tokens":{"input":3272,"output":383,"reasoning":419,"cache":{"write":0,"read":52480}},"modelID":"deepseek-v4-pro","time":{"created":1779755333700,"completed":1779755350639}}"#,
+                90,
+                200,
+            )],
+        );
+
+        let parser = OpenCodeParser::new(opencode_db.clone());
+        assert_eq!(
+            sync_one_file(&db, &parser, &opencode_db, None)?.0,
+            1,
+            "cost > 0 的消息必须入库"
+        );
+        let (input, output, cache_read, cache_creation, total) =
+            legacy_cost_columns(&db, "opencode_session:s1:m1")?;
+        assert_eq!(
+            (
+                input.as_str(),
+                output.as_str(),
+                cache_read.as_str(),
+                cache_creation.as_str(),
+                total.as_str()
+            ),
+            ("0", "0", "0", "0", "0.0023113")
+        );
+
+        fs::remove_dir_all(&tmp).ok();
+        Ok(())
+    }
+
+    /// needs_file_content = false 时,流水线不读文件内容:垃圾二进制文件
+    /// 不产生任何读取/解码错误,parse 拿到的 content 是空串。
+    #[test]
+    fn parsers_can_decline_file_content_so_garbage_binary_never_gets_decoded(
+    ) -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let tmp = probe_temp_dir("no-content");
+        fs::create_dir_all(&tmp).unwrap();
+        let file = tmp.join("session.jsonl");
+        fs::write(&file, [0xFFu8, 0xFE, 0xFD, 0xFC, 0x00, 0x80, 0x81]).unwrap();
+
+        let parser = HookProbeParser::new(tmp.clone()).with_needs_file_content(false);
+        assert_eq!(
+            sync_one_file(&db, &parser, &file, None)?,
+            (0, 0),
+            "空内容 → 零记录,且不得有任何读取/解码错误"
+        );
+        assert_eq!(
+            parser.observed_content_lens.borrow().as_slice(),
+            &[0],
+            "needs_file_content=false 时 parse 拿到的 content 必须是空串"
+        );
+
+        fs::remove_dir_all(&tmp).ok();
         Ok(())
     }
 }

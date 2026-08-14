@@ -53,7 +53,7 @@ impl SessionLogParser for ClaudeParser {
             provider_type: "session_log",
             insert_error_prefix: "插入会话日志",
             calculator_app: None,
-            agent_module_id: CLAUDE_CODE_AGENT_MODULE_ID,
+            agent_module_id: Some(CLAUDE_CODE_AGENT_MODULE_ID),
             subscription_activity_id: Some(CLAUDE_SUBSCRIPTION_ID),
         }
     }
@@ -255,7 +255,7 @@ fn parse_claude_log_file(ctx: &LogFileContext<'_>) -> Result<ParseOutput, AppErr
         records.push(ParsedUsage {
             identity: UsageIdentity {
                 request_id: format!("{SESSION_REQUEST_ID_PREFIX}{}", msg.message_id),
-                event_id: format!("claude-session:{}", msg.message_id),
+                event_id: Some(format!("claude-session:{}", msg.message_id)),
                 upstream_correlation_id: Some(msg.message_id.clone()),
                 message_id: Some(msg.message_id.clone()),
                 log_label: msg.message_id.clone(),
@@ -293,7 +293,7 @@ fn insert_session_log_entry(
         &ParsedUsage {
             identity: UsageIdentity {
                 request_id: format!("{SESSION_REQUEST_ID_PREFIX}{}", msg.message_id),
-                event_id: format!("claude-session:{}", msg.message_id),
+                event_id: Some(format!("claude-session:{}", msg.message_id)),
                 upstream_correlation_id: Some(msg.message_id.clone()),
                 message_id: Some(msg.message_id.clone()),
                 log_label: msg.message_id.clone(),
