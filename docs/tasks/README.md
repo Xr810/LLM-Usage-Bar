@@ -68,28 +68,31 @@
 第一批（三个可同时开，互不碰同一个文件）
   ├─ T1  会话日志共享流水线
   ├─ T2  subscription.rs 按 provider 拆分
-  └─ T3  路由的存储层 + schema 迁移
+  └─ T3  路由的存储层 + schema 迁移   ← 后面三个都在等它，优先
 
 第二批（都依赖 T3 完成并合并）
   ├─ T4  路由决策（纯函数，无 IO）
-  └─ T5  失败分类（纯函数，无 IO）
-        ↑ T4 T5 可同时开
-
-第三批（依赖 T4 + T5）
-  ├─ T6  HTTP 转发层
+  ├─ T5  失败分类（纯函数，无 IO）
   └─ T7  指针写入 + 逃生命令
-        ↑ T6 T7 可同时开（不碰同一个文件）
+        ↑ 三个可同时开
+
+第三批（依赖 T3 + T4 + T5 全部合并）
+  └─ T6  HTTP 转发层
 ```
+
+**第二批的三个会在两个文件上撞车,这是预期内的**:`src-tauri/src/router/mod.rs`
+和 `src-tauri/src/lib.rs` 的 `mod router;` 那一行。三个分支都要建/改它们。
+**合并时保留所有 `pub mod xxx;` 行即可**,是一行级的冲突,不要因为怕冲突而串行。
 
 | 任务 | 文件 | 依赖 | 能否并行 |
 | --- | --- | --- | --- |
 | [T1](T1-ingest-pipeline.md) | 会话日志共享流水线 | 无 | ✅ 与 T2 T3 |
 | [T2](T2-subscription-split.md) | `subscription.rs` 拆分 | 无 | ✅ 与 T1 T3 |
 | [T3](T3-router-storage.md) | 路由存储 + 迁移 | 无 | ✅ 与 T1 T2 |
-| [T4](T4-router-decision.md) | 路由决策纯函数 | T3 | ✅ 与 T5 |
-| [T5](T5-failure-classify.md) | 失败分类纯函数 | T3 | ✅ 与 T4 |
-| [T6](T6-router-forward.md) | HTTP 转发层 | T4 T5 | ✅ 与 T7 |
-| [T7](T7-pointer-escape.md) | 指针写入 + 逃生命令 | T3 | ✅ 与 T6 |
+| [T4](T4-router-decision.md) | 路由决策纯函数 | T3 | ✅ 与 T5 T7 |
+| [T5](T5-failure-classify.md) | 失败分类纯函数 | T3 | ✅ 与 T4 T7 |
+| [T7](T7-pointer-escape.md) | 指针写入 + 逃生命令 | T3 | ✅ 与 T4 T5 |
+| [T6](T6-router-forward.md) | HTTP 转发层 | T3 T4 T5 | ❌ 单独做 |
 
 **UI 不在此列** —— 设置界面、菜单栏状态由项目所有者自己实现。
 
