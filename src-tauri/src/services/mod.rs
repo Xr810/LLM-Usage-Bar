@@ -2,6 +2,7 @@ pub mod balance;
 pub mod budget_alert;
 pub mod claude_cli_auth;
 pub mod coding_plan;
+pub mod ingest;
 pub mod official_pricing;
 pub mod provider_key_usage_scheduler;
 pub mod s3;
