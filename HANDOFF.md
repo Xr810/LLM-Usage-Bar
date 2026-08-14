@@ -1065,3 +1065,19 @@ experimental_bearer_token = "..."    # 模型请求的实际认证
 简言之——router 原来的第一理由(官方登录 + 自己的 provider)已被证明纯配置可达成,
 router 现在只剩「自动故障转移」与「纵深防御」两条理由,且用户要求先权衡其能耗与内存
 代价(该文件 §8,尚未展开)。
+
+---
+
+## 14. 两份 08-13 设计草案的入库时机(记录一笔)
+
+`docs/design/2026-08-13-local-routing-failover-design.md` 与
+`docs/design/2026-08-13-native-hig-restyle-plan.md` 是随提交 `8e420623`
+(`fix(quota): make the OAuth layer compile clean on non-macOS`)进入仓库的——
+那次用了 `git add -A`,把当时还是 untracked 的两份草案一并扫了进去。**提交信息
+与文档内容无关,不要据此判断它们的来历或状态。**
+
+两份的实际状态以文档自身的标注为准:local-routing 那份开头明确写着「**草案,未决策**」,
+HIG 那份是 `feat/swift-native-shell`(PR #27)的配套改造计划,同样尚未批准。入库
+不代表已评审通过。
+
+已推送的历史不为此改写(用户 2026-08-14 决定),留这条说明即可。
