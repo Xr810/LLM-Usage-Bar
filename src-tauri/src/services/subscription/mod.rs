@@ -12,12 +12,13 @@ mod gemini;
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-// 这两个 Codex 查询函数被 `src/usage/quota.rs` 等经
-// `crate::services::subscription::` 路径引用，转出以保持原路径不变。
-// `query_codex_quota` 目前没有模块外的直接调用方（任务书 §1.1 仍要求转出，
-// 作为跨模块契约），保留并压掉未使用告警。
-#[allow(unused_imports)]
-pub(crate) use codex::{query_codex_quota, query_managed_codex_oauth_quota};
+// `src/usage/quota.rs` 经 `crate::services::subscription::` 这条路径引用它，
+// 转出以保持拆分前的路径不变。
+//
+// 同为 `pub(crate)` 的 `query_codex_quota` 不在这里转出：它模块外没有调用方，
+// 转出只会换来一条 unused_imports，而 `-D warnings` 下那就是编译失败。
+// 它在 `codex.rs` 里的可见性照原样保留，将来有人要用再转不迟。
+pub(crate) use codex::query_managed_codex_oauth_quota;
 
 // ── 数据类型 ──────────────────────────────────────────────
 
