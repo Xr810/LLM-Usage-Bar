@@ -1137,6 +1137,13 @@ pub fn run() {
                 log::warn!("provider key usage scheduler was already started");
             }
 
+            if !app
+                .state::<AppState>()
+                .start_openrouter_balance_scheduler()
+            {
+                log::warn!("openrouter balance scheduler was already started");
+            }
+
             let tray_publisher_app = app.handle().clone();
             let tray_publisher: usage::tray_usage_scheduler::TraySnapshotPublisher =
                 Arc::new(move |snapshot| {
@@ -1399,6 +1406,10 @@ pub fn run() {
             commands::test_system_provider_connection,
             commands::refresh_system_provider_key_usage,
             commands::list_system_provider_models,
+            // OpenRouter 账户余额（D1）
+            commands::set_openrouter_management_key,
+            commands::clear_openrouter_management_key,
+            commands::get_openrouter_account_balance,
             commands::reveal_agent_provider_local_key,
             commands::rotate_agent_provider_local_key,
             commands::get_unassigned_usage_diagnostics,
@@ -1657,6 +1668,7 @@ pub async fn cleanup_before_exit(app_handle: &tauri::AppHandle) {
             state.take_midnight_scheduler(),
             state.take_official_pricing_scheduler(),
             state.take_provider_key_usage_scheduler(),
+            state.take_openrouter_balance_scheduler(),
         )
     });
     if let Some((
@@ -1664,6 +1676,7 @@ pub async fn cleanup_before_exit(app_handle: &tauri::AppHandle) {
         midnight_scheduler,
         official_pricing_scheduler,
         provider_key_usage_scheduler,
+        openrouter_balance_scheduler,
     )) = cleanup_resources
     {
         if let Some(scheduler) = quota_scheduler {
@@ -1676,6 +1689,9 @@ pub async fn cleanup_before_exit(app_handle: &tauri::AppHandle) {
             scheduler.stop().await;
         }
         if let Some(scheduler) = provider_key_usage_scheduler {
+            scheduler.stop().await;
+        }
+        if let Some(scheduler) = openrouter_balance_scheduler {
             scheduler.stop().await;
         }
     }
