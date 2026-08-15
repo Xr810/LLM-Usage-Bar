@@ -1238,11 +1238,11 @@ pub fn run() {
                     );
                     run_step(
                         "Gemini usage initial sync",
-                        crate::ingest::session_usage_gemini::sync_gemini_usage(db),
+                        crate::ingest::gemini::sync_gemini_usage(db),
                     );
                     run_step(
                         "OpenCode usage initial sync",
-                        crate::ingest::session_usage_opencode::sync_opencode_usage(db),
+                        crate::ingest::opencode::sync_opencode_usage(db),
                     );
 
                     // 单个源的一次同步，把结果映射成调度退避信号：
@@ -1258,13 +1258,13 @@ pub fn run() {
                                 .sync_source("codex")
                                 .map(|r| r.errors.is_empty()),
                             usage::watcher_state::SourceId::Gemini => {
-                                crate::ingest::session_usage_gemini::sync_gemini_usage(
+                                crate::ingest::gemini::sync_gemini_usage(
                                     &db_for_session_sync,
                                 )
                                 .map(|r| r.errors.is_empty())
                             }
                             usage::watcher_state::SourceId::OpenCode => {
-                                crate::ingest::session_usage_opencode::sync_opencode_usage(
+                                crate::ingest::opencode::sync_opencode_usage(
                                     &db_for_session_sync,
                                 )
                                 .map(|r| r.errors.is_empty())

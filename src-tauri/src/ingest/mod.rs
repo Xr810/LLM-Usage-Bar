@@ -36,10 +36,6 @@ pub mod claude;
 pub mod codex;
 pub mod gemini;
 pub mod opencode;
-pub mod session_usage;
-pub mod session_usage_codex;
-pub mod session_usage_gemini;
-pub mod session_usage_opencode;
 
 pub(crate) type SyncCursorMap = HashMap<String, (i64, i64)>;
 
