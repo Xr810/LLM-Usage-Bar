@@ -132,6 +132,8 @@
 | [T17](T17-module-rearrange.md) | 按职责重排目录 | T14 T15 T16 | ❌ 单独做 |
 | [T18](T18-flaky-test-hunt.md) | 定位偶发失败的测试(纯诊断) | 无 | ✅ 与全部 |
 | [T19](T19-isolate-guard-tests.md) | 守卫测试脱离真实 home | T18 | ✅ 与全部 |
+| [T21](T21-first-real-run.md) | 让 router 第一次真的处理一个请求 | T17 | ✅ 与 T22 |
+| [T22](T22-slim-down.md) | 找出冗余,把后端瘦下来 | T17 | ✅ 与 T21 |
 
 **UI 不在此列** —— 设置界面、菜单栏状态由项目所有者自己实现。
 
