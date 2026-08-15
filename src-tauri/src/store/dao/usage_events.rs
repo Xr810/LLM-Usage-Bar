@@ -1,5 +1,5 @@
-use crate::database::{lock_conn, Database};
 use crate::error::AppError;
+use crate::store::{lock_conn, Database};
 use crate::usage::domain::{
     ArchivedAgentUsageSummary, CostSource, InvalidUsageLinkSummary, TokenSource,
     UnassignedUsageDiagnostics, UnassignedUsageGroup, UsageEvent, UsageEventLink, UsageEventPage,
@@ -488,7 +488,7 @@ impl Database {
 
 #[cfg(test)]
 mod tests {
-    use crate::database::Database;
+    use crate::store::Database;
     use crate::usage::domain::{
         AgentModuleInput, BillingKind, CostSource, TokenSource, UsageEvent, UsageEventLink,
         UsageProviderInput,

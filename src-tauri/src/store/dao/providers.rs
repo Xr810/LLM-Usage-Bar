@@ -1,6 +1,6 @@
-use crate::database::{lock_conn, Database};
 use crate::error::AppError;
 use crate::provider::{Provider, ProviderMeta};
+use crate::store::{lock_conn, Database};
 use indexmap::IndexMap;
 use rusqlite::params;
 use std::collections::{HashMap, HashSet};
@@ -556,7 +556,7 @@ impl Database {
     /// 比 `get_all_providers` 轻量得多：只读 id 列、无 endpoint 子查询、首条命中即返回。
     /// 用于 `import_default_config` 决定是否跳过 live 导入。
     pub fn has_non_official_seed_provider(&self, app_type: &str) -> Result<bool, AppError> {
-        use crate::database::dao::providers_seed::is_official_seed_id;
+        use crate::store::dao::providers_seed::is_official_seed_id;
         let conn = lock_conn!(self.conn);
         let mut stmt = conn
             .prepare("SELECT id FROM providers WHERE app_type = ?1")
@@ -596,7 +596,7 @@ impl Database {
     /// 与 `Database::save_provider` 的 UPSERT 语义配合，即使被意外重复调用
     /// 也不会覆盖用户当前激活的供应商（is_current 字段会被保留）。
     pub fn init_default_official_providers(&self) -> Result<usize, AppError> {
-        use crate::database::dao::providers_seed::BUILTIN_PROVIDER_CATALOG;
+        use crate::store::dao::providers_seed::BUILTIN_PROVIDER_CATALOG;
 
         if self
             .get_bool_flag("official_providers_seeded")
@@ -663,7 +663,7 @@ impl Database {
         seed_id: &str,
         app_type: crate::app_config::AppType,
     ) -> Result<bool, AppError> {
-        use crate::database::dao::providers_seed::BUILTIN_PROVIDER_CATALOG;
+        use crate::store::dao::providers_seed::BUILTIN_PROVIDER_CATALOG;
 
         let seed = BUILTIN_PROVIDER_CATALOG
             .iter()
@@ -710,8 +710,8 @@ impl Database {
 #[cfg(test)]
 mod ensure_official_seed_tests {
     use crate::app_config::AppType;
-    use crate::database::dao::providers_seed::CLAUDE_DESKTOP_OFFICIAL_PROVIDER_ID;
-    use crate::database::Database;
+    use crate::store::dao::providers_seed::CLAUDE_DESKTOP_OFFICIAL_PROVIDER_ID;
+    use crate::store::Database;
 
     #[test]
     fn ensure_inserts_when_missing() {

@@ -1,5 +1,4 @@
 use crate::credentials::{unavailable_credential_store, BindingCredentialService, CredentialStore};
-use crate::database::Database;
 #[cfg(test)]
 use crate::services::claude_cli_auth::ClaudeAuthCommandRunner;
 use crate::services::{
@@ -15,6 +14,7 @@ use crate::services::{
     },
     ClaudeCliAuthService, SystemProviderConnectionService, UsageCache,
 };
+use crate::store::Database;
 use crate::usage::quota::{QuotaCycleCallback, QuotaSchedulerHandle, QuotaService};
 use crate::usage::session::SessionUsageService;
 use std::sync::{Arc, Mutex};

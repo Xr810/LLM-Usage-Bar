@@ -1,6 +1,6 @@
 use crate::credentials::{BindingCredentialService, ResolvedProviderCredential};
-use crate::database::{Database, ProviderKeyUsageSnapshotInput};
 use crate::error::AppError;
+use crate::store::{Database, ProviderKeyUsageSnapshotInput};
 use crate::usage::domain::SystemProviderKeyUsageView;
 use crate::usage::system_providers::system_provider_definition;
 use rust_decimal::Decimal;

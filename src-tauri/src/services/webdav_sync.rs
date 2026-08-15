@@ -62,7 +62,7 @@ pub async fn check_connection(settings: &WebDavSyncSettings) -> Result<(), AppEr
 
 /// Upload local snapshot (db + skills) to remote.
 pub async fn upload(
-    db: &crate::database::Database,
+    db: &crate::store::Database,
     settings: &mut WebDavSyncSettings,
 ) -> Result<Value, AppError> {
     settings.validate()?;
@@ -108,7 +108,7 @@ pub async fn upload(
 
 /// Download remote snapshot and apply to local database + skills.
 pub async fn download(
-    db: &crate::database::Database,
+    db: &crate::store::Database,
     settings: &mut WebDavSyncSettings,
 ) -> Result<Value, AppError> {
     settings.validate()?;

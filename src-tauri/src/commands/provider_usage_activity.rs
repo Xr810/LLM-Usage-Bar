@@ -1,5 +1,5 @@
+use crate::app_state::AppState;
 use crate::error::AppError;
-use crate::store::AppState;
 use crate::usage::aggregation::aggregate_enabled_provider_trend;
 use crate::usage::domain::UsageTrendBucketView;
 use tauri::State;

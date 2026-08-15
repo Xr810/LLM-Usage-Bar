@@ -1011,7 +1011,7 @@ pub fn set_current_provider(app_type: &AppType, id: Option<&str>) -> Result<(), 
 /// 这确保了返回的 ID 一定是有效的（在数据库中存在）。
 /// 多设备云同步场景下，配置导入后本地 ID 可能失效，此函数会自动修复。
 pub fn get_effective_current_provider(
-    db: &crate::database::Database,
+    db: &crate::store::Database,
     app_type: &AppType,
 ) -> Result<Option<String>, AppError> {
     // 1. 从本地 settings 读取

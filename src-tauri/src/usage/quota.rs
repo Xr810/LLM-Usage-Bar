@@ -1,11 +1,11 @@
 use crate::credentials::codex_oauth_auth::CodexOAuthManager;
-use crate::database::Database;
 use crate::error::AppError;
 use crate::services::coding_plan::get_coding_plan_quota;
 use crate::services::subscription::{
     get_subscription_quota, query_managed_codex_oauth_quota, SubscriptionQuota, TIER_FIVE_HOUR,
     TIER_SEVEN_DAY, TIER_WEEKLY_LIMIT,
 };
+use crate::store::Database;
 use crate::usage::domain::{
     BillingKind, QuotaFetchState, QuotaSnapshot, QuotaStatusView, UsageProviderStored,
 };
@@ -972,11 +972,11 @@ fn now_timestamp() -> Result<i64, AppError> {
 mod tests {
     use super::*;
     use crate::credentials::codex_oauth_auth::CodexOAuthManager;
-    use crate::database::Database;
     use crate::services::subscription::{
         CredentialStatus, ManualResetCredit, ManualResetCredits, QuotaTier, SubscriptionQuota,
         TIER_FIVE_HOUR, TIER_SEVEN_DAY,
     };
+    use crate::store::Database;
     use crate::usage::domain::{BillingKind, TokenSource, UsageProviderInput, UsageProviderStored};
     use crate::usage::system_providers::{CHATGPT_SUBSCRIPTION_ID, CLAUDE_SUBSCRIPTION_ID};
     use serde_json::json;

@@ -1,5 +1,5 @@
-use crate::database::Database;
 use crate::error::AppError;
+use crate::store::Database;
 use crate::usage::domain::{session_agent_module_id, TokenSource};
 use crate::usage::ingestion::{LegacyLogInput, UsageIngestionInput, UsageIngestionService};
 use crate::usage::metering::parser::TokenUsage;
@@ -181,7 +181,7 @@ impl SessionUsageService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::database::Database;
+    use crate::store::Database;
     use crate::usage::domain::{
         AgentProviderBindingInput, BillingKind, TokenSource, UsageProviderInput,
     };

@@ -1,6 +1,6 @@
 use super::{BindingCredentialService, CredentialStore, CredentialStoreError, SecretString};
-use crate::database::{CredentialMutationKind, Database};
 use crate::error::AppError;
+use crate::store::{CredentialMutationKind, Database};
 use crate::usage::domain::{
     AgentModuleInput, AgentProviderBindingInput, AgentProviderBindingView, BindingCredentialStatus,
     SystemProviderAuthKind,

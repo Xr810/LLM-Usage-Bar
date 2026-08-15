@@ -1,5 +1,5 @@
-use crate::database::Database;
 use crate::error::AppError;
+use crate::store::Database;
 use crate::usage::domain::{
     AgentProviderUsageRow, AgentUsageBreakdownView, AgentUsageRow, BillingKind, CostSourceCounts,
     ModelProductGroupView, ModelTotalsRow, ModelUsageDashboardView, ModelUsageRow,
@@ -1105,7 +1105,7 @@ fn checked_cost_sum(left: Decimal, right: Decimal) -> Result<Decimal, AppError> 
 #[cfg(test)]
 mod tests {
     use super::{aggregate_agent_usage, aggregate_model_usage, aggregate_provider_range};
-    use crate::database::Database;
+    use crate::store::Database;
     use crate::usage::domain::{
         AgentModuleInput, BillingKind, CostSource, TokenSource, UsageEvent, UsageEventLink,
         UsageProviderInput,

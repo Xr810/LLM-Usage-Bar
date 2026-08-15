@@ -16,9 +16,9 @@ use super::subscription_pace::{
     classify_subscription_windows, FIVE_HOUR_WINDOW_KIND, SEVEN_DAY_WINDOW_KIND,
 };
 use super::usage_light_prediction::{record_live_prediction, SHARED_DAILY_BUDGET_PROVIDER_ID};
-use crate::database::Database;
 use crate::error::AppError;
 use crate::settings::{ApiBudgetConfig, ApiBudgetMode};
+use crate::store::Database;
 use chrono::{DateTime, Local, LocalResult, NaiveDate, SecondsFormat, TimeZone, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -980,7 +980,7 @@ fn cost_quality(aggregate: &ProviderRangeAggregate) -> CostQuality {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::database::Database;
+    use crate::store::Database;
     use crate::usage::domain::{
         BillingKind, CostSource, QuotaSnapshot, TokenSource, UsageEvent, UsageProviderInput,
     };

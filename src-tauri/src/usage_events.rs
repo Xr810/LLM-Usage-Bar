@@ -223,7 +223,7 @@ fn schedule_tray_snapshot_rebuild() {
                 let handle = handle.clone();
                 async move {
                     let service = {
-                        let Some(state) = handle.try_state::<crate::store::AppState>() else {
+                        let Some(state) = handle.try_state::<crate::app_state::AppState>() else {
                             log::warn!("tray usage state is unavailable");
                             return;
                         };

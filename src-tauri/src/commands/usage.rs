@@ -1,8 +1,8 @@
 //! 使用统计相关命令
 
+use crate::app_state::AppState;
 use crate::error::AppError;
 use crate::services::usage_stats::*;
-use crate::store::AppState;
 use rust_decimal::Decimal;
 use std::str::FromStr;
 use tauri::State;
@@ -150,7 +150,7 @@ pub fn get_model_pricing(state: State<'_, AppState>) -> Result<Vec<ModelPricingI
     state.db.ensure_model_pricing_seeded()?;
 
     let db = state.db.clone();
-    let conn = crate::database::lock_conn!(db.conn);
+    let conn = crate::store::lock_conn!(db.conn);
 
     // 检查表是否存在
     let table_exists: bool = conn
@@ -245,7 +245,7 @@ pub fn update_model_pricing(
     }
 
     {
-        let conn = crate::database::lock_conn!(db.conn);
+        let conn = crate::store::lock_conn!(db.conn);
         conn.execute(
             "INSERT OR REPLACE INTO model_pricing (
                 model_id, display_name, input_cost_per_million, output_cost_per_million,
@@ -321,7 +321,7 @@ pub fn check_provider_limits(
 #[tauri::command]
 pub fn delete_model_pricing(state: State<'_, AppState>, model_id: String) -> Result<(), AppError> {
     let db = state.db.clone();
-    let conn = crate::database::lock_conn!(db.conn);
+    let conn = crate::store::lock_conn!(db.conn);
 
     conn.execute(
         "DELETE FROM model_pricing WHERE model_id = ?1",

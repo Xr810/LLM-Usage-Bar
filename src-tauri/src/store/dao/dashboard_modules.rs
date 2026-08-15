@@ -3,8 +3,8 @@
 //! Runtime semantics are Agent-centric. The legacy `dashboard_modules` table is
 //! intentionally frozen and is never read or written from this module.
 
-use crate::database::Database;
 use crate::error::AppError;
+use crate::store::Database;
 use crate::usage::domain::{AgentModuleInput, AgentModuleView};
 
 impl Database {

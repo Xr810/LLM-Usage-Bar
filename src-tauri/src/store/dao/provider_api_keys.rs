@@ -1,5 +1,5 @@
-use crate::database::{lock_conn, Database};
 use crate::error::AppError;
+use crate::store::{lock_conn, Database};
 use rusqlite::{params, OptionalExtension, TransactionBehavior};
 use std::time::{SystemTime, UNIX_EPOCH};
 

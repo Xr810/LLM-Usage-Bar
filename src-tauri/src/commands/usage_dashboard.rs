@@ -1,9 +1,9 @@
+use crate::app_state::AppState;
 use crate::commands::CodexOAuthState;
 use crate::credentials::SecretString;
-use crate::database::AgentModuleDeleteOutcome;
 use crate::error::AppError;
 use crate::services::{SystemProviderConnectionService, SystemProviderConnectionTestResult};
-use crate::store::AppState;
+use crate::store::AgentModuleDeleteOutcome;
 use crate::usage::aggregation::{aggregate_agent_usage, aggregate_model_usage};
 use crate::usage::dashboard::UsageDashboardService;
 use crate::usage::domain::{
@@ -1277,7 +1277,6 @@ mod tests {
     use crate::credentials::{
         BindingCredentialService, CredentialStore, CredentialStoreError, SecretString,
     };
-    use crate::database::Database;
     use crate::services::subscription::{
         QuotaTier, SubscriptionQuota, TIER_FIVE_HOUR, TIER_SEVEN_DAY,
     };
@@ -1287,6 +1286,7 @@ mod tests {
         SystemProviderKeyUsageClientResponse, SystemProviderKeyUsageFuture,
         SystemProviderModelListFuture,
     };
+    use crate::store::Database;
     use crate::usage::domain::{
         AgentModuleInput, AgentProviderBindingInput, BillingKind, BindingCredentialStatus,
         CostSource, TokenSource, UsageEvent, UsageProviderInput,

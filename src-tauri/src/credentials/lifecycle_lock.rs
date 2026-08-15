@@ -1,4 +1,4 @@
-use crate::database::Database;
+use crate::store::Database;
 use fs2::FileExt;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;

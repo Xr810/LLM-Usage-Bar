@@ -103,9 +103,7 @@ impl RemoteLayout {
 
 // ─── Snapshot building ───────────────────────────────────────
 
-pub(crate) fn build_local_snapshot(
-    db: &crate::database::Database,
-) -> Result<LocalSnapshot, AppError> {
+pub(crate) fn build_local_snapshot(db: &crate::store::Database) -> Result<LocalSnapshot, AppError> {
     // Export database to SQL string
     let sql_string = db.export_sql_string_for_sync()?;
     let db_sql = sql_string.into_bytes();
@@ -308,7 +306,7 @@ pub(crate) fn verify_artifact(
 // ─── Snapshot application ────────────────────────────────────
 
 pub(crate) fn apply_snapshot(
-    db: &crate::database::Database,
+    db: &crate::store::Database,
     db_sql: &[u8],
     skills_zip: &[u8],
 ) -> Result<(), AppError> {

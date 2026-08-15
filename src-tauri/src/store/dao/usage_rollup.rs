@@ -2,9 +2,9 @@
 //!
 //! Aggregates proxy_request_logs into daily rollups and prunes old detail rows.
 
-use crate::database::{lock_conn, Database};
 use crate::error::AppError;
 use crate::services::usage_stats::effective_usage_log_filter;
+use crate::store::{lock_conn, Database};
 use chrono::{Duration, Local, TimeZone};
 
 /// Compute the rollup/prune cutoff aligned to a local-day boundary.
@@ -198,8 +198,8 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use super::compute_local_midnight_cutoff;
-    use crate::database::Database;
     use crate::error::AppError;
+    use crate::store::Database;
     use chrono::{Local, TimeZone};
 
     fn local_dt(
@@ -249,7 +249,7 @@ mod tests {
         let recent_ts = now - 5 * 86400; // 5 days ago
 
         {
-            let conn = crate::database::lock_conn!(db.conn);
+            let conn = crate::store::lock_conn!(db.conn);
             for i in 0..5 {
                 conn.execute(
                     "INSERT INTO proxy_request_logs (
@@ -276,7 +276,7 @@ mod tests {
         assert_eq!(deleted, 5);
 
         // Verify rollup data
-        let conn = crate::database::lock_conn!(db.conn);
+        let conn = crate::store::lock_conn!(db.conn);
         let count: i64 = conn.query_row(
             "SELECT request_count FROM usage_daily_rollups WHERE app_type = 'claude'",
             [],
@@ -300,7 +300,7 @@ mod tests {
         let old_ts = now - 40 * 86400;
 
         {
-            let conn = crate::database::lock_conn!(db.conn);
+            let conn = crate::store::lock_conn!(db.conn);
             conn.execute(
                 "INSERT INTO proxy_request_logs (
                     request_id, provider_id, app_type, model, request_model,
@@ -322,7 +322,7 @@ mod tests {
         let deleted = db.rollup_and_prune(30)?;
         assert_eq!(deleted, 2);
 
-        let conn = crate::database::lock_conn!(db.conn);
+        let conn = crate::store::lock_conn!(db.conn);
         let mut stmt = conn.prepare(
             "SELECT provider_id, request_count, input_tokens, output_tokens, cache_read_tokens
              FROM usage_daily_rollups WHERE app_type = 'codex'",
@@ -363,7 +363,7 @@ mod tests {
         let old_ts = now - 40 * 86400;
 
         {
-            let conn = crate::database::lock_conn!(db.conn);
+            let conn = crate::store::lock_conn!(db.conn);
             // 路由接管行：model 是真实上游模型，request_model 是客户端别名。
             // 同 model 下两个不同别名必须各自成行，prune 后映射关系仍可审计。
             for (i, request_model) in [
@@ -385,7 +385,7 @@ mod tests {
         let deleted = db.rollup_and_prune(30)?;
         assert_eq!(deleted, 3);
 
-        let conn = crate::database::lock_conn!(db.conn);
+        let conn = crate::store::lock_conn!(db.conn);
         let mut stmt = conn.prepare(
             "SELECT request_model, request_count FROM usage_daily_rollups
              WHERE model = 'kimi-k2' ORDER BY request_model",
@@ -413,7 +413,7 @@ mod tests {
         let old_ts = now - 40 * 86400;
 
         {
-            let conn = crate::database::lock_conn!(db.conn);
+            let conn = crate::store::lock_conn!(db.conn);
             // request 计价模式下 pricing_model 与 model 分叉，必须各自成行
             conn.execute(
                 "INSERT INTO proxy_request_logs (
@@ -438,7 +438,7 @@ mod tests {
         let deleted = db.rollup_and_prune(30)?;
         assert_eq!(deleted, 2);
 
-        let conn = crate::database::lock_conn!(db.conn);
+        let conn = crate::store::lock_conn!(db.conn);
         let mut stmt = conn.prepare(
             "SELECT pricing_model, total_cost_usd FROM usage_daily_rollups
              WHERE model = 'kimi-k2' ORDER BY pricing_model",
@@ -462,7 +462,7 @@ mod tests {
         let old_ts = now - 40 * 86400;
 
         {
-            let conn = crate::database::lock_conn!(db.conn);
+            let conn = crate::store::lock_conn!(db.conn);
             // >30 天的 0 成本行：pricing_model（gpt-5.5）在 seed 定价表中有价。
             // 剪枝是不可逆的，rollup 必须先回填再汇总，否则按 0 永久入账。
             conn.execute(
@@ -479,7 +479,7 @@ mod tests {
         let deleted = db.rollup_and_prune(30)?;
         assert_eq!(deleted, 1);
 
-        let conn = crate::database::lock_conn!(db.conn);
+        let conn = crate::store::lock_conn!(db.conn);
         let total_cost: f64 = conn.query_row(
             "SELECT CAST(total_cost_usd AS REAL) FROM usage_daily_rollups
              WHERE model = 'gpt-5.5'",
@@ -508,7 +508,7 @@ mod tests {
         let old_ts = now - 40 * 86400;
 
         {
-            let conn = crate::database::lock_conn!(db.conn);
+            let conn = crate::store::lock_conn!(db.conn);
             let date_str = Local
                 .timestamp_opt(old_ts, 0)
                 .single()
@@ -537,7 +537,7 @@ mod tests {
         let deleted = db.rollup_and_prune(30)?;
         assert_eq!(deleted, 3);
 
-        let conn = crate::database::lock_conn!(db.conn);
+        let conn = crate::store::lock_conn!(db.conn);
         let (count, input): (i64, i64) = conn.query_row(
             "SELECT request_count, input_tokens FROM usage_daily_rollups
              WHERE app_type = 'claude' AND provider_id = 'p1'",

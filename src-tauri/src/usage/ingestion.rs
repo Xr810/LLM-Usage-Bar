@@ -1,8 +1,8 @@
-use crate::database::{lock_conn, Database, UsageSyncCursor};
 use crate::error::AppError;
 use crate::services::usage_stats::{
     find_model_pricing_row, find_provider_model_pricing_row, ProviderModelPricingRow,
 };
+use crate::store::{lock_conn, Database, UsageSyncCursor};
 use crate::usage::domain::{BillingKind, CostSource, PricingOrigin, TokenSource, UsageEvent};
 use crate::usage::metering::calculator::{CostBreakdown, CostCalculator, ModelPricing};
 use crate::usage::metering::cost_parser::UpstreamCost;
@@ -729,7 +729,7 @@ mod tests {
         FrozenUsageProviderContext, LegacyLogInput, UsageIngestionInput, UsageIngestionOutcome,
         UsageIngestionService,
     };
-    use crate::database::{Database, UsageSyncCursor};
+    use crate::store::{Database, UsageSyncCursor};
     use crate::usage::domain::{
         AgentModuleInput, AgentProviderBindingInput, BillingKind, CostSource, ModelPriceInput,
         PricingOrigin, TokenSource, UsageProviderInput,

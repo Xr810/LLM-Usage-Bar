@@ -13,11 +13,11 @@
 //! 记录会被当成「从 0 涨到当前累计值」。所以 [`LogFileContext::content`]
 //! 是整个文件的内容,增量由 `last_line_offset` 表达,跳过发生在解析器内部。
 
-use crate::database::{lock_conn, Database, UsageSyncCursor};
 use crate::error::AppError;
 use crate::services::usage_stats::{
     effective_usage_log_filter, find_model_pricing, should_skip_session_insert, DedupKey,
 };
+use crate::store::{lock_conn, Database, UsageSyncCursor};
 use crate::usage::domain::TokenSource;
 use crate::usage::ingestion::{LegacyLogInput, UsageIngestionInput, UsageIngestionService};
 use crate::usage::metering::calculator::CostCalculator;

@@ -1,5 +1,5 @@
-use crate::database::{lock_conn, to_json_string, Database};
 use crate::error::AppError;
+use crate::store::{lock_conn, to_json_string, Database};
 use crate::usage::domain::{QuotaFetchState, QuotaSnapshot};
 use rusqlite::{params, types::Type, Connection, OptionalExtension, Row};
 
@@ -205,7 +205,7 @@ impl Database {
 
 #[cfg(test)]
 mod tests {
-    use crate::database::Database;
+    use crate::store::Database;
     use crate::usage::domain::{BillingKind, QuotaSnapshot, TokenSource, UsageProviderInput};
     use serde_json::json;
 

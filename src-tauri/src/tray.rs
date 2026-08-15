@@ -8,8 +8,8 @@ use tauri::Manager;
 use tauri_plugin_opener::OpenerExt;
 
 use crate::app_config::AppType;
+use crate::app_state::AppState;
 use crate::error::AppError;
-use crate::store::AppState;
 
 const TEMPLATE_TYPE_OFFICIAL_SUBSCRIPTION: &str = "official_subscription";
 const H_TIER_NAMES: &[&str] = &[crate::services::subscription::TIER_FIVE_HOUR];
@@ -493,7 +493,7 @@ fn update_tray_usage_labels(app: &tauri::AppHandle) {
 }
 
 pub fn refresh_tray_menu(app: &tauri::AppHandle) {
-    use crate::store::AppState;
+    use crate::app_state::AppState;
 
     if let Some(state) = app.try_state::<AppState>() {
         if let Ok(new_menu) = create_tray_menu(app, state.inner()) {

@@ -47,7 +47,7 @@ pub async fn check_connection(settings: &S3SyncSettings) -> Result<(), AppError>
 
 /// Upload local snapshot (db + skills) to remote S3.
 pub async fn upload(
-    db: &crate::database::Database,
+    db: &crate::store::Database,
     settings: &mut S3SyncSettings,
 ) -> Result<Value, AppError> {
     settings.validate()?;
@@ -91,7 +91,7 @@ pub async fn upload(
 
 /// Download remote snapshot and apply to local database + skills.
 pub async fn download(
-    db: &crate::database::Database,
+    db: &crate::store::Database,
     settings: &mut S3SyncSettings,
 ) -> Result<Value, AppError> {
     settings.validate()?;

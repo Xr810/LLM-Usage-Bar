@@ -1,11 +1,11 @@
 use super::lifecycle_lock::{CredentialLifecycleLock, SharedLifecycleGuard};
 use super::{CredentialStore, SecretString, KEYCHAIN_SERVICE};
-use crate::database::{
+use crate::error::AppError;
+use crate::store::{
     BindingAuthMode, CredentialBindingSnapshot, CredentialJournalEntry, CredentialMutationKind,
     CredentialOperationReservation, Database, ProviderCredentialJournalEntry,
     ProviderCredentialOperationReservation, ProviderCredentialSnapshot,
 };
-use crate::error::AppError;
 use crate::usage::domain::{
     AgentProviderBindingInput, AgentProviderBindingView, BindingCredentialStatus,
     LocalBindingKeyReveal, ProviderApiKeyView, SystemProviderAuthKind, UsageProviderView,

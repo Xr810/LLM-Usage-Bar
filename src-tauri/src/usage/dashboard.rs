@@ -1,5 +1,5 @@
-use crate::database::Database;
 use crate::error::AppError;
+use crate::store::Database;
 use crate::usage::aggregation::{
     aggregate_enabled_provider_trend, aggregate_provider_account_range, aggregate_provider_range,
 };
@@ -443,7 +443,7 @@ fn add_cost_counts(
 
 #[cfg(test)]
 mod tests {
-    use crate::database::Database;
+    use crate::store::Database;
     use crate::usage::dashboard::UsageDashboardService;
     use crate::usage::domain::{
         AgentProviderBindingInput, BillingKind, CostSource, QuotaSnapshot, TokenSource, UsageEvent,

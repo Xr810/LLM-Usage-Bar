@@ -1,9 +1,9 @@
 use serde_json::{json, Value};
 use std::sync::Arc;
 
-use crate::database::Database;
 use crate::error::AppError;
 use crate::settings;
+use crate::store::Database;
 
 /// Reload settings after a backup import. Provider live-config sync went with
 /// provider switching; this app only reads those files now.

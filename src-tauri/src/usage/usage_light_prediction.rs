@@ -7,8 +7,8 @@
 use super::domain::QuotaSnapshot;
 use super::status::{PaceBasis, SourceClassification, UsageStatus};
 use super::subscription_pace::{FIVE_HOUR_WINDOW_KIND, SEVEN_DAY_WINDOW_KIND};
-use crate::database::Database;
 use crate::error::AppError;
+use crate::store::Database;
 use chrono::DateTime;
 use rusqlite::{params, Connection, OptionalExtension};
 use rust_decimal::Decimal;

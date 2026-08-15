@@ -1,6 +1,6 @@
+use crate::app_state::AppState;
 use crate::error::AppError;
 use crate::services::ClaudeCliAuthStatus;
-use crate::store::AppState;
 use tauri::State;
 
 #[tauri::command]

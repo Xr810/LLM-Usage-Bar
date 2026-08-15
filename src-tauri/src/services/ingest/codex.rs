@@ -18,13 +18,13 @@
 //! 以下的行发生在算完基线**之后**(与 Claude 相反,这就是两家的差别)。
 
 use crate::agent_paths::get_codex_config_dir;
-use crate::database::{Database, UsageSyncCursor};
 use crate::error::AppError;
 use crate::services::ingest::{
     metadata_modified_nanos, occurred_at_secs, sync_with_parser, update_sync_state_for_resource,
     FileCursor, LogFileContext, ParseOutput, ParsedUsage, ProviderWriteProfile, SessionLogParser,
     SessionSyncResult, SyncCursorMap, UsageIdentity,
 };
+use crate::store::{Database, UsageSyncCursor};
 use crate::usage::domain::CODEX_AGENT_MODULE_ID;
 use crate::usage::session::{validate_bound_session_agent, ProviderSessionSyncResult};
 use crate::usage::system_providers::CHATGPT_SUBSCRIPTION_ID;
@@ -34,9 +34,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 #[cfg(test)]
-use crate::database::lock_conn;
-#[cfg(test)]
 use crate::services::ingest::{insert_usage_record, sync_file_with_parser};
+#[cfg(test)]
+use crate::store::lock_conn;
 #[cfg(test)]
 use crate::usage::domain::TokenSource;
 
@@ -1820,7 +1820,7 @@ mod tests {
 
         let current_key = current.to_string_lossy().to_string();
         let metadata = fs::metadata(&current).unwrap();
-        db.put_usage_sync_cursor(&crate::database::UsageSyncCursor {
+        db.put_usage_sync_cursor(&crate::store::UsageSyncCursor {
             source: "codex".to_string(),
             cursor_key: current_key.clone(),
             resource_path: Some(current_key.clone()),

@@ -1,6 +1,6 @@
 use super::binding_credentials::CredentialMutationKind;
-use crate::database::{lock_conn, Database};
 use crate::error::AppError;
+use crate::store::{lock_conn, Database};
 use crate::usage::system_providers::is_fixed_api_preset;
 use rusqlite::{params, OptionalExtension, TransactionBehavior};
 use std::time::{SystemTime, UNIX_EPOCH};

@@ -1,11 +1,11 @@
 //! Safe, one-time migration from the prior current-app database filename.
 
-use crate::database::{Database, SCHEMA_VERSION};
 use crate::error::AppError;
 use crate::product_identity::{
     DATABASE_FILE, DATABASE_IDENTITY_ARCHIVE_FILE, DATABASE_IDENTITY_LEASE_FILE,
     DATABASE_IDENTITY_SOURCE_SCHEMA_VERSION, LEGACY_DATABASE_FILE, LEGACY_DATA_DIR,
 };
+use crate::store::{Database, SCHEMA_VERSION};
 use rusqlite::backup::{Backup, StepResult};
 use rusqlite::{Connection, OpenFlags};
 use std::ffi::{CString, OsString};
@@ -2020,11 +2020,11 @@ mod tests {
         FEATURE_TABLE_RETIREMENT_SCHEMA_VERSION, RETIRED_IN_V21_TABLES,
         RETIREMENT_FENCE_TRIGGER_PREFIX,
     };
-    use crate::database::Database;
     use crate::product_identity::{
         DATABASE_FILE, DATABASE_IDENTITY_SOURCE_SCHEMA_VERSION, LEGACY_DATABASE_FILE,
         LEGACY_DATA_DIR,
     };
+    use crate::store::Database;
     use rusqlite::{Connection, OpenFlags};
     use sha2::{Digest, Sha256};
     use std::ffi::OsString;
@@ -2401,7 +2401,7 @@ mod tests {
     fn spawn_crash_wal_fixture(database: &Path) {
         let output = Command::new(std::env::current_exe().expect("current test executable"))
             .arg("--exact")
-            .arg("database::identity_migration::tests::crash_wal_fixture_child")
+            .arg("store::identity_migration::tests::crash_wal_fixture_child")
             .arg("--nocapture")
             .arg("--test-threads=1")
             .env(CRASH_FIXTURE_ENV, database)

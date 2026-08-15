@@ -1,5 +1,5 @@
-use crate::database::Database;
 use crate::error::AppError;
+use crate::store::Database;
 use crate::usage::domain::{BillingKind, UsageProviderView};
 use crate::usage::quota::QuotaService;
 use crate::usage::session::{ProviderSessionSyncResult, SessionUsageService};

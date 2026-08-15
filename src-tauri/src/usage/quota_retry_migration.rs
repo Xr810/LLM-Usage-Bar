@@ -1,5 +1,5 @@
-use crate::database::Database;
 use crate::error::AppError;
+use crate::store::Database;
 use rusqlite::Connection;
 
 const SAVEPOINT: &str = "quota_retry_v19";

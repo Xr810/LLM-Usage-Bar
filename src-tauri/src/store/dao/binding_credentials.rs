@@ -2,8 +2,8 @@ use super::agent_provider_bindings::{
     binding_auth_mode, binding_record_from_row, BindingAuthMode, BindingRecord,
     BINDING_RECORD_QUERY,
 };
-use crate::database::{lock_conn, Database};
 use crate::error::AppError;
+use crate::store::{lock_conn, Database};
 use crate::usage::domain::{AgentProviderBindingView, BindingCredentialStatus};
 use crate::usage::system_providers::is_fixed_api_preset;
 use rusqlite::{params, OptionalExtension, TransactionBehavior};

@@ -7,12 +7,12 @@
 //! 固定深度规则)仅保留给测试对照。
 
 use crate::config::get_claude_config_dir;
-use crate::database::Database;
 use crate::error::AppError;
 use crate::services::ingest::{
     occurred_at_secs, sync_with_parser, LogFileContext, ParseOutput, ParsedUsage,
     ProviderWriteProfile, SessionLogParser, SessionSyncResult, UsageIdentity,
 };
+use crate::store::Database;
 use crate::usage::domain::CLAUDE_CODE_AGENT_MODULE_ID;
 use crate::usage::metering::parser::SESSION_REQUEST_ID_PREFIX;
 use crate::usage::session::{validate_bound_session_agent, ProviderSessionSyncResult};
@@ -21,14 +21,14 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 #[cfg(test)]
-use crate::database::lock_conn;
-#[cfg(test)]
-use crate::database::UsageSyncCursor;
-#[cfg(test)]
 use crate::services::ingest::{
     get_sync_state, insert_usage_record, load_sync_cursors, sync_file_with_parser,
     update_sync_state, SyncCursorMap,
 };
+#[cfg(test)]
+use crate::store::lock_conn;
+#[cfg(test)]
+use crate::store::UsageSyncCursor;
 #[cfg(test)]
 use crate::usage::domain::TokenSource;
 #[cfg(test)]

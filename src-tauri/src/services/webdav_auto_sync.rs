@@ -97,7 +97,7 @@ fn emit_auto_sync_status_updated(app: &AppHandle, status: &str, error: Option<&s
 }
 
 async fn run_auto_sync_upload(
-    db: &crate::database::Database,
+    db: &crate::store::Database,
     app: &AppHandle,
 ) -> Result<(), AppError> {
     let mut settings = settings::get_webdav_sync_settings();
@@ -141,7 +141,7 @@ pub fn notify_db_changed(table: &str) {
     let _ = enqueue_change_signal(tx, table);
 }
 
-pub fn start_worker(db: Arc<crate::database::Database>, app: tauri::AppHandle) {
+pub fn start_worker(db: Arc<crate::store::Database>, app: tauri::AppHandle) {
     if DB_CHANGE_TX.get().is_some() {
         return;
     }
@@ -158,7 +158,7 @@ pub fn start_worker(db: Arc<crate::database::Database>, app: tauri::AppHandle) {
 }
 
 async fn run_worker_loop(
-    db: Arc<crate::database::Database>,
+    db: Arc<crate::store::Database>,
     mut rx: Receiver<String>,
     app: tauri::AppHandle,
 ) {

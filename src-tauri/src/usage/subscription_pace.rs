@@ -4,8 +4,8 @@ use super::status::{
     classify_subscription_window, PaceInput, PaceMeasurement, SourceClassification,
     SubscriptionThresholds, MIN_RATE_SPAN_SECONDS,
 };
-use crate::database::Database;
 use crate::error::AppError;
+use crate::store::Database;
 use chrono::DateTime;
 use rust_decimal::Decimal;
 

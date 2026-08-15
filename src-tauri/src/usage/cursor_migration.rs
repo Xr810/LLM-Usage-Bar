@@ -1,5 +1,5 @@
-use crate::database::{Database, UsageSyncCursor};
 use crate::error::AppError;
+use crate::store::{Database, UsageSyncCursor};
 use crate::usage::source_roots::UsageSourceRoots;
 use rusqlite::Connection;
 use std::path::Path;
@@ -87,7 +87,7 @@ pub(crate) fn migrate_v13_to_v14(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::database::Database;
+    use crate::store::Database;
     use rusqlite::Connection;
     use std::path::PathBuf;
 

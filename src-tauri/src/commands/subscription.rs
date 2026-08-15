@@ -2,8 +2,8 @@ use std::str::FromStr;
 use tauri::{Emitter, State};
 
 use crate::app_config::AppType;
+use crate::app_state::AppState;
 use crate::services::subscription::SubscriptionQuota;
-use crate::store::AppState;
 
 /// 查询官方订阅额度
 ///

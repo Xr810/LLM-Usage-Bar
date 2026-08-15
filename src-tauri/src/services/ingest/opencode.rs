@@ -14,12 +14,12 @@
 //!   文件级游标」,文件级重试与它等价(去重按 request_id 幂等)。
 
 use crate::agent_paths::get_opencode_db_path;
-use crate::database::Database;
 use crate::error::AppError;
 use crate::services::ingest::{
     current_timestamp, sync_with_parser, LogFileContext, ParseOutput, ParsedUsage,
     ProviderWriteProfile, SessionLogParser, SessionSyncResult, UsageIdentity,
 };
+use crate::store::Database;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 

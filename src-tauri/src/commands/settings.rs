@@ -56,7 +56,7 @@ pub async fn get_settings() -> Result<crate::settings::AppSettings, String> {
 /// 保存设置
 #[tauri::command]
 pub async fn save_settings(
-    state: tauri::State<'_, crate::store::AppState>,
+    state: tauri::State<'_, crate::app_state::AppState>,
     settings: crate::settings::AppSettings,
 ) -> Result<bool, String> {
     let existing = crate::settings::get_settings();

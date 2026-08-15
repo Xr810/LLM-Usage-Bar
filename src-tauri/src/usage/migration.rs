@@ -1,5 +1,5 @@
-use crate::database::Database;
 use crate::error::AppError;
+use crate::store::Database;
 use crate::usage::domain::{BillingKind, TokenSource};
 use rusqlite::{params, Connection};
 use serde_json::Value;

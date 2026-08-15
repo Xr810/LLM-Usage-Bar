@@ -5,9 +5,9 @@
 //! `model_pricing` catalogue, so accepting a custom price for a subscription
 //! account would silently produce a number that means nothing.
 
-use crate::database::{lock_conn, Database};
 use crate::error::AppError;
 use crate::services::usage_stats::clean_model_id_for_pricing;
+use crate::store::{lock_conn, Database};
 use crate::usage::domain::{ModelPriceInput, ProviderModelPricingView};
 use rusqlite::{params, OptionalExtension, Row};
 use rust_decimal::Decimal;

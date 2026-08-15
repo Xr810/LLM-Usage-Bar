@@ -1,5 +1,5 @@
-use crate::database::{lock_conn, Database};
 use crate::error::AppError;
+use crate::store::{lock_conn, Database};
 use crate::usage::domain::{
     AgentProviderBindingInput, AgentProviderBindingView, BillingKind, BindingCredentialStatus,
     SystemProviderAuthKind, TokenSource,
@@ -952,7 +952,7 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use super::{resolve_direct_credential_placement, DirectCredentialPlacement};
-    use crate::database::Database;
+    use crate::store::Database;
     use crate::usage::domain::{
         AgentModuleInput, AgentProviderBindingInput, BindingCredentialStatus,
     };

@@ -1507,7 +1507,7 @@ impl Database {
 
         // 补齐缺失表/索引并进行基础校验
         Self::create_tables_on_conn(&temp_conn)?;
-        if Self::get_user_version(&temp_conn)? == crate::database::SCHEMA_VERSION {
+        if Self::get_user_version(&temp_conn)? == crate::store::SCHEMA_VERSION {
             crate::usage::system_provider_migration::reconcile_system_provider_catalog(&temp_conn)?;
         }
         Self::apply_schema_migrations_on_conn(&temp_conn)?;
@@ -1992,7 +1992,7 @@ impl Database {
             Self::validate_redacted_backup_shape(&staged_conn)?;
         }
         Self::create_tables_on_conn(&staged_conn)?;
-        if Self::get_user_version(&staged_conn)? == crate::database::SCHEMA_VERSION {
+        if Self::get_user_version(&staged_conn)? == crate::store::SCHEMA_VERSION {
             crate::usage::system_provider_migration::reconcile_system_provider_catalog(
                 &staged_conn,
             )?;
@@ -2187,7 +2187,7 @@ mod tests {
         version: i64,
         include_journal: bool,
     ) -> Result<(), AppError> {
-        let conn = crate::database::lock_conn!(db.conn);
+        let conn = crate::store::lock_conn!(db.conn);
         conn.execute(
             "INSERT OR IGNORE INTO providers (id, app_type, name, settings_config, meta)
              VALUES ('backup-provider', 'claude', 'Backup Provider', '{}', '{}')",
@@ -2231,7 +2231,7 @@ mod tests {
         db: &Database,
         binding_id: &str,
     ) -> Result<(Vec<u8>, String, i64), AppError> {
-        let conn = crate::database::lock_conn!(db.conn);
+        let conn = crate::store::lock_conn!(db.conn);
         conn.query_row(
             "SELECT api_key_fingerprint, credential_slot, credential_version
              FROM agent_provider_bindings WHERE id = ?1",
@@ -2247,7 +2247,7 @@ mod tests {
         db: &Database,
         binding_id: &str,
     ) -> Result<OptionalProtectedTuple, AppError> {
-        let conn = crate::database::lock_conn!(db.conn);
+        let conn = crate::store::lock_conn!(db.conn);
         conn.query_row(
             "SELECT api_key_fingerprint, credential_slot, credential_version
              FROM agent_provider_bindings WHERE id = ?1",
@@ -2264,7 +2264,7 @@ mod tests {
         slot: &str,
         version: i64,
     ) -> Result<(), AppError> {
-        let conn = crate::database::lock_conn!(db.conn);
+        let conn = crate::store::lock_conn!(db.conn);
         conn.execute(
             "INSERT INTO provider_api_keys (
                  id, provider_id, label, api_key_fingerprint, credential_slot,
@@ -2293,7 +2293,7 @@ mod tests {
         db: &Database,
         key_id: &str,
     ) -> Result<ProviderCredentialTuple, AppError> {
-        let conn = crate::database::lock_conn!(db.conn);
+        let conn = crate::store::lock_conn!(db.conn);
         conn.query_row(
             "SELECT api_key_fingerprint, credential_slot, credential_version,
                     last_test_at, last_test_status
@@ -2337,7 +2337,7 @@ mod tests {
             8,
         )?;
 
-        let conn = crate::database::lock_conn!(db.conn);
+        let conn = crate::store::lock_conn!(db.conn);
         conn.execute(
             "UPDATE providers
              SET settings_config = '{\"apiKey\":\"legacy-api-secret\",\"baseUrl\":\"https://safe.example/v1/legacy-path-secret\",\"config\":\"experimental_bearer_token = \\\"toml-bearer-secret\\\"\"}',
@@ -2530,7 +2530,7 @@ mod tests {
             4,
         )?;
         {
-            let conn = crate::database::lock_conn!(db.conn);
+            let conn = crate::store::lock_conn!(db.conn);
             conn.execute(
                 "UPDATE providers
                  SET settings_config = '{\"providerType\":\"custom\",\"apiKey\":\"local-legacy-key\"}',
@@ -2572,7 +2572,7 @@ mod tests {
                 Some("success".into()),
             )
         );
-        let conn = crate::database::lock_conn!(db.conn);
+        let conn = crate::store::lock_conn!(db.conn);
         let (route_config, quota_config): (String, String) = conn.query_row(
             "SELECT route_config, quota_config FROM usage_providers
              WHERE id = 'backup-usage-provider'",
@@ -2719,7 +2719,7 @@ mod tests {
         let incoming = Database::memory()?;
         insert_import_sentinel(&incoming, "system-canonical-import")?;
         {
-            let conn = crate::database::lock_conn!(incoming.conn);
+            let conn = crate::store::lock_conn!(incoming.conn);
             conn.execute(
                 "UPDATE usage_providers
                  SET name = 'Incoming Stale Router',
@@ -2735,7 +2735,7 @@ mod tests {
         }
 
         local.import_sql_string(&incoming.export_sql_string()?)?;
-        let conn = crate::database::lock_conn!(local.conn);
+        let conn = crate::store::lock_conn!(local.conn);
         assert_eq!(
             conn.query_row(
                 "SELECT name FROM usage_providers WHERE id = 'system-openrouter-api'",
@@ -2782,7 +2782,7 @@ mod tests {
         agent_id: &str,
         ever_bound: bool,
     ) -> Result<(), AppError> {
-        let conn = crate::database::lock_conn!(db.conn);
+        let conn = crate::store::lock_conn!(db.conn);
         conn.execute(
             "INSERT OR IGNORE INTO providers (id, app_type, name, settings_config, meta)
              VALUES ('ever-bound-import-provider', 'claude', 'Import Sentinel', '{}', '{}')",
@@ -2799,7 +2799,7 @@ mod tests {
     }
 
     fn agent_ever_bound(db: &Database, agent_id: &str) -> Result<bool, AppError> {
-        let conn = crate::database::lock_conn!(db.conn);
+        let conn = crate::store::lock_conn!(db.conn);
         conn.query_row(
             "SELECT ever_bound FROM agent_modules WHERE id = ?1",
             [agent_id],
@@ -2867,7 +2867,7 @@ mod tests {
 
         let incoming = Database::memory()?;
         {
-            let conn = crate::database::lock_conn!(incoming.conn);
+            let conn = crate::store::lock_conn!(incoming.conn);
             conn.execute(
                 "INSERT INTO providers (id, app_type, name, settings_config, meta)
                  VALUES ('incoming-provider', 'claude', 'Incoming Provider', '{}', '{}')",
@@ -3089,7 +3089,7 @@ mod tests {
             .expect_err("import must preserve every local lifecycle journal row");
         assert_eq!(error.to_string(), "credential_conflict");
         let journal_count = {
-            let conn = crate::database::lock_conn!(local.conn);
+            let conn = crate::store::lock_conn!(local.conn);
             conn.query_row(
                 "SELECT COUNT(*) FROM agent_credential_operations
                  WHERE operation_id = 'backup-cleanup-operation'",
@@ -3105,7 +3105,7 @@ mod tests {
     fn redacted_sql_import_drops_remote_credentials_and_journal_rows() -> Result<(), AppError> {
         let local = Database::memory()?;
         {
-            let conn = crate::database::lock_conn!(local.conn);
+            let conn = crate::store::lock_conn!(local.conn);
             conn.execute(
                 "INSERT INTO providers (id, app_type, name, settings_config, meta)
                  VALUES ('local-provider', 'claude', 'Local Provider', '{}', '{}')",
@@ -3447,7 +3447,7 @@ mod tests {
         let incoming = Database::memory()?;
         insert_protected_credential_state(&incoming, "protected-binding", "local-slot", 1, false)?;
         {
-            let conn = crate::database::lock_conn!(incoming.conn);
+            let conn = crate::store::lock_conn!(incoming.conn);
             conn.execute(
                 "INSERT INTO providers (id, app_type, name, settings_config, meta)
                  VALUES ('incoming-extra', 'claude', 'Incoming Extra', '{}', '{}')",
@@ -3505,7 +3505,7 @@ mod tests {
         let incoming_path = incoming_dir.join(DATABASE_FILE);
         let incoming = Database::init_at(&incoming_path)?;
         {
-            let conn = crate::database::lock_conn!(incoming.conn);
+            let conn = crate::store::lock_conn!(incoming.conn);
             conn.execute(
                 "INSERT INTO providers (id, app_type, name, settings_config, meta)
                  VALUES ('incoming-provider', 'claude', 'Incoming Provider', '{}', '{}')",
@@ -3949,7 +3949,7 @@ mod tests {
     fn sync_import_preserves_local_only_tables() -> Result<(), AppError> {
         let remote_db = Database::memory()?;
         {
-            let conn = crate::database::lock_conn!(remote_db.conn);
+            let conn = crate::store::lock_conn!(remote_db.conn);
             conn.execute(
                 "INSERT INTO providers (id, app_type, name, settings_config, meta)
                  VALUES ('remote-provider', 'claude', 'Remote Provider', '{}', '{}')",
@@ -3960,7 +3960,7 @@ mod tests {
 
         let local_db = Database::memory()?;
         {
-            let conn = crate::database::lock_conn!(local_db.conn);
+            let conn = crate::store::lock_conn!(local_db.conn);
             conn.execute(
                 "INSERT INTO providers (id, app_type, name, settings_config, meta)
                  VALUES ('local-provider', 'claude', 'Local Provider', '{}', '{}')",
@@ -3987,7 +3987,7 @@ mod tests {
         local_db.import_sql_string_for_sync(&remote_sql)?;
 
         let remote_provider_exists: i64 = {
-            let conn = crate::database::lock_conn!(local_db.conn);
+            let conn = crate::store::lock_conn!(local_db.conn);
             conn.query_row(
                 "SELECT COUNT(*) FROM providers WHERE id = 'remote-provider' AND app_type = 'claude'",
                 [],
@@ -4000,7 +4000,7 @@ mod tests {
         );
 
         let (request_logs, rollups): (i64, i64) = {
-            let conn = crate::database::lock_conn!(local_db.conn);
+            let conn = crate::store::lock_conn!(local_db.conn);
             let request_logs =
                 conn.query_row("SELECT COUNT(*) FROM proxy_request_logs", [], |row| {
                     row.get(0)
@@ -4037,7 +4037,7 @@ mod tests {
         let old_ts = now - 40 * 86400;
 
         {
-            let conn = crate::database::lock_conn!(db.conn);
+            let conn = crate::store::lock_conn!(db.conn);
             conn.execute(
                 "INSERT INTO proxy_request_logs (
                     request_id, provider_id, app_type, model,
@@ -4051,7 +4051,7 @@ mod tests {
         db.periodic_backup_if_needed()?;
 
         let (remaining_request_logs, rollups): (i64, i64) = {
-            let conn = crate::database::lock_conn!(db.conn);
+            let conn = crate::store::lock_conn!(db.conn);
             let remaining_request_logs =
                 conn.query_row("SELECT COUNT(*) FROM proxy_request_logs", [], |row| {
                     row.get(0)

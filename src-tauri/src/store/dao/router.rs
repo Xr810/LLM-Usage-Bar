@@ -1,5 +1,5 @@
-use crate::database::{lock_conn, Database};
 use crate::error::AppError;
+use crate::store::{lock_conn, Database};
 use rusqlite::params;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -341,7 +341,7 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::database::Database;
+    use crate::store::Database;
 
     fn provider(id: &str, priority: i64, enabled: bool) -> RouterProvider {
         RouterProvider {

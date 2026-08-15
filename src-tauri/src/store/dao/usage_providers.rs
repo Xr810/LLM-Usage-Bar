@@ -1,8 +1,8 @@
 use super::agent_provider_bindings::bindings_for_provider_on_conn;
 use super::provider_api_keys::{list_provider_api_keys_on_conn, ProviderApiKeyRow};
 use super::provider_key_usage::provider_key_usage_view_on_conn;
-use crate::database::{lock_conn, to_json_string, Database};
 use crate::error::AppError;
+use crate::store::{lock_conn, to_json_string, Database};
 use crate::usage::budget_migration::canonicalize_daily_budget;
 use crate::usage::domain::{
     session_agent_module_id, BillingKind, BindingCredentialStatus, ProviderApiKeyView,
@@ -900,7 +900,7 @@ impl Database {
 
 #[cfg(test)]
 mod tests {
-    use crate::database::Database;
+    use crate::store::Database;
     use crate::usage::domain::{
         AgentProviderBindingInput, BillingKind, SystemProviderAuthKind, TokenSource,
         UsageProviderInput,

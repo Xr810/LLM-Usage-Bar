@@ -24,10 +24,10 @@ use axum::Router;
 use futures::future::BoxFuture;
 use futures::stream::StreamExt;
 
-use crate::database::{AttemptOutcome, Database, RouterAttempt, RouterProvider, WireApi};
 use crate::error::AppError;
 use crate::router::decision::{candidates_for, Blacklisted, Candidate, RouteMode};
 use crate::router::failure::{classify, AttemptResult, BlacklistScope, FailureKind};
+use crate::store::{AttemptOutcome, Database, RouterAttempt, RouterProvider, WireApi};
 
 /// 请求体缓存上限(§4.2)。超过之后不缓存、退化成纯流式,不再有故障转移能力。
 const MAX_BUFFERED_BODY: usize = 4 * 1024 * 1024;
@@ -1222,7 +1222,7 @@ fn now_millis() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::database::{ModelRoute, RouterAuthKind};
+    use crate::store::{ModelRoute, RouterAuthKind};
     use axum::body::to_bytes;
     use axum::http::Request;
     use serde_json::json;

@@ -1,5 +1,5 @@
-use crate::database::{lock_conn, Database};
 use crate::error::AppError;
+use crate::store::{lock_conn, Database};
 use crate::usage::domain::{AgentModuleInput, AgentModuleView};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use std::collections::HashSet;
@@ -285,7 +285,7 @@ impl Database {
 
 #[cfg(test)]
 mod tests {
-    use crate::database::Database;
+    use crate::store::Database;
     use crate::usage::domain::{AgentModuleInput, AgentProviderBindingInput};
 
     fn create_custom(db: &Database, name: &str) -> crate::usage::domain::AgentModuleView {

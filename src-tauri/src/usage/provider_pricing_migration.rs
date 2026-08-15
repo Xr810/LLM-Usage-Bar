@@ -13,8 +13,8 @@
 //! stored estimate. It is nullable: upstream-reported and unavailable costs have
 //! no pricing origin, and events written before v20 keep NULL.
 
-use crate::database::Database;
 use crate::error::AppError;
+use crate::store::Database;
 use rusqlite::Connection;
 
 const SAVEPOINT: &str = "provider_pricing_v20";

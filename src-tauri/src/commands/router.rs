@@ -8,7 +8,7 @@
 //! 前端看到的类型路径不变。
 
 use crate::api::router::RouterApi;
-use crate::store::AppState;
+use crate::app_state::AppState;
 
 pub use crate::api::router::{
     ModelRouteInput, PointerStateView, RouterProviderInput, RouterProviderView,

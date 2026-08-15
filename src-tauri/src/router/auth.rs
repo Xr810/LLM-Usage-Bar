@@ -9,9 +9,9 @@ use std::sync::Arc;
 use futures::future::BoxFuture;
 
 use crate::credentials::BindingCredentialService;
-use crate::database::{Database, RouterAuthKind};
 use crate::error::AppError;
 use crate::router::server::UpstreamAuth;
+use crate::store::{Database, RouterAuthKind};
 
 /// `UpstreamAuth` 的真实实现:按 provider 行上记的 auth_kind 去取凭据。
 ///
@@ -100,7 +100,7 @@ impl RouterUpstreamAuth {
 mod tests {
     use super::*;
     use crate::credentials::{CredentialStore, CredentialStoreError, SecretString};
-    use crate::database::{RouterProvider, WireApi};
+    use crate::store::{RouterProvider, WireApi};
     use std::collections::HashMap;
     use std::sync::Mutex;
 

@@ -9,7 +9,6 @@ mod claude_quota;
 mod commands;
 mod config;
 pub mod credentials;
-mod database;
 mod error;
 pub mod http_client;
 mod init_status;
@@ -25,12 +24,13 @@ pub mod product_identity;
 mod prompt;
 mod provider;
 mod provider_defaults;
+mod store;
 // router 用 pub 而不是 mod:T4/T5/T7 往里面放的 pub 入口在启动层接线
 // 之前没有调用点,私有模块会触发 dead_code(clippy -D warnings 直接挂)。
+mod app_state;
 pub mod router;
 mod services;
 mod settings;
-mod store;
 
 mod tray;
 mod tray_popover;
@@ -39,15 +39,15 @@ pub mod usage;
 mod usage_events;
 
 pub use app_config::{AppType, MultiAppConfig};
+pub use app_state::AppState;
 pub use claude_quota::run_claude_statusline_bridge;
 pub use commands::*;
 pub use config::{get_claude_account_path, get_claude_settings_path, read_json_file};
-pub use database::Database;
 pub use error::AppError;
 pub use prompt::Prompt;
 pub use provider::{Provider, ProviderMeta};
 pub use settings::{update_settings, AppSettings};
-pub use store::AppState;
+pub use store::Database;
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 pub use usage::domain::{
@@ -73,7 +73,7 @@ use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
 #[derive(Debug)]
 struct PreparedDatabaseRuntime {
-    outcome: database::DatabaseIdentityOutcome,
+    outcome: store::DatabaseIdentityOutcome,
 }
 
 #[derive(Debug)]
@@ -89,19 +89,19 @@ struct ReadyDatabaseRuntime<'a> {
 
 impl PreparedDatabaseRuntime {
     fn prepare(app_config_dir: &Path) -> Result<Self, AppError> {
-        Self::prepare_with(app_config_dir, database::prepare_database_identity)
+        Self::prepare_with(app_config_dir, store::prepare_database_identity)
     }
 
     fn prepare_with<F>(app_config_dir: &Path, prepare: F) -> Result<Self, AppError>
     where
-        F: FnOnce(&Path) -> Result<database::DatabaseIdentityOutcome, AppError>,
+        F: FnOnce(&Path) -> Result<store::DatabaseIdentityOutcome, AppError>,
     {
         Ok(Self {
             outcome: prepare(app_config_dir)?,
         })
     }
 
-    fn outcome(&self) -> &database::DatabaseIdentityOutcome {
+    fn outcome(&self) -> &store::DatabaseIdentityOutcome {
         &self.outcome
     }
 
@@ -118,7 +118,7 @@ impl PreparedDatabaseRuntime {
     }
 
     fn preflight(&self) -> Result<DatabaseRuntimePreflight<'_>, AppError> {
-        self.preflight_with(database::Database::stored_user_version_exceeds_supported)
+        self.preflight_with(store::Database::stored_user_version_exceeds_supported)
     }
 
     fn preflight_with<F>(&self, preflight: F) -> Result<DatabaseRuntimePreflight<'_>, AppError>
@@ -141,13 +141,13 @@ impl ReadyDatabaseRuntime<'_> {
         self.prepared.database_path()
     }
 
-    fn open(&self) -> Result<database::Database, AppError> {
-        self.open_with(database::Database::init_at)
+    fn open(&self) -> Result<store::Database, AppError> {
+        self.open_with(store::Database::init_at)
     }
 
-    fn open_with<F>(&self, open: F) -> Result<database::Database, AppError>
+    fn open_with<F>(&self, open: F) -> Result<store::Database, AppError>
     where
-        F: FnOnce(&Path) -> Result<database::Database, AppError>,
+        F: FnOnce(&Path) -> Result<store::Database, AppError>,
     {
         open(self.database_path())
     }
@@ -166,8 +166,8 @@ pub struct DatabaseIdentityTestReport {
 }
 
 #[cfg(debug_assertions)]
-impl From<&database::DatabaseIdentityOutcome> for DatabaseIdentityTestReport {
-    fn from(outcome: &database::DatabaseIdentityOutcome) -> Self {
+impl From<&store::DatabaseIdentityOutcome> for DatabaseIdentityTestReport {
+    fn from(outcome: &store::DatabaseIdentityOutcome) -> Self {
         Self {
             database_path: outcome.database_path.clone(),
             archived_prior_path: outcome.archived_prior_path.clone(),
@@ -222,7 +222,7 @@ pub fn create_schema_v13_fixture_test_hook(path: &Path) -> Result<(), AppError> 
     // v13, so the baseline below is untouched.
     // Reviewed for schema v27: v26 -> v27 只新增三张 router_* 表，与 v13 基线无关。
     // Reviewed for schema v28: v27 -> v28 只给 router_providers 加两个可空/带默认的列，与 v13 基线无关。
-    if database::SCHEMA_VERSION != 28
+    if store::SCHEMA_VERSION != 28
         || product_identity::DATABASE_IDENTITY_SOURCE_SCHEMA_VERSION != 13
     {
         return Err(AppError::Database(
@@ -272,7 +272,7 @@ pub fn runtime_log_paths_test_hook(app_config_dir: &Path) -> (PathBuf, PathBuf) 
     )
 }
 
-fn log_database_identity_outcome(outcome: &database::DatabaseIdentityOutcome) {
+fn log_database_identity_outcome(outcome: &store::DatabaseIdentityOutcome) {
     let archived = outcome
         .archived_prior_path
         .as_deref()
@@ -740,11 +740,11 @@ pub fn run() {
                         path: prepared_database.database_path().display().to_string(),
                         error: format!(
                             "数据库版本过新（{version}），当前应用仅支持 {}，请升级应用后再尝试。",
-                            crate::database::SCHEMA_VERSION
+                            crate::store::SCHEMA_VERSION
                         ),
                         kind: Some("db_version_too_new".to_string()),
                         db_version: Some(version),
-                        supported_version: Some(crate::database::SCHEMA_VERSION),
+                        supported_version: Some(crate::store::SCHEMA_VERSION),
                     });
                     // 主窗口默认 visible:false，恢复界面必须强制显示
                     if let Some(window) = app.get_webview_window("main") {
@@ -1652,7 +1652,7 @@ pub fn run() {
 /// 确保 Claude Code/Codex/Gemini 的配置不会处于损坏状态。
 /// 使用 stop_with_restore_keep_state 保留 settings 表中的代理状态，下次启动时自动恢复。
 pub async fn cleanup_before_exit(app_handle: &tauri::AppHandle) {
-    let cleanup_resources = app_handle.try_state::<store::AppState>().map(|state| {
+    let cleanup_resources = app_handle.try_state::<app_state::AppState>().map(|state| {
         (
             state.take_quota_scheduler(),
             state.take_midnight_scheduler(),
@@ -1959,9 +1959,9 @@ mod tests {
         should_hide_minimized_main, DatabaseRuntimePreflight, ExitRequestAction,
         PreparedDatabaseRuntime, WindowEventKind, WindowEventRoute,
     };
-    use crate::database::DatabaseIdentityOutcome;
     use crate::error::AppError;
     use crate::product_identity::DATABASE_FILE;
+    use crate::store::DatabaseIdentityOutcome;
     use std::cell::{Cell, RefCell};
     use std::path::{Path, PathBuf};
 
@@ -2013,7 +2013,7 @@ mod tests {
                 events
                     .borrow_mut()
                     .push(("open", observed_path.to_path_buf()));
-                crate::database::Database::init_at(observed_path)
+                crate::store::Database::init_at(observed_path)
             })
             .expect("open prepared database");
 
@@ -2057,13 +2057,13 @@ mod tests {
             .preflight_with(|observed_path| {
                 events.borrow_mut().push("preflight");
                 assert_eq!(observed_path, authoritative);
-                Ok(Some(crate::database::SCHEMA_VERSION + 1))
+                Ok(Some(crate::store::SCHEMA_VERSION + 1))
             })
             .expect("future-version preflight returns a decision");
 
         match decision {
             DatabaseRuntimePreflight::TooNew { version } => {
-                assert_eq!(version, crate::database::SCHEMA_VERSION + 1)
+                assert_eq!(version, crate::store::SCHEMA_VERSION + 1)
             }
             DatabaseRuntimePreflight::Ready(_) => panic!("future database must not be openable"),
         }

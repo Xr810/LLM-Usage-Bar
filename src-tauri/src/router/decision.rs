@@ -4,7 +4,7 @@
 //! 顺序去试哪几家。本模块不读数据库、不发网络、不读系统时间:所有输入都是参数,
 //! `now_ms` 也由调用方传入,便于测试。
 
-use crate::database::ModelRoute;
+use crate::store::ModelRoute;
 
 /// 路由模式。自动:按顺序试、失败换下一家。手动:只用指定那家,不换。
 ///

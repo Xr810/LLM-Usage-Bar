@@ -1,6 +1,6 @@
+use crate::app_state::AppState;
 use crate::error::AppError;
 use crate::settings::{ApiBudgetConfig, ApiBudgetMode};
-use crate::store::AppState;
 pub use crate::tray_popover::MainWindowDestination;
 use crate::usage::domain::UsageProviderView;
 use crate::usage::tray_snapshot::TrayUsageSnapshot;
@@ -174,7 +174,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::database::Database;
+    use crate::store::Database;
     use crate::usage::status::UsageStatus;
     use crate::usage::system_providers::OPENAI_API_ID;
     use std::sync::atomic::{AtomicUsize, Ordering};
