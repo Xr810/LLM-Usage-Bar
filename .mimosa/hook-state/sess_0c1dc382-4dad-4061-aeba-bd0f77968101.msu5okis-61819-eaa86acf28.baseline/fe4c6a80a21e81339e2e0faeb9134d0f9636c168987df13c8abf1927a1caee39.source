@@ -1,0 +1,143 @@
+[package]
+name = "llm-usage-bar"
+version = "3.16.5"
+description = "All-in-One Assistant for Claude Code, Codex & Gemini CLI"
+authors = ["Jason Young"]
+license = "MIT"
+repository = "https://github.com/Xr810/LLM-Usage-Bar"
+edition = "2021"
+rust-version = "1.85.0"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "llm_usage_bar_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+doctest = false
+
+[features]
+default = []
+test-hooks = []
+
+[build-dependencies]
+tauri-build = { version = "2.4.0", features = [] }
+
+[dependencies]
+serde_json = { version = "1.0", features = ["preserve_order"] }
+serde = { version = "1.0", features = ["derive"] }
+log = "0.4"
+# macOS 上给 tokio worker 线程设 Utility QoS(pthread_set_qos_class_self_np),
+# 见 lib.rs 的 on_thread_start。
+libc = "0.2"
+notify = "8.2"
+portable-pty = "0.8"
+chrono = { version = "0.4", features = ["serde"] }
+tauri = { version = "2.11.5", features = [
+    "tray-icon",
+    "protocol-asset",
+    "image-png",
+    "macos-private-api",
+] }
+tauri-plugin-log = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-process = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-store = "2"
+tauri-plugin-deep-link = "2"
+tauri-plugin-window-state = "2"
+dirs = "6.0"
+toml = "1.1"
+toml_edit = "0.25"
+reqwest = { version = "0.12", features = ["rustls-tls", "json", "stream", "socks"] }
+arboard = "3.6"
+flate2 = "1"
+brotli = "8"
+zstd = "0.13"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }
+futures = "0.3"
+fs2 = "0.4"
+async-stream = "0.3"
+bytes = "1.5"
+axum = "0.8"
+tower = "0.5"
+tower-http = { version = "0.7", features = ["cors"] }
+hyper = { version = "1.0", features = ["full"] }
+hyper-util = { version = "0.1", features = ["tokio", "http1", "client-legacy"] }
+hyper-rustls = { version = "0.27", features = ["http1", "tls12", "ring", "webpki-tokio"] }
+http = "1"
+http-body = "1"
+http-body-util = "0.1"
+httparse = "1"
+tokio-rustls = "0.26"
+rustls = "0.23"
+webpki-roots = "1.0"
+rustls-native-certs = "0.8"
+regex = "1.10"
+rquickjs = { version = "0.12", features = ["array-buffer", "classes"] }
+thiserror = "2.0"
+anyhow = "1.0"
+zip = "8.6"
+serde_yaml = "0.9"
+tempfile = "3"
+url = "2.5"
+auto-launch = "0.6"
+once_cell = "1.21.3"
+base64 = "0.23"
+rusqlite = { version = "0.40", features = ["bundled", "backup", "hooks", "fallible_uint"] }
+indexmap = { version = "2", features = ["serde"] }
+rust_decimal = "1.33"
+uuid = { version = "1.11", features = ["v4"] }
+hex = "0.4"
+sha2 = "0.11"
+subtle = "2"
+zeroize = "1"
+hmac = "0.13"
+json5 = "1.3"
+json-five = "0.3.1"
+
+[target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
+tauri-plugin-single-instance = "2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+webkit2gtk = { version = "2.0.1", features = ["v2_16"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+winreg = "0.56"
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Globalization",
+    "Win32_Storage_FileSystem",
+    "Win32_UI_Shell",
+] }
+
+[target.'cfg(all(target_os = "windows", target_arch = "aarch64"))'.dependencies]
+rquickjs = { version = "0.8", features = ["bindgen"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSColor"] }
+objc2-web-kit = { version = "0.3.2", default-features = false, features = [
+  "objc2-app-kit",
+  "WKWebView",
+] }
+security-framework = { version = "3.7", default-features = false }
+security-framework-sys = { version = "2.17", default-features = false }
+window-vibrancy = "0.8.0"
+
+# Optimize release binary size to help reduce AppImage footprint
+[profile.release]
+codegen-units = 1
+lto = "thin"
+opt-level = "s"
+# 使用 unwind 以便 panic hook 能捕获 backtrace（abort 会直接终止无法捕获）
+panic = "unwind"
+strip = "symbols"
+
+[dev-dependencies]
+serial_test = "4"
+tempfile = "3"
+# 剪枝测试需要显式设置 mtime（CI 文件系统的 mtime 分辨率可能是秒级，
+# 同秒内的先后顺序测不出来）
+filetime = "0.2"

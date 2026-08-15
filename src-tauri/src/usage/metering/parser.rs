@@ -9,7 +9,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// Session 日志 request_id 前缀，与 `session_usage.rs` 中的格式保持一致
+/// Session 日志 request_id 前缀，与 `ingest::claude` 中的格式保持一致
 pub const SESSION_REQUEST_ID_PREFIX: &str = "session:";
 
 /// Token 使用量统计

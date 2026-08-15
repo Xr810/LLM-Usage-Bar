@@ -1,0 +1,480 @@
+import type { ManualResetCreditView } from "./quota";
+import type { PaceBasis, TrayUsageStatus } from "./trayUsage";
+
+export type BillingKind = "subscription" | "metered";
+export type TokenSource = "proxy" | "session_log";
+export type SessionSource = "claude" | "codex";
+export type CostSource = "upstream" | "estimated" | "unavailable";
+
+/**
+ * `user` means the account's own price — what you actually pay. `official`
+ * means the built-in reference catalogue, which is also what subscription
+ * equivalent-API costs are always valued at.
+ */
+export type PricingOrigin = "user" | "official";
+
+/** The four per-million-token rates that make up one model's price. */
+/** What the user typed. A blank rate means "use the official one". */
+export interface ModelPriceInput {
+  inputCostPerMillion: string;
+  outputCostPerMillion: string;
+  cacheReadCostPerMillion: string;
+  cacheCreationCostPerMillion: string;
+}
+
+/**
+ * One Provider account's own price for one model, in USD per million tokens.
+ * A null rate was left blank and resolves to the official catalogue value.
+ */
+export interface ProviderModelPricingView {
+  providerId: string;
+  modelId: string;
+  displayName: string;
+  inputCostPerMillion: string | null;
+  outputCostPerMillion: string | null;
+  cacheReadCostPerMillion: string | null;
+  cacheCreationCostPerMillion: string | null;
+  updatedAt: number;
+}
+export type BindingCredentialStatus =
+  "not_required" | "missing" | "configured" | "unavailable";
+export type SystemProviderAuthKind =
+  "codex_oauth" | "claude_cli" | "provider_api_key";
+
+export interface AgentModuleView {
+  id: string;
+  name: string;
+  sortOrder: number;
+  visible: boolean;
+  isFixed: boolean;
+  archivedAt: number | null;
+  providerCount: number;
+}
+
+export interface AgentModuleInput {
+  id: string | null;
+  name: string;
+  sortOrder: number;
+  visible: boolean;
+}
+
+export interface AgentProviderBindingInput {
+  id: string | null;
+  agentModuleId: string;
+  providerId: string;
+  enabled: boolean;
+}
+
+export interface AgentProviderBindingView {
+  id: string;
+  agentModuleId: string;
+  providerId: string;
+  enabled: boolean;
+  effectiveEnabled: boolean;
+  credentialStatus: BindingCredentialStatus;
+  canClearCredential: boolean;
+  credentialVersion: number;
+  routeProtocol: string | null;
+  localCredentialStatus: BindingCredentialStatus;
+  providerCredentialStatus: BindingCredentialStatus;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface AgentProxyRouteSetup {
+  bindingId: string;
+  providerId: string;
+  protocol: string | null;
+  localBaseUrl: string | null;
+  credentialPlacements: string[];
+  credentialStatus: BindingCredentialStatus;
+}
+
+export interface AgentProxySetupInfo {
+  agentModuleId: string;
+  proxyRunning: boolean;
+  proxyOrigin: string;
+  routes: AgentProxyRouteSetup[];
+}
+
+export interface LocalBindingKeyReveal {
+  bindingId: string;
+  credentialVersion: number;
+  localKey: string;
+}
+
+export interface SystemProviderConnectionTestResult {
+  providerId: string;
+  success: boolean;
+  status: "success" | "failed";
+  testedAt: number;
+  errorCode: string | null;
+}
+
+export interface SystemProviderKeyUsageView {
+  usageTotalUsd: string | null;
+  usageDailyUsd: string | null;
+  usageWeeklyUsd: string | null;
+  usageMonthlyUsd: string | null;
+  limitUsd: string | null;
+  limitRemainingUsd: string | null;
+  isFreeTier: boolean | null;
+  fetchedAt: number;
+  credentialVersion: number;
+  stale: boolean;
+}
+
+export interface ProviderApiKeyView {
+  id: string;
+  providerId: string;
+  label: string;
+  credentialStatus: BindingCredentialStatus;
+  credentialVersion: number;
+  canClearCredential: boolean;
+  lastConnectionTestAt: number | null;
+  lastConnectionTestStatus: string | null;
+  lastConnectionTestErrorCode: string | null;
+  sortOrder: number;
+  keyUsage: SystemProviderKeyUsageView | null;
+}
+
+export interface ClaudeCliAuthStatus {
+  installed: boolean;
+  authenticated: boolean;
+  authMethod: "api_key" | "claude_account" | "other" | null;
+  subscriptionType: "pro" | "max" | null;
+  /** When the newest local quota sample was taken; quota never comes from the CLI. */
+  lastQuotaSampleAt: number | null;
+  errorCode: string | null;
+}
+
+export interface UsageProviderInput {
+  id: string;
+  name: string;
+  billingKind: BillingKind;
+  productGroupId: string;
+  tokenSources: TokenSource[];
+  sessionSourceBindings?: SessionSource[] | null;
+  quotaSource?: string | null;
+  quotaIntervalSeconds?: number | null;
+  routeAppType?: string | null;
+  routeConfig?: Record<string, unknown> | null;
+  enabled: boolean;
+}
+
+export interface UsageProviderView {
+  id: string;
+  name: string;
+  billingKind: BillingKind;
+  productGroupId: string;
+  tokenSources: TokenSource[];
+  sessionSourceBindings: SessionSource[];
+  bindings: AgentProviderBindingView[];
+  quotaSource: string | null;
+  quotaIntervalSeconds: number | null;
+  dailyBudgetUsd: string | null;
+  routeAppType: string | null;
+  enabled: boolean;
+  needsReview: boolean;
+  createdAt: number;
+  updatedAt: number;
+  routeBaseUrl: string | null;
+  hasRouteCredentials: boolean;
+  systemPresetKey: string | null;
+  systemAuthKind: SystemProviderAuthKind | null;
+  canonicalEndpoint: string | null;
+  compatibleAgentModuleIds: string[];
+  apiKeys: ProviderApiKeyView[];
+  supportsKeyUsage: boolean;
+  keyUsageTotal: SystemProviderKeyUsageView | null;
+}
+
+export interface CostSourceCounts {
+  upstream: number;
+  estimated: number;
+  unavailable: number;
+}
+
+/** Why a quota window is the colour it is. Mirrors the tray's pace fields. */
+export interface QuotaWindowPaceView {
+  status: TrayUsageStatus;
+  burnRatePercentPerHour?: string | null;
+  projectedExhaustAt?: string | null;
+  headroomRatio?: string | null;
+  paceBasis?: PaceBasis;
+  rhythmAdjustment?: string | null;
+  flatStatus?: TrayUsageStatus | null;
+}
+
+export interface QuotaStatusView {
+  snapshotId: string;
+  fetchedAt: number;
+  sourceObservedAt?: number | null;
+  planType?: string | null;
+  planRenewsAt?: number | null;
+  fiveHourUtilizationPercent: string | null;
+  fiveHourResetsAt: string | null;
+  sevenDayUtilizationPercent: string | null;
+  sevenDayResetsAt: string | null;
+  fiveHourPace: QuotaWindowPaceView;
+  sevenDayPace: QuotaWindowPaceView;
+  manualResetsRemaining: number | null;
+  manualResetCredits?: ManualResetCreditView[];
+}
+
+export interface QuotaFetchState {
+  providerId: string;
+  lastAttemptAt: number | null;
+  lastSuccessAt: number | null;
+  lastError: string | null;
+  consecutiveFailures: number;
+  stale: boolean;
+}
+
+export interface ProviderUsageView {
+  provider: UsageProviderView;
+  sharedAccount: boolean;
+  eventCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  totalCostUsd: string | null;
+  costSourceCounts: CostSourceCounts;
+  quota: QuotaStatusView | null;
+  quotaFetchState: QuotaFetchState | null;
+}
+
+export type UsageTrendGranularity = "hour" | "day";
+
+export interface UsageTrendBucketView {
+  startAt: number;
+  endAt: number;
+  eventCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  totalTokens: number;
+  totalCostUsd: string | null;
+  costSourceCounts: CostSourceCounts;
+}
+
+export interface ProductUsageView {
+  productGroupId: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  totalCostUsd: string | null;
+  costSourceCounts: CostSourceCounts;
+  tokenSources: TokenSource[];
+  subscriptionProviders: ProviderUsageView[];
+  meteredProviders: ProviderUsageView[];
+}
+
+export interface UsageDashboardView {
+  agentModuleId: string;
+  startAt: number;
+  endAt: number;
+  productGroups: ProductUsageView[];
+  warnings: string[];
+}
+
+export interface ProviderMonitoringDashboardView {
+  startAt: number;
+  endAt: number;
+  providers: ProviderUsageView[];
+  trendGranularity: UsageTrendGranularity;
+  trendBuckets: UsageTrendBucketView[];
+  warnings: string[];
+}
+
+/** One concrete model, scoped to a single Provider account. */
+export interface ModelUsageRow {
+  model: string;
+  providerId: string;
+  providerName: string;
+  productGroupId: string;
+  billingKind: BillingKind;
+  eventCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  totalTokens: number;
+  totalCostUsd: string | null;
+  costSourceCounts: CostSourceCounts;
+  firstOccurredAt: number;
+  lastOccurredAt: number;
+}
+
+/** One concrete model, merged across every Provider account that served it. */
+export interface ModelTotalsRow {
+  model: string;
+  providerIds: string[];
+  eventCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  totalTokens: number;
+  totalCostUsd: string | null;
+  costSourceCounts: CostSourceCounts;
+  firstOccurredAt: number;
+  lastOccurredAt: number;
+}
+
+/** A product/plan group — the "Claude Pro" / "ChatGPT Pro" level. */
+export interface ModelProductGroupView {
+  productGroupId: string;
+  billingKind: BillingKind;
+  providerIds: string[];
+  providerNames: string[];
+  eventCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  totalTokens: number;
+  totalCostUsd: string | null;
+  costSourceCounts: CostSourceCounts;
+  models: ModelUsageRow[];
+}
+
+export interface ModelUsageDashboardView {
+  startAt: number;
+  endAt: number;
+  totalTokens: number;
+  totalEventCount: number;
+  totalCostUsd: string | null;
+  productGroups: ModelProductGroupView[];
+  models: ModelTotalsRow[];
+  warnings: string[];
+}
+
+/** One Provider account's contribution inside a single Agent. */
+export interface AgentProviderUsageRow {
+  providerId: string;
+  providerName: string;
+  productGroupId: string;
+  billingKind: BillingKind;
+  eventCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  totalTokens: number;
+  totalCostUsd: string | null;
+  costSourceCounts: CostSourceCounts;
+}
+
+export interface AgentUsageRow {
+  /** `null` is the bucket for events that carry no Agent owner. */
+  agentModuleId: string | null;
+  /** `null` for the unassigned bucket and for Agents whose module row is gone. */
+  agentName: string | null;
+  archived: boolean;
+  visible: boolean;
+  eventCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  totalTokens: number;
+  totalCostUsd: string | null;
+  costSourceCounts: CostSourceCounts;
+  firstOccurredAt: number;
+  lastOccurredAt: number;
+  providers: AgentProviderUsageRow[];
+  models: ModelTotalsRow[];
+}
+
+export interface AgentUsageBreakdownView {
+  startAt: number;
+  endAt: number;
+  totalTokens: number;
+  totalEventCount: number;
+  totalCostUsd: string | null;
+  agents: AgentUsageRow[];
+  warnings: string[];
+}
+
+export interface UsageEvent {
+  eventId: string;
+  source: TokenSource;
+  providerId: string;
+  agentModuleId: string | null;
+  productGroupId: string;
+  occurredAt: number;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  requestId: string | null;
+  sessionId: string | null;
+  upstreamCorrelationId: string | null;
+  inputCostUsd: string | null;
+  outputCostUsd: string | null;
+  cacheReadCostUsd: string | null;
+  cacheCreationCostUsd: string | null;
+  totalCostUsd: string | null;
+  costSource: CostSource;
+  /**
+   * Which price catalogue produced an estimate. Null for upstream-reported and
+   * unavailable costs, and for events recorded before schema v20.
+   */
+  pricingOrigin: PricingOrigin | null;
+  legacyRequestId: string | null;
+  createdAt: number;
+}
+
+export interface UsageEventPage {
+  items: UsageEvent[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface UnassignedUsageGroup {
+  providerId: string;
+  source: TokenSource;
+  eventCount: number;
+  firstOccurredAt: number;
+  lastOccurredAt: number;
+}
+
+export interface ArchivedAgentUsageSummary {
+  agentModuleId: string;
+  eventCount: number;
+  firstOccurredAt: number;
+  lastOccurredAt: number;
+}
+
+export interface InvalidUsageLinkSummary {
+  reason: string;
+  linkCount: number;
+  firstCreatedAt: number;
+  lastCreatedAt: number;
+}
+
+export interface UnassignedUsageDiagnostics {
+  unassignedEventCount: number;
+  unassignedGroups: UnassignedUsageGroup[];
+  archivedAgentHistory: ArchivedAgentUsageSummary[];
+  invalidLinkSummaries: InvalidUsageLinkSummary[];
+}
+
+export interface QuotaRefreshResult {
+  snapshot: QuotaStatusView;
+  fetchState: QuotaFetchState;
+}
+
+export interface ProviderSessionSyncResult {
+  imported: number;
+  skipped: number;
+  filesScanned: number;
+  errors: string[];
+  warnings: string[];
+}

@@ -157,24 +157,22 @@
 | [T18](T18-flaky-test-hunt.md) | 定位偶发失败的测试(纯诊断) | 无 | ✅ 与全部 |
 | [T19](T19-isolate-guard-tests.md) | 守卫测试脱离真实 home | T18 | ✅ 与全部 |
 | [T20](T20-extension-seam-guards.md) | 依赖方向守卫(建表纪律已落地为铁律 9) | T17 | ✅ 与全部 |
-| [T21⚠](T21-provider-modules-and-sync.md) | 建 `providers/` 与 `sync/`,`services/` 消失 | T17 | ❌ 单独做 |
-| [T21⚠](T21-first-real-run.md) | 让 router 第一次真的处理一个请求 | T17 | ✅ 已完成并合并 |
+| [T21](T21-first-real-run.md) | 让 router 第一次真的处理一个请求 | T17 | ✅ 已完成并合并 |
 | [T22](T22-slim-down.md) | 找出冗余,把后端瘦下来 | T17 | ✅ 已完成并合并 |
 | [T23](T23-sse-content-type-gate.md) | SSE 不再攒兜底缓冲 | T13 T22 | ✅ 与 T24 T25 |
 | [T24](T24-lazy-http-client.md) | http_client 别堵启动主线程 | T22 | ⚠️ 与 T25 同改 lib.rs |
 | [T25](T25-drop-forwarding-layer.md) | 删掉四个转发层文件 | T17 T22 | ✅ 已完成并合并 |
+| [T26](T26-provider-modules-and-sync.md) | 建 `providers/` 与 `sync/`,`services/` 消失 | T17 | ❌ 单独做 |
 | [D1](D1-openrouter-account-balance.md) | OpenRouter 账户余额(改造 `balance.rs`) | T17 | ✅ 与 D2 |
 | [D2](D2-packycode-account-usage.md) | PackyCode 账户用量(新建) | T17 | ✅ 与 D1 |
 
-> **⚠️ 编号撞了,待项目所有者裁定。** 有两份 T21:
-> `T21-provider-modules-and-sync.md`(**未派出**)与
-> `T21-first-real-run.md`(**已完成并合并**,提交信息里也是 T21)。
-> 起因是两条线并行写任务书时没有对过编号。
-> **建议把未派出的那份改名为 T26**,已进历史的那份不动。
-
-**T20 / T21(providers)/ D1 / D2 均已写好但尚未派出**(2026-08-15)。
-D1/D2 不依赖 T21(providers)—— 它若先合并就落在 `providers/`,否则原地做,
+**T20 / T26 / D1 / D2 均已写好但尚未派出**(2026-08-15)。
+D1/D2 不依赖 T26 —— 它若先合并就落在 `providers/`,否则原地做,
 两份任务书都写明了两种落点。
+
+> 原本的 `T21-provider-modules-and-sync.md` 已改名 **T26** —— 编号与
+> 已完成并合并的 `T21-first-real-run.md` 撞了(起因见 `HANDOFF.md` §17.2)。
+> 已进提交历史的那份不动。
 
 **UI 不在此列** —— 设置界面、菜单栏状态由项目所有者自己实现。
 
