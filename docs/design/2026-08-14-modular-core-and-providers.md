@@ -305,6 +305,25 @@ webview 仍然活着,**定时器在没人看得见的情况下继续每 5 分钟
 | **config** | 用户偏好、provider 配置、价格表 | `settings.rs` |
 | **secrets** | 钥匙串 / 加密文件的安全存取**机制** | `credentials/` |
 
+> **2026-08-15 补注:上面这张表混了两个维度,已由
+> [`2026-08-15-provider-modules-and-feature-domains.md`](2026-08-15-provider-modules-and-feature-domains.md)
+> 修正。**
+>
+> `ingest`、`quota`、`route` 三者其实都是**「用量监控」这一个功能域内部**的层;
+> 只有 `model` / `store` / `config` / `secrets` 是**真正跨域的地基**。
+>
+> 分界线不是推测出来的:T17 之后盘点 `services/`,发现里面躺着一整个独立功能域
+> ——备份同步(WebDAV / S3,约 3,800 行),而它的全部上行依赖恰好就是
+> `store` / `config` / `error` / `http_client`,**零 `usage` / `quota` / `route` /
+> `ingest`**。第二个功能域不是假设,它一直在仓库里跑着。
+>
+> 那份文档的决定:建 `providers/`(横向,各厂商)与 `sync/`(纵向,独立功能域)
+> 两个平级目录,**不套 `features/` 前缀** —— 「谁是地基、谁是可拆的功能域」
+> 这个信息交给守卫(见 [`../tasks/T20-extension-seam-guards.md`](../tasks/T20-extension-seam-guards.md))
+> 承载,那是机器检查的,比目录名可靠。
+>
+> 本节其余内容仍然有效,§9.3 的三条边界尤其是。
+
 ### 9.3 三条关键边界
 
 **一、依赖必须单向,`model` 在最底下。**

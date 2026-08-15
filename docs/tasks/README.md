@@ -38,6 +38,30 @@
    在做什么。
 8. **不要动 UI / 前端组件。** `src/` 下的 React 代码由项目所有者自己写。你只在
    `src-tauri/` 里工作(除非任务书明确说了要改前端类型)。
+9. **新建数据库表必须带功能域前缀,DAO 归各自功能域所有。**
+
+   | 功能域 | 表前缀 | DAO 放哪 |
+   | --- | --- | --- |
+   | 用量监控 | `usage_*` | 用量域自己的 dao |
+   | 本地路由 | `router_*` | 路由域自己的 dao |
+   | 供应商与凭据 | `provider_*` | provider 模块自己的 dao |
+   | 备份同步 | `sync_*` | 同步域自己的 dao |
+   | 跨域共享 | 无前缀(仅 `settings`、`model_pricing` 这类) | `store/` |
+
+   `store/schema.rs` 里只留迁移调度,不留业务判断。**一张表属于哪个功能域,
+   看名字就要能说出来** —— 将来「不要这块功能了」时能不能干净拿掉,取决于此刻
+   这个名字。**无前缀的新表要在报告里单独说明为什么它是跨域共享的;默认答案是
+   「它不是」。**
+
+   **优先不建表。** 单账号的少量状态用现有 `settings` 键值表就够
+   (`store/dao/settings.rs` 的 `get_setting` / `set_setting`),机密进钥匙串
+   (`crate::secrets::CredentialStore`)。**这条路不动 `SCHEMA_VERSION`、无迁移,
+   删掉这个功能就是删一行 settings。** 迁移一旦发布到用户机器上就撤不回来了,
+   所以「要不要建表」是需要在动手前明确回答的问题,不是随手决定的。
+
+   > **已知的命名坑**:`session_log_sync` 属于**用量监控域**(会话日志摄入的增量
+   > 游标),不是「会话管理」。将来做会话管理功能时**不要用 `session_*` 前缀**,
+   > 会跟它撞在一起。
 
 ---
 
@@ -132,6 +156,13 @@
 | [T17](T17-module-rearrange.md) | 按职责重排目录 | T14 T15 T16 | ❌ 单独做 |
 | [T18](T18-flaky-test-hunt.md) | 定位偶发失败的测试(纯诊断) | 无 | ✅ 与全部 |
 | [T19](T19-isolate-guard-tests.md) | 守卫测试脱离真实 home | T18 | ✅ 与全部 |
+| [T20](T20-extension-seam-guards.md) | 依赖方向守卫(建表纪律已落地为铁律 9) | T17 | ✅ 与全部 |
+| [T21](T21-provider-modules-and-sync.md) | 建 `providers/` 与 `sync/`,`services/` 消失 | T17 | ❌ 单独做 |
+| [D1](D1-openrouter-account-balance.md) | OpenRouter 账户余额(改造 `balance.rs`) | T17 | ✅ 与 D2 |
+| [D2](D2-packycode-account-usage.md) | PackyCode 账户用量(新建) | T17 | ✅ 与 D1 |
+
+**T20 / T21 / D1 / D2 均已写好但尚未派出**(2026-08-15)。D1/D2 不依赖 T21 —— T21
+若先合并就落在 `providers/`,否则原地做,两份任务书都写明了两种落点。
 
 **UI 不在此列** —— 设置界面、菜单栏状态由项目所有者自己实现。
 
@@ -185,7 +216,9 @@ git switch -c task/T1-ingest-pipeline main
   (33 条,编号排到 37;9/17/19/20 已撤销,编号有意留空)。
   **T3–T7 的执行者必须读 §3、§4**
 - `docs/design/2026-08-14-modular-core-and-providers.md` —— 模块化的划线原则。
-  **T1、T2 的执行者必须读 §3、§4、§9**
+  **T1、T2 的执行者必须读 §3、§4、§9**(§9.2 已于 2026-08-15 加注修正)
+- `docs/design/2026-08-15-provider-modules-and-feature-domains.md` —— provider 模块的
+  目录形态、以及「地基 / 功能域」的分界。**T20、T21、D1、D2 的执行者必须读**
 - `AGENTS.md` —— 本地命令的包装器约定
 
 **注意**:设计文档是背景,用来理解**为什么**这么设计;**任务书(本目录)才是要执行的
