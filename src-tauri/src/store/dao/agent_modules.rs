@@ -87,7 +87,6 @@ impl Database {
         list_agent_modules_on_conn(&conn, false)
     }
 
-    #[allow(dead_code)] // Used by archived diagnostics in Task 6.
     pub(crate) fn get_agent_module_including_archived(
         &self,
         id: &str,

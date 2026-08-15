@@ -158,7 +158,6 @@ pub fn apply_proxy(proxy_url: Option<&str>) -> Result<(), String> {
 ///
 /// # Arguments
 /// * `proxy_url` - 新的代理 URL，None 或空字符串表示直连
-#[allow(dead_code)]
 pub fn update_proxy(proxy_url: Option<&str>) -> Result<(), String> {
     let effective_url = proxy_url.filter(|s| !s.trim().is_empty());
     let new_client = build_client(effective_url)?;
@@ -228,7 +227,6 @@ pub fn get_current_proxy_url() -> Option<String> {
 }
 
 /// 检查是否正在使用代理
-#[allow(dead_code)]
 pub fn is_proxy_enabled() -> bool {
     get_current_proxy_url().is_some()
 }
