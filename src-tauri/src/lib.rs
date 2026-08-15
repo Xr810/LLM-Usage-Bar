@@ -830,6 +830,14 @@ pub fn run() {
                 quota_service,
             );
 
+            // —— T24:启动早期先把已保存的代理配置廉价记录到 http_client ——
+            // 只存字符串、不构建客户端(构建要上百毫秒,挪到后台)。
+            // 必须放在任何可能触发 get() 的任务(router、同步 worker)启动
+            // 之前:这样后台 init 完成前调用 get() 也会按正确配置惰性构建,
+            // 不会拿到不带代理的兜底客户端(任务书 §2 第 3 条的竞态)。
+            let global_proxy_url = app_state.db.get_global_proxy_url().ok().flatten();
+            crate::http_client::set_saved_proxy_url(global_proxy_url.as_deref());
+
             // —— T10:本地 router 启动接线 ——
             // 决定 5②:先把监听端口开起来,再做其余初始化。绑定失败只记 log::error、
             // 不中止 setup——端口被占是常见情况(上次没退干净、别的软件占了),
@@ -1051,34 +1059,40 @@ pub fn run() {
             log::info!("✓ CodexOAuthManager initialized");
 
             // 初始化全局出站代理 HTTP 客户端
+            // T24:客户端构建(TLS 后端 + 连接池)挪到后台任务,不再堵住
+            // 启动主线程;主线程只克隆已读出的配置并 spawn。已保存的代理
+            // 配置已在启动早期记录进 http_client(见上方 T24 注释),保证
+            // 后台 init 完成前 get() 也能按正确配置惰性构建、不绕过代理。
+            // 校验失败时清库并回落直连,行为与原来一致。
             {
-                let db = &app.state::<AppState>().db;
-                let proxy_url = db.get_global_proxy_url().ok().flatten();
-
-                if let Err(e) = crate::http_client::init(proxy_url.as_deref()) {
-                    log::error!(
-                        "[GlobalProxy] [GP-005] Failed to initialize with saved config: {e}"
-                    );
-
-                    // 清除无效的代理配置
-                    if proxy_url.is_some() {
-                        log::warn!(
-                            "[GlobalProxy] [GP-006] Clearing invalid proxy config from database"
+                let db = app.state::<AppState>().db.clone();
+                let proxy_url = global_proxy_url.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = crate::http_client::init(proxy_url.as_deref()) {
+                        log::error!(
+                            "[GlobalProxy] [GP-005] Failed to initialize with saved config: {e}"
                         );
-                        if let Err(clear_err) = db.set_global_proxy_url(None) {
+
+                        // 清除无效的代理配置
+                        if proxy_url.is_some() {
+                            log::warn!(
+                                "[GlobalProxy] [GP-006] Clearing invalid proxy config from database"
+                            );
+                            if let Err(clear_err) = db.set_global_proxy_url(None) {
+                                log::error!(
+                                    "[GlobalProxy] [GP-007] Failed to clear invalid config: {clear_err}"
+                                );
+                            }
+                        }
+
+                        // 使用直连模式重新初始化
+                        if let Err(fallback_err) = crate::http_client::init(None) {
                             log::error!(
-                                "[GlobalProxy] [GP-007] Failed to clear invalid config: {clear_err}"
+                                "[GlobalProxy] [GP-008] Failed to initialize direct connection: {fallback_err}"
                             );
                         }
                     }
-
-                    // 使用直连模式重新初始化
-                    if let Err(fallback_err) = crate::http_client::init(None) {
-                        log::error!(
-                            "[GlobalProxy] [GP-008] Failed to initialize direct connection: {fallback_err}"
-                        );
-                    }
-                }
+                });
             }
 
             let quota_callback_app = app.handle().clone();

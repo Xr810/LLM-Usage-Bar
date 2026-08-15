@@ -7,15 +7,28 @@ use once_cell::sync::OnceCell;
 use reqwest::Client;
 use std::env;
 use std::net::IpAddr;
-use std::sync::RwLock;
+use std::sync::{Mutex, MutexGuard, RwLock};
 use std::time::Duration;
 
-/// 全局 HTTP 客户端实例
-static GLOBAL_CLIENT: OnceCell<RwLock<Client>> = OnceCell::new();
-static GLOBAL_NO_REDIRECT_CLIENT: OnceCell<RwLock<Client>> = OnceCell::new();
+/// 全局 HTTP 客户端实例（None 表示尚未构建）
+static GLOBAL_CLIENT: RwLock<Option<Client>> = RwLock::new(None);
+static GLOBAL_NO_REDIRECT_CLIENT: RwLock<Option<Client>> = RwLock::new(None);
 
 /// 当前代理 URL（用于日志和状态查询）
-static CURRENT_PROXY_URL: OnceCell<RwLock<Option<String>>> = OnceCell::new();
+static CURRENT_PROXY_URL: RwLock<Option<String>> = RwLock::new(None);
+
+/// 已保存的代理配置（启动时从数据库读出后廉价记录，只存字符串、不构建客户端）
+///
+/// get() 在全局客户端尚未构建时按它惰性初始化，保证后台 init 完成前
+/// 第一个请求也不会绕过用户配置的代理。
+static CONFIGURED_PROXY_URL: RwLock<Option<String>> = RwLock::new(None);
+
+/// 初始化互斥锁：把「构建客户端 + 写入全局」串行化
+///
+/// init / apply_proxy / update_proxy 与 get() 的惰性构建都在这把锁内
+/// 完成，避免两个线程同时初始化时一方覆盖另一方的新配置，也避免
+/// get() 在初始化进行到一半时缓存一个不带代理的客户端。
+static INIT_LOCK: Mutex<()> = Mutex::new(());
 
 /// LLM Usage Bar 代理服务器当前监听的端口
 static LLM_USAGE_BAR_PROXY_PORT: OnceCell<RwLock<u16>> = OnceCell::new();
@@ -46,39 +59,31 @@ fn get_proxy_port() -> u16 {
 
 /// 初始化全局 HTTP 客户端
 ///
-/// 应在应用启动时调用一次。
+/// 应用启动时调用一次（T24 起挪到后台任务）。若已初始化过，
+/// 等价于 apply_proxy 做一次热更新。
 ///
 /// # Arguments
 /// * `proxy_url` - 代理 URL，如 `http://127.0.0.1:7890` 或 `socks5://127.0.0.1:1080`
 ///   传入 None 或空字符串表示直连
 pub fn init(proxy_url: Option<&str>) -> Result<(), String> {
     let effective_url = proxy_url.filter(|s| !s.trim().is_empty());
-    let client = build_client(effective_url)?;
-    let no_redirect_client = build_client_with_redirects(effective_url, false)?;
+    let _guard = lock_init();
+    let already_initialized = GLOBAL_CLIENT
+        .read()
+        .ok()
+        .map(|client| client.is_some())
+        .unwrap_or(false);
 
-    // 尝试初始化全局客户端，如果已存在则记录警告并使用 apply_proxy 更新
-    if GLOBAL_CLIENT.set(RwLock::new(client.clone())).is_err() {
-        log::warn!(
-            "[GlobalProxy] [GP-003] Already initialized, updating instead: {}",
-            effective_url
-                .map(mask_url)
-                .unwrap_or_else(|| "direct connection".to_string())
-        );
-        // 已初始化，改用 apply_proxy 更新
-        return apply_proxy(proxy_url);
+    install_clients(effective_url)?;
+
+    let masked = effective_url
+        .map(mask_url)
+        .unwrap_or_else(|| "direct connection".to_string());
+    if already_initialized {
+        log::warn!("[GlobalProxy] [GP-003] Already initialized, updating instead: {masked}");
+    } else {
+        log::info!("[GlobalProxy] Initialized: {masked}");
     }
-    let _ = GLOBAL_NO_REDIRECT_CLIENT.set(RwLock::new(no_redirect_client));
-
-    // 初始化代理 URL 记录
-    let _ = CURRENT_PROXY_URL.set(RwLock::new(effective_url.map(|s| s.to_string())));
-
-    log::info!(
-        "[GlobalProxy] Initialized: {}",
-        effective_url
-            .map(mask_url)
-            .unwrap_or_else(|| "direct connection".to_string())
-    );
-
     Ok(())
 }
 
@@ -108,45 +113,14 @@ pub fn validate_proxy(proxy_url: Option<&str>) -> Result<(), String> {
 /// * `proxy_url` - 代理 URL，None 或空字符串表示直连
 pub fn apply_proxy(proxy_url: Option<&str>) -> Result<(), String> {
     let effective_url = proxy_url.filter(|s| !s.trim().is_empty());
-    let new_client = build_client(effective_url)?;
-    let new_no_redirect_client = build_client_with_redirects(effective_url, false)?;
-
-    // 更新客户端
-    if let Some(lock) = GLOBAL_CLIENT.get() {
-        let mut client = lock.write().map_err(|e| {
-            log::error!("[GlobalProxy] [GP-001] Failed to acquire write lock: {e}");
-            "Failed to update proxy: lock poisoned".to_string()
-        })?;
-        *client = new_client;
-    } else {
-        // 如果还没初始化，则初始化
-        return init(proxy_url);
-    }
-    if let Some(lock) = GLOBAL_NO_REDIRECT_CLIENT.get() {
-        *lock
-            .write()
-            .map_err(|_| "Failed to update no-redirect client: lock poisoned".to_string())? =
-            new_no_redirect_client;
-    } else {
-        let _ = GLOBAL_NO_REDIRECT_CLIENT.set(RwLock::new(new_no_redirect_client));
-    }
-
-    // 更新代理 URL 记录
-    if let Some(lock) = CURRENT_PROXY_URL.get() {
-        let mut url = lock.write().map_err(|e| {
-            log::error!("[GlobalProxy] [GP-002] Failed to acquire URL write lock: {e}");
-            "Failed to update proxy URL record: lock poisoned".to_string()
-        })?;
-        *url = effective_url.map(|s| s.to_string());
-    }
-
+    let _guard = lock_init();
+    install_clients(effective_url)?;
     log::info!(
         "[GlobalProxy] Applied: {}",
         effective_url
             .map(mask_url)
             .unwrap_or_else(|| "direct connection".to_string())
     );
-
     Ok(())
 }
 
@@ -160,75 +134,142 @@ pub fn apply_proxy(proxy_url: Option<&str>) -> Result<(), String> {
 /// * `proxy_url` - 新的代理 URL，None 或空字符串表示直连
 pub fn update_proxy(proxy_url: Option<&str>) -> Result<(), String> {
     let effective_url = proxy_url.filter(|s| !s.trim().is_empty());
-    let new_client = build_client(effective_url)?;
-    let new_no_redirect_client = build_client_with_redirects(effective_url, false)?;
-
-    // 更新客户端
-    if let Some(lock) = GLOBAL_CLIENT.get() {
-        let mut client = lock.write().map_err(|e| {
-            log::error!("[GlobalProxy] [GP-001] Failed to acquire write lock: {e}");
-            "Failed to update proxy: lock poisoned".to_string()
-        })?;
-        *client = new_client;
-    } else {
-        // 如果还没初始化，则初始化
-        return init(proxy_url);
-    }
-    if let Some(lock) = GLOBAL_NO_REDIRECT_CLIENT.get() {
-        *lock
-            .write()
-            .map_err(|_| "Failed to update no-redirect client: lock poisoned".to_string())? =
-            new_no_redirect_client;
-    } else {
-        let _ = GLOBAL_NO_REDIRECT_CLIENT.set(RwLock::new(new_no_redirect_client));
-    }
-
-    // 更新代理 URL 记录
-    if let Some(lock) = CURRENT_PROXY_URL.get() {
-        let mut url = lock.write().map_err(|e| {
-            log::error!("[GlobalProxy] [GP-002] Failed to acquire URL write lock: {e}");
-            "Failed to update proxy URL record: lock poisoned".to_string()
-        })?;
-        *url = effective_url.map(|s| s.to_string());
-    }
-
+    let _guard = lock_init();
+    install_clients(effective_url)?;
     log::info!(
         "[GlobalProxy] Updated: {}",
         effective_url
             .map(mask_url)
             .unwrap_or_else(|| "direct connection".to_string())
     );
-
     Ok(())
 }
 
 /// 获取全局 HTTP 客户端
 ///
-/// 返回配置了代理的客户端（如果已配置代理），否则返回跟随系统代理的客户端。
+/// 若尚未初始化（例如后台 init 还在构建），按已保存的代理配置惰性
+/// 初始化后返回。绝不会在用户配置了代理时返回并缓存一个不带代理的
+/// 客户端：构建失败只会回落直连，与启动路径 init 失败的行为一致。
 pub fn get() -> Client {
-    GLOBAL_CLIENT
-        .get()
-        .and_then(|lock| lock.read().ok())
-        .map(|c| c.clone())
-        .unwrap_or_else(|| {
-            log::warn!("[GlobalProxy] [GP-004] Client not initialized, using fallback");
-            build_client(None).unwrap_or_default()
-        })
+    // 快路径：已初始化直接返回，不碰初始化锁
+    if let Some(client) = GLOBAL_CLIENT.read().ok().and_then(|c| c.clone()) {
+        return client;
+    }
+
+    // 慢路径：与 init / update_proxy 串行，消除初始化竞态
+    let _guard = lock_init();
+
+    // 拿锁后重查：等待期间可能已被其他线程初始化
+    if let Some(client) = GLOBAL_CLIENT.read().ok().and_then(|c| c.clone()) {
+        return client;
+    }
+
+    let saved_url = CONFIGURED_PROXY_URL.read().ok().and_then(|u| u.clone());
+    match install_clients(saved_url.as_deref()) {
+        Ok(client) => {
+            log::info!(
+                "[GlobalProxy] Lazily initialized on first get(): {}",
+                saved_url
+                    .as_deref()
+                    .map(mask_url)
+                    .unwrap_or_else(|| "direct connection".to_string())
+            );
+            client
+        }
+        Err(e) => {
+            // 已保存的代理配置非法：回落直连。数据库里那份无效配置
+            // 仍由 lib.rs 后台 init 的清理逻辑负责清除。
+            log::error!(
+                "[GlobalProxy] [GP-009] Failed to build client from saved proxy config, falling back to direct: {e}"
+            );
+            match install_clients(None) {
+                Ok(client) => client,
+                Err(direct_err) => {
+                    log::warn!(
+                        "[GlobalProxy] [GP-004] Failed to build direct fallback client: {direct_err}"
+                    );
+                    Client::default()
+                }
+            }
+        }
+    }
 }
 
 /// 获取当前代理 URL
 ///
 /// 返回当前配置的代理 URL，None 表示直连。
 pub fn get_current_proxy_url() -> Option<String> {
-    CURRENT_PROXY_URL
-        .get()
-        .and_then(|lock| lock.read().ok())
-        .and_then(|url| url.clone())
+    CURRENT_PROXY_URL.read().ok().and_then(|url| url.clone())
 }
 
 /// 检查是否正在使用代理
 pub fn is_proxy_enabled() -> bool {
     get_current_proxy_url().is_some()
+}
+
+/// 记录已保存的代理配置（不构建客户端，开销极小）
+///
+/// 启动早期由 lib.rs 调用：把数据库里保存的代理 URL 先记录进内存，
+/// 供 get() 在后台 init 完成前按正确配置惰性构建，避免拿到不带代理
+/// 的兜底客户端。init / apply_proxy / update_proxy 生效后也会同步
+/// 刷新这份记录。
+pub(crate) fn set_saved_proxy_url(proxy_url: Option<&str>) {
+    let effective = proxy_url
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.to_string());
+    let _guard = lock_init();
+    if let Ok(mut saved) = CONFIGURED_PROXY_URL.write() {
+        *saved = effective;
+    }
+}
+
+/// 获取初始化互斥锁；锁被毒化时沿用内部值继续（全局状态本身无损坏）
+fn lock_init() -> MutexGuard<'static, ()> {
+    INIT_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// 在 INIT_LOCK 保护下构建并安装两个全局客户端，同时刷新代理记录
+///
+/// 先构建、后写入：构建失败时全局状态保持不变（与 update_proxy 现有
+/// 的「验证失败不影响当前客户端」语义一致）。
+fn install_clients(proxy_url: Option<&str>) -> Result<Client, String> {
+    let client = build_client(proxy_url)?;
+    let no_redirect_client = build_client_with_redirects(proxy_url, false)?;
+
+    let mut global = GLOBAL_CLIENT.write().map_err(|e| {
+        log::error!("[GlobalProxy] [GP-001] Failed to acquire write lock: {e}");
+        "Failed to update proxy: lock poisoned".to_string()
+    })?;
+    *global = Some(client.clone());
+    drop(global);
+
+    let mut no_redirect = GLOBAL_NO_REDIRECT_CLIENT.write().map_err(|e| {
+        log::error!("[GlobalProxy] Failed to acquire no-redirect write lock: {e}");
+        "Failed to update no-redirect client: lock poisoned".to_string()
+    })?;
+    *no_redirect = Some(no_redirect_client);
+    drop(no_redirect);
+
+    let recorded = proxy_url.map(|s| s.to_string());
+
+    // CONFIGURED_PROXY_URL 与 CURRENT_PROXY_URL 保存同一个值：
+    // 前者供 get() 惰性构建使用，后者用于日志和状态查询。
+    let mut saved = CONFIGURED_PROXY_URL.write().map_err(|e| {
+        log::error!("[GlobalProxy] Failed to acquire saved-config write lock: {e}");
+        "Failed to record proxy config: lock poisoned".to_string()
+    })?;
+    *saved = recorded.clone();
+    drop(saved);
+
+    let mut current = CURRENT_PROXY_URL.write().map_err(|e| {
+        log::error!("[GlobalProxy] [GP-002] Failed to acquire URL write lock: {e}");
+        "Failed to update proxy URL record: lock poisoned".to_string()
+    })?;
+    *current = recorded;
+
+    Ok(client)
 }
 
 /// 构建 HTTP 客户端
@@ -368,11 +409,22 @@ pub fn mask_url(url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::{Arc, Barrier, Mutex, OnceLock};
 
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    /// 测试专用：把全局状态清回未初始化。
+    ///
+    /// 全仓库只有本文件的测试（经 env_lock 串行）与 s3.rs 两处
+    /// #[ignore] 测试会碰这些全局，因此测试里直接写锁即可。
+    fn reset_globals_for_test() {
+        *GLOBAL_CLIENT.write().unwrap() = None;
+        *GLOBAL_NO_REDIRECT_CLIENT.write().unwrap() = None;
+        *CURRENT_PROXY_URL.write().unwrap() = None;
+        *CONFIGURED_PROXY_URL.write().unwrap() = None;
     }
 
     #[test]
@@ -477,5 +529,65 @@ mod tests {
         for key in &keys {
             std::env::remove_var(key);
         }
+    }
+
+    #[test]
+    fn test_get_lazily_initializes_with_saved_proxy() {
+        let _env = env_lock().lock().unwrap();
+        reset_globals_for_test();
+
+        let proxy = "http://127.0.0.1:7890";
+        *CONFIGURED_PROXY_URL.write().unwrap() = Some(proxy.to_string());
+
+        let _client = get();
+
+        // get() 按已保存的代理配置惰性初始化，而不是拿直连 fallback
+        assert_eq!(get_current_proxy_url().as_deref(), Some(proxy));
+
+        reset_globals_for_test();
+    }
+
+    #[test]
+    fn test_get_falls_back_to_direct_on_invalid_saved_proxy() {
+        let _env = env_lock().lock().unwrap();
+        reset_globals_for_test();
+
+        // scheme 非法，与 build_client 的校验路径一致
+        *CONFIGURED_PROXY_URL.write().unwrap() =
+            Some("invalid-scheme://127.0.0.1:7890".to_string());
+
+        let _client = get(); // 不应 panic
+
+        // 配置非法时回落直连，与启动路径 init 失败 → init(None) 一致
+        assert_eq!(get_current_proxy_url(), None);
+
+        reset_globals_for_test();
+    }
+
+    #[test]
+    fn test_get_concurrent_threads_share_one_proxy_client() {
+        let _env = env_lock().lock().unwrap();
+        reset_globals_for_test();
+
+        let proxy = "http://127.0.0.1:7890";
+        *CONFIGURED_PROXY_URL.write().unwrap() = Some(proxy.to_string());
+
+        let barrier = Arc::new(Barrier::new(8));
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let barrier = Arc::clone(&barrier);
+            handles.push(std::thread::spawn(move || {
+                barrier.wait();
+                let _client = get();
+                // 谁先初始化都行，但所有线程看到的必须是同一个
+                // 带代理配置的全局客户端，而不是直连 fallback
+                assert_eq!(get_current_proxy_url().as_deref(), Some(proxy));
+            }));
+        }
+        for handle in handles {
+            handle.join().expect("worker thread panicked");
+        }
+
+        reset_globals_for_test();
     }
 }
