@@ -156,6 +156,7 @@
 | [T17](T17-module-rearrange.md) | 按职责重排目录 | T14 T15 T16 | ❌ 单独做 |
 | [T18](T18-flaky-test-hunt.md) | 定位偶发失败的测试(纯诊断) | 无 | ✅ 与全部 |
 | [T19](T19-isolate-guard-tests.md) | 守卫测试脱离真实 home | T18 | ✅ 与全部 |
+<<<<<<< HEAD
 | [T20](T20-extension-seam-guards.md) | 依赖方向守卫(建表纪律已落地为铁律 9) | T17 | ✅ 与全部 |
 | [T21](T21-provider-modules-and-sync.md) | 建 `providers/` 与 `sync/`,`services/` 消失 | T17 | ❌ 单独做 |
 | [D1](D1-openrouter-account-balance.md) | OpenRouter 账户余额(改造 `balance.rs`) | T17 | ✅ 与 D2 |
@@ -163,6 +164,10 @@
 
 **T20 / T21 / D1 / D2 均已写好但尚未派出**(2026-08-15)。D1/D2 不依赖 T21 —— T21
 若先合并就落在 `providers/`,否则原地做,两份任务书都写明了两种落点。
+=======
+| [T21](T21-first-real-run.md) | 让 router 第一次真的处理一个请求 | T17 | ✅ 与 T22 |
+| [T22](T22-slim-down.md) | 找出冗余,把后端瘦下来 | T17 | ✅ 与 T21 |
+>>>>>>> task/T21-real-run
 
 **UI 不在此列** —— 设置界面、菜单栏状态由项目所有者自己实现。
 
