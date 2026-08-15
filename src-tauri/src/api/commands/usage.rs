@@ -11,8 +11,8 @@ use tauri::State;
 #[tauri::command]
 pub async fn refresh_official_pricing(
     state: State<'_, AppState>,
-) -> Result<crate::services::official_pricing::RefreshOutcome, AppError> {
-    crate::services::official_pricing::refresh_official_pricing(&state.db).await
+) -> Result<crate::providers::shared::official_pricing::RefreshOutcome, AppError> {
+    crate::providers::shared::official_pricing::refresh_official_pricing(&state.db).await
 }
 
 /// Return the timestamp of the last successful official-price refresh.
@@ -20,14 +20,14 @@ pub async fn refresh_official_pricing(
 pub fn get_official_pricing_last_refresh_at(
     state: State<'_, AppState>,
 ) -> Result<Option<i64>, AppError> {
-    crate::services::official_pricing::last_refresh_at(&state.db)
+    crate::providers::shared::official_pricing::last_refresh_at(&state.db)
 }
 
 #[tauri::command]
 pub fn get_official_pricing_last_imported_count(
     state: State<'_, AppState>,
 ) -> Result<Option<u64>, AppError> {
-    crate::services::official_pricing::last_imported_count(&state.db)
+    crate::providers::shared::official_pricing::last_imported_count(&state.db)
 }
 
 /// 获取使用量汇总

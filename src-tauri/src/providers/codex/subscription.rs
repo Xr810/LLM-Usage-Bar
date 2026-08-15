@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
 
-use super::{
+use crate::providers::{
     now_millis, unix_ts_to_iso, window_seconds_to_tier_name, CredentialStatus, ManualResetCredit,
     ManualResetCredits, QuotaTier, SubscriptionQuota,
 };
@@ -714,7 +714,7 @@ pub(crate) async fn query_codex_quota(
 /// 与 Gemini 的差别在 `Expired`：Codex 不做 token 续期（refresh token 是轮换式的，
 /// 本 app 只读不写 `auth.json`，刷了不回写会把用户从 Codex CLI 踢下线），过期就
 /// 拿旧 token 试一把，不成就如实报过期。
-pub(super) async fn collect_codex_quota() -> Result<SubscriptionQuota, String> {
+pub(crate) async fn collect_codex_quota() -> Result<SubscriptionQuota, String> {
     const TOOL: &str = "codex";
     const EXPIRED_MESSAGE: &str = "Authentication failed. Please re-login with Codex CLI.";
     let (token, account_id, status, message) = read_codex_credentials();
@@ -753,7 +753,7 @@ pub(super) async fn collect_codex_quota() -> Result<SubscriptionQuota, String> {
 mod tests {
     use super::*;
     // 常量留在父模块 mod.rs，`use super::*` 拿不到，这里补一条。
-    use crate::services::subscription::TIER_SEVEN_DAY;
+    use crate::providers::TIER_SEVEN_DAY;
 
     #[test]
     fn chatgpt_base_url_falls_back_unless_https() {

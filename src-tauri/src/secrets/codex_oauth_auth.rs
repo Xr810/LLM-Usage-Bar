@@ -1327,7 +1327,7 @@ mod tests {
         let query_manager = Arc::clone(&manager);
         let query_task = tokio::spawn(async move {
             started_tx.send(()).unwrap();
-            crate::services::subscription::query_managed_codex_oauth_quota(
+            crate::providers::query_managed_codex_oauth_quota(
                 &query_manager,
                 Some("blocked-account"),
             )

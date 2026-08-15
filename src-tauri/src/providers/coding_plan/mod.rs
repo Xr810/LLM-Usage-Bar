@@ -3,7 +3,7 @@
 //! 支持 Kimi For Coding、智谱 GLM、MiniMax 的 Token Plan 额度查询。
 //! 复用 subscription 模块的 SubscriptionQuota / QuotaTier 类型。
 
-use super::subscription::{
+use crate::providers::{
     CredentialStatus, QuotaTier, SubscriptionQuota, TIER_FIVE_HOUR, TIER_MONTHLY, TIER_WEEKLY_LIMIT,
 };
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -1913,7 +1913,7 @@ mod tests {
     // 三个服务的语义回归锚。
 
     use super::get_coding_plan_quota;
-    use crate::services::subscription::CredentialStatus;
+    use crate::providers::CredentialStatus;
     use std::io::{Read, Write};
 
     /// 测试进程内可能有其他用例临时 set_var HTTP_PROXY（http_client 的

@@ -12,7 +12,7 @@ use serde_json::Value;
 
 use crate::config::settings::{update_s3_sync_status, S3SyncSettings, WebDavSyncStatus};
 use crate::error::AppError;
-use crate::services::s3::{self, S3Credentials};
+use crate::sync::s3::{self, S3Credentials};
 
 use super::sync_protocol::{
     apply_snapshot, build_local_snapshot, localized, persist_sync_success_best_effort, sha256_hex,

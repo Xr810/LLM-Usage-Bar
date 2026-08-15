@@ -1,7 +1,7 @@
 use crate::error::AppError;
 use crate::model::{BindingCredentialStatus, ProviderApiKeyView, UsageProviderView};
+use crate::providers::SystemProviderConnectionService;
 use crate::secrets::BindingCredentialService;
-use crate::services::SystemProviderConnectionService;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;

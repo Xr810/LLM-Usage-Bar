@@ -18,7 +18,7 @@ use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use crate::services::subscription::{
+use crate::providers::{
     QuotaTier, SubscriptionQuota, TIER_FIVE_HOUR, TIER_SEVEN_DAY, TIER_SEVEN_DAY_OPUS,
     TIER_SEVEN_DAY_SONNET,
 };
@@ -237,7 +237,7 @@ fn resolve_probe_binary(bare: &str, candidates: Vec<PathBuf>) -> Option<PathBuf>
 fn resolve_claude_binary(home: &std::path::Path) -> Option<PathBuf> {
     resolve_probe_binary(
         "claude",
-        crate::services::claude_cli_auth::claude_binary_candidates_for_home(home),
+        crate::providers::claude::cli_auth::claude_binary_candidates_for_home(home),
     )
 }
 

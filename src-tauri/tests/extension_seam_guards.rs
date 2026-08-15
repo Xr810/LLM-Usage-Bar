@@ -304,6 +304,88 @@ const ALLOWLIST: &[ExpectedViolation] = &[
         kind: "测试边界上行依赖",
         reason: "store 集成测试直接驱动 usage 迁移并构造系统 provider fixture",
     },
+    // —— 以下 9 条随 T26 建出 providers/ 而暴露(2026-08-15) ——
+    //
+    // 全部是搬入文件**自带的既有依赖**:T26 是纯搬运,一条都不是搬运新增的。
+    // 它们此前藏在 services/ 这个不分层的口袋里,建出 providers/ 才被守卫看见。
+    //
+    // 分三类,后续任务的优先级不同:
+    //
+    // (a) 顶层未归类模块 —— T17 留下 23 个顶层 .rs 没进八个职责模块,
+    //     T20 的白名单只认 error/http_client/product_identity。其中
+    //     `agent_paths`(228 行路径常量)与 `lightweight`(110 行全局开关)
+    //     性质确实是工具,将来可考虑提进白名单;
+    //     但 `provider.rs`(913 行,UsageData 等 SSOT 领域类型)看着本该在
+    //     `model/`,`usage_events`(488 行,往前端 emit 事件)是上行依赖 ——
+    //     **这两条别顺手提白名单,它们是真的债。**
+    //
+    // (b) providers → usage —— provider 实现复用用量域的常量与工具函数。
+    //     与 store → usage 那批同源,都要等 usage 拆分才能消。
+    //
+    // (c) providers → api —— **这条最重**,provider 直接够到了顶层。
+    ExpectedViolation {
+        boundary: "providers",
+        file: "src-tauri/src/providers/balance/mod.rs",
+        dependency: "provider",
+        kind: "(a) 顶层未归类模块",
+        reason: "余额查询返回顶层 provider.rs 的 UsageData/UsageResult;该文件疑似应归入 model",
+    },
+    ExpectedViolation {
+        boundary: "providers",
+        file: "src-tauri/src/providers/claude/cli_auth.rs",
+        dependency: "api",
+        kind: "(c) 上行依赖顶层",
+        reason: "auth login 复用 api::commands::launch_terminal_running 启动终端;本批最严重的一条",
+    },
+    ExpectedViolation {
+        boundary: "providers",
+        file: "src-tauri/src/providers/codex/subscription.rs",
+        dependency: "agent_paths",
+        kind: "(a) 顶层未归类模块",
+        reason: "取 get_codex_auth_path / get_codex_config_dir;agent_paths 性质是工具",
+    },
+    ExpectedViolation {
+        boundary: "providers",
+        file: "src-tauri/src/providers/codex/subscription.rs",
+        dependency: "usage",
+        kind: "(b) providers → usage",
+        reason: "MANAGED_CODEX_QUOTA_SOURCE 常量与 usage::claude_oauth::parse_retry_after",
+    },
+    ExpectedViolation {
+        boundary: "providers",
+        file: "src-tauri/src/providers/gemini/subscription.rs",
+        dependency: "agent_paths",
+        kind: "(a) 顶层未归类模块",
+        reason: "取 get_gemini_dir;同上",
+    },
+    ExpectedViolation {
+        boundary: "providers",
+        file: "src-tauri/src/providers/shared/connection.rs",
+        dependency: "usage",
+        kind: "(b) providers → usage",
+        reason: "连通性探测按 usage::system_providers::system_provider_definition 构造",
+    },
+    ExpectedViolation {
+        boundary: "providers",
+        file: "src-tauri/src/providers/shared/key_usage_scheduler.rs",
+        dependency: "lightweight",
+        kind: "(a) 顶层未归类模块",
+        reason: "调 is_lightweight_mode() 决定是否跳过采集;lightweight 性质是工具",
+    },
+    ExpectedViolation {
+        boundary: "providers",
+        file: "src-tauri/src/providers/shared/key_usage_scheduler.rs",
+        dependency: "usage_events",
+        kind: "(a) 顶层未归类模块",
+        reason: "调 notify_dashboard_invalidated() 通知前端;这是上行的 UI 关注点,不是工具",
+    },
+    ExpectedViolation {
+        boundary: "providers",
+        file: "src-tauri/src/providers/shared/official_pricing.rs",
+        dependency: "usage",
+        kind: "(b) providers → usage",
+        reason: "复用 usage::usage_stats::clean_model_id_for_pricing 清理 model id",
+    },
 ];
 
 type ViolationKey = (String, String, String);

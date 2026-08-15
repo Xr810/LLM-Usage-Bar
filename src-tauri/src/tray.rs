@@ -12,24 +12,23 @@ use crate::config::app_config::AppType;
 use crate::error::AppError;
 
 const TEMPLATE_TYPE_OFFICIAL_SUBSCRIPTION: &str = "official_subscription";
-const H_TIER_NAMES: &[&str] = &[crate::services::subscription::TIER_FIVE_HOUR];
+const H_TIER_NAMES: &[&str] = &[crate::providers::TIER_FIVE_HOUR];
 const W_TIER_NAMES: &[&str] = &[
-    crate::services::subscription::TIER_WEEKLY_LIMIT,
-    crate::services::subscription::TIER_SEVEN_DAY,
-    crate::services::subscription::TIER_SEVEN_DAY_OPUS,
-    crate::services::subscription::TIER_SEVEN_DAY_SONNET,
+    crate::providers::TIER_WEEKLY_LIMIT,
+    crate::providers::TIER_SEVEN_DAY,
+    crate::providers::TIER_SEVEN_DAY_OPUS,
+    crate::providers::TIER_SEVEN_DAY_SONNET,
 ];
 // 月窗口分组：火山方舟 Agent/Coding Plan 的月窗口（5h/周/月 三档），
 // 以及 Codex 免费方案的 30 天窗口（#3651）——两者都归入 "m" 档，避免免费
 // Codex 账号在托盘里空白（前端 footer 能看到、托盘却不显示的不对称）。
 const M_TIER_NAMES: &[&str] = &[
-    crate::services::subscription::TIER_MONTHLY,
-    crate::services::subscription::TIER_THIRTY_DAY,
+    crate::providers::TIER_MONTHLY,
+    crate::providers::TIER_THIRTY_DAY,
 ];
-const GEMINI_PRO_TIER_NAMES: &[&str] = &[crate::services::subscription::TIER_GEMINI_PRO];
-const GEMINI_FLASH_TIER_NAMES: &[&str] = &[crate::services::subscription::TIER_GEMINI_FLASH];
-const GEMINI_FLASH_LITE_TIER_NAMES: &[&str] =
-    &[crate::services::subscription::TIER_GEMINI_FLASH_LITE];
+const GEMINI_PRO_TIER_NAMES: &[&str] = &[crate::providers::TIER_GEMINI_PRO];
+const GEMINI_FLASH_TIER_NAMES: &[&str] = &[crate::providers::TIER_GEMINI_FLASH];
+const GEMINI_FLASH_LITE_TIER_NAMES: &[&str] = &[crate::providers::TIER_GEMINI_FLASH_LITE];
 const TIER_LABEL_GROUPS: &[(&str, &[&str])] = &[
     ("h", H_TIER_NAMES),
     ("w", W_TIER_NAMES),
@@ -144,9 +143,7 @@ fn emoji_for_utilization(pct: f64) -> &'static str {
     }
 }
 
-fn format_subscription_summary(
-    quota: &crate::services::subscription::SubscriptionQuota,
-) -> Option<String> {
+fn format_subscription_summary(quota: &crate::providers::SubscriptionQuota) -> Option<String> {
     if !quota.success {
         return None;
     }
@@ -651,7 +648,7 @@ mod tests {
     use super::{commit_tray_policy, MACOS_DOCK_VISIBLE};
     use super::{format_script_summary, format_subscription_summary, tray_website_url, TRAY_ID};
     use crate::provider::{UsageData, UsageResult};
-    use crate::services::subscription::{
+    use crate::providers::{
         QuotaTier, SubscriptionQuota, TIER_FIVE_HOUR, TIER_GEMINI_FLASH, TIER_GEMINI_FLASH_LITE,
         TIER_GEMINI_PRO, TIER_MONTHLY, TIER_SEVEN_DAY, TIER_SEVEN_DAY_OPUS, TIER_SEVEN_DAY_SONNET,
         TIER_THIRTY_DAY, TIER_WEEKLY_LIMIT,

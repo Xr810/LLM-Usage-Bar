@@ -1,4 +1,4 @@
-use crate::services::subscription::SubscriptionQuota;
+use crate::providers::SubscriptionQuota;
 
 #[tauri::command]
 pub async fn get_coding_plan_quota(
@@ -12,7 +12,7 @@ pub async fn get_coding_plan_quota(
     team_organization_id: Option<String>,
     team_project_id: Option<String>,
 ) -> Result<SubscriptionQuota, String> {
-    crate::services::coding_plan::get_coding_plan_quota(
+    crate::providers::coding_plan::get_coding_plan_quota(
         &base_url,
         &api_key,
         access_key_id.as_deref(),

@@ -57,7 +57,7 @@ impl RouterUpstreamAuth {
                 // 只走既有入口:它自己知道读钥匙串还是回落读文件,不在这里
                 // 直接碰 ~/.codex/auth.json。message 字段不带进错误信息。
                 let (token, _, _, _) =
-                    crate::services::subscription::codex::read_codex_credentials();
+                    crate::providers::codex::subscription::read_codex_credentials();
                 match token {
                     Some(token) => Ok(vec![(
                         "Authorization".to_string(),

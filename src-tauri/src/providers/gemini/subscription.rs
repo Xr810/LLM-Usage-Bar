@@ -3,7 +3,7 @@
 use serde::Deserialize;
 use std::collections::HashMap;
 
-use super::{
+use crate::providers::{
     now_millis, CredentialStatus, QuotaTier, SubscriptionQuota, TIER_GEMINI_FLASH,
     TIER_GEMINI_FLASH_LITE, TIER_GEMINI_PRO,
 };
@@ -472,7 +472,7 @@ async fn query_gemini_quota(access_token: &str) -> Result<SubscriptionQuota, Str
 /// `Expired` 分支会先用 refresh token 续期（Gemini 的 access token 只有约 1 小时，
 /// 而这里的凭据文件本来就由本 app 之外的 Gemini CLI 维护同一份格式），续期失败
 /// 再拿旧 token 试一把。
-pub(super) async fn collect_gemini_quota() -> Result<SubscriptionQuota, String> {
+pub(crate) async fn collect_gemini_quota() -> Result<SubscriptionQuota, String> {
     const TOOL: &str = "gemini";
     let (token, refresh_token, status, message) = read_gemini_credentials();
 

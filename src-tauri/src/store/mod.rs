@@ -102,8 +102,8 @@ fn register_db_change_hook(conn: &Connection) -> rusqlite::Result<()> {
                 if table == "usage_light_predictions" {
                     return;
                 }
-                crate::services::webdav_auto_sync::notify_db_changed(table);
-                crate::services::s3_auto_sync::notify_db_changed(table);
+                crate::sync::webdav_auto_sync::notify_db_changed(table);
+                crate::sync::s3_auto_sync::notify_db_changed(table);
             }
             _ => {}
         },

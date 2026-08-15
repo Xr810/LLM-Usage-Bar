@@ -27,8 +27,9 @@ mod store;
 // router 用 pub 而不是 mod:T4/T5/T7 往里面放的 pub 入口在启动层接线
 // 之前没有调用点,私有模块会触发 dead_code(clippy -D warnings 直接挂)。
 mod app_state;
+mod providers;
 pub mod route;
-mod services;
+mod sync;
 
 mod tray;
 mod tray_popover;
@@ -895,7 +896,7 @@ pub fn run() {
                 log::info!("✓ First-run welcome notice pending");
             }
 
-            crate::services::budget_alert::ensure_permission(app.handle());
+            crate::usage::budget_alert::ensure_permission(app.handle());
 
             // 迁移旧的 app_config_dir 配置到 Store
             if let Err(e) = app_store::migrate_app_config_dir_from_settings(app.handle()) {
@@ -1045,11 +1046,11 @@ pub fn run() {
             }
 
             let _tray = tray_builder.build(app)?;
-            crate::services::webdav_auto_sync::start_worker(
+            crate::sync::webdav_auto_sync::start_worker(
                 app_state.db.clone(),
                 app.handle().clone(),
             );
-            crate::services::s3_auto_sync::start_worker(
+            crate::sync::s3_auto_sync::start_worker(
                 app_state.db.clone(),
                 app.handle().clone(),
             );

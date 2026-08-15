@@ -12,7 +12,7 @@ use serde_json::Value;
 
 use crate::config::settings::{update_webdav_sync_status, WebDavSyncSettings, WebDavSyncStatus};
 use crate::error::AppError;
-use crate::services::webdav::{
+use crate::sync::webdav::{
     auth_from_credentials, build_remote_url, ensure_remote_directories, get_bytes, head_etag,
     path_segments, put_bytes, test_connection, WebDavAuth,
 };

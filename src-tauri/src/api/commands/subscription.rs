@@ -3,7 +3,7 @@ use tauri::{Emitter, State};
 
 use crate::app_state::AppState;
 use crate::config::app_config::AppType;
-use crate::services::subscription::SubscriptionQuota;
+use crate::providers::SubscriptionQuota;
 
 /// 查询官方订阅额度
 ///
@@ -22,7 +22,7 @@ pub async fn get_subscription_quota(
     state: State<'_, AppState>,
     tool: String,
 ) -> Result<SubscriptionQuota, String> {
-    let inner = crate::services::subscription::get_subscription_quota(&tool).await;
+    let inner = crate::providers::get_subscription_quota(&tool).await;
     if let Ok(snapshot) = &inner {
         if let Ok(app_type) = AppType::from_str(&tool) {
             let payload = serde_json::json!({

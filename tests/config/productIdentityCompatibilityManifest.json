@@ -674,7 +674,7 @@
     "reason": "exact read-only legacy compatibility or coexistence reference"
   },
   {
-    "file": "src-tauri/src/services/s3.rs",
+    "file": "src-tauri/src/sync/s3.rs",
     "context": "let key = \"cc-switch-sync/v2/default/_integration_test.json\";",
     "columnNumber": 12,
     "matchedText": "cc-switch",
@@ -682,7 +682,7 @@
     "reason": "exact persisted, transmitted, or upstream compatibility bytes"
   },
   {
-    "file": "src-tauri/src/services/s3.rs",
+    "file": "src-tauri/src/sync/s3.rs",
     "context": "let r = get_object(&creds, \"cc-switch-sync/_no_such_key\", 1024).await;",
     "columnNumber": 29,
     "matchedText": "cc-switch",
@@ -690,7 +690,7 @@
     "reason": "exact persisted, transmitted, or upstream compatibility bytes"
   },
   {
-    "file": "src-tauri/src/services/s3_sync.rs",
+    "file": "src-tauri/src/sync/s3_sync.rs",
     "context": "/// Example: `cc-switch-sync/v2/db-v6/default/manifest.json`",
     "columnNumber": 15,
     "matchedText": "cc-switch",
@@ -698,7 +698,7 @@
     "reason": "exact persisted, transmitted, or upstream compatibility bytes"
   },
   {
-    "file": "src-tauri/src/services/s3_sync.rs",
+    "file": "src-tauri/src/sync/s3_sync.rs",
     "context": "remote_root: \"cc-switch-sync\".to_string(),",
     "columnNumber": 15,
     "matchedText": "cc-switch",
@@ -706,7 +706,7 @@
     "reason": "exact persisted, transmitted, or upstream compatibility bytes"
   },
   {
-    "file": "src-tauri/src/services/s3_sync.rs",
+    "file": "src-tauri/src/sync/s3_sync.rs",
     "context": "assert_eq!(key, \"cc-switch-sync/v2/db-v6/default/manifest.json\");",
     "columnNumber": 18,
     "matchedText": "cc-switch",
@@ -714,7 +714,7 @@
     "reason": "exact persisted, transmitted, or upstream compatibility bytes"
   },
   {
-    "file": "src-tauri/src/services/s3_sync.rs",
+    "file": "src-tauri/src/sync/s3_sync.rs",
     "context": "assert_eq!(parts[0], \"cc-switch-sync\");",
     "columnNumber": 23,
     "matchedText": "cc-switch",
@@ -722,7 +722,7 @@
     "reason": "exact persisted, transmitted, or upstream compatibility bytes"
   },
   {
-    "file": "src-tauri/src/services/sync_protocol.rs",
+    "file": "src-tauri/src/sync/sync_protocol.rs",
     "context": "\"CC_SWITCH_DEVICE_NAME\",",
     "columnNumber": 2,
     "matchedText": "CC_SWITCH",
@@ -730,7 +730,7 @@
     "reason": "exact persisted, transmitted, or upstream compatibility bytes"
   },
   {
-    "file": "src-tauri/src/services/sync_protocol.rs",
+    "file": "src-tauri/src/sync/sync_protocol.rs",
     "context": "(\"CC_SWITCH_DEVICE_NAME\", self.legacy.take()),",
     "columnNumber": 3,
     "matchedText": "CC_SWITCH",
@@ -738,7 +738,7 @@
     "reason": "exact persisted, transmitted, or upstream compatibility bytes"
   },
   {
-    "file": "src-tauri/src/services/sync_protocol.rs",
+    "file": "src-tauri/src/sync/sync_protocol.rs",
     "context": "assert_eq!(LEGACY_SYNC_PROTOCOL_FORMAT, \"cc-switch-webdav-sync\");",
     "columnNumber": 42,
     "matchedText": "cc-switch",
@@ -746,7 +746,7 @@
     "reason": "exact persisted, transmitted, or upstream compatibility bytes"
   },
   {
-    "file": "src-tauri/src/services/sync_protocol.rs",
+    "file": "src-tauri/src/sync/sync_protocol.rs",
     "context": "legacy: std::env::var_os(\"CC_SWITCH_DEVICE_NAME\"),",
     "columnNumber": 27,
     "matchedText": "CC_SWITCH",
@@ -754,7 +754,7 @@
     "reason": "exact persisted, transmitted, or upstream compatibility bytes"
   },
   {
-    "file": "src-tauri/src/services/sync_protocol.rs",
+    "file": "src-tauri/src/sync/sync_protocol.rs",
     "context": "std::env::set_var(\"CC_SWITCH_DEVICE_NAME\", \"Legacy Mac\");",
     "columnNumber": 20,
     "matchedText": "CC_SWITCH",
@@ -762,7 +762,7 @@
     "reason": "exact persisted, transmitted, or upstream compatibility bytes"
   },
   {
-    "file": "src-tauri/src/services/webdav_sync.rs",
+    "file": "src-tauri/src/sync/webdav_sync.rs",
     "context": "remote_root: \"cc-switch-sync\".to_string(),",
     "columnNumber": 15,
     "matchedText": "cc-switch",
@@ -771,7 +771,7 @@
     "occurrences": 2
   },
   {
-    "file": "src-tauri/src/services/webdav_sync.rs",
+    "file": "src-tauri/src/sync/webdav_sync.rs",
     "context": "assert_eq!(segs, vec![\"cc-switch-sync\", \"v2\", \"db-v6\", \"default\"]);",
     "columnNumber": 24,
     "matchedText": "cc-switch",
@@ -779,7 +779,7 @@
     "reason": "exact persisted, transmitted, or upstream compatibility bytes"
   },
   {
-    "file": "src-tauri/src/services/webdav_sync.rs",
+    "file": "src-tauri/src/sync/webdav_sync.rs",
     "context": "assert_eq!(segs, vec![\"cc-switch-sync\", \"v2\", \"default\"]);",
     "columnNumber": 24,
     "matchedText": "cc-switch",

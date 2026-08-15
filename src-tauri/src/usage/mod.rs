@@ -1,5 +1,6 @@
 pub(crate) mod agent_module_migration;
 pub mod aggregation;
+pub(crate) mod budget_alert;
 pub mod budget_migration;
 pub(crate) mod claude_oauth;
 pub(crate) mod cli_probe;

@@ -10,7 +10,7 @@ use tokio::sync::mpsc::{channel, Receiver, Sender};
 
 use crate::config::settings::{self, WebDavSyncSettings};
 use crate::error::AppError;
-use crate::services::webdav_sync as webdav_sync_service;
+use crate::sync::webdav_sync as webdav_sync_service;
 
 const AUTO_SYNC_DEBOUNCE_MS: u64 = 1000;
 pub(crate) const MAX_AUTO_SYNC_WAIT_MS: u64 = 10_000;

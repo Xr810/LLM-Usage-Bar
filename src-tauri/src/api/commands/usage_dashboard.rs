@@ -8,9 +8,9 @@ use crate::model::{
     SystemProviderKeyUsageView, UnassignedUsageDiagnostics, UsageDashboardView, UsageEventPage,
     UsageProviderInput, UsageProviderView,
 };
+use crate::providers::{SystemProviderConnectionService, SystemProviderConnectionTestResult};
 use crate::quota::QuotaRefreshResult;
 use crate::secrets::SecretString;
-use crate::services::{SystemProviderConnectionService, SystemProviderConnectionTestResult};
 use crate::store::AgentModuleDeleteOutcome;
 use crate::usage::aggregation::{aggregate_agent_usage, aggregate_model_usage};
 use crate::usage::dashboard::UsageDashboardService;
@@ -1278,18 +1278,16 @@ mod tests {
         AgentModuleInput, AgentProviderBindingInput, BillingKind, BindingCredentialStatus,
         CostSource, TokenSource, UsageEvent, UsageProviderInput,
     };
-    use crate::quota::{QuotaCollector, QuotaService};
-    use crate::secrets::{
-        BindingCredentialService, CredentialStore, CredentialStoreError, SecretString,
-    };
-    use crate::services::subscription::{
-        QuotaTier, SubscriptionQuota, TIER_FIVE_HOUR, TIER_SEVEN_DAY,
-    };
-    use crate::services::system_provider_connection::{
+    use crate::providers::shared::connection::{
         ModelListClientError, SystemProviderConnectionClient, SystemProviderConnectionFuture,
         SystemProviderConnectionRequest, SystemProviderKeyUsageClientError,
         SystemProviderKeyUsageClientResponse, SystemProviderKeyUsageFuture,
         SystemProviderModelListFuture,
+    };
+    use crate::providers::{QuotaTier, SubscriptionQuota, TIER_FIVE_HOUR, TIER_SEVEN_DAY};
+    use crate::quota::{QuotaCollector, QuotaService};
+    use crate::secrets::{
+        BindingCredentialService, CredentialStore, CredentialStoreError, SecretString,
     };
     use crate::store::Database;
     use crate::usage::status::UsageStatus;

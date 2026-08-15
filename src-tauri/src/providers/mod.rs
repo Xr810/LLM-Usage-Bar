@@ -6,19 +6,26 @@
 //! 本模块只保留共享类型、tier 常量与分发入口；Codex / Gemini 的凭据读取和
 //! 接口查询分别在 `codex` / `gemini` 子模块里。
 
+pub mod balance;
+pub mod claude;
 pub(crate) mod codex;
+pub mod coding_plan;
 mod gemini;
+pub mod shared;
 
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-// `src/usage/quota.rs` 经 `crate::services::subscription::` 这条路径引用它，
+// `src/usage/quota.rs` 经 `crate::providers::` 这条路径引用它，
 // 转出以保持拆分前的路径不变。
 //
 // 同为 `pub(crate)` 的 `query_codex_quota` 不在这里转出：它模块外没有调用方，
 // 转出只会换来一条 unused_imports，而 `-D warnings` 下那就是编译失败。
-// 它在 `codex.rs` 里的可见性照原样保留，将来有人要用再转不迟。
-pub(crate) use codex::query_managed_codex_oauth_quota;
+// 它在 `codex/subscription.rs` 里的可见性照原样保留，将来有人要用再转不迟。
+pub(crate) use codex::subscription::query_managed_codex_oauth_quota;
+
+pub use claude::cli_auth::{ClaudeCliAuthService, ClaudeCliAuthStatus};
+pub use shared::connection::{SystemProviderConnectionService, SystemProviderConnectionTestResult};
 
 // ── 数据类型 ──────────────────────────────────────────────
 
@@ -229,8 +236,8 @@ pub async fn get_subscription_quota(tool: &str) -> Result<SubscriptionQuota, Str
         // Claude Pro/Max only uses local data emitted by official Claude apps.
         // Do not read Claude OAuth credentials or call a private usage endpoint.
         "claude" => crate::quota::claude_quota::collect_local_quota(),
-        "codex" => codex::collect_codex_quota().await,
-        "gemini" => gemini::collect_gemini_quota().await,
+        "codex" => codex::subscription::collect_codex_quota().await,
+        "gemini" => gemini::subscription::collect_gemini_quota().await,
         _ => Ok(SubscriptionQuota::not_found(tool)),
     }
 }

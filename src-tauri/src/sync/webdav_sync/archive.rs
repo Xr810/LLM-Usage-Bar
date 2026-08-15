@@ -8,7 +8,7 @@ use zip::write::SimpleFileOptions;
 use zip::DateTime;
 
 use crate::error::AppError;
-use crate::services::sync_protocol::{
+use crate::sync::sync_protocol::{
     io_context_localized, localized, MAX_SYNC_ARTIFACT_BYTES, REMOTE_SKILLS_ZIP,
 };
 

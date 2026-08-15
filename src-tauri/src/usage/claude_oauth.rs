@@ -26,7 +26,7 @@ use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 
-use crate::services::subscription::{
+use crate::providers::{
     CredentialStatus, ExtraUsage, QuotaTier, SubscriptionQuota, TIER_FIVE_HOUR, TIER_SEVEN_DAY,
     TIER_SEVEN_DAY_OPUS, TIER_SEVEN_DAY_SONNET,
 };

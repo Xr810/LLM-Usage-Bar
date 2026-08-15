@@ -10,7 +10,7 @@ use tokio::sync::mpsc::{channel, Receiver, Sender};
 
 use crate::config::settings::{self, S3SyncSettings};
 use crate::error::AppError;
-use crate::services::s3_sync;
+use crate::sync::s3_sync;
 
 const AUTO_SYNC_DEBOUNCE_MS: u64 = 1000;
 pub(crate) const MAX_AUTO_SYNC_WAIT_MS: u64 = 10_000;

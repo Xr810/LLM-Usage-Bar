@@ -7,7 +7,7 @@
 
 use crate::config;
 use crate::error::AppError;
-use crate::services::subscription::{QuotaTier, SubscriptionQuota, TIER_FIVE_HOUR, TIER_SEVEN_DAY};
+use crate::providers::{QuotaTier, SubscriptionQuota, TIER_FIVE_HOUR, TIER_SEVEN_DAY};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

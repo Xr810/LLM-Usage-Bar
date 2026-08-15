@@ -8,7 +8,7 @@ use std::sync::RwLock;
 
 use crate::config::app_config::AppType;
 use crate::provider::UsageResult;
-use crate::services::subscription::SubscriptionQuota;
+use crate::providers::SubscriptionQuota;
 
 #[derive(Default)]
 pub struct UsageCache {

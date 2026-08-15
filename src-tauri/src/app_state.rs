@@ -1,16 +1,16 @@
-use crate::quota::{QuotaCycleCallback, QuotaSchedulerHandle, QuotaService};
-use crate::secrets::{unavailable_credential_store, BindingCredentialService, CredentialStore};
 #[cfg(test)]
-use crate::services::claude_cli_auth::ClaudeAuthCommandRunner;
-use crate::services::{
-    official_pricing::{
-        start_scheduler as start_official_pricing_scheduler, OfficialPricingSchedulerHandle,
-    },
-    provider_key_usage_scheduler::{
+use crate::providers::claude::cli_auth::ClaudeAuthCommandRunner;
+use crate::providers::{
+    shared::key_usage_scheduler::{
         start_scheduler as start_provider_key_usage_scheduler, ProviderKeyUsageSchedulerHandle,
+    },
+    shared::official_pricing::{
+        start_scheduler as start_official_pricing_scheduler, OfficialPricingSchedulerHandle,
     },
     ClaudeCliAuthService, SystemProviderConnectionService,
 };
+use crate::quota::{QuotaCycleCallback, QuotaSchedulerHandle, QuotaService};
+use crate::secrets::{unavailable_credential_store, BindingCredentialService, CredentialStore};
 use crate::store::Database;
 use crate::usage::session::SessionUsageService;
 use crate::usage::tray_usage::TrayUsageService;
@@ -236,8 +236,8 @@ impl AppState {
 mod tests {
     use super::*;
     use crate::model::{BillingKind, TokenSource, UsageProviderInput, UsageProviderStored};
+    use crate::providers::SubscriptionQuota;
     use crate::quota::QuotaCollector;
-    use crate::services::subscription::SubscriptionQuota;
     use chrono::{Local, TimeZone};
     use futures::future::BoxFuture;
     use std::sync::atomic::{AtomicUsize, Ordering};
