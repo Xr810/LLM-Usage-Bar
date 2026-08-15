@@ -11,8 +11,8 @@ use std::collections::BTreeSet;
 
 use rust_decimal::Decimal;
 
+use crate::config::settings::ApiBudgetMode;
 use crate::error::AppError;
-use crate::settings::ApiBudgetMode;
 use crate::store::Database;
 use crate::usage::tray_snapshot::TrayUsageSnapshot;
 
@@ -216,7 +216,7 @@ pub fn notify_for_snapshot(app: &tauri::AppHandle, snapshot: &TrayUsageSnapshot)
         return;
     }
 
-    let language = crate::settings::get_settings()
+    let language = crate::config::settings::get_settings()
         .language
         .unwrap_or_else(|| "zh".to_string());
     for alert in &alerts {

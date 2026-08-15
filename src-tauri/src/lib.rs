@@ -1,6 +1,5 @@
 mod agent_paths;
 pub mod api;
-mod app_config;
 mod app_store;
 mod auto_launch;
 mod claude_desktop_config;
@@ -22,7 +21,6 @@ mod panic_hook;
 pub mod product_identity;
 mod prompt;
 mod provider;
-mod provider_defaults;
 mod quota;
 pub mod secrets;
 mod store;
@@ -31,7 +29,6 @@ mod store;
 mod app_state;
 pub mod route;
 mod services;
-mod settings;
 
 mod tray;
 mod tray_popover;
@@ -39,15 +36,15 @@ pub mod tray_status;
 pub mod usage;
 mod usage_events;
 
-pub use app_config::{AppType, MultiAppConfig};
 pub use app_state::AppState;
 pub use commands::*;
+pub use config::app_config::{AppType, MultiAppConfig};
+pub use config::settings::{update_settings, AppSettings};
 pub use config::{get_claude_account_path, get_claude_settings_path, read_json_file};
 pub use error::AppError;
 pub use prompt::Prompt;
 pub use provider::{Provider, ProviderMeta};
 pub use quota::claude_quota::run_claude_statusline_bridge;
-pub use settings::{update_settings, AppSettings};
 pub use store::Database;
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
@@ -565,7 +562,7 @@ pub fn run() {
                 return;
             }
 
-            let settings = crate::settings::get_settings();
+            let settings = crate::config::settings::get_settings();
 
             if settings.minimize_to_tray_on_close {
                 api.prevent_close();
@@ -647,7 +644,7 @@ pub fn run() {
             // written by auto-launch 0.6 before the executable-path fix.
             #[cfg(target_os = "macos")]
             {
-                let launch_on_startup = crate::settings::get_settings().launch_on_startup;
+                let launch_on_startup = crate::config::settings::get_settings().launch_on_startup;
                 let result = if launch_on_startup {
                     crate::auto_launch::enable_auto_launch()
                 } else {
@@ -704,7 +701,7 @@ pub fn run() {
 
                 // 循环：支持用户重试加载配置文件
                 loop {
-                    match crate::app_config::MultiAppConfig::load() {
+                    match crate::config::app_config::MultiAppConfig::load() {
                         Ok(config) => {
                             log::info!("✓ 配置文件加载成功");
                             break Some(config);
@@ -869,7 +866,7 @@ pub fn run() {
             //
             // 捕获首次运行快照：所有全新装用户都会看到欢迎弹窗介绍 LLM Usage Bar 的工作方式。
             // 读失败时默认不弹，宁可漏弹也不要因为故障打扰用户。
-            let first_run_already_confirmed = crate::settings::get_settings()
+            let first_run_already_confirmed = crate::config::settings::get_settings()
                 .first_run_notice_confirmed
                 .unwrap_or(false);
             let fresh_install_at_startup =
@@ -1344,7 +1341,7 @@ pub fn run() {
 
                 #[cfg(not(target_os = "macos"))]
                 {
-                    let settings = crate::settings::get_settings();
+                    let settings = crate::config::settings::get_settings();
 
                     // 在窗口首次显示前同步装饰状态，避免前端加载后再切换导致标题栏闪烁
                     // 仅 Linux 生效：解决 Wayland 下系统窗口按钮不可用的问题

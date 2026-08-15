@@ -2415,12 +2415,12 @@ pub async fn probe_tool_installations(
 #[cfg(target_os = "windows")]
 fn wsl_distro_for_tool(tool: &str) -> Option<String> {
     let override_dir = match tool {
-        "claude" => crate::settings::get_claude_override_dir(),
-        "codex" => crate::settings::get_codex_override_dir(),
-        "gemini" => crate::settings::get_gemini_override_dir(),
-        "opencode" => crate::settings::get_opencode_override_dir(),
-        "openclaw" => crate::settings::get_openclaw_override_dir(),
-        "hermes" => crate::settings::get_hermes_override_dir(),
+        "claude" => crate::config::settings::get_claude_override_dir(),
+        "codex" => crate::config::settings::get_codex_override_dir(),
+        "gemini" => crate::config::settings::get_gemini_override_dir(),
+        "opencode" => crate::config::settings::get_opencode_override_dir(),
+        "openclaw" => crate::config::settings::get_openclaw_override_dir(),
+        "hermes" => crate::config::settings::get_hermes_override_dir(),
         _ => None,
     }?;
 
@@ -2786,7 +2786,7 @@ read -r _
         std::fs::set_permissions(&script_file, std::fs::Permissions::from_mode(0o755))
             .map_err(|e| format!("设置脚本权限失败: {e}"))?;
 
-        let preferred = crate::settings::get_preferred_terminal();
+        let preferred = crate::config::settings::get_preferred_terminal();
         let terminal = preferred.as_deref().unwrap_or("terminal");
 
         let result = match terminal {
@@ -2821,7 +2821,7 @@ read -r _
         std::fs::set_permissions(&script_file, std::fs::Permissions::from_mode(0o755))
             .map_err(|e| format!("设置脚本权限失败: {e}"))?;
 
-        let preferred = crate::settings::get_preferred_terminal();
+        let preferred = crate::config::settings::get_preferred_terminal();
         let default_terminals = [
             ("gnome-terminal", vec!["--"]),
             ("konsole", vec!["-e"]),
@@ -2882,7 +2882,7 @@ read -r _
 
     #[cfg(target_os = "windows")]
     {
-        let preferred = crate::settings::get_preferred_terminal();
+        let preferred = crate::config::settings::get_preferred_terminal();
         let terminal = preferred.as_deref().unwrap_or("cmd");
 
         let bat_file = temp_dir.join(format!("cc_switch_{}_{}.bat", label, pid));

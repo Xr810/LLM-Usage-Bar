@@ -10,12 +10,12 @@ use std::sync::OnceLock;
 use chrono::Utc;
 use serde_json::Value;
 
+use crate::config::settings::{update_webdav_sync_status, WebDavSyncSettings, WebDavSyncStatus};
 use crate::error::AppError;
 use crate::services::webdav::{
     auth_from_credentials, build_remote_url, ensure_remote_directories, get_bytes, head_etag,
     path_segments, put_bytes, test_connection, WebDavAuth,
 };
-use crate::settings::{update_webdav_sync_status, WebDavSyncSettings, WebDavSyncStatus};
 
 use super::sync_protocol::{
     apply_snapshot, build_local_snapshot, effective_db_compat_version, localized,

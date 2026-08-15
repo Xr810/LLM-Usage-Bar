@@ -255,9 +255,9 @@ pub(crate) fn read_claude_keychain_credentials(interactive: bool) -> KeychainRea
 /// 记录拒绝冷却到设置（幂等；失败只记日志，绝不影响额度链路）。
 #[cfg(target_os = "macos")]
 fn record_denied_cooldown(now: i64) {
-    if let Err(error) =
-        crate::settings::set_claude_oauth_denied_until(Some(now + KEYCHAIN_DENY_COOLDOWN_SECS))
-    {
+    if let Err(error) = crate::config::settings::set_claude_oauth_denied_until(Some(
+        now + KEYCHAIN_DENY_COOLDOWN_SECS,
+    )) {
         log::warn!("记录 Claude 钥匙串拒绝冷却失败: {error}");
     }
 }
@@ -393,7 +393,7 @@ pub(crate) async fn collect_claude_oauth_quota(
     interactive: bool,
 ) -> Result<SubscriptionQuota, String> {
     let now = now_unix_seconds()?;
-    let settings = crate::settings::get_settings();
+    let settings = crate::config::settings::get_settings();
     if let Err(gate) = check_consent_gate(
         settings.claude_oauth_quota_enabled,
         &settings.claude_oauth_prompt_mode,

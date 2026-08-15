@@ -4,7 +4,7 @@ use tauri::AppHandle;
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 
-use crate::app_config::AppType;
+use crate::config::app_config::AppType;
 use crate::config::{self, get_claude_settings_path};
 
 use std::str::FromStr;

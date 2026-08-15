@@ -16,8 +16,8 @@ use super::subscription_pace::{
     classify_subscription_windows, FIVE_HOUR_WINDOW_KIND, SEVEN_DAY_WINDOW_KIND,
 };
 use super::usage_light_prediction::{record_live_prediction, SHARED_DAILY_BUDGET_PROVIDER_ID};
+use crate::config::settings::{ApiBudgetConfig, ApiBudgetMode};
 use crate::error::AppError;
-use crate::settings::{ApiBudgetConfig, ApiBudgetMode};
 use crate::store::Database;
 use chrono::{DateTime, Local, LocalResult, NaiveDate, SecondsFormat, TimeZone, Utc};
 use rust_decimal::Decimal;
@@ -317,7 +317,7 @@ impl TrayUsageProjector {
             (left.name.to_lowercase(), left.id.as_str())
                 .cmp(&(right.name.to_lowercase(), right.id.as_str()))
         });
-        let settings = crate::settings::get_settings();
+        let settings = crate::config::settings::get_settings();
         let thresholds = SubscriptionThresholds::from(&settings);
         let api_budget_config =
             budget_config_override.unwrap_or_else(|| settings.api_budget_config());

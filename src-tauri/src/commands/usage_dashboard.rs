@@ -1133,7 +1133,7 @@ pub fn get_provider_usage_dashboard_test_hook(
 }
 
 fn usage_dashboard_service(state: &AppState) -> UsageDashboardService<'_> {
-    let settings = crate::settings::get_settings();
+    let settings = crate::config::settings::get_settings();
     UsageDashboardService::new(&state.db)
         .with_subscription_thresholds(SubscriptionThresholds::from(&settings))
         .with_pace_now_timestamp(Local::now().timestamp())

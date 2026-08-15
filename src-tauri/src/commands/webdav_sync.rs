@@ -7,9 +7,9 @@ use crate::app_state::AppState;
 use crate::commands::sync_support::{
     attach_warning, post_sync_warning_from_result, run_post_import_sync,
 };
+use crate::config::settings::{self, WebDavSyncSettings};
 use crate::error::AppError;
 use crate::services::webdav_sync as webdav_sync_service;
-use crate::settings::{self, WebDavSyncSettings};
 
 fn persist_sync_error(settings: &mut WebDavSyncSettings, error: &AppError, source: &str) {
     settings.status.last_error = Some(error.to_string());
@@ -180,8 +180,8 @@ mod tests {
         map_sync_result, persist_sync_error, require_enabled_webdav_settings,
         resolve_password_for_request, run_with_webdav_lock, webdav_sync_mutex,
     };
+    use crate::config::settings::{AppSettings, WebDavSyncSettings};
     use crate::error::AppError;
-    use crate::settings::{AppSettings, WebDavSyncSettings};
     use serial_test::serial;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
@@ -275,7 +275,7 @@ mod tests {
         std::fs::create_dir_all(&test_home).expect("create test home");
         std::env::set_var("LLM_USAGE_BAR_TEST_HOME", &test_home);
 
-        crate::settings::update_settings(AppSettings::default()).expect("reset settings");
+        crate::config::settings::update_settings(AppSettings::default()).expect("reset settings");
         let mut current = WebDavSyncSettings {
             enabled: true,
             base_url: "https://dav.example.com/dav/".to_string(),
@@ -285,7 +285,7 @@ mod tests {
             profile: "default".to_string(),
             ..WebDavSyncSettings::default()
         };
-        crate::settings::set_webdav_sync_settings(Some(current.clone()))
+        crate::config::settings::set_webdav_sync_settings(Some(current.clone()))
             .expect("seed webdav settings");
 
         persist_sync_error(
@@ -294,7 +294,8 @@ mod tests {
             "manual",
         );
 
-        let after = crate::settings::get_webdav_sync_settings().expect("read webdav settings");
+        let after =
+            crate::config::settings::get_webdav_sync_settings().expect("read webdav settings");
         assert_eq!(after.base_url, "https://dav.example.com/dav/");
         assert_eq!(after.username, "alice");
         assert_eq!(after.password, "secret");
@@ -320,8 +321,8 @@ mod tests {
         std::fs::create_dir_all(&test_home).expect("create test home");
         std::env::set_var("LLM_USAGE_BAR_TEST_HOME", &test_home);
 
-        crate::settings::update_settings(AppSettings::default()).expect("reset settings");
-        crate::settings::set_webdav_sync_settings(Some(WebDavSyncSettings {
+        crate::config::settings::update_settings(AppSettings::default()).expect("reset settings");
+        crate::config::settings::set_webdav_sync_settings(Some(WebDavSyncSettings {
             enabled: false,
             base_url: "https://dav.example.com/dav/".to_string(),
             username: "alice".to_string(),
@@ -345,8 +346,8 @@ mod tests {
         std::fs::create_dir_all(&test_home).expect("create test home");
         std::env::set_var("LLM_USAGE_BAR_TEST_HOME", &test_home);
 
-        crate::settings::update_settings(AppSettings::default()).expect("reset settings");
-        crate::settings::set_webdav_sync_settings(Some(WebDavSyncSettings {
+        crate::config::settings::update_settings(AppSettings::default()).expect("reset settings");
+        crate::config::settings::set_webdav_sync_settings(Some(WebDavSyncSettings {
             enabled: true,
             base_url: "https://dav.example.com/dav/".to_string(),
             username: "alice".to_string(),

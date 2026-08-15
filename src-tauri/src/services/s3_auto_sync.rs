@@ -8,9 +8,9 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 
+use crate::config::settings::{self, S3SyncSettings};
 use crate::error::AppError;
 use crate::services::s3_sync;
-use crate::settings::{self, S3SyncSettings};
 
 const AUTO_SYNC_DEBOUNCE_MS: u64 = 1000;
 pub(crate) const MAX_AUTO_SYNC_WAIT_MS: u64 = 10_000;
@@ -189,7 +189,7 @@ mod tests {
         should_run_auto_sync, should_trigger_for_table, AutoSyncSuppressionGuard,
         MAX_AUTO_SYNC_WAIT_MS,
     };
-    use crate::settings::S3SyncSettings;
+    use crate::config::settings::S3SyncSettings;
     use std::time::{Duration, Instant};
     use tokio::sync::mpsc::channel;
 

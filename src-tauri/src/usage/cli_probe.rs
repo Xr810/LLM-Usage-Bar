@@ -115,7 +115,7 @@ pub(crate) async fn probe_claude_usage(interactive: bool) -> Result<Subscription
         return Err(NOT_INSTALLED_ERROR_CODE.to_string());
     };
 
-    let claude_config_dir = crate::settings::get_claude_override_dir();
+    let claude_config_dir = crate::config::settings::get_claude_override_dir();
     let result = tokio::task::spawn_blocking(move || -> Result<ProbeUsage, String> {
         let mut env: Vec<(&str, String)> = Vec::new();
         if let Some(dir) = claude_config_dir.as_deref() {

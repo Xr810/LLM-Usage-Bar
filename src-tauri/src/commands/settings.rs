@@ -3,9 +3,9 @@
 use tauri::AppHandle;
 
 fn merge_settings_for_save(
-    mut incoming: crate::settings::AppSettings,
-    existing: &crate::settings::AppSettings,
-) -> crate::settings::AppSettings {
+    mut incoming: crate::config::settings::AppSettings,
+    existing: &crate::config::settings::AppSettings,
+) -> crate::config::settings::AppSettings {
     match (&mut incoming.webdav_sync, &existing.webdav_sync) {
         // incoming 没有 webdav → 保留现有
         (None, _) => {
@@ -49,21 +49,21 @@ fn merge_settings_for_save(
 
 /// 获取设置
 #[tauri::command]
-pub async fn get_settings() -> Result<crate::settings::AppSettings, String> {
-    Ok(crate::settings::get_settings_for_frontend())
+pub async fn get_settings() -> Result<crate::config::settings::AppSettings, String> {
+    Ok(crate::config::settings::get_settings_for_frontend())
 }
 
 /// 保存设置
 #[tauri::command]
 pub async fn save_settings(
     state: tauri::State<'_, crate::app_state::AppState>,
-    settings: crate::settings::AppSettings,
+    settings: crate::config::settings::AppSettings,
 ) -> Result<bool, String> {
-    let existing = crate::settings::get_settings();
+    let existing = crate::config::settings::get_settings();
     let merged = merge_settings_for_save(settings, &existing);
     let consent_changed = merged.claude_oauth_quota_enabled != existing.claude_oauth_quota_enabled
         || merged.claude_oauth_prompt_mode != existing.claude_oauth_prompt_mode;
-    crate::settings::update_settings(merged).map_err(|e| e.to_string())?;
+    crate::config::settings::update_settings(merged).map_err(|e| e.to_string())?;
 
     // 同意门控刚改过：手动刷新的 60 秒结果缓存里存的是按旧设置得到的结论
     // （多半是 consent_required），不清掉的话用户开完开关立刻点刷新还会看到
@@ -135,7 +135,7 @@ pub async fn set_auto_launch(enabled: bool) -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
     use super::merge_settings_for_save;
-    use crate::settings::{
+    use crate::config::settings::{
         AppSettings, CodexOfficialHistoryUnifyMigration, CodexProviderTemplateMigration,
         CodexThirdPartyHistoryProviderBucketMigration, LocalMigrations, S3SyncSettings,
         WebDavSyncSettings,

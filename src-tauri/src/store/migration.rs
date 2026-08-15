@@ -3,7 +3,7 @@
 //! 将旧版 config.json (MultiAppConfig) 数据迁移到 SQLite 数据库。
 
 use super::{lock_conn, to_json_string, Database};
-use crate::app_config::MultiAppConfig;
+use crate::config::app_config::MultiAppConfig;
 use crate::error::AppError;
 use rusqlite::{params, Connection};
 

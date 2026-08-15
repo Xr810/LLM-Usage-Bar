@@ -118,9 +118,9 @@ impl Provider {
     /// in `UsageScriptModal.tsx`.
     pub fn resolve_usage_credentials(
         &self,
-        app_type: &crate::app_config::AppType,
+        app_type: &crate::config::app_config::AppType,
     ) -> (String, String) {
-        use crate::app_config::AppType;
+        use crate::config::app_config::AppType;
 
         let settings = &self.settings_config;
         let str_at =
@@ -410,7 +410,7 @@ impl LocalProxyRequestOverrides {
 pub struct ProviderMeta {
     /// 自定义端点列表（按 URL 去重存储）
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub custom_endpoints: HashMap<String, crate::settings::CustomEndpoint>,
+    pub custom_endpoints: HashMap<String, crate::config::settings::CustomEndpoint>,
     /// 是否在写入 live 时应用通用配置片段
     #[serde(
         rename = "commonConfigEnabled",
@@ -721,7 +721,7 @@ mod tests {
 
     // ── resolve_usage_credentials (per-app credential extraction) ──
 
-    use crate::app_config::AppType;
+    use crate::config::app_config::AppType;
 
     fn provider_with(settings_config: serde_json::Value) -> Provider {
         Provider::with_id("p".to_string(), "P".to_string(), settings_config, None)

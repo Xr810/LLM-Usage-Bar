@@ -82,7 +82,7 @@ impl Database {
                     let added_at: Option<i64> = row.get(1)?;
                     Ok((
                         url,
-                        crate::settings::CustomEndpoint {
+                        crate::config::settings::CustomEndpoint {
                             url: "".to_string(),
                             added_at: added_at.unwrap_or(0),
                             last_used: None,
@@ -661,7 +661,7 @@ impl Database {
     pub fn ensure_official_seed_by_id(
         &self,
         seed_id: &str,
-        app_type: crate::app_config::AppType,
+        app_type: crate::config::app_config::AppType,
     ) -> Result<bool, AppError> {
         use crate::store::dao::providers_seed::BUILTIN_PROVIDER_CATALOG;
 
@@ -709,7 +709,7 @@ impl Database {
 
 #[cfg(test)]
 mod ensure_official_seed_tests {
-    use crate::app_config::AppType;
+    use crate::config::app_config::AppType;
     use crate::store::dao::providers_seed::CLAUDE_DESKTOP_OFFICIAL_PROVIDER_ID;
     use crate::store::Database;
 

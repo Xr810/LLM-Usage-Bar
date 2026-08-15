@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{OnceLock, RwLock};
 use tempfile::NamedTempFile;
 
-use crate::app_config::AppType;
+use crate::config::app_config::AppType;
 use crate::error::AppError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -1148,7 +1148,7 @@ pub fn update_s3_sync_status(status: WebDavSyncStatus) -> Result<(), AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app_config::AppType;
+    use crate::config::app_config::AppType;
     use tempfile::tempdir;
 
     #[test]

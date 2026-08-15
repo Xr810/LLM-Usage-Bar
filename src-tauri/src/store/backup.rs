@@ -1636,7 +1636,7 @@ impl Database {
 
     /// Periodic backup: create a new backup if the latest one is older than the configured interval
     pub(crate) fn periodic_backup_if_needed(&self) -> Result<(), AppError> {
-        let interval_hours = crate::settings::effective_backup_interval_hours();
+        let interval_hours = crate::config::settings::effective_backup_interval_hours();
         if interval_hours > 0 {
             if let Some(backup_dir) = self.authoritative_backup_dir()? {
                 let latest = fs::read_dir(&backup_dir).ok().and_then(|entries| {
@@ -1727,7 +1727,7 @@ impl Database {
 
     /// 清理旧的数据库备份，保留最新的 N 个
     fn cleanup_db_backups(dir: &Path) -> Result<(), AppError> {
-        let retain = crate::settings::effective_backup_retain_count();
+        let retain = crate::config::settings::effective_backup_retain_count();
         let entries = match fs::read_dir(dir) {
             Ok(iter) => iter
                 .filter_map(|entry| entry.ok())
@@ -2128,9 +2128,9 @@ mod tests {
         redact_url_secrets, Database, LEGACY_CC_SWITCH_SQL_EXPORT_HEADER,
         LLM_USAGE_BAR_SQL_EXPORT_HEADER,
     };
+    use crate::config::settings::{update_settings, AppSettings};
     use crate::error::AppError;
     use crate::product_identity::DATABASE_FILE;
-    use crate::settings::{update_settings, AppSettings};
     use crate::usage::domain::{BillingKind, TokenSource, UsageProviderInput};
     use rusqlite::params;
     use serial_test::serial;

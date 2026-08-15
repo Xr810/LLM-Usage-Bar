@@ -7,9 +7,9 @@ use crate::app_state::AppState;
 use crate::commands::sync_support::{
     attach_warning, post_sync_warning_from_result, run_post_import_sync,
 };
+use crate::config::settings::{self, S3SyncSettings};
 use crate::error::AppError;
 use crate::services::s3_sync as s3_sync_service;
-use crate::settings::{self, S3SyncSettings};
 
 fn persist_sync_error(settings: &mut S3SyncSettings, error: &AppError, source: &str) {
     settings.status.last_error = Some(error.to_string());
@@ -172,8 +172,8 @@ mod tests {
         map_sync_result, persist_sync_error, require_enabled_s3_settings,
         resolve_secret_for_request, run_with_s3_lock, s3_sync_mutex,
     };
+    use crate::config::settings::{AppSettings, S3SyncSettings};
     use crate::error::AppError;
-    use crate::settings::{AppSettings, S3SyncSettings};
     use serial_test::serial;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
@@ -268,7 +268,7 @@ mod tests {
         std::fs::create_dir_all(&test_home).expect("create test home");
         std::env::set_var("LLM_USAGE_BAR_TEST_HOME", &test_home);
 
-        crate::settings::update_settings(AppSettings::default()).expect("reset settings");
+        crate::config::settings::update_settings(AppSettings::default()).expect("reset settings");
         let mut current = S3SyncSettings {
             enabled: true,
             region: "us-east-1".to_string(),
@@ -279,7 +279,8 @@ mod tests {
             profile: "default".to_string(),
             ..S3SyncSettings::default()
         };
-        crate::settings::set_s3_sync_settings(Some(current.clone())).expect("seed s3 settings");
+        crate::config::settings::set_s3_sync_settings(Some(current.clone()))
+            .expect("seed s3 settings");
 
         persist_sync_error(
             &mut current,
@@ -287,7 +288,7 @@ mod tests {
             "manual",
         );
 
-        let after = crate::settings::get_s3_sync_settings().expect("read s3 settings");
+        let after = crate::config::settings::get_s3_sync_settings().expect("read s3 settings");
         assert_eq!(after.region, "us-east-1");
         assert_eq!(after.bucket, "my-bucket");
         assert_eq!(after.access_key_id, "AKID");
@@ -314,8 +315,8 @@ mod tests {
         std::fs::create_dir_all(&test_home).expect("create test home");
         std::env::set_var("LLM_USAGE_BAR_TEST_HOME", &test_home);
 
-        crate::settings::update_settings(AppSettings::default()).expect("reset settings");
-        crate::settings::set_s3_sync_settings(Some(S3SyncSettings {
+        crate::config::settings::update_settings(AppSettings::default()).expect("reset settings");
+        crate::config::settings::set_s3_sync_settings(Some(S3SyncSettings {
             enabled: false,
             region: "us-east-1".to_string(),
             bucket: "my-bucket".to_string(),
@@ -340,8 +341,8 @@ mod tests {
         std::fs::create_dir_all(&test_home).expect("create test home");
         std::env::set_var("LLM_USAGE_BAR_TEST_HOME", &test_home);
 
-        crate::settings::update_settings(AppSettings::default()).expect("reset settings");
-        crate::settings::set_s3_sync_settings(Some(S3SyncSettings {
+        crate::config::settings::update_settings(AppSettings::default()).expect("reset settings");
+        crate::config::settings::set_s3_sync_settings(Some(S3SyncSettings {
             enabled: true,
             region: "us-east-1".to_string(),
             bucket: "my-bucket".to_string(),

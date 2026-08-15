@@ -1,3 +1,7 @@
+pub mod app_config;
+pub mod provider_defaults;
+pub mod settings;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::fs;
@@ -30,7 +34,7 @@ pub fn get_home_dir() -> PathBuf {
 
 /// 获取 Claude Code 配置目录路径
 pub fn get_claude_config_dir() -> PathBuf {
-    if let Some(custom) = crate::settings::get_claude_override_dir() {
+    if let Some(custom) = crate::config::settings::get_claude_override_dir() {
         return custom;
     }
 
@@ -164,7 +168,7 @@ fn derive_account_path_from_override(dir: &Path) -> PathBuf {
 
 /// Resolve the account profile for the same Claude config root used by sessions.
 pub fn get_claude_account_path() -> PathBuf {
-    if let Some(custom_dir) = crate::settings::get_claude_override_dir() {
+    if let Some(custom_dir) = crate::config::settings::get_claude_override_dir() {
         if let Some(path) = default_account_path_for_config_dir(&custom_dir) {
             return path;
         }
