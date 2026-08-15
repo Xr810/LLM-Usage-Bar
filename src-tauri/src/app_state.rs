@@ -3,6 +3,7 @@ use crate::secrets::{unavailable_credential_store, BindingCredentialService, Cre
 #[cfg(test)]
 use crate::services::claude_cli_auth::ClaudeAuthCommandRunner;
 use crate::services::{
+    balance::{start_openrouter_balance_scheduler, OpenRouterBalanceSchedulerHandle},
     official_pricing::{
         start_scheduler as start_official_pricing_scheduler, OfficialPricingSchedulerHandle,
     },
@@ -35,6 +36,7 @@ pub struct AppState {
     midnight_scheduler: Mutex<Option<TrayUsageSchedulerHandle>>,
     official_pricing_scheduler: Mutex<Option<OfficialPricingSchedulerHandle>>,
     provider_key_usage_scheduler: Mutex<Option<ProviderKeyUsageSchedulerHandle>>,
+    openrouter_balance_scheduler: Mutex<Option<OpenRouterBalanceSchedulerHandle>>,
 }
 
 impl AppState {
@@ -120,6 +122,7 @@ impl AppState {
             midnight_scheduler: Mutex::new(None),
             official_pricing_scheduler: Mutex::new(None),
             provider_key_usage_scheduler: Mutex::new(None),
+            openrouter_balance_scheduler: Mutex::new(None),
         }
     }
 
@@ -226,6 +229,33 @@ impl AppState {
             Ok(mut scheduler) => scheduler.take(),
             Err(_) => {
                 log::error!("provider key usage scheduler lock is poisoned");
+                None
+            }
+        }
+    }
+
+    pub fn start_openrouter_balance_scheduler(&self) -> bool {
+        let Ok(mut scheduler) = self.openrouter_balance_scheduler.lock() else {
+            log::error!("openrouter balance scheduler lock is poisoned");
+            return false;
+        };
+        if scheduler.is_some() {
+            return false;
+        }
+        *scheduler = Some(start_openrouter_balance_scheduler(
+            self.db.clone(),
+            self.credential_store.clone(),
+        ));
+        true
+    }
+
+    pub(crate) fn take_openrouter_balance_scheduler(
+        &self,
+    ) -> Option<OpenRouterBalanceSchedulerHandle> {
+        match self.openrouter_balance_scheduler.lock() {
+            Ok(mut scheduler) => scheduler.take(),
+            Err(_) => {
+                log::error!("openrouter balance scheduler lock is poisoned");
                 None
             }
         }

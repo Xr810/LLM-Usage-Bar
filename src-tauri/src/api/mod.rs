@@ -7,4 +7,5 @@
 //! 硬约定:本目录任何文件不得 import 任何 tauri 类型——「与传输无关」可机械验证。
 
 pub mod commands;
+pub mod openrouter_balance;
 pub mod router;
