@@ -1111,3 +1111,54 @@ HIG 那份是 `feat/swift-native-shell`(PR #27)的配套改造计划,同样尚�
 不代表已评审通过。
 
 已推送的历史不为此改写(用户 2026-08-14 决定),留这条说明即可。
+
+---
+
+## 15. 后端重排之后留下的两条债(2026-08-15,T17 合入时记)
+
+T17 把后端从「按技术类型分目录」改成「按职责分模块」(设计文档
+`2026-08-14-modular-core-and-providers.md` §9.2)。**有两处没做完,都是任务书
+本身没给出路,不是执行者偷懒。** 打开代码看到它们时不要以为是遗漏:
+
+### 15.1 `model` 仍然依赖 `usage::status`
+
+```
+src-tauri/src/model/domain.rs:4
+    use crate::usage::status::{PaceBasis, SourceClassification, UsageStatus};
+```
+
+设计 §9.3 第一条要求 **`model` 谁都不依赖**。这三个纯枚举住在
+`usage/status.rs`(1262 行,还依赖 `rhythm`),把它们并进 `model` 需要**拆文件**,
+而 T17 的红线是「只搬不改、不许拆分文件」。
+
+**要消除这条边**:把 `status.rs` 里那三个纯枚举单独拆进 `model/`,
+其余留在 `usage/`。是个小活,但它得单独做,因为拆文件必须能逐个复核。
+
+### 15.2 `services/` 还剩 17 个文件
+
+剩下的是:`balance`、`budget_alert`、`claude_cli_auth`、`coding_plan`、
+`official_pricing`、`provider_key_usage_scheduler`、`s3*`、`sync_protocol`、
+`system_provider_connection`、`webdav*`、`subscription/`。
+
+**它们不属于 §9 的八个模块里的任何一个** —— 设计文档把这类东西归「provider 模块」
+(§9.3 二、§10 第二步),而 T17 的批次表**没有为 provider 模块立目录**。
+硬塞进 model/store/ingest/quota/route/api/config/secrets 任何一个都是错误归类。
+
+`subscription/` 尤其不能硬搬:`mod.rs` 里共享类型和 `get_subscription_quota`
+(要发 HTTP、要碰凭据)在同一个文件,整搬进 `model` 会让 model 依赖 HTTP 和凭据,
+正好违反 §9.3 第一条。
+
+**下一步应当是**:先决定 provider 模块的目录形态(设计 §5 说 provider 模块与面板
+是两种东西、方向相反),再把这 17 个文件按那个形态归位。**不要为了让 `services/`
+消失而随便造一个目录。**
+
+### 15.3 一条给验收标准的教训
+
+T17 任务书写的验收是「那条 diff 命令输出必须为空」。**这个预期不现实**:
+模块搬家必然要改函数体里的内联全限定路径(`crate::database::lock_conn!` →
+`crate::store::lock_conn!`),而路径变长会触发 rustfmt 重新折行。实际输出 520 行。
+
+**更好的机械判据是比对字符串字面量**:纯搬运不该改动任何字符串。T17 实测
+全树 17101 条字面量前后数量相同,唯一差异是一条子进程测试定位串
+(`database::identity_migration::tests::…` → `store::…`,那是模块路径不是业务字符串)。
+以后再做这类大搬运,用这个判据。
