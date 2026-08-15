@@ -167,6 +167,9 @@
 =======
 | [T21](T21-first-real-run.md) | 让 router 第一次真的处理一个请求 | T17 | ✅ 与 T22 |
 | [T22](T22-slim-down.md) | 找出冗余,把后端瘦下来 | T17 | ✅ 与 T21 |
+| [T23](T23-sse-content-type-gate.md) | SSE 不再攒兜底缓冲 | T13 T22 | ✅ 与 T24 T25 |
+| [T24](T24-lazy-http-client.md) | http_client 别堵启动主线程 | T22 | ⚠️ 与 T25 同改 lib.rs |
+| [T25](T25-drop-forwarding-layer.md) | 删掉四个转发层文件 | T17 T22 | ⚠️ 与 T24 同改 lib.rs |
 >>>>>>> task/T21-real-run
 
 **UI 不在此列** —— 设置界面、菜单栏状态由项目所有者自己实现。
