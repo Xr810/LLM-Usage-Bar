@@ -1262,7 +1262,21 @@ services/    剩 17 个文件(同步、告警、定价调度、subscription 等)
 ### 18.2 三件已知的债(都不是遗漏,是有意留的)
 
 1. **`model` 仍依赖 `usage::status`** —— 要拆 `status.rs` 才能消,见 §15.1
-2. **`services/` 剩 17 个文件** —— 在等 provider 模块目录,任务书 `T26` 已写好未派
+2. ~~`services/` 剩 17 个文件~~ —— **T26 已完成(2026-08-16,`23a43331`)**:
+   `sync/` 与 `providers/` 已建,`services/` 不复存在。但它暴露出**新的 9 条
+   依赖方向违规**,已记入 T20 守卫的 allowlist,分三类:
+   - **顶层未归类模块 5 条** —— T17 留了 23 个顶层 `.rs` 没进八个职责模块。
+     其中 `agent_paths`(228 行路径常量)、`lightweight`(110 行全局开关)
+     性质确实是工具,可考虑提进守卫白名单;**但 `provider.rs`(913 行,
+     `UsageData` 等 SSOT 类型,疑似应归入 `model/`)和 `usage_events`
+     (488 行,往前端 emit 事件,是上行关注点)不要顺手提** —— 那是真的债
+   - **`providers` → `usage` 3 条** —— 与 `store` → `usage` 那 11 条同源,
+     都要等 `usage` 拆分
+   - **`providers` → `api` 1 条** —— 最严重,provider 够到了顶层
+     (`claude/cli_auth.rs` 用 `api::commands::launch_terminal_running`)
+
+   **这 9 条全是既有依赖,一条都不是 T26 搬运新增的** —— 此前藏在不分层的
+   `services/` 口袋里,建出 `providers/` 才被守卫看见。
 3. **分账是下界** —— `sum_router_usage_by_provider` 只统计「经过 router 且抓到
    usage」的请求;用户取消、上游断流、上游不发 `response.completed` 的都缺席。
    **做面板时必须标注,不能当余额用**
@@ -1282,8 +1296,13 @@ services/    剩 17 个文件(同步、告警、定价调度、subscription 等)
 
 ### 18.4 未派出的任务书
 
-`T20`(依赖方向守卫)、`T26`(建 `providers/` 与 `sync/`)、`D1`(OpenRouter
-账户余额)、`D2`(PackyCode 账户用量)。
+~~`T20`~~(2026-08-15 合入 `60a9707c`)、~~`T26`~~(2026-08-16 合入 `23a43331`)。
+
+**后端到此为止,剩下的全是前端** —— 见 §18.3 的顺序。
+
+`D1`(OpenRouter 账户余额)、`D2`(PackyCode 账户用量)由另一条线在做,
+工作区 `/private/tmp/llm-usage-bar-{d1,d2,merge}`,分支
+`task/D1-*`、`task/D2-*`、`review/D1-D2-integration`,均未合入 main。
 
 ### 18.5 装新构建之前
 
