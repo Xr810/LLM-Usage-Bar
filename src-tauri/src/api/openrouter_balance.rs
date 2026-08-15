@@ -10,8 +10,9 @@ use std::sync::Arc;
 use crate::error::AppError;
 use crate::secrets::{CredentialStore, SecretString};
 use crate::services::balance::{
-    clear_snapshot, has_openrouter_management_key, load_snapshot, OpenRouterAccountBalanceView,
-    OpenRouterBalanceSnapshot, OPENROUTER_MANAGEMENT_KEY_SLOT,
+    clear_snapshot, has_openrouter_management_key, load_snapshot,
+    manual_refresh_openrouter_balance, OpenRouterAccountBalanceView, OpenRouterBalanceSnapshot,
+    OPENROUTER_MANAGEMENT_KEY_SLOT,
 };
 use crate::store::Database;
 
@@ -65,6 +66,14 @@ impl OpenRouterBalanceApi {
             fetched_at: snapshot.as_ref().map(|value| value.fetched_at),
             has_management_key,
         })
+    }
+
+    /// 立刻查一次再返回视图。调度器每 15 分钟才重读一次凭据,
+    /// 没有这个入口的话「刚设完 key」要等一个周期才看得见数。
+    /// 60 秒内重复调用复用上次快照(防连点),刷新失败按错误码原样抛出。
+    pub async fn refresh_account_balance(&self) -> Result<OpenRouterAccountBalanceView, AppError> {
+        manual_refresh_openrouter_balance(&self.db, &*self.credentials).await?;
+        self.get_account_balance()
     }
 }
 
@@ -132,6 +141,40 @@ mod tests {
                 .as_deref(),
             Some(&b"sk-or-mgmt-test-123"[..])
         );
+    }
+
+    #[tokio::test]
+    async fn refresh_without_a_management_key_fails_and_leaves_the_view_empty() {
+        let db = Arc::new(Database::memory().unwrap());
+        let store = Arc::new(MemoryCredentialStore::default());
+        let api = OpenRouterBalanceApi::new(db, store);
+
+        // 没配 key 时刷新直接报错、不发请求;视图仍是全 None,不编造 0。
+        assert!(api.refresh_account_balance().await.is_err());
+        let view = api.get_account_balance().unwrap();
+        assert!(!view.has_management_key);
+        assert_eq!(view.balance_usd, None);
+    }
+
+    #[tokio::test]
+    async fn refresh_within_the_throttle_window_returns_the_existing_snapshot() {
+        let db = Arc::new(Database::memory().unwrap());
+        let store = Arc::new(MemoryCredentialStore::default());
+        store
+            .put(OPENROUTER_MANAGEMENT_KEY_SLOT, b"sk-or-mgmt-test")
+            .unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        save_snapshot(&db, &snapshot_fixture(now)).unwrap();
+        let api = OpenRouterBalanceApi::new(db, store);
+
+        // 快照还新鲜 → 复用,不发请求(这条测试不许联网)。
+        let view = api.refresh_account_balance().await.unwrap();
+
+        assert_eq!(view.balance_usd.as_deref(), Some("74.75"));
+        assert_eq!(view.fetched_at, Some(now));
     }
 
     #[test]

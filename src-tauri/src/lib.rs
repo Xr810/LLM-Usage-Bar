@@ -1410,6 +1410,7 @@ pub fn run() {
             commands::set_openrouter_management_key,
             commands::clear_openrouter_management_key,
             commands::get_openrouter_account_balance,
+            commands::refresh_openrouter_account_balance,
             commands::reveal_agent_provider_local_key,
             commands::rotate_agent_provider_local_key,
             commands::get_unassigned_usage_diagnostics,

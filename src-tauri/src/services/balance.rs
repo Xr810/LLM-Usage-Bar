@@ -317,18 +317,37 @@ const OPENROUTER_FAILURE_RETRY_DELAYS: [Duration; 5] = [
     Duration::from_secs(1_800),
 ];
 
-/// 上游查询失败的四类错误码。Display 绝不包含 key 明文,
-/// 这些错误串会被日志与前端透传。
+/// 手动刷新防连点:60 秒内重复调用复用上次快照(与 packycode 用量同一口径)。
+const OPENROUTER_MANUAL_REFRESH_MIN_INTERVAL_SECS: i64 = 60;
+/// 上游 body 进错误串前截断,防超长文本刷屏日志。
+const OPENROUTER_UPSTREAM_BODY_MAX_CHARS: usize = 200;
+
+/// 上游查询失败的四类错误码。Display 绝不包含 key 明文;文案与本文件
+/// 另外四家保持同一种语言(英文),别让同一个面板一半中文一半英文。
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum OpenRouterBalanceError {
-    #[error("OpenRouter 鉴权失败 (HTTP {0})")]
+    #[error("Authentication error (HTTP {0})")]
     AuthenticationFailed(u16),
-    #[error("OpenRouter 连接失败: {0}")]
+    #[error("Network error: {0}")]
     ConnectionFailed(String),
-    #[error("OpenRouter 响应无效: {0}")]
+    #[error("Invalid response: {0}")]
     InvalidResponse(String),
-    #[error("OpenRouter 上游拒绝 (HTTP {0})")]
-    UpstreamRejected(u16),
+    /// 非 2xx。带上(截断过的)上游 body —— 只有 HTTP 码没法诊断。
+    #[error("API error (HTTP {status}): {body}")]
+    UpstreamRejected { status: u16, body: String },
+}
+
+impl From<OpenRouterBalanceError> for AppError {
+    fn from(error: OpenRouterBalanceError) -> Self {
+        AppError::Message(error.to_string())
+    }
+}
+
+fn truncate_upstream_body(raw: &[u8]) -> String {
+    String::from_utf8_lossy(raw)
+        .chars()
+        .take(OPENROUTER_UPSTREAM_BODY_MAX_CHARS)
+        .collect()
 }
 
 /// 一次成功查询的结果。金额一律十进制字符串(仓库约定:金额不 round)。
@@ -399,7 +418,10 @@ fn parse_openrouter_response(
         return Err(OpenRouterBalanceError::AuthenticationFailed(status));
     }
     if !(200..300).contains(&status) {
-        return Err(OpenRouterBalanceError::UpstreamRejected(status));
+        return Err(OpenRouterBalanceError::UpstreamRejected {
+            status,
+            body: truncate_upstream_body(raw),
+        });
     }
 
     let body: serde_json::Value = serde_json::from_slice(raw).map_err(|e| {
@@ -521,6 +543,61 @@ pub fn has_openrouter_management_key(credentials: &dyn CredentialStore) -> bool 
     )
 }
 
+/// 读管理 key。None = 未配置(空串/全空白也算未配置)。
+/// 调度器与手动刷新共用这一份读法,不各写一遍。
+fn read_openrouter_management_key(
+    credentials: &dyn CredentialStore,
+) -> Result<Option<String>, AppError> {
+    match credentials.get(OPENROUTER_MANAGEMENT_KEY_SLOT) {
+        Ok(Some(bytes)) => Ok(String::from_utf8(bytes)
+            .ok()
+            .filter(|key| !key.trim().is_empty())),
+        Ok(None) => Ok(None),
+        Err(error) => Err(AppError::Message(format!(
+            "credential store read failed: {error}"
+        ))),
+    }
+}
+
+/// 手动刷新:立刻查一次并落快照。
+///
+/// 调度器只在每轮开头读一次凭据,所以刚设完 key 最长要等一个刷新周期;
+/// 这个入口让「设完就能看见」不必等 15 分钟,也让退避期间改对的 key 立刻生效。
+/// 60 秒内重复调用直接复用上次快照(防连点),未配置 key 直接报错、不发请求。
+pub async fn manual_refresh_openrouter_balance(
+    db: &Database,
+    credentials: &dyn CredentialStore,
+) -> Result<(), AppError> {
+    if let Some(snapshot) = load_snapshot(db)? {
+        if unix_timestamp()?.saturating_sub(snapshot.fetched_at)
+            < OPENROUTER_MANUAL_REFRESH_MIN_INTERVAL_SECS
+        {
+            log::debug!("openrouter balance refresh throttled, reusing the last snapshot");
+            return Ok(());
+        }
+    }
+
+    let Some(api_key) = read_openrouter_management_key(credentials)? else {
+        return Err(AppError::InvalidInput(
+            "OpenRouter 管理 key 未配置".to_string(),
+        ));
+    };
+
+    let payload = query_openrouter(&api_key).await?;
+    save_snapshot(
+        db,
+        &OpenRouterBalanceSnapshot {
+            total_credits_usd: payload.total_credits_usd,
+            total_usage_usd: payload.total_usage_usd,
+            balance_usd: payload.balance_usd,
+            fetched_at: unix_timestamp()?,
+        },
+    )?;
+    crate::usage_events::notify_dashboard_invalidated();
+    log::info!("openrouter account balance refreshed on demand");
+    Ok(())
+}
+
 // ── OpenRouter 调度器(照 official_pricing.rs 的模板)─────────
 
 type OpenRouterFetchFuture<'a> = Pin<
@@ -546,15 +623,7 @@ struct ProductionOpenRouterBalanceDependencies {
 
 impl OpenRouterBalanceSchedulerDependencies for ProductionOpenRouterBalanceDependencies {
     fn management_key(&self) -> Result<Option<String>, AppError> {
-        match self.credentials.get(OPENROUTER_MANAGEMENT_KEY_SLOT) {
-            Ok(Some(bytes)) => Ok(String::from_utf8(bytes)
-                .ok()
-                .filter(|key| !key.trim().is_empty())),
-            Ok(None) => Ok(None),
-            Err(error) => Err(AppError::Message(format!(
-                "credential store read failed: {error}"
-            ))),
-        }
+        read_openrouter_management_key(&*self.credentials)
     }
 
     fn fetch_credits(&self, api_key: &str) -> OpenRouterFetchFuture<'_> {
@@ -1043,12 +1112,57 @@ mod tests {
         );
         assert_eq!(
             parse_openrouter_response(500, b"boom").unwrap_err(),
-            OpenRouterBalanceError::UpstreamRejected(500)
+            OpenRouterBalanceError::UpstreamRejected {
+                status: 500,
+                body: "boom".to_string(),
+            }
         );
         assert_eq!(
             parse_openrouter_response(429, b"slow down").unwrap_err(),
-            OpenRouterBalanceError::UpstreamRejected(429)
+            OpenRouterBalanceError::UpstreamRejected {
+                status: 429,
+                body: "slow down".to_string(),
+            }
         );
+    }
+
+    #[test]
+    fn upstream_rejection_keeps_the_body_for_diagnosis_but_caps_its_length() {
+        // 只有 HTTP 码没法诊断:上游那句话要带上,但不能无限长。
+        let error =
+            parse_openrouter_response(402, br#"{"error":"insufficient credits"}"#).unwrap_err();
+        assert!(
+            error.to_string().contains("insufficient credits"),
+            "错误串应带上游 body,实际: {error}"
+        );
+
+        let long_body = "x".repeat(OPENROUTER_UPSTREAM_BODY_MAX_CHARS * 3);
+        let OpenRouterBalanceError::UpstreamRejected { body, .. } =
+            parse_openrouter_response(503, long_body.as_bytes()).unwrap_err()
+        else {
+            panic!("503 应归为 upstream_rejected");
+        };
+        assert_eq!(body.chars().count(), OPENROUTER_UPSTREAM_BODY_MAX_CHARS);
+    }
+
+    #[test]
+    fn error_messages_stay_in_the_same_language_as_the_other_providers() {
+        // 同一个面板不能一半中文一半英文:这四条与 make_error/make_auth_error 对齐。
+        for error in [
+            OpenRouterBalanceError::AuthenticationFailed(401),
+            OpenRouterBalanceError::ConnectionFailed("timeout".to_string()),
+            OpenRouterBalanceError::InvalidResponse("bad json".to_string()),
+            OpenRouterBalanceError::UpstreamRejected {
+                status: 500,
+                body: "boom".to_string(),
+            },
+        ] {
+            let rendered = error.to_string();
+            assert!(
+                rendered.is_ascii(),
+                "错误文案应与本文件其它 provider 一致(英文),实际: {rendered}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -1283,7 +1397,10 @@ mod tests {
             .replace("sk-or-mgmt-test".to_string());
         dependencies.fetch_results.lock().unwrap().extend([
             Err(OpenRouterBalanceError::ConnectionFailed("down".to_string())),
-            Err(OpenRouterBalanceError::UpstreamRejected(500)),
+            Err(OpenRouterBalanceError::UpstreamRejected {
+                status: 500,
+                body: "boom".to_string(),
+            }),
             Err(OpenRouterBalanceError::InvalidResponse("bad".to_string())),
             Ok(credits_payload("100", "20")),
         ]);
@@ -1366,6 +1483,49 @@ mod tests {
             .await
             .expect("scheduler stop should not wait for the backoff delay");
         assert_eq!(dependencies.fetch_calls.load(Ordering::SeqCst), 1);
+    }
+
+    // ── 手动刷新:不必等调度器的 15 分钟 ─────────────────────
+
+    #[tokio::test]
+    async fn manual_refresh_without_a_management_key_fails_before_any_network() {
+        let db = Database::memory().unwrap();
+        let store = MemoryCredentialStore::default();
+
+        // 没 key 就直接报错,绝不去打网络(这条测试本身也不许联网)。
+        let error = manual_refresh_openrouter_balance(&db, &store)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, AppError::InvalidInput(_)), "实际: {error}");
+        assert_eq!(
+            db.get_setting(OPENROUTER_ACCOUNT_BALANCE_SETTING_KEY)
+                .unwrap(),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn manual_refresh_within_60_seconds_reuses_the_snapshot() {
+        let db = Database::memory().unwrap();
+        let store = MemoryCredentialStore::default();
+        store
+            .put(OPENROUTER_MANAGEMENT_KEY_SLOT, b"sk-or-mgmt-test")
+            .unwrap();
+        let fresh = snapshot_fixture("100.5", "25.75", "74.75", unix_timestamp().unwrap());
+        save_snapshot(&db, &fresh).unwrap();
+
+        // 防连点:快照还新鲜就直接返回,不发请求(有 key 也不发)。
+        manual_refresh_openrouter_balance(&db, &store)
+            .await
+            .unwrap();
+
+        assert_eq!(load_snapshot(&db).unwrap().unwrap(), fresh);
+    }
+
+    #[test]
+    fn manual_refresh_throttle_window_is_one_minute() {
+        assert_eq!(OPENROUTER_MANUAL_REFRESH_MIN_INTERVAL_SECS, 60);
     }
 
     // ── 6. 无管理 key:调度空转 ───────────────────────────────

@@ -36,3 +36,14 @@ pub async fn get_openrouter_account_balance(
     OpenRouterBalanceApi::new(state.db.clone(), state.credential_store.clone())
         .get_account_balance()
 }
+
+/// 手动刷新:立刻查一次再返回视图(60 秒内复用上次快照)。
+/// 设完管理 key 之后调它,不用等调度器的 15 分钟。
+#[tauri::command]
+pub async fn refresh_openrouter_account_balance(
+    state: tauri::State<'_, AppState>,
+) -> Result<OpenRouterAccountBalanceView, AppError> {
+    OpenRouterBalanceApi::new(state.db.clone(), state.credential_store.clone())
+        .refresh_account_balance()
+        .await
+}
