@@ -1162,3 +1162,53 @@ T17 任务书写的验收是「那条 diff 命令输出必须为空」。**这�
 全树 17101 条字面量前后数量相同,唯一差异是一条子进程测试定位串
 (`database::identity_migration::tests::…` → `store::…`,那是模块路径不是业务字符串)。
 以后再做这类大搬运,用这个判据。
+
+## 16. T21 端到端回归探针(2026-08-15,router 第一次真的处理请求)
+
+**这是 T21 验证任务留给仓库的回归基线**,放在
+`src-tauri/tests/router_probe.rs`,是一个 `#[ignore]` 的集成测试
+(仓库 ignored 测试总数 2 → 3)。平时 `cargo test` 不跑它,显式跑:
+
+```bash
+pnpm rust -- test --manifest-path src-tauri/Cargo.toml -- --ignored router_end_to_end_probe --nocapture
+```
+
+**它能证明什么**:走真实 `route::server::start()`(真实端口、真实文件库、真实
+`RouterApi` 播种、真实 `RouterUpstreamAuth`),用本地假上游验证——候选队列与
+wire_api 跳过、model 改写、bearer 凭据注入、404 故障转移与 600 秒拉黑、401
+原样透传、客户端凭据头全部丢弃、`router_attempts` 真实落行、T13 从真实 SSE
+流回填 token(42/17)、端口被占时 `start()` 返回 Err 且不污染
+`listening_port()`;再用**真实 Codex CLI**(临时 CODEX_HOME,不碰真实
+`~/.codex`)打进来,验证 `POST /v1/responses` 路径契约与全链路透传。
+默认零外部网络、零花费。
+
+**两个可选阶段,默认关闭,环境变量开启**:
+
+- `T21_PROBE_MIGRATE_FROM=<旧版库副本路径>`:迁移实验。**指向你自己复制出来的
+  副本**,探针会再复制一份后走 `Database::init_at` 的真实迁移链,逐表比对行数
+  (2026-08-15 在真实线上库副本上实测:v26→v28,25 张表逐表行数零变化)。
+- `T21_PROBE_REAL_TOKEN=<token>`(可选 `T21_PROBE_REAL_BASE_URL`、
+  `T21_PROBE_REAL_MODEL`):对真实上游发**一个**最小请求(真花钱,只在用户明确
+  同意后使用;token 只从环境变量进入,不落文件与日志)。2026-08-15 对
+  packyapi 实测:200,`router_attempts` 记 success 且回填
+  `input_tokens=2169 / output_tokens=20`——T13 首次对真实 SSE 生效。
+
+**它不能证明什么**:指针写入(只能靠 `route/pointer.rs` 的单元测试,真实写入
+受红线约束)、用户自己的 Codex 配置、多实例并发、以及「用户界面点一下」这
+件事本身。
+
+**两个已知的接缝**(验证时发现,修法待项目所有者定):
+
+1. `Database::reconcile_system_providers` / `create_provider_api_key` /
+   `provider_credential_snapshot` 是 `pub(crate)`,进程外(集成测试、将来的
+   socket 面板、外部验证工具)进不去,探针只能用同构 SQL 复刻两行播种
+   (见 `router_probe.rs::seed_credential_rows`)。
+2. 指针写入 `route::pointer::point_codex_at_router` 的路径硬编码真实
+   `~/.codex/config.toml`,没有可注入路径的 pub 入口——从 app 外部无法安全地
+   端到端验证「写指针」这一步。
+
+另外:真实 codex 0.147 实测 `base_url` 含 `/v1` 时打的是
+`POST http://127.0.0.1:<port>/v1/responses`,与跨任务契约一致;packyapi 的
+模型目录只有 7 个(`codex-auto-review`、gpt-5.4/mini、gpt-5.5、gpt-5.6-luna/
+sol/terra),前端做模型映射时,逻辑模型(Codex 默认发的)必须映射到这些真实 id
+之一。
