@@ -25,8 +25,8 @@ use futures::future::BoxFuture;
 use futures::stream::StreamExt;
 
 use crate::error::AppError;
-use crate::router::decision::{candidates_for, Blacklisted, Candidate, RouteMode};
-use crate::router::failure::{classify, AttemptResult, BlacklistScope, FailureKind};
+use crate::route::decision::{candidates_for, Blacklisted, Candidate, RouteMode};
+use crate::route::failure::{classify, AttemptResult, BlacklistScope, FailureKind};
 use crate::store::{AttemptOutcome, Database, RouterAttempt, RouterProvider, WireApi};
 
 /// 请求体缓存上限(§4.2)。超过之后不缓存、退化成纯流式,不再有故障转移能力。

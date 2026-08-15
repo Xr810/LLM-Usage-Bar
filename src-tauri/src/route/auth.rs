@@ -9,7 +9,7 @@ use std::sync::Arc;
 use futures::future::BoxFuture;
 
 use crate::error::AppError;
-use crate::router::server::UpstreamAuth;
+use crate::route::server::UpstreamAuth;
 use crate::secrets::BindingCredentialService;
 use crate::store::{Database, RouterAuthKind};
 

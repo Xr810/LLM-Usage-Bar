@@ -28,7 +28,7 @@ mod store;
 // router 用 pub 而不是 mod:T4/T5/T7 往里面放的 pub 入口在启动层接线
 // 之前没有调用点,私有模块会触发 dead_code(clippy -D warnings 直接挂)。
 mod app_state;
-pub mod router;
+pub mod route;
 mod services;
 mod settings;
 
@@ -836,15 +836,15 @@ pub fn run() {
             // 不中止 setup——端口被占是常见情况(上次没退干净、别的软件占了),
             // 不能因此打不开界面(任务书 §1.4)。
             let router_port = crate::api::router::read_router_port(&app_state.db);
-            let router_auth: Arc<dyn crate::router::server::UpstreamAuth> =
-                Arc::new(crate::router::auth::RouterUpstreamAuth::new(
+            let router_auth: Arc<dyn crate::route::server::UpstreamAuth> =
+                Arc::new(crate::route::auth::RouterUpstreamAuth::new(
                     app_state.db.clone(),
                     app_state.binding_credential_service.clone(),
                 ));
             let router_db = app_state.db.clone();
             tauri::async_runtime::spawn(async move {
                 if let Err(error) =
-                    crate::router::server::start(router_db, router_port, router_auth).await
+                    crate::route::server::start(router_db, router_port, router_auth).await
                 {
                     log::error!("[ROUTER] 启动失败: {error}");
                 }
@@ -853,7 +853,7 @@ pub fn run() {
             // 启动时只读指针,绝不写(决定 34/36):发现指针不是自己写的只记缺口
             // 标记、不静默覆盖;真正写指针只有 enable_router_pointer 一条路,
             // 由用户显式点「启用」触发。
-            let router_pointer_state = crate::router::pointer::inspect_pointer();
+            let router_pointer_state = crate::route::pointer::inspect_pointer();
             if let Err(error) =
                 crate::api::router::apply_pointer_gap_marker(&app_state.db, &router_pointer_state)
             {
