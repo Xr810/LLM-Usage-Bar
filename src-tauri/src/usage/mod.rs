@@ -12,7 +12,6 @@ pub mod metering;
 pub(crate) mod migration;
 pub(crate) mod module_migration;
 pub(crate) mod provider_pricing_migration;
-pub mod quota;
 pub(crate) mod quota_retry_migration;
 pub(crate) mod rhythm;
 pub mod session;

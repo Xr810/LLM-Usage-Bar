@@ -5,7 +5,6 @@ mod app_store;
 mod auto_launch;
 mod claude_desktop_config;
 mod claude_plugin;
-mod claude_quota;
 mod commands;
 mod config;
 mod error;
@@ -24,6 +23,7 @@ pub mod product_identity;
 mod prompt;
 mod provider;
 mod provider_defaults;
+mod quota;
 pub mod secrets;
 mod store;
 // router 用 pub 而不是 mod:T4/T5/T7 往里面放的 pub 入口在启动层接线
@@ -41,12 +41,12 @@ mod usage_events;
 
 pub use app_config::{AppType, MultiAppConfig};
 pub use app_state::AppState;
-pub use claude_quota::run_claude_statusline_bridge;
 pub use commands::*;
 pub use config::{get_claude_account_path, get_claude_settings_path, read_json_file};
 pub use error::AppError;
 pub use prompt::Prompt;
 pub use provider::{Provider, ProviderMeta};
+pub use quota::claude_quota::run_claude_statusline_bridge;
 pub use settings::{update_settings, AppSettings};
 pub use store::Database;
 use tauri_plugin_deep_link::DeepLinkExt;
@@ -821,7 +821,7 @@ pub fn run() {
             let app_config_dir = crate::config::get_app_config_dir();
             let codex_oauth_manager =
                 Arc::new(RwLock::new(CodexOAuthManager::new(app_config_dir)));
-            let quota_service = Arc::new(usage::quota::QuotaService::production(
+            let quota_service = Arc::new(quota::QuotaService::production(
                 db.clone(),
                 codex_oauth_manager.clone(),
             ));
@@ -1084,7 +1084,7 @@ pub fn run() {
             }
 
             let quota_callback_app = app.handle().clone();
-            let quota_after_cycle: usage::quota::QuotaCycleCallback = Arc::new(move |outcome| {
+            let quota_after_cycle: quota::QuotaCycleCallback = Arc::new(move |outcome| {
                 let app_handle = quota_callback_app.clone();
                 Box::pin(async move {
                     let service = {
@@ -1100,16 +1100,16 @@ pub fn run() {
                         tray_status::publish_tray_usage(&publish_app, snapshot);
                     };
                     match outcome {
-                        usage::quota::QuotaSchedulerOutcome::Completed {
+                        quota::QuotaSchedulerOutcome::Completed {
                             had_errors: false,
                             ..
                         } => {
                             service.rebuild_from_persisted(publish).await;
                         }
-                        usage::quota::QuotaSchedulerOutcome::Completed {
+                        quota::QuotaSchedulerOutcome::Completed {
                             had_errors: true, ..
                         }
-                        | usage::quota::QuotaSchedulerOutcome::Failed => {
+                        | quota::QuotaSchedulerOutcome::Failed => {
                             service
                                 .mark_refresh_failed_at(chrono::Local::now().timestamp(), publish)
                                 .await;

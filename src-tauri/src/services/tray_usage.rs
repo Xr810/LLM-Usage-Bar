@@ -1,7 +1,7 @@
 use crate::error::AppError;
+use crate::quota::QuotaService;
 use crate::store::Database;
 use crate::usage::domain::{BillingKind, UsageProviderView};
-use crate::usage::quota::QuotaService;
 use crate::usage::session::{ProviderSessionSyncResult, SessionUsageService};
 use crate::usage::status::UsageStatus;
 use crate::usage::tray_snapshot::{TrayUsageProjector, TrayUsageSnapshot};

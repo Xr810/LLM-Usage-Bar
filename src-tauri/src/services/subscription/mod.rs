@@ -228,7 +228,7 @@ pub async fn get_subscription_quota(tool: &str) -> Result<SubscriptionQuota, Str
     match tool {
         // Claude Pro/Max only uses local data emitted by official Claude apps.
         // Do not read Claude OAuth credentials or call a private usage endpoint.
-        "claude" => crate::claude_quota::collect_local_quota(),
+        "claude" => crate::quota::claude_quota::collect_local_quota(),
         "codex" => codex::collect_codex_quota().await,
         "gemini" => gemini::collect_gemini_quota().await,
         _ => Ok(SubscriptionQuota::not_found(tool)),

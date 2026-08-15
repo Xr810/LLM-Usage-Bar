@@ -1,4 +1,5 @@
 use crate::error::AppError;
+pub mod claude_quota;
 use crate::secrets::codex_oauth_auth::CodexOAuthManager;
 use crate::services::coding_plan::get_coding_plan_quota;
 use crate::services::subscription::{
@@ -138,7 +139,7 @@ impl ClaudeChainCollector {
                 )
             }),
             local_stage: Arc::new(|_| {
-                Box::pin(async move { crate::claude_quota::collect_local_quota() })
+                Box::pin(async move { crate::quota::claude_quota::collect_local_quota() })
             }),
         }
     }

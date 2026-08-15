@@ -1,6 +1,7 @@
 use crate::app_state::AppState;
 use crate::commands::CodexOAuthState;
 use crate::error::AppError;
+use crate::quota::QuotaRefreshResult;
 use crate::secrets::SecretString;
 use crate::services::{SystemProviderConnectionService, SystemProviderConnectionTestResult};
 use crate::store::AgentModuleDeleteOutcome;
@@ -13,7 +14,6 @@ use crate::usage::domain::{
     SystemProviderKeyUsageView, UnassignedUsageDiagnostics, UsageDashboardView, UsageEventPage,
     UsageProviderInput, UsageProviderView,
 };
-use crate::usage::quota::QuotaRefreshResult;
 use crate::usage::session::ProviderSessionSyncResult;
 use crate::usage::status::SubscriptionThresholds;
 use crate::usage::system_providers::{CHATGPT_SUBSCRIPTION_ID, CLAUDE_SUBSCRIPTION_ID};
@@ -1274,6 +1274,7 @@ fn require_active_agent(state: &AppState, agent_module_id: &str) -> Result<(), A
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::quota::{QuotaCollector, QuotaService};
     use crate::secrets::{
         BindingCredentialService, CredentialStore, CredentialStoreError, SecretString,
     };
@@ -1291,7 +1292,6 @@ mod tests {
         AgentModuleInput, AgentProviderBindingInput, BillingKind, BindingCredentialStatus,
         CostSource, TokenSource, UsageEvent, UsageProviderInput,
     };
-    use crate::usage::quota::{QuotaCollector, QuotaService};
     use crate::usage::status::UsageStatus;
     use crate::usage::system_providers::MANAGED_CODEX_QUOTA_SOURCE;
     use chrono::{Local, TimeZone};

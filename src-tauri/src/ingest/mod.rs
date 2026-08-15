@@ -806,7 +806,7 @@ fn insert_legacy_usage_record(
         if let Some(subscription_id) = profile.subscription_activity_id {
             #[cfg(test)]
             record_subscription_activity_mark(subscription_id);
-            crate::usage::quota::mark_subscription_activity(subscription_id);
+            crate::quota::mark_subscription_activity(subscription_id);
         }
     }
 
