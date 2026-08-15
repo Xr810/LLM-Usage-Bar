@@ -500,11 +500,10 @@ impl PinnedDirectory {
 /// Read-only guard. This must run before mkdir, lease creation, SQLite open, or
 /// any authoritative-path early return.
 fn reject_legacy_namespace_before_any_io(app_dir: &Path) -> Result<(), AppError> {
-    let home = dirs::home_dir().ok_or_else(|| {
-        AppError::InvalidInput(
-            "cannot resolve home directory for protected .cc-switch guard".to_string(),
-        )
-    })?;
+    // 与 app 数据目录用同一个 home 解析：get_home_dir 认 LLM_USAGE_BAR_TEST_HOME，
+    // 否则带着测试 home 跑时数据目录搬去了假 home、守卫却还在保护真实 home 里的
+    // 旧数据目录，两者不一致。get_home_dir 本身带回退，不会返回错误。
+    let home = crate::config::get_home_dir();
     reject_legacy_namespace_with_protected(app_dir, &home.join(LEGACY_DATA_DIR))
 }
 
@@ -2024,9 +2023,11 @@ mod tests {
     use crate::database::Database;
     use crate::product_identity::{
         DATABASE_FILE, DATABASE_IDENTITY_SOURCE_SCHEMA_VERSION, LEGACY_DATABASE_FILE,
+        LEGACY_DATA_DIR,
     };
     use rusqlite::{Connection, OpenFlags};
     use sha2::{Digest, Sha256};
+    use std::ffi::OsString;
     use std::fs::File;
     use std::io::Read;
     use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -2316,22 +2317,75 @@ mod tests {
         entries
     }
 
-    fn real_legacy_directory() -> Option<PathBuf> {
-        let candidate = dirs::home_dir()?.join(".cc-switch");
-        let metadata = std::fs::symlink_metadata(&candidate).ok()?;
-        if !metadata.file_type().is_dir() {
-            return None;
-        }
-        Some(
-            std::fs::canonicalize(candidate)
-                .expect("canonicalize the real protected legacy directory"),
-        )
+    /// 保存并恢复 home 环境变量，照抄 config.rs 测试的写法，避免污染同进程其他测试。
+    struct HomeEnvRestore {
+        current: Option<OsString>,
+        legacy: Option<OsString>,
     }
 
-    fn assert_guard_rejects_without_changing_real_legacy(app_dir: &Path, real_legacy: &Path) {
-        let before = snapshot_directory_tree(real_legacy);
+    impl Drop for HomeEnvRestore {
+        fn drop(&mut self) {
+            match self.current.take() {
+                Some(value) => std::env::set_var("LLM_USAGE_BAR_TEST_HOME", value),
+                None => std::env::remove_var("LLM_USAGE_BAR_TEST_HOME"),
+            }
+            match self.legacy.take() {
+                Some(value) => std::env::set_var("CC_SWITCH_TEST_HOME", value),
+                None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+            }
+        }
+    }
+
+    /// 在临时假 home 里造一个 legacy 数据目录（LEGACY_DATA_DIR），并把
+    /// LLM_USAGE_BAR_TEST_HOME 指过去：守卫经 get_home_dir() 保护的就是这个假目录，
+    /// 快照比对不再和真实 home 下的旧数据目录（以及运行中旧版 app 的日志写入）赛跑。
+    /// Drop 时恢复环境变量，随后删除临时目录（_restore 声明在前、先析构，
+    /// 恢复时假 home 还在）。
+    struct IsolatedLegacyHome {
+        _restore: HomeEnvRestore,
+        _home: tempfile::TempDir,
+        legacy: PathBuf,
+    }
+
+    impl IsolatedLegacyHome {
+        fn new() -> Self {
+            let home = tempfile::tempdir().expect("tempdir for isolated fake home");
+            let legacy = home.path().join(LEGACY_DATA_DIR);
+            std::fs::create_dir(&legacy).expect("create fake legacy directory in fake home");
+            // 放几个普通文件与子目录，让递归快照覆盖的不止数据库一个文件；
+            // LEGACY_DATABASE_FILE 必须存在，hardlink 测试要拿它做硬链接别名。
+            std::fs::write(legacy.join("config.json"), br#"{"theme":"dark"}"#)
+                .expect("write fake legacy config file");
+            let logs = legacy.join("logs");
+            std::fs::create_dir(&logs).expect("create fake legacy logs directory");
+            std::fs::write(logs.join("legacy-app.log"), "旧版 app 的日志行\n")
+                .expect("write fake legacy log file");
+            drop(create_real_v13_fixture(&legacy.join(LEGACY_DATABASE_FILE)));
+
+            let restore = HomeEnvRestore {
+                current: std::env::var_os("LLM_USAGE_BAR_TEST_HOME"),
+                legacy: std::env::var_os("CC_SWITCH_TEST_HOME"),
+            };
+            std::env::set_var("LLM_USAGE_BAR_TEST_HOME", home.path());
+            Self {
+                _restore: restore,
+                _home: home,
+                legacy,
+            }
+        }
+
+        fn legacy_dir(&self) -> &Path {
+            &self.legacy
+        }
+    }
+
+    fn assert_guard_rejects_without_changing_protected_legacy(
+        app_dir: &Path,
+        protected_legacy: &Path,
+    ) {
+        let before = snapshot_directory_tree(protected_legacy);
         let call = catch_unwind(AssertUnwindSafe(|| prepare_database_identity(app_dir)));
-        let after = snapshot_directory_tree(real_legacy);
+        let after = snapshot_directory_tree(protected_legacy);
         assert_eq!(
             after, before,
             "guard call changed protected ~/.cc-switch entries or file bytes"
@@ -2962,33 +3016,29 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn lexical_alias_to_real_legacy_directory_is_rejected_before_any_write() {
-        let Some(real_legacy) = real_legacy_directory() else {
-            eprintln!("skipping real-directory guard: ~/.cc-switch does not exist");
-            return;
-        };
-        let name = real_legacy
+        let fake_home = IsolatedLegacyHome::new();
+        let legacy = fake_home.legacy_dir();
+        let name = legacy
             .file_name()
-            .expect("real legacy directory name")
+            .expect("legacy directory name")
             .to_os_string();
-        let lexical_alias = real_legacy.join("..").join(name);
+        let lexical_alias = legacy.join("..").join(name);
 
-        assert_guard_rejects_without_changing_real_legacy(&lexical_alias, &real_legacy);
+        assert_guard_rejects_without_changing_protected_legacy(&lexical_alias, legacy);
     }
 
     #[cfg(unix)]
     #[test]
     #[serial_test::serial]
     fn symlink_alias_to_real_legacy_directory_is_rejected_before_any_write() {
-        let Some(real_legacy) = real_legacy_directory() else {
-            eprintln!("skipping real-directory guard: ~/.cc-switch does not exist");
-            return;
-        };
+        let fake_home = IsolatedLegacyHome::new();
+        let legacy = fake_home.legacy_dir();
         let temp = tempfile::tempdir().expect("tempdir");
         let symlink_alias = temp.path().join("legacy-directory-alias");
-        std::os::unix::fs::symlink(&real_legacy, &symlink_alias)
+        std::os::unix::fs::symlink(legacy, &symlink_alias)
             .expect("create symlink alias to protected legacy directory");
 
-        assert_guard_rejects_without_changing_real_legacy(&symlink_alias, &real_legacy);
+        assert_guard_rejects_without_changing_protected_legacy(&symlink_alias, legacy);
         assert_eq!(
             directory_entry_names(temp.path()),
             vec!["legacy-directory-alias"]
@@ -2998,32 +3048,26 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn hardlink_old_path_alias_to_real_legacy_database_is_rejected_before_any_write() {
-        let Some(real_legacy) = real_legacy_directory() else {
-            eprintln!("skipping hardlink guard: ~/.cc-switch does not exist");
-            return;
-        };
-        let real_database = real_legacy.join(LEGACY_DATABASE_FILE);
-        let Ok(metadata) = std::fs::symlink_metadata(&real_database) else {
-            eprintln!("skipping hardlink guard: real legacy database does not exist");
-            return;
-        };
-        if !metadata.file_type().is_file() {
-            eprintln!("skipping hardlink guard: real legacy database is not a regular file");
-            return;
-        }
+        let fake_home = IsolatedLegacyHome::new();
+        let legacy = fake_home.legacy_dir();
+        let real_database = legacy.join(LEGACY_DATABASE_FILE);
+        assert!(
+            real_database.is_file(),
+            "fake legacy database must exist as a regular file for the hardlink alias"
+        );
 
-        let before = snapshot_directory_tree(&real_legacy);
+        let before = snapshot_directory_tree(legacy);
         let temp = tempfile::tempdir().expect("tempdir");
         let hardlink_alias = temp.path().join(LEGACY_DATABASE_FILE);
         if let Err(error) = std::fs::hard_link(&real_database, &hardlink_alias) {
-            let after = snapshot_directory_tree(&real_legacy);
+            let after = snapshot_directory_tree(legacy);
             assert_eq!(after, before);
             eprintln!("skipping hardlink guard because filesystem rejected hard link: {error}");
             return;
         }
 
         let call = catch_unwind(AssertUnwindSafe(|| prepare_database_identity(temp.path())));
-        let after = snapshot_directory_tree(&real_legacy);
+        let after = snapshot_directory_tree(legacy);
         assert_eq!(
             after, before,
             "hardlink guard call changed protected ~/.cc-switch entries or file bytes"

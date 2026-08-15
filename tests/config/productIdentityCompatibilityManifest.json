@@ -354,14 +354,6 @@
   },
   {
     "file": "src-tauri/src/database/identity_migration.rs",
-    "context": "\"cannot resolve home directory for protected .cc-switch guard\".to_string(),",
-    "columnNumber": 47,
-    "matchedText": "cc-switch",
-    "kind": "legacyReadOnly",
-    "reason": "exact read-only legacy compatibility or coexistence reference"
-  },
-  {
-    "file": "src-tauri/src/database/identity_migration.rs",
     "context": "const ARCHIVE_FILE: &str = \"cc-switch.db.pre-llm-usage-bar-v14\";",
     "columnNumber": 29,
     "matchedText": "cc-switch",
@@ -386,14 +378,6 @@
   },
   {
     "file": "src-tauri/src/database/identity_migration.rs",
-    "context": "let candidate = dirs::home_dir()?.join(\".cc-switch\");",
-    "columnNumber": 42,
-    "matchedText": "cc-switch",
-    "kind": "legacyReadOnly",
-    "reason": "exact read-only legacy compatibility or coexistence reference"
-  },
-  {
-    "file": "src-tauri/src/database/identity_migration.rs",
     "context": "\"guard call changed protected ~/.cc-switch entries or file bytes\"",
     "columnNumber": 34,
     "matchedText": "cc-switch",
@@ -410,28 +394,35 @@
   },
   {
     "file": "src-tauri/src/database/identity_migration.rs",
-    "context": "eprintln!(\"skipping real-directory guard: ~/.cc-switch does not exist\");",
-    "columnNumber": 46,
-    "matchedText": "cc-switch",
-    "kind": "legacyReadOnly",
-    "reason": "exact read-only legacy compatibility or coexistence reference",
-    "occurrences": 2
-  },
-  {
-    "file": "src-tauri/src/database/identity_migration.rs",
-    "context": "eprintln!(\"skipping hardlink guard: ~/.cc-switch does not exist\");",
-    "columnNumber": 40,
-    "matchedText": "cc-switch",
-    "kind": "legacyReadOnly",
-    "reason": "exact read-only legacy compatibility or coexistence reference"
-  },
-  {
-    "file": "src-tauri/src/database/identity_migration.rs",
     "context": "\"hardlink guard call changed protected ~/.cc-switch entries or file bytes\"",
     "columnNumber": 43,
     "matchedText": "cc-switch",
     "kind": "legacyReadOnly",
     "reason": "exact read-only legacy compatibility or coexistence reference"
+  },
+  {
+    "file": "src-tauri/src/database/identity_migration.rs",
+    "context": "Some(value) => std::env::set_var(\"CC_SWITCH_TEST_HOME\", value),",
+    "columnNumber": 35,
+    "matchedText": "CC_SWITCH",
+    "kind": "externalWireStable",
+    "reason": "exact persisted, transmitted, or upstream compatibility bytes"
+  },
+  {
+    "file": "src-tauri/src/database/identity_migration.rs",
+    "context": "None => std::env::remove_var(\"CC_SWITCH_TEST_HOME\"),",
+    "columnNumber": 31,
+    "matchedText": "CC_SWITCH",
+    "kind": "externalWireStable",
+    "reason": "exact persisted, transmitted, or upstream compatibility bytes"
+  },
+  {
+    "file": "src-tauri/src/database/identity_migration.rs",
+    "context": "legacy: std::env::var_os(\"CC_SWITCH_TEST_HOME\"),",
+    "columnNumber": 27,
+    "matchedText": "CC_SWITCH",
+    "kind": "externalWireStable",
+    "reason": "exact persisted, transmitted, or upstream compatibility bytes"
   },
   {
     "file": "src-tauri/src/database/tests.rs",
