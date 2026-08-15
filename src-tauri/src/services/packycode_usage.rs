@@ -69,9 +69,10 @@ const UPSTREAM_MESSAGE_MAX_CHARS: usize = 200;
 /// 网络层四类错误码。Display 里带机器可读前缀,便于前端/测试区分。
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PackyCodeFetchError {
-    /// 401/403:上游拒绝凭据。
-    #[error("authentication_failed: 上游拒绝凭据 (HTTP {status})")]
-    AuthenticationFailed { status: u16 },
+    /// 401/403:上游拒绝凭据。`detail` 区分「令牌被拒」与「被防护层拦下」——
+    /// 无凭据探测就能拿到 403 HTML 挑战页,所以 403+HTML 未必是令牌无效。
+    #[error("authentication_failed: {detail} (HTTP {status})")]
+    AuthenticationFailed { status: u16, detail: String },
     /// 网络不可达/超时/读体中断。
     #[error("connection_failed: {detail}")]
     ConnectionFailed { detail: String },
@@ -130,6 +131,7 @@ pub struct AccountSnapshot {
 
 /// 对外视图:只暴露视图,不暴露令牌明文;无快照时全 None,绝不编造 0。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PackyCodeAccountUsageView {
     pub balance_usd: Option<String>,
     pub used_usd: Option<String>,
@@ -218,6 +220,9 @@ fn parse_quota_per_unit(document: &Value) -> Option<String> {
 /// 分类顺序有意为之:401/403 先于 body 解析 —— Cloudflare 挑战页常以 403
 /// 返回 HTML,这种响应就是「凭据被拦」,而不是「响应看不懂」;200 的 HTML
 /// 才是 invalid_response。任何非 JSON / 缺字段都绝不 panic、不抠字段。
+///
+/// 403 + `text/html` 单独给一句话:防护层在没带任何凭据时也返回这个,
+/// 所以它不等于「令牌无效」,错误文案不能让用户去白改令牌。
 pub async fn fetch_self(
     client: &reqwest::Client,
     base_url: &str,
@@ -242,6 +247,7 @@ pub async fn fetch_self(
     if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
         return Err(PackyCodeFetchError::AuthenticationFailed {
             status: status.as_u16(),
+            detail: authentication_failure_detail(status, response.headers()),
         });
     }
 
@@ -257,6 +263,30 @@ pub async fn fetch_self(
         });
     }
     parse_self_document(&bytes)
+}
+
+/// 401/403 的文案。403 且响应是 HTML → 防护层挑战页,令牌未必无效;
+/// 其余按「上游拒绝凭据」。只看响应头,不读 body。
+fn authentication_failed_is_challenge_page(
+    status: reqwest::StatusCode,
+    headers: &reqwest::header::HeaderMap,
+) -> bool {
+    status == reqwest::StatusCode::FORBIDDEN
+        && headers
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.to_ascii_lowercase().contains("text/html"))
+}
+
+fn authentication_failure_detail(
+    status: reqwest::StatusCode,
+    headers: &reqwest::header::HeaderMap,
+) -> String {
+    if authentication_failed_is_challenge_page(status, headers) {
+        "被防护层拦下(返回 HTML 挑战页),令牌未必无效".to_string()
+    } else {
+        "上游拒绝凭据".to_string()
+    }
 }
 
 /// 解析 `{ success, message, data }` 信封。success 缺失/非布尔、data 缺失
@@ -1023,6 +1053,12 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(error.code(), "authentication_failed");
+        // 但文案要说清是被防护层拦下的:没带凭据也会拿到这个 403,
+        // 不能让用户以为令牌一定无效。
+        assert!(
+            error.to_string().contains("防护层"),
+            "403 HTML 应给出防护页提示,实际: {error}"
+        );
 
         let unauthorized = spawn_server(Router::new().route(
             "/api/user/self",
@@ -1033,6 +1069,34 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(error.code(), "authentication_failed");
+        assert!(
+            error.to_string().contains("上游拒绝凭据"),
+            "401 应按凭据被拒报,实际: {error}"
+        );
+
+        // 403 但响应是 JSON:那就是真的凭据被拒,不该扯到防护页。
+        let json_forbidden = spawn_server(Router::new().route(
+            "/api/user/self",
+            get(|| async {
+                (
+                    StatusCode::FORBIDDEN,
+                    [(
+                        axum::http::header::CONTENT_TYPE,
+                        "application/json; charset=UTF-8",
+                    )],
+                    r#"{"success":false,"message":"no permission"}"#,
+                )
+            }),
+        ))
+        .await;
+        let error = fetch_self(&test_client(), &json_forbidden, "token", "user-1")
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), "authentication_failed");
+        assert!(
+            error.to_string().contains("上游拒绝凭据"),
+            "403 JSON 应按凭据被拒报,实际: {error}"
+        );
     }
 
     #[tokio::test]
@@ -1299,6 +1363,33 @@ mod tests {
                 has_credentials: false,
             }
         );
+    }
+
+    #[test]
+    fn view_serializes_with_camel_case_keys_like_every_other_view() {
+        // 前端拿到的键必须与仓库里其它 *View 一致(camelCase),
+        // 否则同一块面板会一半 balanceUsd、一半 balance_usd。
+        let view = PackyCodeAccountUsageView {
+            balance_usd: Some("1.5".to_string()),
+            used_usd: Some("2.5".to_string()),
+            reference_usd: Some("4".to_string()),
+            quota_per_unit: Some("500000".to_string()),
+            fetched_at: Some(1_700_000_000),
+            has_credentials: true,
+        };
+
+        let serialized = serde_json::to_value(&view).unwrap();
+        for key in [
+            "balanceUsd",
+            "usedUsd",
+            "referenceUsd",
+            "quotaPerUnit",
+            "fetchedAt",
+            "hasCredentials",
+        ] {
+            assert!(serialized.get(key).is_some(), "缺少 camelCase 键 {key}");
+        }
+        assert!(serialized.get("balance_usd").is_none());
     }
 
     // ── §6.8:set/clear 与令牌不泄密 ─────────────────────────
