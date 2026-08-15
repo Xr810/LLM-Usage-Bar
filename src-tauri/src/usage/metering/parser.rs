@@ -53,7 +53,6 @@ impl TokenUsage {
 
 /// API 类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum ApiType {
     Claude,
     OpenRouter,
@@ -92,7 +91,6 @@ impl TokenUsage {
     }
 
     /// 从 Claude API 流式响应解析
-    #[allow(dead_code)]
     pub fn from_claude_stream_events(events: &[Value]) -> Option<Self> {
         let mut usage = Self::default();
         let mut model: Option<String> = None;
@@ -211,7 +209,6 @@ impl TokenUsage {
     }
 
     /// 从 OpenRouter 响应解析 (OpenAI 格式)
-    #[allow(dead_code)]
     pub fn from_openrouter_response(body: &Value) -> Option<Self> {
         let usage = body.get("usage")?;
         Some(Self {
@@ -275,7 +272,6 @@ impl TokenUsage {
     ///
     /// Codex 的 input_tokens 需要减去 cached_tokens 以获得实际计费的 token 数
     /// 公式: adjusted_input = max(input_tokens - cached_tokens, 0)
-    #[allow(dead_code)]
     pub fn from_codex_response_adjusted(body: &Value) -> Option<Self> {
         let usage = body.get("usage")?;
         let input_tokens = usage.get("input_tokens")?.as_u64()? as u32;
@@ -316,7 +312,6 @@ impl TokenUsage {
     }
 
     /// 从 Codex API 流式响应解析
-    #[allow(dead_code)]
     pub fn from_codex_stream_events(events: &[Value]) -> Option<Self> {
         log::debug!("[Codex] 解析流式事件，共 {} 个事件", events.len());
         for event in events {
@@ -455,7 +450,6 @@ impl TokenUsage {
     }
 
     /// 从 Gemini API 流式响应解析
-    #[allow(dead_code)]
     pub fn from_gemini_stream_chunks(chunks: &[Value]) -> Option<Self> {
         let mut total_input = 0u32;
         let mut total_tokens = 0u32;
