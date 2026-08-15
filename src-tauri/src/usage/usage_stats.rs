@@ -3371,7 +3371,7 @@ mod tests {
         assert!(!request_ids.contains(&"claude-session-dup"));
         assert!(!request_ids.contains(&"gemini-session-dup"));
 
-        let breakdown = crate::ingest::session_usage::get_data_source_breakdown(&db)?;
+        let breakdown = crate::ingest::get_data_source_breakdown(&db)?;
         let proxy_count = breakdown
             .iter()
             .find(|item| item.data_source == "proxy")

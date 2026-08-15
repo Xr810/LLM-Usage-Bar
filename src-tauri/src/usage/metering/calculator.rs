@@ -129,7 +129,6 @@ impl CostCalculator {
     }
 
     /// 尝试计算成本，如果模型未知则返回 None
-    #[allow(dead_code)]
     pub fn try_calculate(
         usage: &TokenUsage,
         pricing: Option<&ModelPricing>,
@@ -138,7 +137,7 @@ impl CostCalculator {
         pricing.map(|p| Self::calculate(usage, p, cost_multiplier))
     }
 
-    #[allow(dead_code)] // Retained for v12 compatibility logging.
+    // Retained for v12 compatibility logging.
     pub fn try_calculate_for_app(
         app_type: &str,
         usage: &TokenUsage,

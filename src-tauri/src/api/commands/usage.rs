@@ -337,12 +337,12 @@ pub fn delete_model_pricing(state: State<'_, AppState>, model_id: String) -> Res
 #[tauri::command]
 pub fn sync_session_usage(
     state: State<'_, AppState>,
-) -> Result<crate::ingest::session_usage::SessionSyncResult, AppError> {
+) -> Result<crate::ingest::SessionSyncResult, AppError> {
     // 同步 Claude 会话日志
-    let mut result = crate::ingest::session_usage::sync_claude_session_logs(&state.db)?;
+    let mut result = crate::ingest::claude::sync_claude_session_logs(&state.db)?;
 
     // 同步 Codex 使用数据
-    match crate::ingest::session_usage_codex::sync_codex_usage(&state.db) {
+    match crate::ingest::codex::sync_codex_usage(&state.db) {
         Ok(codex_result) => {
             result.imported += codex_result.imported;
             result.skipped += codex_result.skipped;
@@ -356,7 +356,7 @@ pub fn sync_session_usage(
     }
 
     // 同步 Gemini 使用数据
-    match crate::ingest::session_usage_gemini::sync_gemini_usage(&state.db) {
+    match crate::ingest::gemini::sync_gemini_usage(&state.db) {
         Ok(gemini_result) => {
             result.imported += gemini_result.imported;
             result.skipped += gemini_result.skipped;
@@ -370,7 +370,7 @@ pub fn sync_session_usage(
     }
 
     // 同步 OpenCode 使用数据
-    match crate::ingest::session_usage_opencode::sync_opencode_usage(&state.db) {
+    match crate::ingest::opencode::sync_opencode_usage(&state.db) {
         Ok(opencode_result) => {
             result.imported += opencode_result.imported;
             result.skipped += opencode_result.skipped;
@@ -390,8 +390,8 @@ pub fn sync_session_usage(
 #[tauri::command]
 pub fn get_usage_data_sources(
     state: State<'_, AppState>,
-) -> Result<Vec<crate::ingest::session_usage::DataSourceSummary>, AppError> {
-    crate::ingest::session_usage::get_data_source_breakdown(&state.db)
+) -> Result<Vec<crate::ingest::DataSourceSummary>, AppError> {
+    crate::ingest::get_data_source_breakdown(&state.db)
 }
 
 /// 模型定价信息

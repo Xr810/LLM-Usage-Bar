@@ -99,11 +99,9 @@ impl SessionUsageService {
     ) -> Result<ProviderSessionSyncResult, AppError> {
         match source {
             "claude" => {
-                crate::ingest::session_usage::sync_claude_session_logs_bound(&self.db, provider_id)
+                crate::ingest::claude::sync_claude_session_logs_bound(&self.db, provider_id)
             }
-            "codex" => {
-                crate::ingest::session_usage_codex::sync_codex_usage_bound(&self.db, provider_id)
-            }
+            "codex" => crate::ingest::codex::sync_codex_usage_bound(&self.db, provider_id),
             _ => Err(AppError::Message(format!(
                 "unsupported usage source: {source}"
             ))),
@@ -533,20 +531,15 @@ mod tests {
         let claude_db = db.clone();
         let claude_done = done_tx.clone();
         let claude = std::thread::spawn(move || {
-            let result = crate::ingest::session_usage::sync_claude_session_logs_bound(
-                &claude_db,
-                "unbound-claude",
-            )
-            .unwrap();
+            let result =
+                crate::ingest::claude::sync_claude_session_logs_bound(&claude_db, "unbound-claude")
+                    .unwrap();
             claude_done.send(("claude", result)).unwrap();
         });
         let codex_db = db.clone();
         let codex = std::thread::spawn(move || {
-            let result = crate::ingest::session_usage_codex::sync_codex_usage_bound(
-                &codex_db,
-                "unbound-codex",
-            )
-            .unwrap();
+            let result =
+                crate::ingest::codex::sync_codex_usage_bound(&codex_db, "unbound-codex").unwrap();
             done_tx.send(("codex", result)).unwrap();
         });
 

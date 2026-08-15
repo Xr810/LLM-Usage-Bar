@@ -36,10 +36,6 @@ pub mod claude;
 pub mod codex;
 pub mod gemini;
 pub mod opencode;
-pub mod session_usage;
-pub mod session_usage_codex;
-pub mod session_usage_gemini;
-pub mod session_usage_opencode;
 
 pub(crate) type SyncCursorMap = HashMap<String, (i64, i64)>;
 
@@ -78,9 +74,6 @@ pub struct LogFileContext<'a> {
     pub last_line_offset: i64,
     /// 上一轮这个解析器存下的私有状态;首次为 None。
     /// 流水线只存不看,内容格式由解析器自己定。
-    // T14b 迁入 gemini/opencode 之前没有任何非测试解析器读它:这是给
-    // 解析器实现的接口字段,不是死代码。
-    #[allow(dead_code)]
     pub parser_state: Option<&'a str>,
 }
 
