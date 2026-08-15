@@ -840,6 +840,11 @@ fn stream_upstream_success(
 ) -> Result<Response, AppError> {
     let status = response.status();
     let content_type = response.headers().get(header::CONTENT_TYPE).cloned();
+    // T23(§1):SSE 响应完全不攒下面的兜底缓冲。门只挡 SSE,其余照旧——
+    // 拿不到 content-type 或判断不了时按「攒」处理(保守)。
+    // §4 已知取舍:上游把 JSON 错误体误标成 text/event-stream 时,兜底回填
+    // 会丢掉,两列保持 None——不会崩、不会算错,这是 T22 提案时点明的取舍。
+    let is_sse = is_sse_content_type(content_type.as_ref());
     // T13:把新行的 id 留出来,扫描到 usage 后回填到这一行(§2.1)。
     let attempt_id = record_attempt(
         &state.db,
@@ -865,6 +870,9 @@ fn stream_upstream_success(
         let mut scanner = SseScanner::new();
         // 非流式兜底(§2.5):响应不是 SSE 时 usage 在顶层,整份 body 才是有意义
         // 的解析单位;但只在上限内留副本,超过 MAX_SSE_EVENT_BYTES 就放弃回填。
+        // T23:SSE 的 usage 由 SseScanner 的 response.completed 回填,顶层 JSON
+        // 兜底对 SSE 文本解析不出任何东西,攒副本纯属白占内存(§0)——所以 SSE
+        // 下这份缓冲全程不写、容量不涨。
         let mut buffered: Vec<u8> = Vec::new();
         let mut buffered_overflow = false;
         let mut captured = false;
@@ -883,7 +891,7 @@ fn stream_upstream_success(
                             }
                         }
                     }
-                    if !captured && !buffered_overflow {
+                    if !is_sse && !captured && !buffered_overflow {
                         if bytes.len() <= MAX_SSE_EVENT_BYTES - buffered.len() {
                             buffered.extend_from_slice(&bytes);
                         } else {
@@ -914,8 +922,10 @@ fn stream_upstream_success(
                     duration_ms: Some(now_millis() - attempt_start),
                 },
             );
-        } else if !captured && !buffered_overflow {
+        } else if !is_sse && !captured && !buffered_overflow {
             // 非流式响应:整个 body 已在手里且没超上限,直接解析顶层 usage(§2.5)。
+            // SSE 响应走不到这里(§1 的门)——它的 buffered 全程为空,兜底没有
+            // 可解析的东西,usage 只可能来自上面的 response.completed。
             if let Some((input_tokens, output_tokens)) = usage_from_body_json(&buffered) {
                 backfill_attempt_tokens(&db, attempt_id, input_tokens, output_tokens);
             }
@@ -928,6 +938,19 @@ fn stream_upstream_success(
     builder
         .body(Body::from_stream(stream))
         .map_err(|error| AppError::InvalidInput(format!("构建流式响应失败: {error}")))
+}
+
+/// T23:content-type 是否声明为 SSE(§1)。判断宽松:大小写不敏感,允许后面
+/// 带 `; charset=utf-8` 之类的参数——按 `starts_with` 语义判 `text/event-stream`
+/// 前缀即可,不挑剔前缀后面跟着什么。拿不到 header、或 header 字节不是这个
+/// 前缀时返回 false,调用方按「攒」处理(保守):宁多攒,不误丢。
+fn is_sse_content_type(content_type: Option<&HeaderValue>) -> bool {
+    const SSE_MEDIA_TYPE: &[u8] = b"text/event-stream";
+    content_type.is_some_and(|value| {
+        let bytes = value.as_bytes();
+        bytes.len() >= SSE_MEDIA_TYPE.len()
+            && bytes[..SSE_MEDIA_TYPE.len()].eq_ignore_ascii_case(SSE_MEDIA_TYPE)
+    })
 }
 
 /// 增量 SSE 扫描器的内部缓冲上限(§2.3):当前事件超过它就整件丢弃、继续找
@@ -2160,6 +2183,166 @@ mod tests {
             attempt_tokens(&db),
             vec![(Some(7), Some(89))],
             "旁路扫描不能影响透传,也不能因此漏掉 usage"
+        );
+    }
+
+    // —— T23:SSE content-type 门 ——
+
+    /// 1. content-type 判断大小写不敏感(§1「宽松」):`Text/Event-Stream`
+    /// 照样走 SSE 路径,usage 仍从 response.completed 正确回填,透传逐字节不变。
+    #[tokio::test]
+    async fn mixed_case_sse_content_type_still_backfills_from_completed_event() {
+        let db = memory_db();
+        seed_route(&db, "packyapi", WireApi::Responses, 1, MODEL);
+        let whole: Vec<u8> = format!(
+            "{}{}",
+            sse_event(
+                r#"{"type":"response.completed","response":{"usage":{"input_tokens":31,"output_tokens":77}}}"#
+            ),
+            sse_event(r#"{"type":"response.done"}"#),
+        )
+        .into_bytes();
+        let chunks = split_varied(&whole);
+        let sender = fake_sender(vec![ScriptedOutcome::RespondChunked {
+            status: 200,
+            headers: vec![("content-type".to_string(), "Text/Event-Stream".to_string())],
+            chunks,
+        }]);
+        let router = test_router(test_state(db.clone(), ok_auth(), sender));
+
+        let (status, _, out) = post_json(router, json_body(json!({"model": MODEL})), &[]).await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(out.as_ref(), whole.as_slice(), "透传字节必须逐字节不变");
+        assert_eq!(
+            attempt_tokens(&db),
+            vec![(Some(31), Some(77))],
+            "SSE 的 usage 仍由 response.completed 回填,content-type 门不挡它"
+        );
+    }
+
+    /// 2. content-type 带参数(§1):`text/event-stream; charset=utf-8` 同样判成
+    /// SSE,usage 回填与透传都不受影响。
+    #[tokio::test]
+    async fn sse_content_type_with_charset_parameter_still_backfills() {
+        let db = memory_db();
+        seed_route(&db, "packyapi", WireApi::Responses, 1, MODEL);
+        let whole: Vec<u8> = format!(
+            "{}{}",
+            sse_event(
+                r#"{"type":"response.completed","response":{"usage":{"input_tokens":41,"output_tokens":88}}}"#
+            ),
+            sse_event(r#"{"type":"response.done"}"#),
+        )
+        .into_bytes();
+        let chunks = split_varied(&whole);
+        let sender = fake_sender(vec![ScriptedOutcome::RespondChunked {
+            status: 200,
+            headers: vec![(
+                "content-type".to_string(),
+                "text/event-stream; charset=utf-8".to_string(),
+            )],
+            chunks,
+        }]);
+        let router = test_router(test_state(db.clone(), ok_auth(), sender));
+
+        let (status, _, out) = post_json(router, json_body(json!({"model": MODEL})), &[]).await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(out.as_ref(), whole.as_slice(), "透传字节必须逐字节不变");
+        assert_eq!(
+            attempt_tokens(&db),
+            vec![(Some(41), Some(88))],
+            "带参数的 SSE content-type 也要走 SSE 路径回填"
+        );
+    }
+
+    /// 3. application/json 时顶层兜底仍然工作(§3.3,T13 第 5 条的加强版):
+    /// JSON 被切在 chunk 中间,缓冲按块攒完,兜底仍解析回填成功。
+    #[tokio::test]
+    async fn json_content_type_fallback_survives_chunk_boundaries() {
+        let db = memory_db();
+        seed_route(&db, "packyapi", WireApi::Responses, 1, MODEL);
+        let whole: Vec<u8> =
+            br#"{"id":"resp_1","object":"response","usage":{"input_tokens":11,"output_tokens":22}}"#
+                .to_vec();
+        let chunks = split_varied(&whole);
+        let sender = fake_sender(vec![ScriptedOutcome::RespondChunked {
+            status: 200,
+            headers: vec![("content-type".to_string(), "application/json".to_string())],
+            chunks,
+        }]);
+        let router = test_router(test_state(db.clone(), ok_auth(), sender));
+
+        let (status, _, out) = post_json(
+            router,
+            json_body(json!({"model": MODEL, "stream": false})),
+            &[],
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(out.as_ref(), whole.as_slice());
+        assert_eq!(
+            attempt_tokens(&db),
+            vec![(Some(11), Some(22))],
+            "application/json 必须继续走兜底回填,这是这次改动的安全网"
+        );
+    }
+
+    /// 4. 没有 content-type 头(§3.4):按保守路径处理——仍然攒,顶层兜底仍可用。
+    /// 用与第 5 条完全相同的 body:同一份 body 在「没有头」时回填成功,在
+    /// 「标成 SSE」时不回填,两个测试合起来就是 buffered 全程为空的对照证明。
+    #[tokio::test]
+    async fn missing_content_type_keeps_conservative_buffered_fallback() {
+        let db = memory_db();
+        seed_route(&db, "packyapi", WireApi::Responses, 1, MODEL);
+        let body: &[u8] = br#"{"id":"resp_1","usage":{"input_tokens":10,"output_tokens":20}}"#;
+        let sender = fake_sender(vec![ScriptedOutcome::Respond {
+            status: 200,
+            headers: vec![],
+            body: body.to_vec(),
+        }]);
+        let router = test_router(test_state(db.clone(), ok_auth(), sender));
+
+        let (status, _, out) = post_json(router, json_body(json!({"model": MODEL})), &[]).await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(out.as_ref(), body);
+        assert_eq!(
+            attempt_tokens(&db),
+            vec![(Some(10), Some(20))],
+            "拿不到 content-type 按「攒」处理,兜底仍要回填"
+        );
+    }
+
+    /// 5. SSE 下 buffered 全程为空的行为证明(§6):上游把一份顶层 JSON 误标成
+    /// text/event-stream(§4 的边角),并按不规则的 chunk 边界切成多块。这份
+    /// body 若被攒进 buffered,流结束时顶层兜底一定能解析出 usage 并回填——
+    /// 第 4 条已经证明同一份 body 在兜底路径上回填成功。兜底是 buffered 唯一
+    /// 的消费者,它读到的必须是空:断言两列保持 None,说明 SSE 路径从头到尾
+    /// 一个字节都没攒进 buffered。
+    #[tokio::test]
+    async fn sse_content_type_never_buffers_the_fallback_copy() {
+        let db = memory_db();
+        seed_route(&db, "packyapi", WireApi::Responses, 1, MODEL);
+        let body: &[u8] = br#"{"id":"resp_1","usage":{"input_tokens":10,"output_tokens":20}}"#;
+        let chunks = split_varied(body);
+        let sender = fake_sender(vec![ScriptedOutcome::RespondChunked {
+            status: 200,
+            headers: vec![("content-type".to_string(), "text/event-stream".to_string())],
+            chunks,
+        }]);
+        let router = test_router(test_state(db.clone(), ok_auth(), sender));
+
+        let (status, _, out) = post_json(router, json_body(json!({"model": MODEL})), &[]).await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(out.as_ref(), body, "旁路门不得改动透传字节");
+        assert_eq!(
+            attempt_tokens(&db),
+            vec![(None, None)],
+            "误标成 SSE 的 JSON 体不会被兜底解析——这正是 buffered 全程为空的证据(§4 接受的取舍)"
         );
     }
 }
