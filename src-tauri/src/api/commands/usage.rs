@@ -2,7 +2,7 @@
 
 use crate::app_state::AppState;
 use crate::error::AppError;
-use crate::services::usage_stats::*;
+use crate::usage::usage_stats::*;
 use rust_decimal::Decimal;
 use std::str::FromStr;
 use tauri::State;
@@ -313,7 +313,7 @@ pub fn check_provider_limits(
     state: State<'_, AppState>,
     provider_id: String,
     app_type: String,
-) -> Result<crate::services::usage_stats::ProviderLimitStatus, AppError> {
+) -> Result<crate::usage::usage_stats::ProviderLimitStatus, AppError> {
     state.db.check_provider_limits(&provider_id, &app_type)
 }
 

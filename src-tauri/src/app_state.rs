@@ -9,14 +9,15 @@ use crate::services::{
     provider_key_usage_scheduler::{
         start_scheduler as start_provider_key_usage_scheduler, ProviderKeyUsageSchedulerHandle,
     },
-    tray_usage::TrayUsageService,
-    tray_usage_scheduler::{
-        start_local_midnight_scheduler, TraySnapshotPublisher, TrayUsageSchedulerHandle,
-    },
-    ClaudeCliAuthService, SystemProviderConnectionService, UsageCache,
+    ClaudeCliAuthService, SystemProviderConnectionService,
 };
 use crate::store::Database;
 use crate::usage::session::SessionUsageService;
+use crate::usage::tray_usage::TrayUsageService;
+use crate::usage::tray_usage_scheduler::{
+    start_local_midnight_scheduler, TraySnapshotPublisher, TrayUsageSchedulerHandle,
+};
+use crate::usage::usage_cache::UsageCache;
 use std::sync::{Arc, Mutex};
 
 /// 全局应用状态

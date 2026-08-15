@@ -5,10 +5,10 @@ use std::path::PathBuf;
 use tauri::State;
 use tauri_plugin_dialog::DialogExt;
 
-use crate::app_state::AppState;
-use crate::commands::sync_support::{
+use crate::api::commands::sync_support::{
     post_sync_warning_from_result, run_post_import_sync, success_payload_with_warning,
 };
+use crate::app_state::AppState;
 use crate::error::AppError;
 use crate::store::backup::BackupEntry;
 

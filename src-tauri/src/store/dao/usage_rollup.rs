@@ -3,8 +3,8 @@
 //! Aggregates proxy_request_logs into daily rollups and prunes old detail rows.
 
 use crate::error::AppError;
-use crate::services::usage_stats::effective_usage_log_filter;
 use crate::store::{lock_conn, Database};
+use crate::usage::usage_stats::effective_usage_log_filter;
 use chrono::{Duration, Local, TimeZone};
 
 /// Compute the rollup/prune cutoff aligned to a local-day boundary.

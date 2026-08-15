@@ -4,7 +4,6 @@ mod app_store;
 mod auto_launch;
 mod claude_desktop_config;
 mod claude_plugin;
-mod commands;
 mod config;
 mod error;
 pub mod http_client;
@@ -37,8 +36,9 @@ pub mod tray_status;
 pub mod usage;
 mod usage_events;
 
+use api::commands;
+pub use api::commands::*;
 pub use app_state::AppState;
-pub use commands::*;
 pub use config::app_config::{AppType, MultiAppConfig};
 pub use config::settings::{update_settings, AppSettings};
 pub use config::{get_claude_account_path, get_claude_settings_path, read_json_file};
@@ -1138,7 +1138,7 @@ pub fn run() {
             }
 
             let tray_publisher_app = app.handle().clone();
-            let tray_publisher: services::tray_usage_scheduler::TraySnapshotPublisher =
+            let tray_publisher: usage::tray_usage_scheduler::TraySnapshotPublisher =
                 Arc::new(move |snapshot| {
                     tray_status::publish_tray_usage(&tray_publisher_app, snapshot);
                     usage_events::emit_dashboard_invalidated_only();

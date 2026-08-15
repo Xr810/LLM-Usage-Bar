@@ -7,14 +7,9 @@ pub mod provider_key_usage_scheduler;
 pub mod s3;
 pub mod s3_auto_sync;
 pub mod s3_sync;
-pub mod sql_helpers;
 pub mod subscription;
 pub mod sync_protocol;
 pub mod system_provider_connection;
-pub mod tray_usage;
-pub mod tray_usage_scheduler;
-pub mod usage_cache;
-pub mod usage_stats;
 pub mod webdav;
 pub mod webdav_auto_sync;
 pub mod webdav_sync;
@@ -22,10 +17,4 @@ pub mod webdav_sync;
 pub use claude_cli_auth::{ClaudeCliAuthService, ClaudeCliAuthStatus};
 pub use system_provider_connection::{
     SystemProviderConnectionService, SystemProviderConnectionTestResult,
-};
-pub use usage_cache::UsageCache;
-#[allow(unused_imports)]
-pub use usage_stats::{
-    DailyStats, LogFilters, ModelStats, PaginatedLogs, ProviderLimitStatus, ProviderStats,
-    RequestLogDetail, UsageSummary, UsageSummaryByApp,
 };

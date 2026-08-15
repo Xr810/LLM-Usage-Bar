@@ -3,10 +3,10 @@
 use serde_json::{json, Value};
 use tauri::State;
 
-use crate::app_state::AppState;
-use crate::commands::sync_support::{
+use crate::api::commands::sync_support::{
     attach_warning, post_sync_warning_from_result, run_post_import_sync,
 };
+use crate::app_state::AppState;
 use crate::config::settings::{self, WebDavSyncSettings};
 use crate::error::AppError;
 use crate::services::webdav_sync as webdav_sync_service;

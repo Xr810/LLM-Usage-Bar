@@ -1,12 +1,12 @@
 use crate::error::AppError;
 use crate::model::{BillingKind, CostSource, PricingOrigin, TokenSource, UsageEvent};
-use crate::services::usage_stats::{
-    find_model_pricing_row, find_provider_model_pricing_row, ProviderModelPricingRow,
-};
 use crate::store::{lock_conn, Database, UsageSyncCursor};
 use crate::usage::metering::calculator::{CostBreakdown, CostCalculator, ModelPricing};
 use crate::usage::metering::cost_parser::UpstreamCost;
 use crate::usage::metering::parser::TokenUsage;
+use crate::usage::usage_stats::{
+    find_model_pricing_row, find_provider_model_pricing_row, ProviderModelPricingRow,
+};
 use rusqlite::{params, OptionalExtension, Transaction};
 use rust_decimal::Decimal;
 use std::time::{SystemTime, UNIX_EPOCH};

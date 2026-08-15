@@ -1,5 +1,5 @@
-use crate::services::tray_usage::TrayUsageService;
 use crate::usage::tray_snapshot::{TrayUsageSnapshot, TrayUsageWindows};
+use crate::usage::tray_usage::TrayUsageService;
 use futures::future::BoxFuture;
 use std::sync::Arc;
 use std::time::Duration;

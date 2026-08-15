@@ -1,6 +1,6 @@
 use crate::error::AppError;
-use crate::services::usage_stats::clean_model_id_for_pricing;
 use crate::store::{lock_conn, Database};
+use crate::usage::usage_stats::clean_model_id_for_pricing;
 use rusqlite::params;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
