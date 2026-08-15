@@ -1137,6 +1137,10 @@ pub fn run() {
                 log::warn!("provider key usage scheduler was already started");
             }
 
+            if !app.state::<AppState>().start_packycode_usage_scheduler() {
+                log::warn!("packycode usage scheduler was already started");
+            }
+
             let tray_publisher_app = app.handle().clone();
             let tray_publisher: usage::tray_usage_scheduler::TraySnapshotPublisher =
                 Arc::new(move |snapshot| {
@@ -1545,6 +1549,11 @@ pub fn run() {
             commands::inspect_router_pointer,
             commands::enable_router_pointer,
             commands::recent_router_attempts,
+            // PackyCode account usage (D2):NewAPI 管理接口 → 余额/花费
+            commands::set_packycode_usage_credentials,
+            commands::clear_packycode_usage_credentials,
+            commands::get_packycode_account_usage,
+            commands::refresh_packycode_account_usage,
             // Copilot OAuth commands (multi-account support)
             // OMO commands
             // Workspace files (OpenClaw)
@@ -1657,6 +1666,7 @@ pub async fn cleanup_before_exit(app_handle: &tauri::AppHandle) {
             state.take_midnight_scheduler(),
             state.take_official_pricing_scheduler(),
             state.take_provider_key_usage_scheduler(),
+            state.take_packycode_usage_scheduler(),
         )
     });
     if let Some((
@@ -1664,6 +1674,7 @@ pub async fn cleanup_before_exit(app_handle: &tauri::AppHandle) {
         midnight_scheduler,
         official_pricing_scheduler,
         provider_key_usage_scheduler,
+        packycode_usage_scheduler,
     )) = cleanup_resources
     {
         if let Some(scheduler) = quota_scheduler {
@@ -1676,6 +1687,9 @@ pub async fn cleanup_before_exit(app_handle: &tauri::AppHandle) {
             scheduler.stop().await;
         }
         if let Some(scheduler) = provider_key_usage_scheduler {
+            scheduler.stop().await;
+        }
+        if let Some(scheduler) = packycode_usage_scheduler {
             scheduler.stop().await;
         }
     }

@@ -6,6 +6,9 @@ use crate::services::{
     official_pricing::{
         start_scheduler as start_official_pricing_scheduler, OfficialPricingSchedulerHandle,
     },
+    packycode_usage::{
+        start_scheduler as start_packycode_usage_scheduler, PackyCodeUsageSchedulerHandle,
+    },
     provider_key_usage_scheduler::{
         start_scheduler as start_provider_key_usage_scheduler, ProviderKeyUsageSchedulerHandle,
     },
@@ -35,6 +38,7 @@ pub struct AppState {
     midnight_scheduler: Mutex<Option<TrayUsageSchedulerHandle>>,
     official_pricing_scheduler: Mutex<Option<OfficialPricingSchedulerHandle>>,
     provider_key_usage_scheduler: Mutex<Option<ProviderKeyUsageSchedulerHandle>>,
+    packycode_usage_scheduler: Mutex<Option<PackyCodeUsageSchedulerHandle>>,
 }
 
 impl AppState {
@@ -120,6 +124,7 @@ impl AppState {
             midnight_scheduler: Mutex::new(None),
             official_pricing_scheduler: Mutex::new(None),
             provider_key_usage_scheduler: Mutex::new(None),
+            packycode_usage_scheduler: Mutex::new(None),
         }
     }
 
@@ -226,6 +231,33 @@ impl AppState {
             Ok(mut scheduler) => scheduler.take(),
             Err(_) => {
                 log::error!("provider key usage scheduler lock is poisoned");
+                None
+            }
+        }
+    }
+
+    /// D2:PackyCode 账户用量调度(15 分钟 + 失败退避),与 official_pricing
+    /// 同一套启停形状。依赖 db + 钥匙串,不依赖任何 provider 行。
+    pub fn start_packycode_usage_scheduler(&self) -> bool {
+        let Ok(mut scheduler) = self.packycode_usage_scheduler.lock() else {
+            log::error!("packycode usage scheduler lock is poisoned");
+            return false;
+        };
+        if scheduler.is_some() {
+            return false;
+        }
+        *scheduler = Some(start_packycode_usage_scheduler(
+            self.db.clone(),
+            self.credential_store.clone(),
+        ));
+        true
+    }
+
+    pub(crate) fn take_packycode_usage_scheduler(&self) -> Option<PackyCodeUsageSchedulerHandle> {
+        match self.packycode_usage_scheduler.lock() {
+            Ok(mut scheduler) => scheduler.take(),
+            Err(_) => {
+                log::error!("packycode usage scheduler lock is poisoned");
                 None
             }
         }
