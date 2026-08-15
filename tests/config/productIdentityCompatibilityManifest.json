@@ -48,7 +48,7 @@
     "reason": "exact read-only legacy compatibility or coexistence reference"
   },
   {
-    "file": "src-tauri/src/commands/misc.rs",
+    "file": "src-tauri/src/api/commands/misc.rs",
     "context": "std::env::temp_dir().join(format!(\"cc_switch_{}_{}.bat\", label, std::process::id()));",
     "columnNumber": 36,
     "matchedText": "cc_switch",
@@ -56,7 +56,7 @@
     "reason": "exact Windows or Linux-only branch excluded from macOS delivery"
   },
   {
-    "file": "src-tauri/src/commands/misc.rs",
+    "file": "src-tauri/src/api/commands/misc.rs",
     "context": "let bat_file = temp_dir.join(format!(\"cc_switch_{}_{}.bat\", label, pid));",
     "columnNumber": 39,
     "matchedText": "cc_switch",
@@ -64,7 +64,7 @@
     "reason": "exact Windows or Linux-only branch excluded from macOS delivery"
   },
   {
-    "file": "src-tauri/src/commands/misc.rs",
+    "file": "src-tauri/src/api/commands/misc.rs",
     "context": "\"@echo off\\r\\necho [cc-switch] Starting: {label}\\r\\necho.\\r\\n{cmd}\\r\\necho.\\r\\necho [cc-switch] Command exited. Press any key to close.\\r\\npause >nul\\r\\ndel \\\"%~f0\\\" >nul 2>&1\\r\\n\",",
     "columnNumber": 21,
     "matchedText": "cc-switch",
@@ -72,7 +72,7 @@
     "reason": "exact Windows or Linux-only branch excluded from macOS delivery"
   },
   {
-    "file": "src-tauri/src/commands/misc.rs",
+    "file": "src-tauri/src/api/commands/misc.rs",
     "context": "\"@echo off\\r\\necho [cc-switch] Starting: {label}\\r\\necho.\\r\\n{cmd}\\r\\necho.\\r\\necho [cc-switch] Command exited. Press any key to close.\\r\\npause >nul\\r\\ndel \\\"%~f0\\\" >nul 2>&1\\r\\n\",",
     "columnNumber": 86,
     "matchedText": "cc-switch",
@@ -80,7 +80,7 @@
     "reason": "exact Windows or Linux-only branch excluded from macOS delivery"
   },
   {
-    "file": "src-tauri/src/commands/s3_sync.rs",
+    "file": "src-tauri/src/api/commands/s3_sync.rs",
     "context": "remote_root: \"cc-switch-sync\".to_string(),",
     "columnNumber": 15,
     "matchedText": "cc-switch",
@@ -88,7 +88,7 @@
     "reason": "exact persisted, transmitted, or upstream compatibility bytes"
   },
   {
-    "file": "src-tauri/src/commands/s3_sync.rs",
+    "file": "src-tauri/src/api/commands/s3_sync.rs",
     "context": "assert_eq!(after.remote_root, \"cc-switch-sync\");",
     "columnNumber": 32,
     "matchedText": "cc-switch",
@@ -96,7 +96,7 @@
     "reason": "exact persisted, transmitted, or upstream compatibility bytes"
   },
   {
-    "file": "src-tauri/src/commands/webdav_sync.rs",
+    "file": "src-tauri/src/api/commands/webdav_sync.rs",
     "context": "remote_root: \"cc-switch-sync\".to_string(),",
     "columnNumber": 15,
     "matchedText": "cc-switch",
@@ -104,7 +104,7 @@
     "reason": "exact persisted, transmitted, or upstream compatibility bytes"
   },
   {
-    "file": "src-tauri/src/commands/webdav_sync.rs",
+    "file": "src-tauri/src/api/commands/webdav_sync.rs",
     "context": "assert_eq!(after.remote_root, \"cc-switch-sync\");",
     "columnNumber": 32,
     "matchedText": "cc-switch",
@@ -112,7 +112,7 @@
     "reason": "exact persisted, transmitted, or upstream compatibility bytes"
   },
   {
-    "file": "src-tauri/src/config.rs",
+    "file": "src-tauri/src/config/mod.rs",
     "context": "/// `LLM_USAGE_BAR_TEST_HOME` 是当前覆盖名；`CC_SWITCH_TEST_HOME` 仅作为旧测试和",
     "columnNumber": 39,
     "matchedText": "CC_SWITCH",
@@ -120,7 +120,7 @@
     "reason": "exact persisted, transmitted, or upstream compatibility bytes"
   },
   {
-    "file": "src-tauri/src/config.rs",
+    "file": "src-tauri/src/config/mod.rs",
     "context": "for key in [\"LLM_USAGE_BAR_TEST_HOME\", \"CC_SWITCH_TEST_HOME\"] {",
     "columnNumber": 41,
     "matchedText": "CC_SWITCH",
@@ -128,7 +128,7 @@
     "reason": "exact persisted, transmitted, or upstream compatibility bytes"
   },
   {
-    "file": "src-tauri/src/config.rs",
+    "file": "src-tauri/src/config/mod.rs",
     "context": "/// Return whether a proposed data directory is the original CC Switch data directory.",
     "columnNumber": 62,
     "matchedText": "CC Switch",
@@ -136,7 +136,7 @@
     "reason": "exact read-only legacy compatibility or coexistence reference"
   },
   {
-    "file": "src-tauri/src/config.rs",
+    "file": "src-tauri/src/config/mod.rs",
     "context": "fn is_legacy_cc_switch_config_dir_for_home(path: &Path, home: &Path) -> bool {",
     "columnNumber": 14,
     "matchedText": "cc_switch",
@@ -144,7 +144,7 @@
     "reason": "exact read-only legacy compatibility or coexistence reference"
   },
   {
-    "file": "src-tauri/src/config.rs",
+    "file": "src-tauri/src/config/mod.rs",
     "context": "let legacy_dir = home.join(\".cc-switch\");",
     "columnNumber": 30,
     "matchedText": "cc-switch",
@@ -152,7 +152,7 @@
     "reason": "exact read-only legacy compatibility or coexistence reference"
   },
   {
-    "file": "src-tauri/src/config.rs",
+    "file": "src-tauri/src/config/mod.rs",
     "context": "if is_legacy_cc_switch_config_dir_for_home(path, home) {",
     "columnNumber": 14,
     "matchedText": "cc_switch",
@@ -160,7 +160,7 @@
     "reason": "exact read-only legacy compatibility or coexistence reference"
   },
   {
-    "file": "src-tauri/src/config.rs",
+    "file": "src-tauri/src/config/mod.rs",
     "context": "\"LLM Usage Bar cannot use the original ~/.cc-switch data directory\".to_string(),",
     "columnNumber": 43,
     "matchedText": "cc-switch",
@@ -168,7 +168,7 @@
     "reason": "exact read-only legacy compatibility or coexistence reference"
   },
   {
-    "file": "src-tauri/src/config.rs",
+    "file": "src-tauri/src/config/mod.rs",
     "context": "\"Rejected unsafe app_config_dir override pointing at the original CC Switch data: {}\",",
     "columnNumber": 67,
     "matchedText": "CC Switch",
@@ -176,7 +176,7 @@
     "reason": "exact read-only legacy compatibility or coexistence reference"
   },
   {
-    "file": "src-tauri/src/config.rs",
+    "file": "src-tauri/src/config/mod.rs",
     "context": "Some(value) => std::env::set_var(\"CC_SWITCH_TEST_HOME\", value),",
     "columnNumber": 35,
     "matchedText": "CC_SWITCH",
@@ -184,7 +184,7 @@
     "reason": "exact persisted, transmitted, or upstream compatibility bytes"
   },
   {
-    "file": "src-tauri/src/config.rs",
+    "file": "src-tauri/src/config/mod.rs",
     "context": "None => std::env::remove_var(\"CC_SWITCH_TEST_HOME\"),",
     "columnNumber": 31,
     "matchedText": "CC_SWITCH",
@@ -192,7 +192,7 @@
     "reason": "exact persisted, transmitted, or upstream compatibility bytes"
   },
   {
-    "file": "src-tauri/src/config.rs",
+    "file": "src-tauri/src/config/mod.rs",
     "context": "legacy: std::env::var_os(\"CC_SWITCH_TEST_HOME\"),",
     "columnNumber": 27,
     "matchedText": "CC_SWITCH",
@@ -200,7 +200,7 @@
     "reason": "exact persisted, transmitted, or upstream compatibility bytes"
   },
   {
-    "file": "src-tauri/src/config.rs",
+    "file": "src-tauri/src/config/mod.rs",
     "context": "std::env::set_var(\"CC_SWITCH_TEST_HOME\", &legacy);",
     "columnNumber": 20,
     "matchedText": "CC_SWITCH",
@@ -208,7 +208,7 @@
     "reason": "exact persisted, transmitted, or upstream compatibility bytes"
   },
   {
-    "file": "src-tauri/src/config.rs",
+    "file": "src-tauri/src/config/mod.rs",
     "context": "fn app_data_directory_is_distinct_from_original_cc_switch() {",
     "columnNumber": 49,
     "matchedText": "cc_switch",
@@ -216,7 +216,7 @@
     "reason": "exact read-only legacy compatibility or coexistence reference"
   },
   {
-    "file": "src-tauri/src/config.rs",
+    "file": "src-tauri/src/config/mod.rs",
     "context": "let legacy = home.join(\".cc-switch\");",
     "columnNumber": 26,
     "matchedText": "cc-switch",
@@ -224,7 +224,7 @@
     "reason": "exact read-only legacy compatibility or coexistence reference"
   },
   {
-    "file": "src-tauri/src/config.rs",
+    "file": "src-tauri/src/config/mod.rs",
     "context": "assert!(is_legacy_cc_switch_config_dir_for_home(&legacy, &home));",
     "columnNumber": 19,
     "matchedText": "cc_switch",
@@ -232,7 +232,7 @@
     "reason": "exact read-only legacy compatibility or coexistence reference"
   },
   {
-    "file": "src-tauri/src/config.rs",
+    "file": "src-tauri/src/config/mod.rs",
     "context": "assert!(!is_legacy_cc_switch_config_dir_for_home(&isolated, &home));",
     "columnNumber": 20,
     "matchedText": "cc_switch",
@@ -240,7 +240,7 @@
     "reason": "exact read-only legacy compatibility or coexistence reference"
   },
   {
-    "file": "src-tauri/src/config.rs",
+    "file": "src-tauri/src/config/mod.rs",
     "context": "let legacy = temp.path().join(\".cc-switch\");",
     "columnNumber": 33,
     "matchedText": "cc-switch",
@@ -249,7 +249,7 @@
     "occurrences": 2
   },
   {
-    "file": "src-tauri/src/config.rs",
+    "file": "src-tauri/src/config/mod.rs",
     "context": "assert!(is_legacy_cc_switch_config_dir_for_home(&alias, temp.path()));",
     "columnNumber": 19,
     "matchedText": "cc_switch",
@@ -257,7 +257,7 @@
     "reason": "exact read-only legacy compatibility or coexistence reference"
   },
   {
-    "file": "src-tauri/src/config.rs",
+    "file": "src-tauri/src/config/mod.rs",
     "context": "let case_alias = temp.path().join(\".CC-SWITCH\");",
     "columnNumber": 37,
     "matchedText": "CC-SWITCH",
@@ -265,7 +265,7 @@
     "reason": "exact read-only legacy compatibility or coexistence reference"
   },
   {
-    "file": "src-tauri/src/config.rs",
+    "file": "src-tauri/src/config/mod.rs",
     "context": "assert!(is_legacy_cc_switch_config_dir_for_home(",
     "columnNumber": 19,
     "matchedText": "cc_switch",
@@ -273,7 +273,7 @@
     "reason": "exact read-only legacy compatibility or coexistence reference"
   },
   {
-    "file": "src-tauri/src/credentials/codex_oauth_auth.rs",
+    "file": "src-tauri/src/secrets/codex_oauth_auth.rs",
     "context": "assert_eq!(CODEX_USER_AGENT, \"cc-switch-codex-oauth\");",
     "columnNumber": 31,
     "matchedText": "cc-switch",
@@ -281,7 +281,7 @@
     "reason": "exact persisted, transmitted, or upstream compatibility bytes"
   },
   {
-    "file": "src-tauri/src/database/backup.rs",
+    "file": "src-tauri/src/store/backup.rs",
     "context": "const LEGACY_CC_SWITCH_SQL_EXPORT_HEADER: &str = \"-- CC Switch SQLite 导出\";",
     "columnNumber": 14,
     "matchedText": "CC_SWITCH",
@@ -289,7 +289,7 @@
     "reason": "exact read-only legacy compatibility or coexistence reference"
   },
   {
-    "file": "src-tauri/src/database/backup.rs",
+    "file": "src-tauri/src/store/backup.rs",
     "context": "const LEGACY_CC_SWITCH_SQL_EXPORT_HEADER: &str = \"-- CC Switch SQLite 导出\";",
     "columnNumber": 54,
     "matchedText": "CC Switch",
@@ -297,7 +297,7 @@
     "reason": "exact persisted, transmitted, or upstream compatibility bytes"
   },
   {
-    "file": "src-tauri/src/database/backup.rs",
+    "file": "src-tauri/src/store/backup.rs",
     "context": "LLM_USAGE_BAR_SQL_EXPORT_HEADER | LEGACY_CC_SWITCH_SQL_EXPORT_HEADER",
     "columnNumber": 42,
     "matchedText": "CC_SWITCH",
@@ -305,7 +305,7 @@
     "reason": "exact read-only legacy compatibility or coexistence reference"
   },
   {
-    "file": "src-tauri/src/database/backup.rs",
+    "file": "src-tauri/src/store/backup.rs",
     "context": "\"仅支持导入由 LLM Usage Bar 或旧版 CC Switch 导出的 SQL 备份文件。\",",
     "columnNumber": 27,
     "matchedText": "CC Switch",
@@ -313,7 +313,7 @@
     "reason": "exact read-only legacy compatibility or coexistence reference"
   },
   {
-    "file": "src-tauri/src/database/backup.rs",
+    "file": "src-tauri/src/store/backup.rs",
     "context": "\"Only SQL backups exported by LLM Usage Bar or legacy CC Switch are supported.\",",
     "columnNumber": 55,
     "matchedText": "CC Switch",
@@ -321,7 +321,7 @@
     "reason": "exact read-only legacy compatibility or coexistence reference"
   },
   {
-    "file": "src-tauri/src/database/backup.rs",
+    "file": "src-tauri/src/store/backup.rs",
     "context": "redact_url_secrets, Database, LEGACY_CC_SWITCH_SQL_EXPORT_HEADER,",
     "columnNumber": 38,
     "matchedText": "CC_SWITCH",
@@ -329,7 +329,7 @@
     "reason": "exact read-only legacy compatibility or coexistence reference"
   },
   {
-    "file": "src-tauri/src/database/backup.rs",
+    "file": "src-tauri/src/store/backup.rs",
     "context": "assert!(!sql.starts_with(&format!(\"{LEGACY_CC_SWITCH_SQL_EXPORT_HEADER}\\n\")));",
     "columnNumber": 44,
     "matchedText": "CC_SWITCH",
@@ -337,7 +337,7 @@
     "reason": "exact read-only legacy compatibility or coexistence reference"
   },
   {
-    "file": "src-tauri/src/database/backup.rs",
+    "file": "src-tauri/src/store/backup.rs",
     "context": "let legacy = format!(\"{LEGACY_CC_SWITCH_SQL_EXPORT_HEADER}\\nBEGIN TRANSACTION;\");",
     "columnNumber": 31,
     "matchedText": "CC_SWITCH",
@@ -345,7 +345,7 @@
     "reason": "exact read-only legacy compatibility or coexistence reference"
   },
   {
-    "file": "src-tauri/src/database/backup.rs",
+    "file": "src-tauri/src/store/backup.rs",
     "context": "format!(\"{LEGACY_CC_SWITCH_SQL_EXPORT_HEADER} with suffix\\nBEGIN TRANSACTION;\");",
     "columnNumber": 18,
     "matchedText": "CC_SWITCH",
@@ -353,7 +353,7 @@
     "reason": "exact read-only legacy compatibility or coexistence reference"
   },
   {
-    "file": "src-tauri/src/database/identity_migration.rs",
+    "file": "src-tauri/src/store/identity_migration.rs",
     "context": "const ARCHIVE_FILE: &str = \"cc-switch.db.pre-llm-usage-bar-v14\";",
     "columnNumber": 29,
     "matchedText": "cc-switch",
@@ -361,7 +361,7 @@
     "reason": "exact read-only legacy compatibility or coexistence reference"
   },
   {
-    "file": "src-tauri/src/database/identity_migration.rs",
+    "file": "src-tauri/src/store/identity_migration.rs",
     "context": "\"cc-switch.db-wal\",",
     "columnNumber": 2,
     "matchedText": "cc-switch",
@@ -369,7 +369,7 @@
     "reason": "exact read-only legacy compatibility or coexistence reference"
   },
   {
-    "file": "src-tauri/src/database/identity_migration.rs",
+    "file": "src-tauri/src/store/identity_migration.rs",
     "context": "\"cc-switch.db-shm\",",
     "columnNumber": 2,
     "matchedText": "cc-switch",
@@ -377,7 +377,7 @@
     "reason": "exact read-only legacy compatibility or coexistence reference"
   },
   {
-    "file": "src-tauri/src/database/identity_migration.rs",
+    "file": "src-tauri/src/store/identity_migration.rs",
     "context": "\"guard call changed protected ~/.cc-switch entries or file bytes\"",
     "columnNumber": 34,
     "matchedText": "cc-switch",
@@ -385,7 +385,7 @@
     "reason": "exact read-only legacy compatibility or coexistence reference"
   },
   {
-    "file": "src-tauri/src/database/identity_migration.rs",
+    "file": "src-tauri/src/store/identity_migration.rs",
     "context": "error.to_string().contains(\".cc-switch\"),",
     "columnNumber": 30,
     "matchedText": "cc-switch",
@@ -393,7 +393,7 @@
     "reason": "exact read-only legacy compatibility or coexistence reference"
   },
   {
-    "file": "src-tauri/src/database/identity_migration.rs",
+    "file": "src-tauri/src/store/identity_migration.rs",
     "context": "\"hardlink guard call changed protected ~/.cc-switch entries or file bytes\"",
     "columnNumber": 43,
     "matchedText": "cc-switch",
@@ -401,7 +401,7 @@
     "reason": "exact read-only legacy compatibility or coexistence reference"
   },
   {
-    "file": "src-tauri/src/database/identity_migration.rs",
+    "file": "src-tauri/src/store/identity_migration.rs",
     "context": "Some(value) => std::env::set_var(\"CC_SWITCH_TEST_HOME\", value),",
     "columnNumber": 35,
     "matchedText": "CC_SWITCH",
@@ -409,7 +409,7 @@
     "reason": "exact persisted, transmitted, or upstream compatibility bytes"
   },
   {
-    "file": "src-tauri/src/database/identity_migration.rs",
+    "file": "src-tauri/src/store/identity_migration.rs",
     "context": "None => std::env::remove_var(\"CC_SWITCH_TEST_HOME\"),",
     "columnNumber": 31,
     "matchedText": "CC_SWITCH",
@@ -417,7 +417,7 @@
     "reason": "exact persisted, transmitted, or upstream compatibility bytes"
   },
   {
-    "file": "src-tauri/src/database/identity_migration.rs",
+    "file": "src-tauri/src/store/identity_migration.rs",
     "context": "legacy: std::env::var_os(\"CC_SWITCH_TEST_HOME\"),",
     "columnNumber": 27,
     "matchedText": "CC_SWITCH",
@@ -425,7 +425,7 @@
     "reason": "exact persisted, transmitted, or upstream compatibility bytes"
   },
   {
-    "file": "src-tauri/src/database/tests.rs",
+    "file": "src-tauri/src/store/tests.rs",
     "context": "VALUES ('external-cc-switch-provider', 'claude', 'External',",
     "columnNumber": 19,
     "matchedText": "cc-switch",
@@ -433,7 +433,7 @@
     "reason": "exact persisted, transmitted, or upstream compatibility bytes"
   },
   {
-    "file": "src-tauri/src/database/tests.rs",
+    "file": "src-tauri/src/store/tests.rs",
     "context": "'{\"remoteRoot\":\"cc-switch-sync\"}',",
     "columnNumber": 17,
     "matchedText": "cc-switch",
@@ -441,7 +441,7 @@
     "reason": "exact persisted, transmitted, or upstream compatibility bytes"
   },
   {
-    "file": "src-tauri/src/database/tests.rs",
+    "file": "src-tauri/src/store/tests.rs",
     "context": "'{\"affiliate\":\"cc_switch\"}');",
     "columnNumber": 16,
     "matchedText": "cc_switch",
@@ -449,7 +449,7 @@
     "reason": "exact persisted, transmitted, or upstream compatibility bytes"
   },
   {
-    "file": "src-tauri/src/database/tests.rs",
+    "file": "src-tauri/src/store/tests.rs",
     "context": "VALUES ('external-wire', 'External MCP', '{\"protocol\":\"cc-switch-webdav-sync\"}');",
     "columnNumber": 56,
     "matchedText": "cc-switch",
@@ -457,7 +457,7 @@
     "reason": "exact persisted, transmitted, or upstream compatibility bytes"
   },
   {
-    "file": "src-tauri/src/database/tests.rs",
+    "file": "src-tauri/src/store/tests.rs",
     "context": "VALUES ('legacy-profile', 'Imported', '{\"providerId\":\"ccswitch\"}');",
     "columnNumber": 55,
     "matchedText": "ccswitch",
@@ -465,7 +465,7 @@
     "reason": "exact persisted, transmitted, or upstream compatibility bytes"
   },
   {
-    "file": "src-tauri/src/database/tests.rs",
+    "file": "src-tauri/src/store/tests.rs",
     "context": "VALUES ('external_remote_root', 'cc-switch-sync');",
     "columnNumber": 34,
     "matchedText": "cc-switch",
@@ -473,7 +473,7 @@
     "reason": "exact persisted, transmitted, or upstream compatibility bytes"
   },
   {
-    "file": "src-tauri/src/database/tests.rs",
+    "file": "src-tauri/src/store/tests.rs",
     "context": "\"SELECT settings_config || '|' || meta FROM providers WHERE id='external-cc-switch-provider'\",",
     "columnNumber": 74,
     "matchedText": "cc-switch",
@@ -787,7 +787,7 @@
     "reason": "exact persisted, transmitted, or upstream compatibility bytes"
   },
   {
-    "file": "src-tauri/src/settings.rs",
+    "file": "src-tauri/src/config/settings.rs",
     "context": "#[serde(alias = \"cc_switch\")]",
     "columnNumber": 18,
     "matchedText": "cc_switch",
@@ -795,7 +795,7 @@
     "reason": "exact read-only legacy compatibility or coexistence reference"
   },
   {
-    "file": "src-tauri/src/settings.rs",
+    "file": "src-tauri/src/config/settings.rs",
     "context": "== Some(\"cc_switch\");",
     "columnNumber": 10,
     "matchedText": "cc_switch",
@@ -803,7 +803,7 @@
     "reason": "exact read-only legacy compatibility or coexistence reference"
   },
   {
-    "file": "src-tauri/src/settings.rs",
+    "file": "src-tauri/src/config/settings.rs",
     "context": "\"cc-switch-sync\"",
     "columnNumber": 2,
     "matchedText": "cc-switch",
@@ -811,7 +811,7 @@
     "reason": "exact persisted, transmitted, or upstream compatibility bytes"
   },
   {
-    "file": "src-tauri/src/settings.rs",
+    "file": "src-tauri/src/config/settings.rs",
     "context": "\"skillStorageLocation\": \"cc_switch\",",
     "columnNumber": 26,
     "matchedText": "cc_switch",
@@ -819,7 +819,7 @@
     "reason": "exact read-only legacy compatibility or coexistence reference"
   },
   {
-    "file": "src-tauri/src/settings.rs",
+    "file": "src-tauri/src/config/settings.rs",
     "context": "\"remoteRoot\": \"cc-switch-sync\"",
     "columnNumber": 16,
     "matchedText": "cc-switch",
@@ -827,7 +827,7 @@
     "reason": "exact persisted, transmitted, or upstream compatibility bytes"
   },
   {
-    "file": "src-tauri/src/settings.rs",
+    "file": "src-tauri/src/config/settings.rs",
     "context": "\"identity\": \"cc-switch-plugin-wire\",",
     "columnNumber": 14,
     "matchedText": "cc-switch",
@@ -836,7 +836,7 @@
     "occurrences": 2
   },
   {
-    "file": "src-tauri/src/settings.rs",
+    "file": "src-tauri/src/config/settings.rs",
     "context": "assert_eq!(rewritten[\"webdavSync\"][\"remoteRoot\"], \"cc-switch-sync\");",
     "columnNumber": 52,
     "matchedText": "cc-switch",
@@ -844,7 +844,7 @@
     "reason": "exact persisted, transmitted, or upstream compatibility bytes"
   },
   {
-    "file": "src-tauri/src/settings.rs",
+    "file": "src-tauri/src/config/settings.rs",
     "context": "r#\"{\"skillStorageLocation\":\"cc_switch\",\"language\":\"zh\"}\"#,",
     "columnNumber": 29,
     "matchedText": "cc_switch",
@@ -852,7 +852,7 @@
     "reason": "exact read-only legacy compatibility or coexistence reference"
   },
   {
-    "file": "src-tauri/src/settings.rs",
+    "file": "src-tauri/src/config/settings.rs",
     "context": ".contains(\"cc_switch\"));",
     "columnNumber": 12,
     "matchedText": "cc_switch",
@@ -860,7 +860,7 @@
     "reason": "exact read-only legacy compatibility or coexistence reference"
   },
   {
-    "file": "src-tauri/src/settings.rs",
+    "file": "src-tauri/src/config/settings.rs",
     "context": ".contains(\"/.cc-switch/\"));",
     "columnNumber": 14,
     "matchedText": "cc-switch",

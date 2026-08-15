@@ -1,7 +1,7 @@
-use crate::credentials::{BindingCredentialService, ResolvedProviderCredential};
-use crate::database::{Database, ProviderKeyUsageSnapshotInput};
 use crate::error::AppError;
-use crate::usage::domain::SystemProviderKeyUsageView;
+use crate::model::SystemProviderKeyUsageView;
+use crate::secrets::{BindingCredentialService, ResolvedProviderCredential};
+use crate::store::{Database, ProviderKeyUsageSnapshotInput};
 use crate::usage::system_providers::system_provider_definition;
 use rust_decimal::Decimal;
 use serde_json::Value;
@@ -499,7 +499,7 @@ impl SystemProviderConnectionService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::credentials::{CredentialStore, CredentialStoreError, SecretString};
+    use crate::secrets::{CredentialStore, CredentialStoreError, SecretString};
     use std::collections::{HashMap, VecDeque};
     use std::sync::{Arc, Mutex};
     use zeroize::Zeroizing;

@@ -1,4 +1,4 @@
-use super::domain::{BillingKind, SystemProviderAuthKind, TokenSource};
+use crate::model::{BillingKind, SystemProviderAuthKind, TokenSource};
 
 pub const CHATGPT_SUBSCRIPTION_ID: &str = "system-chatgpt-subscription";
 pub const CLAUDE_SUBSCRIPTION_ID: &str = "system-claude-subscription";

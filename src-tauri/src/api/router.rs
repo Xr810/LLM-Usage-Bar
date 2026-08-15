@@ -13,9 +13,9 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::database::{lock_conn, Database, ModelRoute, RouterAuthKind, RouterProvider, WireApi};
 use crate::error::AppError;
-use crate::router::pointer::PointerState;
+use crate::route::pointer::PointerState;
+use crate::store::{lock_conn, Database, ModelRoute, RouterAuthKind, RouterProvider, WireApi};
 
 /// router 默认监听端口(settings 里没有 `router.port` 或解析不了时用)。
 pub const DEFAULT_ROUTER_PORT: u16 = 8788;
@@ -308,7 +308,7 @@ impl RouterApi {
 
     /// 指针当前状态,供界面显示「已接管 / 未接管 / 读不到」。只读,绝不写。
     pub fn inspect_pointer() -> PointerStateView {
-        match crate::router::pointer::inspect_pointer() {
+        match crate::route::pointer::inspect_pointer() {
             PointerState::OursAndCurrent => PointerStateView {
                 state: "ours".to_string(),
                 current: None,
@@ -330,9 +330,9 @@ impl RouterApi {
     /// 写入成功后清掉缺口标记——指针刚被自己接管,缺口到此结束。
     pub fn enable_pointer(&self) -> Result<(), AppError> {
         let port = read_router_port(self.db.as_ref());
-        pointer_enable_guard(port, crate::router::server::listening_port())
+        pointer_enable_guard(port, crate::route::server::listening_port())
             .map_err(AppError::Message)?;
-        crate::router::pointer::point_codex_at_router(port)?;
+        crate::route::pointer::point_codex_at_router(port)?;
         if let Err(error) =
             apply_pointer_gap_marker(self.db.as_ref(), &PointerState::OursAndCurrent)
         {

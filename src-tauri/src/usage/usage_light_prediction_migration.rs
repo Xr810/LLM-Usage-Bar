@@ -1,5 +1,5 @@
-use crate::database::Database;
 use crate::error::AppError;
+use crate::store::Database;
 use rusqlite::{Connection, OptionalExtension};
 
 const SAVEPOINT: &str = "usage_light_predictions_v24";

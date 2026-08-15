@@ -11,9 +11,9 @@ use std::collections::BTreeSet;
 
 use rust_decimal::Decimal;
 
-use crate::database::Database;
+use crate::config::settings::ApiBudgetMode;
 use crate::error::AppError;
-use crate::settings::ApiBudgetMode;
+use crate::store::Database;
 use crate::usage::tray_snapshot::TrayUsageSnapshot;
 
 /// 触发阈值：花费达到预算的 100%。
@@ -134,7 +134,7 @@ pub fn load_ledger(db: &Database) -> AlertLedger {
 }
 
 pub fn save_ledger(db: &Database, ledger: &AlertLedger) -> Result<(), AppError> {
-    let encoded = crate::database::to_json_string(ledger)?;
+    let encoded = crate::store::to_json_string(ledger)?;
     db.set_setting(LEDGER_SETTING_KEY, &encoded)
 }
 
@@ -203,7 +203,7 @@ pub fn render_alert(alert: &BudgetAlert, language: &str) -> (String, String) {
 pub fn notify_for_snapshot(app: &tauri::AppHandle, snapshot: &TrayUsageSnapshot) {
     use tauri::Manager;
 
-    let Some(state) = app.try_state::<crate::store::AppState>() else {
+    let Some(state) = app.try_state::<crate::app_state::AppState>() else {
         return;
     };
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
@@ -216,7 +216,7 @@ pub fn notify_for_snapshot(app: &tauri::AppHandle, snapshot: &TrayUsageSnapshot)
         return;
     }
 
-    let language = crate::settings::get_settings()
+    let language = crate::config::settings::get_settings()
         .language
         .unwrap_or_else(|| "zh".to_string());
     for alert in &alerts {
@@ -255,7 +255,7 @@ pub fn ensure_permission(app: &tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::usage::domain::BillingKind;
+    use crate::model::BillingKind;
     use crate::usage::status::{CostQuality, PaceBasis, UsageStatus};
     use crate::usage::tray_snapshot::{
         TrayAgentUsageView, TrayApiBudgetView, TrayMeteredUsageView, TrayProviderRecentUsageView,

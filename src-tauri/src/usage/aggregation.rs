@@ -1,10 +1,10 @@
-use crate::database::Database;
 use crate::error::AppError;
-use crate::usage::domain::{
+use crate::model::{
     AgentProviderUsageRow, AgentUsageBreakdownView, AgentUsageRow, BillingKind, CostSourceCounts,
     ModelProductGroupView, ModelTotalsRow, ModelUsageDashboardView, ModelUsageRow,
     UsageTrendBucketView, UsageTrendGranularity,
 };
+use crate::store::Database;
 use chrono::{Duration, Local, NaiveDate, TimeZone};
 use rusqlite::params;
 use rust_decimal::Decimal;
@@ -1105,11 +1105,11 @@ fn checked_cost_sum(left: Decimal, right: Decimal) -> Result<Decimal, AppError> 
 #[cfg(test)]
 mod tests {
     use super::{aggregate_agent_usage, aggregate_model_usage, aggregate_provider_range};
-    use crate::database::Database;
-    use crate::usage::domain::{
+    use crate::model::{
         AgentModuleInput, BillingKind, CostSource, TokenSource, UsageEvent, UsageEventLink,
         UsageProviderInput,
     };
+    use crate::store::Database;
 
     fn provider() -> UsageProviderInput {
         UsageProviderInput {

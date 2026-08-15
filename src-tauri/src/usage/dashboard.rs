@@ -1,12 +1,12 @@
-use crate::database::Database;
 use crate::error::AppError;
-use crate::usage::aggregation::{
-    aggregate_enabled_provider_trend, aggregate_provider_account_range, aggregate_provider_range,
-};
-use crate::usage::domain::{
+use crate::model::{
     BillingKind, CostSourceCounts, ProductUsageView, ProviderMonitoringDashboardView,
     ProviderUsageView, QuotaSnapshot, QuotaStatusView, TokenSource, UsageDashboardView,
     UsageProviderView,
+};
+use crate::store::Database;
+use crate::usage::aggregation::{
+    aggregate_enabled_provider_trend, aggregate_provider_account_range, aggregate_provider_range,
 };
 use crate::usage::status::SubscriptionThresholds;
 use crate::usage::subscription_pace::classify_subscription_windows;
@@ -443,12 +443,12 @@ fn add_cost_counts(
 
 #[cfg(test)]
 mod tests {
-    use crate::database::Database;
-    use crate::usage::dashboard::UsageDashboardService;
-    use crate::usage::domain::{
+    use crate::model::{
         AgentProviderBindingInput, BillingKind, CostSource, QuotaSnapshot, TokenSource, UsageEvent,
         UsageEventLink, UsageProviderInput,
     };
+    use crate::store::Database;
+    use crate::usage::dashboard::UsageDashboardService;
     use crate::usage::status::{
         classify_subscription_with_thresholds, SubscriptionThresholds, UsageStatus,
     };
@@ -975,7 +975,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             dashboard.trend_granularity,
-            crate::usage::domain::UsageTrendGranularity::Hour
+            crate::model::UsageTrendGranularity::Hour
         );
         assert_eq!(dashboard.trend_buckets.len(), 3);
         assert_eq!(

@@ -23,11 +23,11 @@ pub(crate) struct SkillsBackup {
 }
 
 fn skills_ssot_dir() -> Result<PathBuf, AppError> {
-    let dir = match crate::settings::get_skill_storage_location() {
-        crate::settings::SkillStorageLocation::LlmUsageBar => {
+    let dir = match crate::config::settings::get_skill_storage_location() {
+        crate::config::settings::SkillStorageLocation::LlmUsageBar => {
             crate::config::get_app_config_dir().join("skills")
         }
-        crate::settings::SkillStorageLocation::Unified => dirs::home_dir()
+        crate::config::settings::SkillStorageLocation::Unified => dirs::home_dir()
             .ok_or_else(|| AppError::Config("Failed to resolve home directory".to_string()))?
             .join(".agents")
             .join("skills"),

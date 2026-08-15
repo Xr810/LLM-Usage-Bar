@@ -169,8 +169,11 @@ impl ClaudeAuthCommandRunner for ProductionClaudeAuthCommandRunner {
     }
 
     fn launch_login(&self) -> Result<(), AppError> {
-        crate::commands::launch_terminal_running(CLAUDE_LOGIN_COMMAND_LINE, "claude_auth_login")
-            .map_err(|_| command_error("claude_cli_login_failed"))
+        crate::api::commands::launch_terminal_running(
+            CLAUDE_LOGIN_COMMAND_LINE,
+            "claude_auth_login",
+        )
+        .map_err(|_| command_error("claude_cli_login_failed"))
     }
 
     fn logout(&self) -> ClaudeAuthCommandFuture<'_> {

@@ -7,9 +7,9 @@ use tauri::menu::{CheckMenuItem, Menu, MenuBuilder, MenuItem, Submenu, SubmenuBu
 use tauri::Manager;
 use tauri_plugin_opener::OpenerExt;
 
-use crate::app_config::AppType;
+use crate::app_state::AppState;
+use crate::config::app_config::AppType;
 use crate::error::AppError;
-use crate::store::AppState;
 
 const TEMPLATE_TYPE_OFFICIAL_SUBSCRIPTION: &str = "official_subscription";
 const H_TIER_NAMES: &[&str] = &[crate::services::subscription::TIER_FIVE_HOUR];
@@ -329,7 +329,7 @@ pub fn create_tray_menu(
     app: &tauri::AppHandle,
     app_state: &AppState,
 ) -> Result<Menu<tauri::Wry>, AppError> {
-    let app_settings = crate::settings::get_settings();
+    let app_settings = crate::config::settings::get_settings();
     let tray_texts = TrayTexts::from_language(app_settings.language.as_deref().unwrap_or("zh"));
 
     // Get visible apps setting, default to all visible
@@ -365,9 +365,11 @@ pub fn create_tray_menu(
         let app_type_str = section.app_type.as_str();
         let providers = app_state.db.get_all_providers(app_type_str)?;
 
-        let current_id =
-            crate::settings::get_effective_current_provider(&app_state.db, &section.app_type)?
-                .unwrap_or_default();
+        let current_id = crate::config::settings::get_effective_current_provider(
+            &app_state.db,
+            &section.app_type,
+        )?
+        .unwrap_or_default();
 
         if providers.is_empty() {
             // 空供应商：显示禁用的菜单项
@@ -475,9 +477,10 @@ fn update_tray_usage_labels(app: &tauri::AppHandle) {
         let Ok(providers) = app_state.db.get_all_providers(section.app_type.as_str()) else {
             continue;
         };
-        let Ok(Some(current_id)) =
-            crate::settings::get_effective_current_provider(&app_state.db, &section.app_type)
-        else {
+        let Ok(Some(current_id)) = crate::config::settings::get_effective_current_provider(
+            &app_state.db,
+            &section.app_type,
+        ) else {
             continue;
         };
         let Some(provider) = providers.get(&current_id) else {
@@ -493,7 +496,7 @@ fn update_tray_usage_labels(app: &tauri::AppHandle) {
 }
 
 pub fn refresh_tray_menu(app: &tauri::AppHandle) {
-    use crate::store::AppState;
+    use crate::app_state::AppState;
 
     if let Some(state) = app.try_state::<AppState>() {
         if let Ok(new_menu) = create_tray_menu(app, state.inner()) {

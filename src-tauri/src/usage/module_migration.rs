@@ -1,5 +1,5 @@
-use crate::database::Database;
 use crate::error::AppError;
+use crate::store::Database;
 use rusqlite::Connection;
 
 const DEFAULT_MODULES: [(&str, &str, &str, i64, i64); 4] = [

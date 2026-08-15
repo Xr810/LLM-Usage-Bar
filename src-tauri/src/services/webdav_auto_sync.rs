@@ -8,9 +8,9 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 
+use crate::config::settings::{self, WebDavSyncSettings};
 use crate::error::AppError;
 use crate::services::webdav_sync as webdav_sync_service;
-use crate::settings::{self, WebDavSyncSettings};
 
 const AUTO_SYNC_DEBOUNCE_MS: u64 = 1000;
 pub(crate) const MAX_AUTO_SYNC_WAIT_MS: u64 = 10_000;
@@ -97,7 +97,7 @@ fn emit_auto_sync_status_updated(app: &AppHandle, status: &str, error: Option<&s
 }
 
 async fn run_auto_sync_upload(
-    db: &crate::database::Database,
+    db: &crate::store::Database,
     app: &AppHandle,
 ) -> Result<(), AppError> {
     let mut settings = settings::get_webdav_sync_settings();
@@ -141,7 +141,7 @@ pub fn notify_db_changed(table: &str) {
     let _ = enqueue_change_signal(tx, table);
 }
 
-pub fn start_worker(db: Arc<crate::database::Database>, app: tauri::AppHandle) {
+pub fn start_worker(db: Arc<crate::store::Database>, app: tauri::AppHandle) {
     if DB_CHANGE_TX.get().is_some() {
         return;
     }
@@ -158,7 +158,7 @@ pub fn start_worker(db: Arc<crate::database::Database>, app: tauri::AppHandle) {
 }
 
 async fn run_worker_loop(
-    db: Arc<crate::database::Database>,
+    db: Arc<crate::store::Database>,
     mut rx: Receiver<String>,
     app: tauri::AppHandle,
 ) {
@@ -193,7 +193,7 @@ mod tests {
         should_run_auto_sync, should_trigger_for_table, AutoSyncSuppressionGuard,
         MAX_AUTO_SYNC_WAIT_MS,
     };
-    use crate::settings::WebDavSyncSettings;
+    use crate::config::settings::WebDavSyncSettings;
     use std::time::{Duration, Instant};
     use tokio::sync::mpsc::channel;
 

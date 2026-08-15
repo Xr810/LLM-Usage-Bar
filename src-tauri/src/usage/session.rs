@@ -1,6 +1,6 @@
-use crate::database::Database;
 use crate::error::AppError;
-use crate::usage::domain::{session_agent_module_id, TokenSource};
+use crate::model::{session_agent_module_id, TokenSource};
+use crate::store::Database;
 use crate::usage::ingestion::{LegacyLogInput, UsageIngestionInput, UsageIngestionService};
 use crate::usage::metering::parser::TokenUsage;
 use serde::{Deserialize, Serialize};
@@ -98,12 +98,11 @@ impl SessionUsageService {
         provider_id: &str,
     ) -> Result<ProviderSessionSyncResult, AppError> {
         match source {
-            "claude" => crate::services::session_usage::sync_claude_session_logs_bound(
-                &self.db,
-                provider_id,
-            ),
+            "claude" => {
+                crate::ingest::session_usage::sync_claude_session_logs_bound(&self.db, provider_id)
+            }
             "codex" => {
-                crate::services::session_usage_codex::sync_codex_usage_bound(&self.db, provider_id)
+                crate::ingest::session_usage_codex::sync_codex_usage_bound(&self.db, provider_id)
             }
             _ => Err(AppError::Message(format!(
                 "unsupported usage source: {source}"
@@ -154,7 +153,7 @@ impl SessionUsageService {
     fn binding_or_warning(
         &self,
         source: &str,
-    ) -> Result<Option<crate::usage::domain::UsageSourceBinding>, AppError> {
+    ) -> Result<Option<crate::model::UsageSourceBinding>, AppError> {
         if !matches!(source, "claude" | "codex") {
             return Err(AppError::Message(format!(
                 "unsupported usage source: {source}"
@@ -181,10 +180,8 @@ impl SessionUsageService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::database::Database;
-    use crate::usage::domain::{
-        AgentProviderBindingInput, BillingKind, TokenSource, UsageProviderInput,
-    };
+    use crate::model::{AgentProviderBindingInput, BillingKind, TokenSource, UsageProviderInput};
+    use crate::store::Database;
     use crate::usage::ingestion::{
         FrozenUsageProviderContext, UsageIngestionInput, UsageIngestionService,
     };
@@ -536,7 +533,7 @@ mod tests {
         let claude_db = db.clone();
         let claude_done = done_tx.clone();
         let claude = std::thread::spawn(move || {
-            let result = crate::services::session_usage::sync_claude_session_logs_bound(
+            let result = crate::ingest::session_usage::sync_claude_session_logs_bound(
                 &claude_db,
                 "unbound-claude",
             )
@@ -545,7 +542,7 @@ mod tests {
         });
         let codex_db = db.clone();
         let codex = std::thread::spawn(move || {
-            let result = crate::services::session_usage_codex::sync_codex_usage_bound(
+            let result = crate::ingest::session_usage_codex::sync_codex_usage_bound(
                 &codex_db,
                 "unbound-codex",
             )

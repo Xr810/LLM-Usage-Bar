@@ -2,9 +2,6 @@ use super::aggregation::{
     aggregate_provider_account_range, aggregate_provider_account_trend, most_used_provider_model,
     ProviderRangeAggregate,
 };
-use super::domain::{
-    BillingKind, ManualResetCreditView, QuotaStatusView, UsageProviderView, UsageTrendBucketView,
-};
 use super::rhythm::{cached_metered_profile, RhythmProfile, DAILY_BUDGET_WINDOW_KIND};
 use super::status::{
     classify_metered, worst_status, CostQuality, PaceBasis, PaceInput, PaceMeasurement,
@@ -16,9 +13,12 @@ use super::subscription_pace::{
     classify_subscription_windows, FIVE_HOUR_WINDOW_KIND, SEVEN_DAY_WINDOW_KIND,
 };
 use super::usage_light_prediction::{record_live_prediction, SHARED_DAILY_BUDGET_PROVIDER_ID};
-use crate::database::Database;
+use crate::config::settings::{ApiBudgetConfig, ApiBudgetMode};
 use crate::error::AppError;
-use crate::settings::{ApiBudgetConfig, ApiBudgetMode};
+use crate::model::{
+    BillingKind, ManualResetCreditView, QuotaStatusView, UsageProviderView, UsageTrendBucketView,
+};
+use crate::store::Database;
 use chrono::{DateTime, Local, LocalResult, NaiveDate, SecondsFormat, TimeZone, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -317,7 +317,7 @@ impl TrayUsageProjector {
             (left.name.to_lowercase(), left.id.as_str())
                 .cmp(&(right.name.to_lowercase(), right.id.as_str()))
         });
-        let settings = crate::settings::get_settings();
+        let settings = crate::config::settings::get_settings();
         let thresholds = SubscriptionThresholds::from(&settings);
         let api_budget_config =
             budget_config_override.unwrap_or_else(|| settings.api_budget_config());
@@ -980,10 +980,10 @@ fn cost_quality(aggregate: &ProviderRangeAggregate) -> CostQuality {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::database::Database;
-    use crate::usage::domain::{
+    use crate::model::{
         BillingKind, CostSource, QuotaSnapshot, TokenSource, UsageEvent, UsageProviderInput,
     };
+    use crate::store::Database;
     use crate::usage::status::{classify_subscription_window, CostQuality, UsageStatus};
     use chrono::{Datelike, FixedOffset, LocalResult, NaiveDate, TimeZone};
     use rusqlite::params;
@@ -2087,7 +2087,7 @@ mod tests {
                             cache_creation_tokens: 0,
                             total_tokens: 42,
                             total_cost_usd: Some("5".to_string()),
-                            cost_source_counts: super::super::domain::CostSourceCounts {
+                            cost_source_counts: crate::model::CostSourceCounts {
                                 upstream: 0,
                                 estimated: 1,
                                 unavailable: 0,

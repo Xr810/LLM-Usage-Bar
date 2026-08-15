@@ -107,8 +107,8 @@ impl Default for SubscriptionThresholds {
     }
 }
 
-impl From<&crate::settings::AppSettings> for SubscriptionThresholds {
-    fn from(settings: &crate::settings::AppSettings) -> Self {
+impl From<&crate::config::settings::AppSettings> for SubscriptionThresholds {
+    fn from(settings: &crate::config::settings::AppSettings) -> Self {
         Self {
             warning_remaining_percent: settings.usage_warning_remaining_percent,
             critical_remaining_percent: settings.usage_critical_remaining_percent,

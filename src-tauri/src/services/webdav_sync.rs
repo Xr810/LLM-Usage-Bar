@@ -10,12 +10,12 @@ use std::sync::OnceLock;
 use chrono::Utc;
 use serde_json::Value;
 
+use crate::config::settings::{update_webdav_sync_status, WebDavSyncSettings, WebDavSyncStatus};
 use crate::error::AppError;
 use crate::services::webdav::{
     auth_from_credentials, build_remote_url, ensure_remote_directories, get_bytes, head_etag,
     path_segments, put_bytes, test_connection, WebDavAuth,
 };
-use crate::settings::{update_webdav_sync_status, WebDavSyncSettings, WebDavSyncStatus};
 
 use super::sync_protocol::{
     apply_snapshot, build_local_snapshot, effective_db_compat_version, localized,
@@ -62,7 +62,7 @@ pub async fn check_connection(settings: &WebDavSyncSettings) -> Result<(), AppEr
 
 /// Upload local snapshot (db + skills) to remote.
 pub async fn upload(
-    db: &crate::database::Database,
+    db: &crate::store::Database,
     settings: &mut WebDavSyncSettings,
 ) -> Result<Value, AppError> {
     settings.validate()?;
@@ -108,7 +108,7 @@ pub async fn upload(
 
 /// Download remote snapshot and apply to local database + skills.
 pub async fn download(
-    db: &crate::database::Database,
+    db: &crate::store::Database,
     settings: &mut WebDavSyncSettings,
 ) -> Result<Value, AppError> {
     settings.validate()?;

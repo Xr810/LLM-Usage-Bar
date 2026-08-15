@@ -1,17 +1,13 @@
 mod agent_paths;
 pub mod api;
-mod app_config;
 mod app_store;
 mod auto_launch;
 mod claude_desktop_config;
 mod claude_plugin;
-mod claude_quota;
-mod commands;
 mod config;
-pub mod credentials;
-mod database;
 mod error;
 pub mod http_client;
+mod ingest;
 mod init_status;
 mod lightweight;
 #[cfg(target_os = "linux")]
@@ -20,17 +16,19 @@ mod linux_fix;
 mod macos_fix;
 #[cfg(any(target_os = "macos", test))]
 mod macos_material;
+mod model;
 mod panic_hook;
 pub mod product_identity;
 mod prompt;
 mod provider;
-mod provider_defaults;
+mod quota;
+pub mod secrets;
+mod store;
 // router 用 pub 而不是 mod:T4/T5/T7 往里面放的 pub 入口在启动层接线
 // 之前没有调用点,私有模块会触发 dead_code(clippy -D warnings 直接挂)。
-pub mod router;
+mod app_state;
+pub mod route;
 mod services;
-mod settings;
-mod store;
 
 mod tray;
 mod tray_popover;
@@ -38,19 +36,14 @@ pub mod tray_status;
 pub mod usage;
 mod usage_events;
 
-pub use app_config::{AppType, MultiAppConfig};
-pub use claude_quota::run_claude_statusline_bridge;
-pub use commands::*;
+use api::commands;
+pub use api::commands::*;
+pub use app_state::AppState;
+pub use config::app_config::{AppType, MultiAppConfig};
+pub use config::settings::{update_settings, AppSettings};
 pub use config::{get_claude_account_path, get_claude_settings_path, read_json_file};
-pub use database::Database;
 pub use error::AppError;
-pub use prompt::Prompt;
-pub use provider::{Provider, ProviderMeta};
-pub use settings::{update_settings, AppSettings};
-pub use store::AppState;
-use tauri_plugin_deep_link::DeepLinkExt;
-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
-pub use usage::domain::{
+pub use model::{
     AgentModuleInput, AgentModuleView, AgentProviderBindingInput, AgentProviderBindingView,
     AgentProxyRouteSetup, AgentProxySetupInfo, ArchivedAgentUsageSummary, BillingKind,
     BindingCredentialStatus, CostSource, CostSourceCounts, InvalidUsageLinkSummary,
@@ -59,6 +52,12 @@ pub use usage::domain::{
     UnassignedUsageGroup, UsageDashboardView, UsageEvent, UsageEventLink, UsageEventPage,
     UsageProviderInput, UsageProviderView, UsageSourceBinding,
 };
+pub use prompt::Prompt;
+pub use provider::{Provider, ProviderMeta};
+pub use quota::claude_quota::run_claude_statusline_bridge;
+pub use store::Database;
+use tauri_plugin_deep_link::DeepLinkExt;
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 use std::path::Path;
 #[cfg(debug_assertions)]
@@ -73,7 +72,7 @@ use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
 #[derive(Debug)]
 struct PreparedDatabaseRuntime {
-    outcome: database::DatabaseIdentityOutcome,
+    outcome: store::DatabaseIdentityOutcome,
 }
 
 #[derive(Debug)]
@@ -89,19 +88,19 @@ struct ReadyDatabaseRuntime<'a> {
 
 impl PreparedDatabaseRuntime {
     fn prepare(app_config_dir: &Path) -> Result<Self, AppError> {
-        Self::prepare_with(app_config_dir, database::prepare_database_identity)
+        Self::prepare_with(app_config_dir, store::prepare_database_identity)
     }
 
     fn prepare_with<F>(app_config_dir: &Path, prepare: F) -> Result<Self, AppError>
     where
-        F: FnOnce(&Path) -> Result<database::DatabaseIdentityOutcome, AppError>,
+        F: FnOnce(&Path) -> Result<store::DatabaseIdentityOutcome, AppError>,
     {
         Ok(Self {
             outcome: prepare(app_config_dir)?,
         })
     }
 
-    fn outcome(&self) -> &database::DatabaseIdentityOutcome {
+    fn outcome(&self) -> &store::DatabaseIdentityOutcome {
         &self.outcome
     }
 
@@ -118,7 +117,7 @@ impl PreparedDatabaseRuntime {
     }
 
     fn preflight(&self) -> Result<DatabaseRuntimePreflight<'_>, AppError> {
-        self.preflight_with(database::Database::stored_user_version_exceeds_supported)
+        self.preflight_with(store::Database::stored_user_version_exceeds_supported)
     }
 
     fn preflight_with<F>(&self, preflight: F) -> Result<DatabaseRuntimePreflight<'_>, AppError>
@@ -141,13 +140,13 @@ impl ReadyDatabaseRuntime<'_> {
         self.prepared.database_path()
     }
 
-    fn open(&self) -> Result<database::Database, AppError> {
-        self.open_with(database::Database::init_at)
+    fn open(&self) -> Result<store::Database, AppError> {
+        self.open_with(store::Database::init_at)
     }
 
-    fn open_with<F>(&self, open: F) -> Result<database::Database, AppError>
+    fn open_with<F>(&self, open: F) -> Result<store::Database, AppError>
     where
-        F: FnOnce(&Path) -> Result<database::Database, AppError>,
+        F: FnOnce(&Path) -> Result<store::Database, AppError>,
     {
         open(self.database_path())
     }
@@ -166,8 +165,8 @@ pub struct DatabaseIdentityTestReport {
 }
 
 #[cfg(debug_assertions)]
-impl From<&database::DatabaseIdentityOutcome> for DatabaseIdentityTestReport {
-    fn from(outcome: &database::DatabaseIdentityOutcome) -> Self {
+impl From<&store::DatabaseIdentityOutcome> for DatabaseIdentityTestReport {
+    fn from(outcome: &store::DatabaseIdentityOutcome) -> Self {
         Self {
             database_path: outcome.database_path.clone(),
             archived_prior_path: outcome.archived_prior_path.clone(),
@@ -222,7 +221,7 @@ pub fn create_schema_v13_fixture_test_hook(path: &Path) -> Result<(), AppError> 
     // v13, so the baseline below is untouched.
     // Reviewed for schema v27: v26 -> v27 只新增三张 router_* 表，与 v13 基线无关。
     // Reviewed for schema v28: v27 -> v28 只给 router_providers 加两个可空/带默认的列，与 v13 基线无关。
-    if database::SCHEMA_VERSION != 28
+    if store::SCHEMA_VERSION != 28
         || product_identity::DATABASE_IDENTITY_SOURCE_SCHEMA_VERSION != 13
     {
         return Err(AppError::Database(
@@ -272,7 +271,7 @@ pub fn runtime_log_paths_test_hook(app_config_dir: &Path) -> (PathBuf, PathBuf) 
     )
 }
 
-fn log_database_identity_outcome(outcome: &database::DatabaseIdentityOutcome) {
+fn log_database_identity_outcome(outcome: &store::DatabaseIdentityOutcome) {
     let archived = outcome
         .archived_prior_path
         .as_deref()
@@ -564,7 +563,7 @@ pub fn run() {
                 return;
             }
 
-            let settings = crate::settings::get_settings();
+            let settings = crate::config::settings::get_settings();
 
             if settings.minimize_to_tray_on_close {
                 api.prevent_close();
@@ -646,7 +645,7 @@ pub fn run() {
             // written by auto-launch 0.6 before the executable-path fix.
             #[cfg(target_os = "macos")]
             {
-                let launch_on_startup = crate::settings::get_settings().launch_on_startup;
+                let launch_on_startup = crate::config::settings::get_settings().launch_on_startup;
                 let result = if launch_on_startup {
                     crate::auto_launch::enable_auto_launch()
                 } else {
@@ -703,7 +702,7 @@ pub fn run() {
 
                 // 循环：支持用户重试加载配置文件
                 loop {
-                    match crate::app_config::MultiAppConfig::load() {
+                    match crate::config::app_config::MultiAppConfig::load() {
                         Ok(config) => {
                             log::info!("✓ 配置文件加载成功");
                             break Some(config);
@@ -740,11 +739,11 @@ pub fn run() {
                         path: prepared_database.database_path().display().to_string(),
                         error: format!(
                             "数据库版本过新（{version}），当前应用仅支持 {}，请升级应用后再尝试。",
-                            crate::database::SCHEMA_VERSION
+                            crate::store::SCHEMA_VERSION
                         ),
                         kind: Some("db_version_too_new".to_string()),
                         db_version: Some(version),
-                        supported_version: Some(crate::database::SCHEMA_VERSION),
+                        supported_version: Some(crate::store::SCHEMA_VERSION),
                     });
                     // 主窗口默认 visible:false，恢复界面必须强制显示
                     if let Some(window) = app.get_webview_window("main") {
@@ -814,17 +813,17 @@ pub fn run() {
                 }
             }
 
-            use crate::credentials::codex_oauth_auth::CodexOAuthManager;
+            use crate::secrets::codex_oauth_auth::CodexOAuthManager;
             use tokio::sync::RwLock;
 
             let app_config_dir = crate::config::get_app_config_dir();
             let codex_oauth_manager =
                 Arc::new(RwLock::new(CodexOAuthManager::new(app_config_dir)));
-            let quota_service = Arc::new(usage::quota::QuotaService::production(
+            let quota_service = Arc::new(quota::QuotaService::production(
                 db.clone(),
                 codex_oauth_manager.clone(),
             ));
-            let credential_store = crate::credentials::production_credential_store();
+            let credential_store = crate::secrets::production_credential_store();
             let app_state = AppState::new_with_credential_store_and_quota_service(
                 db,
                 credential_store,
@@ -836,15 +835,15 @@ pub fn run() {
             // 不中止 setup——端口被占是常见情况(上次没退干净、别的软件占了),
             // 不能因此打不开界面(任务书 §1.4)。
             let router_port = crate::api::router::read_router_port(&app_state.db);
-            let router_auth: Arc<dyn crate::router::server::UpstreamAuth> =
-                Arc::new(crate::router::auth::RouterUpstreamAuth::new(
+            let router_auth: Arc<dyn crate::route::server::UpstreamAuth> =
+                Arc::new(crate::route::auth::RouterUpstreamAuth::new(
                     app_state.db.clone(),
                     app_state.binding_credential_service.clone(),
                 ));
             let router_db = app_state.db.clone();
             tauri::async_runtime::spawn(async move {
                 if let Err(error) =
-                    crate::router::server::start(router_db, router_port, router_auth).await
+                    crate::route::server::start(router_db, router_port, router_auth).await
                 {
                     log::error!("[ROUTER] 启动失败: {error}");
                 }
@@ -853,7 +852,7 @@ pub fn run() {
             // 启动时只读指针,绝不写(决定 34/36):发现指针不是自己写的只记缺口
             // 标记、不静默覆盖;真正写指针只有 enable_router_pointer 一条路,
             // 由用户显式点「启用」触发。
-            let router_pointer_state = crate::router::pointer::inspect_pointer();
+            let router_pointer_state = crate::route::pointer::inspect_pointer();
             if let Err(error) =
                 crate::api::router::apply_pointer_gap_marker(&app_state.db, &router_pointer_state)
             {
@@ -868,7 +867,7 @@ pub fn run() {
             //
             // 捕获首次运行快照：所有全新装用户都会看到欢迎弹窗介绍 LLM Usage Bar 的工作方式。
             // 读失败时默认不弹，宁可漏弹也不要因为故障打扰用户。
-            let first_run_already_confirmed = crate::settings::get_settings()
+            let first_run_already_confirmed = crate::config::settings::get_settings()
                 .first_run_notice_confirmed
                 .unwrap_or(false);
             let fresh_install_at_startup =
@@ -1083,7 +1082,7 @@ pub fn run() {
             }
 
             let quota_callback_app = app.handle().clone();
-            let quota_after_cycle: usage::quota::QuotaCycleCallback = Arc::new(move |outcome| {
+            let quota_after_cycle: quota::QuotaCycleCallback = Arc::new(move |outcome| {
                 let app_handle = quota_callback_app.clone();
                 Box::pin(async move {
                     let service = {
@@ -1099,16 +1098,16 @@ pub fn run() {
                         tray_status::publish_tray_usage(&publish_app, snapshot);
                     };
                     match outcome {
-                        usage::quota::QuotaSchedulerOutcome::Completed {
+                        quota::QuotaSchedulerOutcome::Completed {
                             had_errors: false,
                             ..
                         } => {
                             service.rebuild_from_persisted(publish).await;
                         }
-                        usage::quota::QuotaSchedulerOutcome::Completed {
+                        quota::QuotaSchedulerOutcome::Completed {
                             had_errors: true, ..
                         }
-                        | usage::quota::QuotaSchedulerOutcome::Failed => {
+                        | quota::QuotaSchedulerOutcome::Failed => {
                             service
                                 .mark_refresh_failed_at(chrono::Local::now().timestamp(), publish)
                                 .await;
@@ -1139,7 +1138,7 @@ pub fn run() {
             }
 
             let tray_publisher_app = app.handle().clone();
-            let tray_publisher: services::tray_usage_scheduler::TraySnapshotPublisher =
+            let tray_publisher: usage::tray_usage_scheduler::TraySnapshotPublisher =
                 Arc::new(move |snapshot| {
                     tray_status::publish_tray_usage(&tray_publisher_app, snapshot);
                     usage_events::emit_dashboard_invalidated_only();
@@ -1239,11 +1238,11 @@ pub fn run() {
                     );
                     run_step(
                         "Gemini usage initial sync",
-                        crate::services::session_usage_gemini::sync_gemini_usage(db),
+                        crate::ingest::session_usage_gemini::sync_gemini_usage(db),
                     );
                     run_step(
                         "OpenCode usage initial sync",
-                        crate::services::session_usage_opencode::sync_opencode_usage(db),
+                        crate::ingest::session_usage_opencode::sync_opencode_usage(db),
                     );
 
                     // 单个源的一次同步，把结果映射成调度退避信号：
@@ -1259,13 +1258,13 @@ pub fn run() {
                                 .sync_source("codex")
                                 .map(|r| r.errors.is_empty()),
                             usage::watcher_state::SourceId::Gemini => {
-                                crate::services::session_usage_gemini::sync_gemini_usage(
+                                crate::ingest::session_usage_gemini::sync_gemini_usage(
                                     &db_for_session_sync,
                                 )
                                 .map(|r| r.errors.is_empty())
                             }
                             usage::watcher_state::SourceId::OpenCode => {
-                                crate::services::session_usage_opencode::sync_opencode_usage(
+                                crate::ingest::session_usage_opencode::sync_opencode_usage(
                                     &db_for_session_sync,
                                 )
                                 .map(|r| r.errors.is_empty())
@@ -1343,7 +1342,7 @@ pub fn run() {
 
                 #[cfg(not(target_os = "macos"))]
                 {
-                    let settings = crate::settings::get_settings();
+                    let settings = crate::config::settings::get_settings();
 
                     // 在窗口首次显示前同步装饰状态，避免前端加载后再切换导致标题栏闪烁
                     // 仅 Linux 生效：解决 Wayland 下系统窗口按钮不可用的问题
@@ -1652,7 +1651,7 @@ pub fn run() {
 /// 确保 Claude Code/Codex/Gemini 的配置不会处于损坏状态。
 /// 使用 stop_with_restore_keep_state 保留 settings 表中的代理状态，下次启动时自动恢复。
 pub async fn cleanup_before_exit(app_handle: &tauri::AppHandle) {
-    let cleanup_resources = app_handle.try_state::<store::AppState>().map(|state| {
+    let cleanup_resources = app_handle.try_state::<app_state::AppState>().map(|state| {
         (
             state.take_quota_scheduler(),
             state.take_midnight_scheduler(),
@@ -1959,9 +1958,9 @@ mod tests {
         should_hide_minimized_main, DatabaseRuntimePreflight, ExitRequestAction,
         PreparedDatabaseRuntime, WindowEventKind, WindowEventRoute,
     };
-    use crate::database::DatabaseIdentityOutcome;
     use crate::error::AppError;
     use crate::product_identity::DATABASE_FILE;
+    use crate::store::DatabaseIdentityOutcome;
     use std::cell::{Cell, RefCell};
     use std::path::{Path, PathBuf};
 
@@ -2013,7 +2012,7 @@ mod tests {
                 events
                     .borrow_mut()
                     .push(("open", observed_path.to_path_buf()));
-                crate::database::Database::init_at(observed_path)
+                crate::store::Database::init_at(observed_path)
             })
             .expect("open prepared database");
 
@@ -2057,13 +2056,13 @@ mod tests {
             .preflight_with(|observed_path| {
                 events.borrow_mut().push("preflight");
                 assert_eq!(observed_path, authoritative);
-                Ok(Some(crate::database::SCHEMA_VERSION + 1))
+                Ok(Some(crate::store::SCHEMA_VERSION + 1))
             })
             .expect("future-version preflight returns a decision");
 
         match decision {
             DatabaseRuntimePreflight::TooNew { version } => {
-                assert_eq!(version, crate::database::SCHEMA_VERSION + 1)
+                assert_eq!(version, crate::store::SCHEMA_VERSION + 1)
             }
             DatabaseRuntimePreflight::Ready(_) => panic!("future database must not be openable"),
         }

@@ -5,7 +5,7 @@
 //! find their directories.
 
 use crate::config::get_home_dir;
-use crate::settings::{
+use crate::config::settings::{
     get_hermes_override_dir, get_openclaw_override_dir, get_opencode_override_dir,
 };
 use serde_json::Value;
@@ -14,7 +14,7 @@ use toml_edit::DocumentMut;
 
 /// 获取 Codex 配置目录路径
 pub fn get_codex_config_dir() -> PathBuf {
-    if let Some(custom) = crate::settings::get_codex_override_dir() {
+    if let Some(custom) = crate::config::settings::get_codex_override_dir() {
         return custom;
     }
 
@@ -26,7 +26,7 @@ pub fn get_codex_auth_path() -> PathBuf {
 }
 /// 获取 Gemini 配置目录路径（支持设置覆盖）
 pub fn get_gemini_dir() -> PathBuf {
-    if let Some(custom) = crate::settings::get_gemini_override_dir() {
+    if let Some(custom) = crate::config::settings::get_gemini_override_dir() {
         return custom;
     }
 

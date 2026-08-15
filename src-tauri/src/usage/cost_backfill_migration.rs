@@ -25,10 +25,10 @@
 //! an upstream API are never touched: those are billed amounts, not estimates.
 
 use crate::error::AppError;
-use crate::services::usage_stats::find_model_pricing_row;
 use crate::usage::metering::calculator::CostCalculator;
 use crate::usage::metering::calculator::ModelPricing;
 use crate::usage::metering::parser::TokenUsage;
+use crate::usage::usage_stats::find_model_pricing_row;
 use rusqlite::{params, Connection};
 use rust_decimal::Decimal;
 use std::str::FromStr;

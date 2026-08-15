@@ -62,9 +62,9 @@ impl UsageSourceRoots {
         Self::resolve_for_migration(
             &home,
             UsageSourceOverrides {
-                claude_config_dir: crate::settings::get_claude_override_dir(),
-                codex_config_dir: crate::settings::get_codex_override_dir(),
-                gemini_config_dir: crate::settings::get_gemini_override_dir(),
+                claude_config_dir: crate::config::settings::get_claude_override_dir(),
+                codex_config_dir: crate::config::settings::get_codex_override_dir(),
+                gemini_config_dir: crate::config::settings::get_gemini_override_dir(),
                 opencode_db_path: Some(crate::agent_paths::get_opencode_db_path()),
             },
         )

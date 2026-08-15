@@ -1,12 +1,12 @@
-use crate::database::{lock_conn, Database, UsageSyncCursor};
 use crate::error::AppError;
-use crate::services::usage_stats::{
-    find_model_pricing_row, find_provider_model_pricing_row, ProviderModelPricingRow,
-};
-use crate::usage::domain::{BillingKind, CostSource, PricingOrigin, TokenSource, UsageEvent};
+use crate::model::{BillingKind, CostSource, PricingOrigin, TokenSource, UsageEvent};
+use crate::store::{lock_conn, Database, UsageSyncCursor};
 use crate::usage::metering::calculator::{CostBreakdown, CostCalculator, ModelPricing};
 use crate::usage::metering::cost_parser::UpstreamCost;
 use crate::usage::metering::parser::TokenUsage;
+use crate::usage::usage_stats::{
+    find_model_pricing_row, find_provider_model_pricing_row, ProviderModelPricingRow,
+};
 use rusqlite::{params, OptionalExtension, Transaction};
 use rust_decimal::Decimal;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -154,7 +154,7 @@ impl<'a> UsageIngestionService<'a> {
         if outcome.inserted {
             crate::usage_events::notify_log_recorded();
             // 用量活动按事件归属的 Provider 打标记,触发其订阅额度补刷。
-            crate::usage::quota::mark_subscription_activity(&input.provider_id);
+            crate::quota::mark_subscription_activity(&input.provider_id);
         }
         Ok(outcome)
     }
@@ -188,7 +188,7 @@ impl<'a> UsageIngestionService<'a> {
             crate::usage_events::notify_log_recorded();
             // 同一批内不同 Provider 的事件分别打标记(去重交给静态表)。
             for input in inputs {
-                crate::usage::quota::mark_subscription_activity(&input.provider_id);
+                crate::quota::mark_subscription_activity(&input.provider_id);
             }
         }
         Ok(outcomes)
@@ -729,11 +729,11 @@ mod tests {
         FrozenUsageProviderContext, LegacyLogInput, UsageIngestionInput, UsageIngestionOutcome,
         UsageIngestionService,
     };
-    use crate::database::{Database, UsageSyncCursor};
-    use crate::usage::domain::{
+    use crate::model::{
         AgentModuleInput, AgentProviderBindingInput, BillingKind, CostSource, ModelPriceInput,
         PricingOrigin, TokenSource, UsageProviderInput,
     };
+    use crate::store::{Database, UsageSyncCursor};
     use crate::usage::metering::cost_parser::UpstreamCost;
     use crate::usage::metering::parser::TokenUsage;
 
