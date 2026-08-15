@@ -1,5 +1,5 @@
-use crate::credentials::BindingCredentialService;
 use crate::error::AppError;
+use crate::secrets::BindingCredentialService;
 use crate::services::SystemProviderConnectionService;
 use crate::usage::domain::{BindingCredentialStatus, ProviderApiKeyView, UsageProviderView};
 use std::collections::{HashMap, HashSet};

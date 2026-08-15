@@ -1,7 +1,7 @@
 use crate::app_state::AppState;
 use crate::commands::CodexOAuthState;
-use crate::credentials::SecretString;
 use crate::error::AppError;
+use crate::secrets::SecretString;
 use crate::services::{SystemProviderConnectionService, SystemProviderConnectionTestResult};
 use crate::store::AgentModuleDeleteOutcome;
 use crate::usage::aggregation::{aggregate_agent_usage, aggregate_model_usage};
@@ -1274,7 +1274,7 @@ fn require_active_agent(state: &AppState, agent_module_id: &str) -> Result<(), A
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::credentials::{
+    use crate::secrets::{
         BindingCredentialService, CredentialStore, CredentialStoreError, SecretString,
     };
     use crate::services::subscription::{

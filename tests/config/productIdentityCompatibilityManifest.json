@@ -273,7 +273,7 @@
     "reason": "exact read-only legacy compatibility or coexistence reference"
   },
   {
-    "file": "src-tauri/src/credentials/codex_oauth_auth.rs",
+    "file": "src-tauri/src/secrets/codex_oauth_auth.rs",
     "context": "assert_eq!(CODEX_USER_AGENT, \"cc-switch-codex-oauth\");",
     "columnNumber": 31,
     "matchedText": "cc-switch",

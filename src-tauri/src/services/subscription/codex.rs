@@ -9,7 +9,7 @@ use super::{
     now_millis, unix_ts_to_iso, window_seconds_to_tier_name, CredentialStatus, ManualResetCredit,
     ManualResetCredits, QuotaTier, SubscriptionQuota,
 };
-use crate::credentials::codex_oauth_auth::CodexOAuthManager;
+use crate::secrets::codex_oauth_auth::CodexOAuthManager;
 use crate::usage::system_providers::MANAGED_CODEX_QUOTA_SOURCE;
 
 // ── Codex 凭据读取 ──────────────────────────────────────

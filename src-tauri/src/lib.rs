@@ -8,7 +8,6 @@ mod claude_plugin;
 mod claude_quota;
 mod commands;
 mod config;
-pub mod credentials;
 mod error;
 pub mod http_client;
 mod init_status;
@@ -24,6 +23,7 @@ pub mod product_identity;
 mod prompt;
 mod provider;
 mod provider_defaults;
+pub mod secrets;
 mod store;
 // router 用 pub 而不是 mod:T4/T5/T7 往里面放的 pub 入口在启动层接线
 // 之前没有调用点,私有模块会触发 dead_code(clippy -D warnings 直接挂)。
@@ -814,7 +814,7 @@ pub fn run() {
                 }
             }
 
-            use crate::credentials::codex_oauth_auth::CodexOAuthManager;
+            use crate::secrets::codex_oauth_auth::CodexOAuthManager;
             use tokio::sync::RwLock;
 
             let app_config_dir = crate::config::get_app_config_dir();
@@ -824,7 +824,7 @@ pub fn run() {
                 db.clone(),
                 codex_oauth_manager.clone(),
             ));
-            let credential_store = crate::credentials::production_credential_store();
+            let credential_store = crate::secrets::production_credential_store();
             let app_state = AppState::new_with_credential_store_and_quota_service(
                 db,
                 credential_store,

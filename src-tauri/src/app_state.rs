@@ -1,4 +1,4 @@
-use crate::credentials::{unavailable_credential_store, BindingCredentialService, CredentialStore};
+use crate::secrets::{unavailable_credential_store, BindingCredentialService, CredentialStore};
 #[cfg(test)]
 use crate::services::claude_cli_auth::ClaudeAuthCommandRunner;
 use crate::services::{

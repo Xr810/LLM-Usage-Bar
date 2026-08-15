@@ -1,9 +1,7 @@
 use tauri::State;
 
 use crate::commands::codex_oauth::CodexOAuthState;
-use crate::credentials::codex_oauth_auth::{
-    CodexAccount, CodexDeviceCodeResponse, CodexOAuthError,
-};
+use crate::secrets::codex_oauth_auth::{CodexAccount, CodexDeviceCodeResponse, CodexOAuthError};
 
 const AUTH_PROVIDER_CODEX_OAUTH: &str = "codex_oauth";
 
