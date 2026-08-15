@@ -1,4 +1,5 @@
 mod agent_paths;
+pub mod api;
 mod app_config;
 mod app_store;
 mod auto_launch;
@@ -834,7 +835,7 @@ pub fn run() {
             // 决定 5②:先把监听端口开起来,再做其余初始化。绑定失败只记 log::error、
             // 不中止 setup——端口被占是常见情况(上次没退干净、别的软件占了),
             // 不能因此打不开界面(任务书 §1.4)。
-            let router_port = crate::commands::read_router_port(&app_state.db);
+            let router_port = crate::api::router::read_router_port(&app_state.db);
             let router_auth: Arc<dyn crate::router::server::UpstreamAuth> =
                 Arc::new(crate::router::auth::RouterUpstreamAuth::new(
                     app_state.db.clone(),
@@ -854,7 +855,7 @@ pub fn run() {
             // 由用户显式点「启用」触发。
             let router_pointer_state = crate::router::pointer::inspect_pointer();
             if let Err(error) =
-                crate::commands::apply_pointer_gap_marker(&app_state.db, &router_pointer_state)
+                crate::api::router::apply_pointer_gap_marker(&app_state.db, &router_pointer_state)
             {
                 log::warn!("记录 router 指针缺口标记失败: {error}");
             }
