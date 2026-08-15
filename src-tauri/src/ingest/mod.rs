@@ -36,6 +36,10 @@ pub mod claude;
 pub mod codex;
 pub mod gemini;
 pub mod opencode;
+pub mod session_usage;
+pub mod session_usage_codex;
+pub mod session_usage_gemini;
+pub mod session_usage_opencode;
 
 pub(crate) type SyncCursorMap = HashMap<String, (i64, i64)>;
 
@@ -995,10 +999,10 @@ pub fn get_data_source_breakdown(db: &Database) -> Result<Vec<DataSourceSummary>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::ingest::claude::ClaudeParser;
-    use crate::services::ingest::codex::CodexParser;
-    use crate::services::ingest::gemini::GeminiParser;
-    use crate::services::ingest::opencode::OpenCodeParser;
+    use crate::ingest::claude::ClaudeParser;
+    use crate::ingest::codex::CodexParser;
+    use crate::ingest::gemini::GeminiParser;
+    use crate::ingest::opencode::OpenCodeParser;
 
     fn sync_one_file(
         db: &Database,

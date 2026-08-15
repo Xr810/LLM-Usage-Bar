@@ -5,4 +5,4 @@
 //! 这个旧路径仍被 `lib.rs` 与 `commands/usage.rs` 引用;保留为转发层,
 //! 避免改动任务书之外的文件。
 
-pub use crate::services::ingest::gemini::sync_gemini_usage;
+pub use crate::ingest::gemini::sync_gemini_usage;

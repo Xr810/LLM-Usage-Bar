@@ -5,4 +5,4 @@
 //! `usage/session.rs`、`commands/usage.rs` 引用;保留为转发层,避免改动
 //! 任务书之外的文件。
 
-pub use crate::services::ingest::codex::{sync_codex_usage, sync_codex_usage_bound};
+pub use crate::ingest::codex::{sync_codex_usage, sync_codex_usage_bound};

@@ -19,7 +19,7 @@
 
 use crate::agent_paths::get_codex_config_dir;
 use crate::error::AppError;
-use crate::services::ingest::{
+use crate::ingest::{
     metadata_modified_nanos, occurred_at_secs, sync_with_parser, update_sync_state_for_resource,
     FileCursor, LogFileContext, ParseOutput, ParsedUsage, ProviderWriteProfile, SessionLogParser,
     SessionSyncResult, SyncCursorMap, UsageIdentity,
@@ -34,7 +34,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 #[cfg(test)]
-use crate::services::ingest::{insert_usage_record, sync_file_with_parser};
+use crate::ingest::{insert_usage_record, sync_file_with_parser};
 #[cfg(test)]
 use crate::store::lock_conn;
 #[cfg(test)]
@@ -1186,11 +1186,11 @@ mod tests {
     }
 
     fn reset_codex_file_open_count() {
-        crate::services::ingest::reset_session_file_open_count();
+        crate::ingest::reset_session_file_open_count();
     }
 
     fn codex_file_open_count() -> u64 {
-        crate::services::ingest::session_file_open_count()
+        crate::ingest::session_file_open_count()
     }
 
     #[test]

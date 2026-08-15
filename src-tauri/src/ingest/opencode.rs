@@ -15,7 +15,7 @@
 
 use crate::agent_paths::get_opencode_db_path;
 use crate::error::AppError;
-use crate::services::ingest::{
+use crate::ingest::{
     current_timestamp, sync_with_parser, LogFileContext, ParseOutput, ParsedUsage,
     ProviderWriteProfile, SessionLogParser, SessionSyncResult, UsageIdentity,
 };

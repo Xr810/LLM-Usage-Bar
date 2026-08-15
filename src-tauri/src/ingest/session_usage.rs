@@ -6,9 +6,5 @@
 //! `commands/usage.rs` 引用;保留为转发层,避免改动任务书之外的文件。
 //! (T14b 把 gemini/opencode 也迁进了 `ingest/`,它们不再引用这里。)
 
-pub use crate::services::ingest::claude::{
-    sync_claude_session_logs, sync_claude_session_logs_bound,
-};
-pub use crate::services::ingest::{
-    get_data_source_breakdown, DataSourceSummary, SessionSyncResult,
-};
+pub use crate::ingest::claude::{sync_claude_session_logs, sync_claude_session_logs_bound};
+pub use crate::ingest::{get_data_source_breakdown, DataSourceSummary, SessionSyncResult};

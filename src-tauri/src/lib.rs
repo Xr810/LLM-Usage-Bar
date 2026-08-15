@@ -10,6 +10,7 @@ mod commands;
 mod config;
 mod error;
 pub mod http_client;
+mod ingest;
 mod init_status;
 mod lightweight;
 #[cfg(target_os = "linux")]
@@ -1239,11 +1240,11 @@ pub fn run() {
                     );
                     run_step(
                         "Gemini usage initial sync",
-                        crate::services::session_usage_gemini::sync_gemini_usage(db),
+                        crate::ingest::session_usage_gemini::sync_gemini_usage(db),
                     );
                     run_step(
                         "OpenCode usage initial sync",
-                        crate::services::session_usage_opencode::sync_opencode_usage(db),
+                        crate::ingest::session_usage_opencode::sync_opencode_usage(db),
                     );
 
                     // 单个源的一次同步，把结果映射成调度退避信号：
@@ -1259,13 +1260,13 @@ pub fn run() {
                                 .sync_source("codex")
                                 .map(|r| r.errors.is_empty()),
                             usage::watcher_state::SourceId::Gemini => {
-                                crate::services::session_usage_gemini::sync_gemini_usage(
+                                crate::ingest::session_usage_gemini::sync_gemini_usage(
                                     &db_for_session_sync,
                                 )
                                 .map(|r| r.errors.is_empty())
                             }
                             usage::watcher_state::SourceId::OpenCode => {
-                                crate::services::session_usage_opencode::sync_opencode_usage(
+                                crate::ingest::session_usage_opencode::sync_opencode_usage(
                                     &db_for_session_sync,
                                 )
                                 .map(|r| r.errors.is_empty())

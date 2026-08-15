@@ -11,7 +11,7 @@
 
 use crate::agent_paths::get_gemini_dir;
 use crate::error::AppError;
-use crate::services::ingest::{
+use crate::ingest::{
     occurred_at_secs, sync_with_parser, LogFileContext, ParseOutput, ParsedUsage,
     ProviderWriteProfile, SessionLogParser, SessionSyncResult, UsageIdentity,
 };
@@ -19,7 +19,7 @@ use crate::store::Database;
 use std::path::{Path, PathBuf};
 
 #[cfg(test)]
-use crate::services::ingest::insert_usage_record;
+use crate::ingest::insert_usage_record;
 #[cfg(test)]
 use crate::store::lock_conn;
 #[cfg(test)]

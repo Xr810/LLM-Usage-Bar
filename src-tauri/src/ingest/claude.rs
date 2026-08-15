@@ -8,7 +8,7 @@
 
 use crate::config::get_claude_config_dir;
 use crate::error::AppError;
-use crate::services::ingest::{
+use crate::ingest::{
     occurred_at_secs, sync_with_parser, LogFileContext, ParseOutput, ParsedUsage,
     ProviderWriteProfile, SessionLogParser, SessionSyncResult, UsageIdentity,
 };
@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 #[cfg(test)]
-use crate::services::ingest::{
+use crate::ingest::{
     get_sync_state, insert_usage_record, load_sync_cursors, sync_file_with_parser,
     update_sync_state, SyncCursorMap,
 };
