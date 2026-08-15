@@ -255,7 +255,7 @@ pub fn ensure_permission(app: &tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::usage::domain::BillingKind;
+    use crate::model::BillingKind;
     use crate::usage::status::{CostQuality, PaceBasis, UsageStatus};
     use crate::usage::tray_snapshot::{
         TrayAgentUsageView, TrayApiBudgetView, TrayMeteredUsageView, TrayProviderRecentUsageView,

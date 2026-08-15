@@ -1,10 +1,10 @@
 use super::{BindingCredentialService, CredentialStore, CredentialStoreError, SecretString};
 use crate::error::AppError;
-use crate::store::{CredentialMutationKind, Database};
-use crate::usage::domain::{
+use crate::model::{
     AgentModuleInput, AgentProviderBindingInput, AgentProviderBindingView, BindingCredentialStatus,
     SystemProviderAuthKind,
 };
+use crate::store::{CredentialMutationKind, Database};
 use crate::usage::system_providers::system_provider_definitions;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;

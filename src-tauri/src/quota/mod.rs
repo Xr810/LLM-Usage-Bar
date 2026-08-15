@@ -1,5 +1,8 @@
 use crate::error::AppError;
 pub mod claude_quota;
+use crate::model::{
+    BillingKind, QuotaFetchState, QuotaSnapshot, QuotaStatusView, UsageProviderStored,
+};
 use crate::secrets::codex_oauth_auth::CodexOAuthManager;
 use crate::services::coding_plan::get_coding_plan_quota;
 use crate::services::subscription::{
@@ -7,9 +10,6 @@ use crate::services::subscription::{
     TIER_SEVEN_DAY, TIER_WEEKLY_LIMIT,
 };
 use crate::store::Database;
-use crate::usage::domain::{
-    BillingKind, QuotaFetchState, QuotaSnapshot, QuotaStatusView, UsageProviderStored,
-};
 use crate::usage::system_providers::{CLAUDE_LOCAL_QUOTA_SOURCE, MANAGED_CODEX_QUOTA_SOURCE};
 use futures::future::BoxFuture;
 use rust_decimal::Decimal;
@@ -972,13 +972,13 @@ fn now_timestamp() -> Result<i64, AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::{BillingKind, TokenSource, UsageProviderInput, UsageProviderStored};
     use crate::secrets::codex_oauth_auth::CodexOAuthManager;
     use crate::services::subscription::{
         CredentialStatus, ManualResetCredit, ManualResetCredits, QuotaTier, SubscriptionQuota,
         TIER_FIVE_HOUR, TIER_SEVEN_DAY,
     };
     use crate::store::Database;
-    use crate::usage::domain::{BillingKind, TokenSource, UsageProviderInput, UsageProviderStored};
     use crate::usage::system_providers::{CHATGPT_SUBSCRIPTION_ID, CLAUDE_SUBSCRIPTION_ID};
     use serde_json::json;
     use std::collections::VecDeque;

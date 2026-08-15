@@ -4,10 +4,10 @@
 //! predictions and resolves completed subscription windows so a later calibration
 //! pass has honest local outcome data instead of reconstructing past decisions.
 
-use super::domain::QuotaSnapshot;
 use super::status::{PaceBasis, SourceClassification, UsageStatus};
 use super::subscription_pace::{FIVE_HOUR_WINDOW_KIND, SEVEN_DAY_WINDOW_KIND};
 use crate::error::AppError;
+use crate::model::QuotaSnapshot;
 use crate::store::Database;
 use chrono::DateTime;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -222,7 +222,7 @@ fn pace_basis_text(basis: PaceBasis) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::usage::domain::{BillingKind, TokenSource, UsageProviderInput};
+    use crate::model::{BillingKind, TokenSource, UsageProviderInput};
     use serde_json::json;
 
     fn classification(status: UsageStatus) -> SourceClassification {

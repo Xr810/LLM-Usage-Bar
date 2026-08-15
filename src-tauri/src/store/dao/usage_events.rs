@@ -1,9 +1,9 @@
 use crate::error::AppError;
-use crate::store::{lock_conn, Database};
-use crate::usage::domain::{
+use crate::model::{
     ArchivedAgentUsageSummary, CostSource, InvalidUsageLinkSummary, TokenSource,
     UnassignedUsageDiagnostics, UnassignedUsageGroup, UsageEvent, UsageEventLink, UsageEventPage,
 };
+use crate::store::{lock_conn, Database};
 use rusqlite::{params, types::Type, OptionalExtension, Row};
 
 fn token_source_value(source: TokenSource) -> &'static str {
@@ -120,7 +120,7 @@ impl Database {
                 event.agent_module_id,
                 event
                     .pricing_origin
-                    .map(crate::usage::domain::PricingOrigin::as_str),
+                    .map(crate::model::PricingOrigin::as_str),
             ],
         )?;
         if inserted == 0 {
@@ -488,11 +488,11 @@ impl Database {
 
 #[cfg(test)]
 mod tests {
-    use crate::store::Database;
-    use crate::usage::domain::{
+    use crate::model::{
         AgentModuleInput, BillingKind, CostSource, TokenSource, UsageEvent, UsageEventLink,
         UsageProviderInput,
     };
+    use crate::store::Database;
 
     fn save_provider(db: &Database, id: &str) {
         db.save_usage_provider(&UsageProviderInput {

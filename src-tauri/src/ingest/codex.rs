@@ -24,8 +24,8 @@ use crate::ingest::{
     FileCursor, LogFileContext, ParseOutput, ParsedUsage, ProviderWriteProfile, SessionLogParser,
     SessionSyncResult, SyncCursorMap, UsageIdentity,
 };
+use crate::model::CODEX_AGENT_MODULE_ID;
 use crate::store::{Database, UsageSyncCursor};
-use crate::usage::domain::CODEX_AGENT_MODULE_ID;
 use crate::usage::session::{validate_bound_session_agent, ProviderSessionSyncResult};
 use crate::usage::system_providers::CHATGPT_SUBSCRIPTION_ID;
 use sha2::{Digest, Sha256};
@@ -36,9 +36,9 @@ use std::path::{Path, PathBuf};
 #[cfg(test)]
 use crate::ingest::{insert_usage_record, sync_file_with_parser};
 #[cfg(test)]
-use crate::store::lock_conn;
+use crate::model::TokenSource;
 #[cfg(test)]
-use crate::usage::domain::TokenSource;
+use crate::store::lock_conn;
 
 /// 累计 token 用量(跟踪 total_token_usage 字段)
 #[derive(Debug, Clone, Default)]
@@ -954,10 +954,10 @@ mod tests {
     use chrono::Datelike;
 
     fn save_session_provider(db: &Database, provider_id: &str) -> Result<(), AppError> {
-        db.save_usage_provider(&crate::usage::domain::UsageProviderInput {
+        db.save_usage_provider(&crate::model::UsageProviderInput {
             id: provider_id.to_string(),
             name: format!("{provider_id} session provider"),
-            billing_kind: crate::usage::domain::BillingKind::Subscription,
+            billing_kind: crate::model::BillingKind::Subscription,
             product_group_id: "codex".to_string(),
             token_sources: vec![TokenSource::SessionLog],
             session_source_bindings: None,
@@ -977,13 +977,12 @@ mod tests {
         agent_module_id: &str,
         provider_id: &str,
     ) -> Result<(), AppError> {
-        let binding =
-            db.save_agent_provider_binding(&crate::usage::domain::AgentProviderBindingInput {
-                id: None,
-                agent_module_id: agent_module_id.to_string(),
-                provider_id: provider_id.to_string(),
-                enabled: true,
-            })?;
+        let binding = db.save_agent_provider_binding(&crate::model::AgentProviderBindingInput {
+            id: None,
+            agent_module_id: agent_module_id.to_string(),
+            provider_id: provider_id.to_string(),
+            enabled: true,
+        })?;
         assert!(binding.enabled);
         Ok(())
     }

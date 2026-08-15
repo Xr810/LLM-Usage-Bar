@@ -12,8 +12,8 @@ use crate::ingest::{
     occurred_at_secs, sync_with_parser, LogFileContext, ParseOutput, ParsedUsage,
     ProviderWriteProfile, SessionLogParser, SessionSyncResult, UsageIdentity,
 };
+use crate::model::CLAUDE_CODE_AGENT_MODULE_ID;
 use crate::store::Database;
-use crate::usage::domain::CLAUDE_CODE_AGENT_MODULE_ID;
 use crate::usage::metering::parser::SESSION_REQUEST_ID_PREFIX;
 use crate::usage::session::{validate_bound_session_agent, ProviderSessionSyncResult};
 use crate::usage::system_providers::CLAUDE_SUBSCRIPTION_ID;
@@ -26,11 +26,11 @@ use crate::ingest::{
     update_sync_state, SyncCursorMap,
 };
 #[cfg(test)]
+use crate::model::TokenSource;
+#[cfg(test)]
 use crate::store::lock_conn;
 #[cfg(test)]
 use crate::store::UsageSyncCursor;
-#[cfg(test)]
-use crate::usage::domain::TokenSource;
 #[cfg(test)]
 use crate::usage::ingestion::{UsageIngestionInput, UsageIngestionService};
 #[cfg(test)]
@@ -707,12 +707,12 @@ mod tests {
     #[test]
     fn bound_sync_advances_offset_only_after_full_file_ingestion() -> Result<(), AppError> {
         let db = Database::memory()?;
-        db.save_usage_provider(&crate::usage::domain::UsageProviderInput {
+        db.save_usage_provider(&crate::model::UsageProviderInput {
             id: "claude-sub".to_string(),
             name: "Claude subscription".to_string(),
-            billing_kind: crate::usage::domain::BillingKind::Subscription,
+            billing_kind: crate::model::BillingKind::Subscription,
             product_group_id: "claude".to_string(),
-            token_sources: vec![crate::usage::domain::TokenSource::SessionLog],
+            token_sources: vec![crate::model::TokenSource::SessionLog],
             session_source_bindings: None,
             quota_source: None,
             quota_interval_seconds: Some(300),
@@ -722,7 +722,7 @@ mod tests {
             enabled: true,
         })?;
         db.set_usage_source_binding("claude", "claude-sub")?;
-        db.save_agent_provider_binding(&crate::usage::domain::AgentProviderBindingInput {
+        db.save_agent_provider_binding(&crate::model::AgentProviderBindingInput {
             id: None,
             agent_module_id: "claude-code".to_string(),
             provider_id: "claude-sub".to_string(),
@@ -765,14 +765,14 @@ mod tests {
     #[test]
     fn bound_claude_parser_links_exact_raw_message_id_from_proxy() -> Result<(), AppError> {
         let db = Database::memory()?;
-        db.save_usage_provider(&crate::usage::domain::UsageProviderInput {
+        db.save_usage_provider(&crate::model::UsageProviderInput {
             id: "claude-sub".to_string(),
             name: "Claude subscription".to_string(),
-            billing_kind: crate::usage::domain::BillingKind::Subscription,
+            billing_kind: crate::model::BillingKind::Subscription,
             product_group_id: "claude".to_string(),
             token_sources: vec![
-                crate::usage::domain::TokenSource::Proxy,
-                crate::usage::domain::TokenSource::SessionLog,
+                crate::model::TokenSource::Proxy,
+                crate::model::TokenSource::SessionLog,
             ],
             session_source_bindings: None,
             quota_source: None,
@@ -785,7 +785,7 @@ mod tests {
         db.set_usage_source_binding("claude", "claude-sub")?;
         for agent_module_id in ["claude-code", "codex"] {
             let binding =
-                db.save_agent_provider_binding(&crate::usage::domain::AgentProviderBindingInput {
+                db.save_agent_provider_binding(&crate::model::AgentProviderBindingInput {
                     id: None,
                     agent_module_id: agent_module_id.to_string(),
                     provider_id: "claude-sub".to_string(),

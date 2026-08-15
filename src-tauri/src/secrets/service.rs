@@ -1,14 +1,14 @@
 use super::lifecycle_lock::{CredentialLifecycleLock, SharedLifecycleGuard};
 use super::{CredentialStore, SecretString, KEYCHAIN_SERVICE};
 use crate::error::AppError;
+use crate::model::{
+    AgentProviderBindingInput, AgentProviderBindingView, BindingCredentialStatus,
+    LocalBindingKeyReveal, ProviderApiKeyView, SystemProviderAuthKind, UsageProviderView,
+};
 use crate::store::{
     BindingAuthMode, CredentialBindingSnapshot, CredentialJournalEntry, CredentialMutationKind,
     CredentialOperationReservation, Database, ProviderCredentialJournalEntry,
     ProviderCredentialOperationReservation, ProviderCredentialSnapshot,
-};
-use crate::usage::domain::{
-    AgentProviderBindingInput, AgentProviderBindingView, BindingCredentialStatus,
-    LocalBindingKeyReveal, ProviderApiKeyView, SystemProviderAuthKind, UsageProviderView,
 };
 use crate::usage::system_providers::{is_fixed_api_preset, system_binding_route_protocol};
 use sha2::{Digest, Sha256};

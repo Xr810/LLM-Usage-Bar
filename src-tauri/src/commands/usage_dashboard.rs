@@ -1,19 +1,19 @@
 use crate::app_state::AppState;
 use crate::commands::CodexOAuthState;
 use crate::error::AppError;
-use crate::quota::QuotaRefreshResult;
-use crate::secrets::SecretString;
-use crate::services::{SystemProviderConnectionService, SystemProviderConnectionTestResult};
-use crate::store::AgentModuleDeleteOutcome;
-use crate::usage::aggregation::{aggregate_agent_usage, aggregate_model_usage};
-use crate::usage::dashboard::UsageDashboardService;
-use crate::usage::domain::{
+use crate::model::{
     AgentModuleInput, AgentModuleView, AgentProviderBindingInput, AgentProviderBindingView,
     AgentUsageBreakdownView, LocalBindingKeyReveal, ModelUsageDashboardView, ProviderApiKeyView,
     ProviderMonitoringDashboardView, RouteBinding, SystemProviderAuthKind,
     SystemProviderKeyUsageView, UnassignedUsageDiagnostics, UsageDashboardView, UsageEventPage,
     UsageProviderInput, UsageProviderView,
 };
+use crate::quota::QuotaRefreshResult;
+use crate::secrets::SecretString;
+use crate::services::{SystemProviderConnectionService, SystemProviderConnectionTestResult};
+use crate::store::AgentModuleDeleteOutcome;
+use crate::usage::aggregation::{aggregate_agent_usage, aggregate_model_usage};
+use crate::usage::dashboard::UsageDashboardService;
 use crate::usage::session::ProviderSessionSyncResult;
 use crate::usage::status::SubscriptionThresholds;
 use crate::usage::system_providers::{CHATGPT_SUBSCRIPTION_ID, CLAUDE_SUBSCRIPTION_ID};
@@ -27,9 +27,9 @@ use tauri::{AppHandle, State};
 pub struct SaveUsageProviderCommandInput {
     id: String,
     name: String,
-    billing_kind: crate::usage::domain::BillingKind,
+    billing_kind: crate::model::BillingKind,
     product_group_id: String,
-    token_sources: Vec<crate::usage::domain::TokenSource>,
+    token_sources: Vec<crate::model::TokenSource>,
     #[serde(default)]
     session_source_bindings: Option<Vec<String>>,
     quota_source: Option<String>,
@@ -1274,6 +1274,10 @@ fn require_active_agent(state: &AppState, agent_module_id: &str) -> Result<(), A
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::{
+        AgentModuleInput, AgentProviderBindingInput, BillingKind, BindingCredentialStatus,
+        CostSource, TokenSource, UsageEvent, UsageProviderInput,
+    };
     use crate::quota::{QuotaCollector, QuotaService};
     use crate::secrets::{
         BindingCredentialService, CredentialStore, CredentialStoreError, SecretString,
@@ -1288,10 +1292,6 @@ mod tests {
         SystemProviderModelListFuture,
     };
     use crate::store::Database;
-    use crate::usage::domain::{
-        AgentModuleInput, AgentProviderBindingInput, BillingKind, BindingCredentialStatus,
-        CostSource, TokenSource, UsageEvent, UsageProviderInput,
-    };
     use crate::usage::status::UsageStatus;
     use crate::usage::system_providers::MANAGED_CODEX_QUOTA_SOURCE;
     use chrono::{Local, TimeZone};
@@ -1403,7 +1403,7 @@ mod tests {
 
         fn collect<'a>(
             &'a self,
-            _provider: &'a crate::usage::domain::UsageProviderStored,
+            _provider: &'a crate::model::UsageProviderStored,
             _interactive: bool,
         ) -> BoxFuture<'a, Result<SubscriptionQuota, String>> {
             self.calls.fetch_add(1, Ordering::SeqCst);
@@ -1448,7 +1448,7 @@ mod tests {
 
         fn collect<'a>(
             &'a self,
-            _provider: &'a crate::usage::domain::UsageProviderStored,
+            _provider: &'a crate::model::UsageProviderStored,
             _interactive: bool,
         ) -> BoxFuture<'a, Result<SubscriptionQuota, String>> {
             let call = self.calls.fetch_add(1, Ordering::SeqCst);
@@ -2391,7 +2391,7 @@ mod tests {
             created_at: 50,
         })
         .unwrap();
-        db.append_quota_success(&crate::usage::domain::QuotaSnapshot {
+        db.append_quota_success(&crate::model::QuotaSnapshot {
             snapshot_id: "shared-direct-quota".to_string(),
             provider_id: "shared-direct".to_string(),
             fetched_at: 60,

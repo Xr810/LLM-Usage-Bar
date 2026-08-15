@@ -6,7 +6,6 @@ pub(crate) mod cli_probe;
 pub(crate) mod cost_backfill_migration;
 pub(crate) mod cursor_migration;
 pub mod dashboard;
-pub mod domain;
 pub mod ingestion;
 pub mod metering;
 pub(crate) mod migration;
@@ -28,5 +27,3 @@ pub(crate) mod watcher;
 // set_interval 由模块内单元测试覆盖,非测试构建下允许未被引用(dead_code)。
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) mod watcher_state;
-
-pub use domain::*;

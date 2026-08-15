@@ -3,8 +3,8 @@ use super::agent_provider_bindings::{
     BINDING_RECORD_QUERY,
 };
 use crate::error::AppError;
+use crate::model::{AgentProviderBindingView, BindingCredentialStatus};
 use crate::store::{lock_conn, Database};
-use crate::usage::domain::{AgentProviderBindingView, BindingCredentialStatus};
 use crate::usage::system_providers::is_fixed_api_preset;
 use rusqlite::{params, OptionalExtension, TransactionBehavior};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -845,7 +845,7 @@ impl Database {
 mod tests {
     use super::{CredentialMutationKind, Database};
 
-    use crate::usage::domain::AgentProviderBindingInput;
+    use crate::model::AgentProviderBindingInput;
     use rusqlite::params;
 
     fn insert_direct_provider(db: &Database, id: &str) {

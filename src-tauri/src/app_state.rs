@@ -234,9 +234,9 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::{BillingKind, TokenSource, UsageProviderInput, UsageProviderStored};
     use crate::quota::QuotaCollector;
     use crate::services::subscription::SubscriptionQuota;
-    use crate::usage::domain::{BillingKind, TokenSource, UsageProviderInput, UsageProviderStored};
     use chrono::{Local, TimeZone};
     use futures::future::BoxFuture;
     use std::sync::atomic::{AtomicUsize, Ordering};

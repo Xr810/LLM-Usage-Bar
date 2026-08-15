@@ -1,9 +1,9 @@
 use crate::error::AppError;
-use crate::store::{lock_conn, Database};
-use crate::usage::domain::{
+use crate::model::{
     AgentProviderBindingInput, AgentProviderBindingView, BillingKind, BindingCredentialStatus,
     SystemProviderAuthKind, TokenSource,
 };
+use crate::store::{lock_conn, Database};
 use crate::usage::system_providers::{
     is_fixed_api_preset, system_binding_route_protocol, system_provider_definition,
 };
@@ -952,10 +952,8 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use super::{resolve_direct_credential_placement, DirectCredentialPlacement};
+    use crate::model::{AgentModuleInput, AgentProviderBindingInput, BindingCredentialStatus};
     use crate::store::Database;
-    use crate::usage::domain::{
-        AgentModuleInput, AgentProviderBindingInput, BindingCredentialStatus,
-    };
     use rusqlite::params;
     use serde_json::Value;
 

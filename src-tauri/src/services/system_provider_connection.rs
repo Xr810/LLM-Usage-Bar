@@ -1,7 +1,7 @@
 use crate::error::AppError;
+use crate::model::SystemProviderKeyUsageView;
 use crate::secrets::{BindingCredentialService, ResolvedProviderCredential};
 use crate::store::{Database, ProviderKeyUsageSnapshotInput};
-use crate::usage::domain::SystemProviderKeyUsageView;
 use crate::usage::system_providers::system_provider_definition;
 use rust_decimal::Decimal;
 use serde_json::Value;

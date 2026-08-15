@@ -275,7 +275,7 @@ pub fn update_model_pricing(
 pub fn get_provider_model_pricing(
     state: State<'_, AppState>,
     provider_id: String,
-) -> Result<Vec<crate::usage::domain::ProviderModelPricingView>, AppError> {
+) -> Result<Vec<crate::model::ProviderModelPricingView>, AppError> {
     state.db.list_provider_model_pricing(&provider_id)
 }
 
@@ -288,7 +288,7 @@ pub fn update_provider_model_pricing(
     provider_id: String,
     model_id: String,
     display_name: String,
-    price: crate::usage::domain::ModelPriceInput,
+    price: crate::model::ModelPriceInput,
 ) -> Result<(), AppError> {
     state
         .db

@@ -1,7 +1,7 @@
 use super::aggregation::aggregate_provider_account_range;
-use super::domain::QuotaSnapshot;
 use super::subscription_pace::valid_quota_pair;
 use crate::error::AppError;
+use crate::model::QuotaSnapshot;
 use crate::store::Database;
 use chrono::{Datelike, Duration, Local, LocalResult, NaiveDate, TimeZone, Timelike};
 use rust_decimal::prelude::ToPrimitive;

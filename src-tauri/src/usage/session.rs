@@ -1,6 +1,6 @@
 use crate::error::AppError;
+use crate::model::{session_agent_module_id, TokenSource};
 use crate::store::Database;
-use crate::usage::domain::{session_agent_module_id, TokenSource};
 use crate::usage::ingestion::{LegacyLogInput, UsageIngestionInput, UsageIngestionService};
 use crate::usage::metering::parser::TokenUsage;
 use serde::{Deserialize, Serialize};
@@ -153,7 +153,7 @@ impl SessionUsageService {
     fn binding_or_warning(
         &self,
         source: &str,
-    ) -> Result<Option<crate::usage::domain::UsageSourceBinding>, AppError> {
+    ) -> Result<Option<crate::model::UsageSourceBinding>, AppError> {
         if !matches!(source, "claude" | "codex") {
             return Err(AppError::Message(format!(
                 "unsupported usage source: {source}"
@@ -180,10 +180,8 @@ impl SessionUsageService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::{AgentProviderBindingInput, BillingKind, TokenSource, UsageProviderInput};
     use crate::store::Database;
-    use crate::usage::domain::{
-        AgentProviderBindingInput, BillingKind, TokenSource, UsageProviderInput,
-    };
     use crate::usage::ingestion::{
         FrozenUsageProviderContext, UsageIngestionInput, UsageIngestionService,
     };

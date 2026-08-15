@@ -1,6 +1,6 @@
 use crate::error::AppError;
+use crate::model::{QuotaFetchState, QuotaSnapshot};
 use crate::store::{lock_conn, to_json_string, Database};
-use crate::usage::domain::{QuotaFetchState, QuotaSnapshot};
 use rusqlite::{params, types::Type, Connection, OptionalExtension, Row};
 
 fn quota_snapshot_from_row(row: &Row<'_>) -> rusqlite::Result<QuotaSnapshot> {
@@ -205,8 +205,8 @@ impl Database {
 
 #[cfg(test)]
 mod tests {
+    use crate::model::{BillingKind, QuotaSnapshot, TokenSource, UsageProviderInput};
     use crate::store::Database;
-    use crate::usage::domain::{BillingKind, QuotaSnapshot, TokenSource, UsageProviderInput};
     use serde_json::json;
 
     fn save_provider(db: &Database, id: &str) {

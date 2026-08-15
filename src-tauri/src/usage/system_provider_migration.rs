@@ -1,8 +1,8 @@
-use super::domain::{BillingKind, SystemProviderAuthKind};
 use super::system_providers::{
     system_provider_definitions, CHATGPT_SUBSCRIPTION_ID, CLAUDE_SUBSCRIPTION_ID, OPENROUTER_API_ID,
 };
 use crate::error::AppError;
+use crate::model::{BillingKind, SystemProviderAuthKind};
 use crate::store::{to_json_string, Database};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::time::{SystemTime, UNIX_EPOCH};

@@ -1,6 +1,6 @@
 use crate::error::AppError;
+use crate::model::{AgentModuleInput, AgentModuleView};
 use crate::store::{lock_conn, Database};
-use crate::usage::domain::{AgentModuleInput, AgentModuleView};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use std::collections::HashSet;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -285,10 +285,10 @@ impl Database {
 
 #[cfg(test)]
 mod tests {
+    use crate::model::{AgentModuleInput, AgentProviderBindingInput};
     use crate::store::Database;
-    use crate::usage::domain::{AgentModuleInput, AgentProviderBindingInput};
 
-    fn create_custom(db: &Database, name: &str) -> crate::usage::domain::AgentModuleView {
+    fn create_custom(db: &Database, name: &str) -> crate::model::AgentModuleView {
         db.save_agent_module(&AgentModuleInput {
             id: None,
             name: name.to_string(),

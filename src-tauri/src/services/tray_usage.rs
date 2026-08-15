@@ -1,7 +1,7 @@
 use crate::error::AppError;
+use crate::model::{BillingKind, UsageProviderView};
 use crate::quota::QuotaService;
 use crate::store::Database;
-use crate::usage::domain::{BillingKind, UsageProviderView};
 use crate::usage::session::{ProviderSessionSyncResult, SessionUsageService};
 use crate::usage::status::UsageStatus;
 use crate::usage::tray_snapshot::{TrayUsageProjector, TrayUsageSnapshot};
@@ -420,7 +420,7 @@ impl TrayUsageService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::usage::domain::TokenSource;
+    use crate::model::TokenSource;
     use crate::usage::tray_snapshot::TrayAgentUsageView;
     use chrono::TimeZone;
     use std::collections::VecDeque;

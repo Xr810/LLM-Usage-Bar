@@ -1,8 +1,8 @@
 use crate::app_state::AppState;
 use crate::config::settings::{ApiBudgetConfig, ApiBudgetMode};
 use crate::error::AppError;
+use crate::model::UsageProviderView;
 pub use crate::tray_popover::MainWindowDestination;
-use crate::usage::domain::UsageProviderView;
 use crate::usage::tray_snapshot::TrayUsageSnapshot;
 use std::future::Future;
 use std::sync::Arc;

@@ -6,9 +6,9 @@
 //! account would silently produce a number that means nothing.
 
 use crate::error::AppError;
+use crate::model::{ModelPriceInput, ProviderModelPricingView};
 use crate::services::usage_stats::clean_model_id_for_pricing;
 use crate::store::{lock_conn, Database};
-use crate::usage::domain::{ModelPriceInput, ProviderModelPricingView};
 use rusqlite::{params, OptionalExtension, Row};
 use rust_decimal::Decimal;
 use std::str::FromStr;
@@ -178,7 +178,7 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::usage::domain::{BillingKind, TokenSource, UsageProviderInput};
+    use crate::model::{BillingKind, TokenSource, UsageProviderInput};
 
     fn price(input: &str, output: &str, cache_read: &str, cache_creation: &str) -> ModelPriceInput {
         ModelPriceInput {

@@ -1,10 +1,10 @@
-use super::domain::QuotaSnapshot;
 use super::rhythm::cached_quota_profile;
 use super::status::{
     classify_subscription_window, PaceInput, PaceMeasurement, SourceClassification,
     SubscriptionThresholds, MIN_RATE_SPAN_SECONDS,
 };
 use crate::error::AppError;
+use crate::model::QuotaSnapshot;
 use crate::store::Database;
 use chrono::DateTime;
 use rust_decimal::Decimal;
@@ -238,7 +238,7 @@ pub(crate) fn quota_window_values<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::usage::domain::{BillingKind, TokenSource, UsageProviderInput};
+    use crate::model::{BillingKind, TokenSource, UsageProviderInput};
     use chrono::{DateTime, SecondsFormat, Utc};
     use serde_json::json;
 

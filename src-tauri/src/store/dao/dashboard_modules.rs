@@ -4,8 +4,8 @@
 //! intentionally frozen and is never read or written from this module.
 
 use crate::error::AppError;
+use crate::model::{AgentModuleInput, AgentModuleView};
 use crate::store::Database;
-use crate::usage::domain::{AgentModuleInput, AgentModuleView};
 
 impl Database {
     pub fn list_dashboard_modules(&self) -> Result<Vec<AgentModuleView>, AppError> {

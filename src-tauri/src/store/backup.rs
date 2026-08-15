@@ -2130,8 +2130,8 @@ mod tests {
     };
     use crate::config::settings::{update_settings, AppSettings};
     use crate::error::AppError;
+    use crate::model::{BillingKind, TokenSource, UsageProviderInput};
     use crate::product_identity::DATABASE_FILE;
-    use crate::usage::domain::{BillingKind, TokenSource, UsageProviderInput};
     use rusqlite::params;
     use serial_test::serial;
     use std::ffi::OsString;

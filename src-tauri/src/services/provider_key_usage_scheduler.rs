@@ -1,7 +1,7 @@
 use crate::error::AppError;
+use crate::model::{BindingCredentialStatus, ProviderApiKeyView, UsageProviderView};
 use crate::secrets::BindingCredentialService;
 use crate::services::SystemProviderConnectionService;
-use crate::usage::domain::{BindingCredentialStatus, ProviderApiKeyView, UsageProviderView};
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
@@ -310,7 +310,7 @@ fn unix_timestamp() -> Result<i64, AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::usage::domain::{BillingKind, SystemProviderKeyUsageView};
+    use crate::model::{BillingKind, SystemProviderKeyUsageView};
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
     use std::sync::Mutex;

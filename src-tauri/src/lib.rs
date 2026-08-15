@@ -17,6 +17,7 @@ mod linux_fix;
 mod macos_fix;
 #[cfg(any(target_os = "macos", test))]
 mod macos_material;
+mod model;
 mod panic_hook;
 pub mod product_identity;
 mod prompt;
@@ -42,13 +43,7 @@ pub use config::app_config::{AppType, MultiAppConfig};
 pub use config::settings::{update_settings, AppSettings};
 pub use config::{get_claude_account_path, get_claude_settings_path, read_json_file};
 pub use error::AppError;
-pub use prompt::Prompt;
-pub use provider::{Provider, ProviderMeta};
-pub use quota::claude_quota::run_claude_statusline_bridge;
-pub use store::Database;
-use tauri_plugin_deep_link::DeepLinkExt;
-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
-pub use usage::domain::{
+pub use model::{
     AgentModuleInput, AgentModuleView, AgentProviderBindingInput, AgentProviderBindingView,
     AgentProxyRouteSetup, AgentProxySetupInfo, ArchivedAgentUsageSummary, BillingKind,
     BindingCredentialStatus, CostSource, CostSourceCounts, InvalidUsageLinkSummary,
@@ -57,6 +52,12 @@ pub use usage::domain::{
     UnassignedUsageGroup, UsageDashboardView, UsageEvent, UsageEventLink, UsageEventPage,
     UsageProviderInput, UsageProviderView, UsageSourceBinding,
 };
+pub use prompt::Prompt;
+pub use provider::{Provider, ProviderMeta};
+pub use quota::claude_quota::run_claude_statusline_bridge;
+pub use store::Database;
+use tauri_plugin_deep_link::DeepLinkExt;
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 use std::path::Path;
 #[cfg(debug_assertions)]
