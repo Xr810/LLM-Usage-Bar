@@ -17,6 +17,7 @@ mod macos_fix;
 #[cfg(any(target_os = "macos", test))]
 mod macos_material;
 mod model;
+mod native_bridge;
 mod panic_hook;
 pub mod product_identity;
 mod prompt;
