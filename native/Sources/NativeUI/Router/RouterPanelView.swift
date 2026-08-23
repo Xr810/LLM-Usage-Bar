@@ -49,8 +49,19 @@ public struct RouterPanelView: View {
     private var theme: NativeTheme { appearance.theme }
 
     public var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: NativeSpacing.xl) {
+        ScrollView { content }
+            .background(background)
+            .tint(theme.accent)
+            .environment(\.colorScheme, theme.appearance == .dark ? .dark : .light)
+    }
+
+    /// 内容层单独暴露,不含 ScrollView。
+    ///
+    /// 为什么要拆:`ImageRenderer` **渲不出 ScrollView 里的内容**(实测把整屏渲成空白,
+    /// 非背景像素为 0),而无头渲图是「自己看一眼刚写的界面」的唯一通道。拆开之后
+    /// 渲染器直接渲这一层,真实界面照旧带滚动。
+    public var content: some View {
+        VStack(alignment: .leading, spacing: NativeSpacing.xl) {
                 // 错误钉在顶部,不自动消失。
                 if let message = model.errorMessage {
                     NativeErrorBanner(message: message, theme: theme) {
@@ -83,13 +94,9 @@ public struct RouterPanelView: View {
                     onModeChange: onModeChange,
                     onMove: onMoveProviders
                 )
-            }
-            .padding(NativeSpacing.lg)
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .background(background)
-        .tint(theme.accent)
-        .environment(\.colorScheme, theme.appearance == .dark ? .dark : .light)
+        .padding(NativeSpacing.lg)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// 半透明关掉时落到主题底色,**不是白色** —— 纯白是「没设计过」的样子。

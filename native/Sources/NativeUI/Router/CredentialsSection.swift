@@ -106,11 +106,10 @@ public struct CredentialsSection: View {
                     // 只能替换,不能查看 —— 输入框是一次性的,关掉就再也读不回来。
                     Button("替换…") { onBind(provider) }
                         .controlSize(.small)
-                    Button("解绑") { onUnbind(provider) }
+                    // 用系统的 destructive role,不要手工上色 —— 手工上色会渲成一个
+                    // 实心色块,而系统 role 给的是 macOS 标准的破坏性按钮样式。
+                    Button("解绑", role: .destructive) { onUnbind(provider) }
                         .controlSize(.small)
-                        .foregroundStyle(
-                            NativeStatusColor.destructive.resolved(for: theme.appearance)
-                        )
                 }
             }
         case "chatgpt_oauth":

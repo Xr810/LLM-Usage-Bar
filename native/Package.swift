@@ -10,9 +10,6 @@ let package = Package(
         // 新视图按 docs/design/2026-08-23-router-panel-visual-direction.md 重写后再加回。
         .library(name: "UsageCore", targets: ["UsageCore"]),
         .library(name: "NativeUI", targets: ["NativeUI"]),
-        // 只为「把界面跑起来看一眼」存在,不是产品外壳。产品外壳(菜单栏、窗口、
-        // 生命周期)是另一件事,归后面的任务。
-        .executable(name: "RouterPanelPreview", targets: ["RouterPanelPreview"]),
     ],
     targets: [
         .target(
@@ -24,7 +21,6 @@ let package = Package(
         // T29:设计系统单独成 target —— UsageCore 是数据与传输层,不该被 SwiftUI 拖进去。
         // 视图将来长在可执行 target 里,依赖这一层拿 token。
         .target(name: "NativeUI", dependencies: ["UsageCore"]),
-        .executableTarget(name: "RouterPanelPreview", dependencies: ["NativeUI", "UsageCore"]),
         .testTarget(
             name: "NativeUITests",
             dependencies: ["NativeUI", "UsageCore"]

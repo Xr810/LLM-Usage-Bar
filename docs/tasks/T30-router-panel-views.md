@@ -42,19 +42,51 @@ Sources/RouterPanelPreview/main.swift                   跑起来看一眼用的
 | 身份色在映射表 / 凭据 / 排序 / 分账**四处一致** | `model.identityIndex(forProvider:)` |
 | 错误钉在顶部不自动消失 | `NativeErrorBanner` + `model.errorMessage` |
 
-## 3. 验证与**没有**验证的
+## 3. 怎么看,以及看到了什么
 
-- `swift build` 通过;`swift test` **58 passed**(45 + 13 条 model 测试)
-- `script/lint_design.sh` 三条全绿
+### 两条通道
 
-**视觉没有被验证过。** 我请求截屏权限时被拒,所以这四屏我一行都没亲眼看过 ——
-只知道它编译通过、逻辑测试通过。**看起来对不对是未知的**,不要把本任务当作视觉已定稿。
+**Xcode 预览**:打开 `native/Package.swift` → `RouterPanelView.swift` → Editor ▸ Canvas。
+**scheme 必须选 `NativeUI`,不能选带可执行 target 的那个** —— 详见 §3.1。
 
-看的办法:
+**无头渲图**(不需要 Xcode、不需要屏幕权限):
 
 ```
-cd native && swift run RouterPanelPreview [--theme system|overcast|ink] [--opaque] [--empty]
+PANEL_SHOTS_DIR=/tmp/shots swift test --filter renderPanelSnapshots
 ```
+
+七张:默认 / Overcast / Ink 深色 / 空态 / 手动模式 / 接管后 / 错误条。
+
+### 3.1 踩过的两个坑,都记在这
+
+**一、可执行 target 会把 SwiftUI 预览堵死。**
+最初把渲染器做成了可执行 target `RouterPanelPreview`,结果 Xcode 挑它当预览宿主,
+报 `DebugDylibNotEnabled: 需要把 ENABLE_DEBUG_DYLIB 设为 YES` —— 而 SwiftPM 设不了
+这个构建设置,四个 `#Preview` 全部渲染失败。**已把渲染器搬进测试 target**(测试不会
+被选作预览宿主),包里现在没有任何可执行 target。
+
+**二、`ImageRenderer` 渲不出 `ScrollView` 里的内容。**
+实测:`Text` 与 `VStack` 正常,`ScrollView` 渲出来非背景像素为 **0**(整屏空白)。
+所以 `RouterPanelView` 把内容层拆成了 `.content`(不含 ScrollView),渲染器渲那一层,
+真实界面照旧带滚动。
+
+### 3.2 这条通道**看不到**什么
+
+`ImageRenderer` 渲不了 AppKit 支撑的控件:**模式那个 segmented `Picker` 和尝试顺序的
+`List` 会渲成黄色禁止符号占位块**。那不是界面坏了,是这条通道看不见它们 ——
+**这两个控件必须在 Xcode 预览或真窗口里验**,渲图结果对它们无效。
+
+### 3.3 靠渲图逮到并修掉的两处
+
+1. **已停用 provider 的映射行没跟着变暗** —— `.opacity` 只加在了表头行上,底下的映射
+   仍然全亮,看起来像在生效。这一屏最不该给错的就是这个信息。已改成盖住整块
+2. **「解绑」渲成了粉红实心块** —— 手工 `.foregroundStyle(destructive)` 的结果。
+   改用系统的 `Button(role: .destructive)`
+
+### 3.4 现在的状态
+
+`swift build` 通过;`swift test` **59 passed**;`script/lint_design.sh` 三条全绿;
+七张渲图逐张看过,除 §3.2 那两个控件外均符合设计。
 
 ## 4. 值得单说的两条测试
 

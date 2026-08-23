@@ -75,6 +75,14 @@ public struct ModelMappingSection: View {
 
     @ViewBuilder
     private func providerBlock(_ provider: RouterProviderV1, index: Int) -> some View {
+        // 停用状态要盖住**整块**(表头 + 它的映射行)。只暗表头的话,底下的映射
+        // 看起来仍在生效 —— 那正是这一屏最不该给错的信息。
+        providerBlockContent(provider, index: index)
+            .opacity(provider.enabled ? 1 : 0.55)
+    }
+
+    @ViewBuilder
+    private func providerBlockContent(_ provider: RouterProviderV1, index: Int) -> some View {
         let providerRoutes = model.routes(forProvider: provider.id)
 
         NativeRow(theme: theme) {
@@ -89,7 +97,6 @@ public struct ModelMappingSection: View {
         } trailing: {
             statusBadge(for: provider)
         }
-        .opacity(provider.enabled ? 1 : 0.55)
         .accessibilityElement(children: .combine)
 
         if providerRoutes.isEmpty {
