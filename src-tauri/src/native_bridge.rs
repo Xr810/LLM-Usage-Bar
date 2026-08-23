@@ -80,6 +80,27 @@ struct UsageEventsParams {
     page_size: u64,
 }
 
+// ---- T28:本地路由面板的参数(九个命令,见 docs/tasks/T28-*.md) ----
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RouterProviderIdParams {
+    id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SetModelRoutesParams {
+    provider_id: String,
+    routes: Vec<crate::api::router::ModelRouteInput>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SetRouterModeParams {
+    mode: String,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SetNativeSettingsParams {
@@ -102,7 +123,8 @@ struct BridgeResponse {
 #[serde(rename_all = "camelCase")]
 struct BridgeError {
     code: &'static str,
-    message: &'static str,
+    // T28:由 &'static str 放宽为 String —— 路由命令要回传 AppError 原文。
+    message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     data: Option<Value>,
 }
@@ -290,40 +312,33 @@ fn set_native_settings_with_auto_launch<AutoLaunch>(
 where
     AutoLaunch: Fn(bool) -> Result<(), AppError> + Copy,
 {
-    // T27:main 上 `update_settings_checked_with_hooks` 已被删除(此前只有本文件在用),
-    // 这里用公开的 get_settings / update_settings 就地重建同一顺序:
-    // 准备 → 副作用(失败即回滚并中止)→ 落盘 → 落盘失败再回滚副作用。
-    //
-    // 差异:原实现在设置写锁内完成读改写,这一版读与写之间不持锁,理论上存在
-    // read-modify-write 竞态。设置写入都由用户显式触发、并发极低,先接受;要恢复
-    // 原子性得把 helper 放回 `config::settings`,那属于改动 SSOT,留给 T28 定夺。
-    let existing = crate::config::settings::get_settings();
-    let (next, response) = prepare_native_settings_update(&existing, &params)?;
-
-    let launch_changed = existing.launch_on_startup != next.launch_on_startup;
-    if launch_changed {
-        if let Err(error) = auto_launch(next.launch_on_startup) {
-            if let Err(rollback_error) = auto_launch(existing.launch_on_startup) {
-                log::error!(
-                    "native bridge could not restore auto-launch after failure: {rollback_error}"
-                );
+    // T28:改回持锁的 compare-and-swap。T27 那版用 get_settings + update_settings
+    // 两步实现,读写之间不持锁,并发的两个变更会读到同一 revision 而双双成功 ——
+    // 被 `concurrent_settings_mutations_conflict_inside_the_settings_lock` 逮到。
+    crate::config::settings::update_settings_checked(
+        |existing| prepare_native_settings_update(existing, &params),
+        |existing, next| {
+            if existing.launch_on_startup == next.launch_on_startup {
+                return Ok(());
             }
-            return Err(error.into());
-        }
-    }
-
-    if let Err(error) = crate::config::settings::update_settings(next) {
-        if launch_changed {
-            if let Err(rollback_error) = auto_launch(existing.launch_on_startup) {
-                log::error!(
-                    "native bridge could not roll back auto-launch state: {rollback_error}"
-                );
+            if let Err(error) = auto_launch(next.launch_on_startup) {
+                if let Err(rollback_error) = auto_launch(existing.launch_on_startup) {
+                    log::error!(
+                        "native bridge could not restore auto-launch after failure: {rollback_error}"
+                    );
+                }
+                return Err(error.into());
             }
-        }
-        return Err(error.into());
-    }
-
-    Ok(response)
+            Ok(())
+        },
+        |existing, next| {
+            if existing.launch_on_startup != next.launch_on_startup {
+                if let Err(error) = auto_launch(existing.launch_on_startup) {
+                    log::error!("native bridge could not roll back auto-launch state: {error}");
+                }
+            }
+        },
+    )
 }
 
 #[cfg(test)]
@@ -336,12 +351,11 @@ fn set_native_settings_in_store_with_auto_launch<AutoLaunch>(
 where
     AutoLaunch: Fn(bool) -> Result<(), AppError> + Copy,
 {
-    // T27:`update_settings_in_store_with_hooks` 同样已被删除。测试版对着显式传入的
-    // store 与 path 走同一顺序,避免碰到真实设置文件。
-    let existing = {
-        let guard = store.read().unwrap_or_else(|e| e.into_inner());
-        guard.clone()
-    };
+    // T28:写锁持到整段「读 → 准备 → 副作用 → 落盘 → 提交」上,与生产路径
+    // (`config::settings::update_settings_checked`)同一语义,只是作用在注入的 store 上,
+    // 这样测试不会碰到真实设置文件。
+    let mut guard = store.write().unwrap_or_else(|e| e.into_inner());
+    let existing = guard.clone();
     let (next, response) = prepare_native_settings_update(&existing, &params)?;
 
     let launch_changed = existing.launch_on_startup != next.launch_on_startup;
@@ -353,7 +367,7 @@ where
     }
 
     let serialized = serde_json::to_vec_pretty(&next)
-        .map_err(|e| AppError::Unknown(format!("serialize settings: {e}")))?;
+        .map_err(|e| AppError::Message(format!("serialize settings: {e}")))?;
     if let Err(error) = crate::config::atomic_write(path, &serialized) {
         if launch_changed {
             let _ = auto_launch(existing.launch_on_startup);
@@ -361,11 +375,7 @@ where
         return Err(error.into());
     }
 
-    {
-        let mut guard = store.write().unwrap_or_else(|e| e.into_inner());
-        *guard = next;
-    }
-
+    *guard = next;
     Ok(response)
 }
 
@@ -1082,6 +1092,137 @@ async fn serve_client(app: AppHandle, stream: UnixStream) -> Result<(), std::io:
                 .map(SchemaEnvelopeV1::new);
                 write_app_result(&mut writer, id, result).await?;
             }
+            // ---- T28:本地路由 ----
+            //
+            // 两条与 tauri 那条路不同的契约,都是有意的:
+            // 1. 错误按原文回传,不走 write_app_result 的统一脱敏 ——
+            // 路由面板要把「非法 wire_api」「模式指向不存在的 provider」这类文案直接
+            // 显示给用户(设计:保存被拒时错误钉在窗口顶部),而 tauri 那条路本来也是
+            // e.to_string() 原样给前端。
+            // 2. **变更命令返回变更后的新状态**,不是 ()。tauri 那边返回 () 没问题,
+            //    但 bridge 的响应里 result 为 null 会被 Swift 侧判成畸形响应;而且
+            //    顺手返回新状态,面板就不用再回查一次,也没有读到旧值的窗口。
+            "listRouterProviders" => {
+                let state = app.state::<AppState>();
+                let result = crate::api::router::RouterApi::new(state.db.clone())
+                    .list_providers()
+                    .map(SchemaEnvelopeV1::new);
+                write_router_result(&mut writer, id, result).await?;
+            }
+            "upsertRouterProvider" => {
+                let input = match decode_params::<crate::api::router::RouterProviderInput>(
+                    request.params.as_ref(),
+                ) {
+                    Ok(input) => input,
+                    Err(()) => {
+                        write_error(&mut writer, id, "invalid_params", "Invalid router provider")
+                            .await?;
+                        continue;
+                    }
+                };
+                let state = app.state::<AppState>();
+                let api = crate::api::router::RouterApi::new(state.db.clone());
+                let result = api
+                    .upsert_provider(input)
+                    .and_then(|()| api.list_providers())
+                    .map(SchemaEnvelopeV1::new);
+                write_router_result(&mut writer, id, result).await?;
+            }
+            "deleteRouterProvider" => {
+                let params = match decode_params::<RouterProviderIdParams>(request.params.as_ref())
+                {
+                    Ok(params) => params,
+                    Err(()) => {
+                        write_error(&mut writer, id, "invalid_params", "Invalid provider id")
+                            .await?;
+                        continue;
+                    }
+                };
+                let state = app.state::<AppState>();
+                let api = crate::api::router::RouterApi::new(state.db.clone());
+                let result = api
+                    .delete_provider(&params.id)
+                    .and_then(|()| api.list_providers())
+                    .map(SchemaEnvelopeV1::new);
+                write_router_result(&mut writer, id, result).await?;
+            }
+            "setModelRoutes" => {
+                let params = match decode_params::<SetModelRoutesParams>(request.params.as_ref()) {
+                    Ok(params) => params,
+                    Err(()) => {
+                        write_error(&mut writer, id, "invalid_params", "Invalid model routes")
+                            .await?;
+                        continue;
+                    }
+                };
+                let state = app.state::<AppState>();
+                let api = crate::api::router::RouterApi::new(state.db.clone());
+                let result = api
+                    .set_model_routes(&params.provider_id, params.routes)
+                    .and_then(|()| api.list_model_routes())
+                    .map(SchemaEnvelopeV1::new);
+                write_router_result(&mut writer, id, result).await?;
+            }
+            "listModelRoutes" => {
+                let state = app.state::<AppState>();
+                let result = crate::api::router::RouterApi::new(state.db.clone())
+                    .list_model_routes()
+                    .map(SchemaEnvelopeV1::new);
+                write_router_result(&mut writer, id, result).await?;
+            }
+            "getRouterMode" => {
+                let state = app.state::<AppState>();
+                let result = crate::api::router::RouterApi::new(state.db.clone())
+                    .get_mode()
+                    .map(SchemaEnvelopeV1::new);
+                write_router_result(&mut writer, id, result).await?;
+            }
+            "setRouterMode" => {
+                let params = match decode_params::<SetRouterModeParams>(request.params.as_ref()) {
+                    Ok(params) => params,
+                    Err(()) => {
+                        write_error(&mut writer, id, "invalid_params", "Invalid router mode")
+                            .await?;
+                        continue;
+                    }
+                };
+                let state = app.state::<AppState>();
+                let api = crate::api::router::RouterApi::new(state.db.clone());
+                let result = api
+                    .set_mode(&params.mode)
+                    .and_then(|()| api.get_mode())
+                    .map(SchemaEnvelopeV1::new);
+                write_router_result(&mut writer, id, result).await?;
+            }
+            "inspectRouterPointer" => {
+                // 只读,绝不写指针 —— 与 api 层同一约定。
+                let view = crate::api::router::RouterApi::inspect_pointer();
+                write_serialized_result(&mut writer, id, &SchemaEnvelopeV1::new(view)).await?;
+            }
+            "enableRouterPointer" => {
+                // 会真的改用户磁盘上的 ~/.codex/config.toml。调用方必须是用户显式点击,
+                // 且点完要提示重启 Codex(决定 34)—— 这条约束在 UI 侧,bridge 只转发。
+                let state = app.state::<AppState>();
+                let result = crate::api::router::RouterApi::new(state.db.clone())
+                    .enable_pointer()
+                    .map(|()| SchemaEnvelopeV1::new(crate::api::router::RouterApi::inspect_pointer()));
+                write_router_result(&mut writer, id, result).await?;
+            }
+            "recentRouterAttempts" => {
+                let params = match decode_params::<DashboardRangeParams>(request.params.as_ref()) {
+                    Ok(params) => params,
+                    Err(()) => {
+                        write_error(&mut writer, id, "invalid_params", "Invalid attempt range")
+                            .await?;
+                        continue;
+                    }
+                };
+                let state = app.state::<AppState>();
+                let result = crate::api::router::RouterApi::new(state.db.clone())
+                    .recent_attempts(params.start_at, params.end_at)
+                    .map(SchemaEnvelopeV1::new);
+                write_router_result(&mut writer, id, result).await?;
+            }
             "shutdown" => {
                 let destination = match shutdown_destination(request.params.as_ref()) {
                     Ok(destination) => destination,
@@ -1188,11 +1329,53 @@ fn capabilities_result() -> Value {
             "getModelDashboard",
             "getAgentBreakdown",
             "getUsageEvents",
+            "listRouterProviders",
+            "upsertRouterProvider",
+            "deleteRouterProvider",
+            "setModelRoutes",
+            "listModelRoutes",
+            "getRouterMode",
+            "setRouterMode",
+            "inspectRouterPointer",
+            "enableRouterPointer",
+            "recentRouterAttempts",
             "shutdown"
         ],
-        "mutations": ["setNativeSettings"],
-        "shutdownDestinations": ["usage", "settings"]
+        "mutations": [
+            "setNativeSettings",
+            "upsertRouterProvider",
+            "deleteRouterProvider",
+            "setModelRoutes",
+            "setRouterMode",
+            "enableRouterPointer"
+        ],
+        // T28:"settings" 暂不登记 —— MainWindowDestination::GeneralSettings 已从 main
+        // 删除,新设置界面写出来之前这个交接目的地无处可去(分发臂仍会安全地收下并
+        // 退化为「不指定目的地」,只是不再对外声称支持)。
+        "shutdownDestinations": ["usage"]
     })
+}
+
+/// T28:路由命令的结果写出。与 `write_app_result` 的区别是**不脱敏**:
+/// `AppError` 的原文直接回给客户端。路由的错误是用户要看懂并据以修改配置的
+/// (非法 wire_api、模式指向不存在的 provider),而 `api::router` 已经是脱敏面 ——
+/// tauri 那条路同样是 `e.to_string()` 原样给前端,两边保持一致。
+async fn write_router_result<W, T>(
+    writer: &mut W,
+    id: String,
+    result: Result<T, AppError>,
+) -> Result<(), std::io::Error>
+where
+    W: AsyncWrite + Unpin,
+    T: Serialize,
+{
+    match result {
+        Ok(value) => write_serialized_result(writer, id, &value).await,
+        Err(error) => {
+            log::warn!("native bridge router request failed: {error}");
+            write_error(writer, id, "router_failed", &error.to_string()).await
+        }
+    }
 }
 
 async fn write_app_result<W, T>(
@@ -1248,7 +1431,8 @@ async fn write_error<W>(
     writer: &mut W,
     id: String,
     code: &'static str,
-    message: &'static str,
+    // T28:放宽到 &str —— 路由命令要回传 AppError 原文,不是字面量。
+    message: &str,
 ) -> Result<(), std::io::Error>
 where
     W: AsyncWrite + Unpin,
@@ -1261,7 +1445,7 @@ where
             result: None,
             error: Some(BridgeError {
                 code,
-                message,
+                message: message.to_owned(),
                 data: None,
             }),
         },
@@ -1285,7 +1469,7 @@ where
             result: None,
             error: Some(BridgeError {
                 code: error.code,
-                message: error.message,
+                message: error.message.to_owned(),
                 data: error.data,
             }),
         },
@@ -1366,7 +1550,17 @@ mod tests {
     #[test]
     fn capabilities_advertise_versioned_settings_mutation() {
         let capabilities = capabilities_result();
-        assert_eq!(capabilities["mutations"], json!(["setNativeSettings"]));
+        assert_eq!(
+            capabilities["mutations"],
+            json!([
+                "setNativeSettings",
+                "upsertRouterProvider",
+                "deleteRouterProvider",
+                "setModelRoutes",
+                "setRouterMode",
+                "enableRouterPointer"
+            ])
+        );
         assert_eq!(hello_result()["protocolVersion"], PROTOCOL_VERSION);
         assert_eq!(hello_result()["readOnly"], false);
         assert_eq!(
@@ -1788,13 +1982,23 @@ mod tests {
 
     #[test]
     fn shutdown_destination_is_typed_and_rejects_unknown_fields() {
+        // T27/T28:`MainWindowDestination::GeneralSettings` 已从 main 删除,
+        // 「settings」交接因此退化为「打开主窗口但不指定目的地」。参数仍被严格解析
+        // (未知字段照样拒),只是解析出来映射到 None —— 这里断言的正是这条退化,
+        // 不是把断言放水。新设置界面写出来后若恢复目的地,这个测试要跟着改回。
         let settings = json!({"destination": "settings"});
-        assert_eq!(
-            shutdown_destination(Some(&settings)).unwrap(),
-            Some(crate::tray_popover::MainWindowDestination::GeneralSettings)
-        );
+        assert_eq!(shutdown_destination(Some(&settings)).unwrap(), None);
         assert!(
             shutdown_destination(Some(&json!({"destination": "settings", "token": "no"}))).is_err()
+        );
+
+        // usage 目的地不受影响,仍然是有类型的
+        let usage = json!({"destination": "usage"});
+        assert_eq!(
+            shutdown_destination(Some(&usage)).unwrap(),
+            Some(crate::tray_popover::MainWindowDestination::Usage {
+                agent_module_id: None
+            })
         );
     }
 
@@ -1856,6 +2060,109 @@ mod tests {
         assert_eq!(value["protocolVersion"], 1);
         assert_eq!(value["schemaVersion"], 1);
         assert_eq!(value["snapshot"]["generatedAt"], 123);
+    }
+
+    #[test]
+    fn router_contract_fixture_matches_the_real_rust_views() {
+        use crate::api::router::{
+            ModelRouteView, PointerStateView, RouterProviderView, RouterUsageSummaryView,
+        };
+
+        // 与 Swift 侧 RouterContractTests 共用同一份 fixture:那边断言能解回 DTO,
+        // 这边断言真实视图序列化出来就是它。两边都不改这个文件,才说明协议没脱节。
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../native/Tests/UsageCoreTests/Fixtures/router-contract-v1.json"
+        ))
+        .unwrap();
+
+        let providers = vec![
+            RouterProviderView {
+                id: "official".into(),
+                display_name: "官方 ChatGPT".into(),
+                base_url: "https://chatgpt.com/backend-api".into(),
+                wire_api: "responses".into(),
+                priority: 10,
+                enabled: true,
+                auth_kind: "chatgpt_oauth".into(),
+                credential_key_id: None,
+            },
+            RouterProviderView {
+                id: "sol-relay".into(),
+                display_name: "Sol 中转".into(),
+                base_url: "https://api.sol-relay.dev/v1".into(),
+                wire_api: "responses".into(),
+                priority: 20,
+                enabled: true,
+                auth_kind: "bearer_key".into(),
+                credential_key_id: Some("keychain-entry-1".into()),
+            },
+            RouterProviderView {
+                id: "local-llama".into(),
+                display_name: "本机 llama.cpp".into(),
+                base_url: "http://127.0.0.1:8080/v1".into(),
+                wire_api: "chat_completions".into(),
+                priority: 30,
+                enabled: false,
+                auth_kind: "none".into(),
+                credential_key_id: None,
+            },
+        ];
+        assert_eq!(
+            serde_json::to_value(SchemaEnvelopeV1::new(providers)).unwrap(),
+            fixture["providers"],
+        );
+
+        let routes = vec![
+            ModelRouteView {
+                provider_id: "official".into(),
+                logical_model: "gpt-5.6".into(),
+                upstream_model: "gpt-5.6".into(),
+            },
+            ModelRouteView {
+                provider_id: "sol-relay".into(),
+                logical_model: "gpt-5.6-sol".into(),
+                upstream_model: "sol-preview-1120".into(),
+            },
+            ModelRouteView {
+                provider_id: "local-llama".into(),
+                logical_model: "gpt-5.6".into(),
+                upstream_model: "qwen3-coder-30b".into(),
+            },
+        ];
+        assert_eq!(
+            serde_json::to_value(SchemaEnvelopeV1::new(routes)).unwrap(),
+            fixture["routes"],
+        );
+
+        let pointer = PointerStateView {
+            state: "not_ours".into(),
+            current: Some("openai".into()),
+        };
+        assert_eq!(
+            serde_json::to_value(SchemaEnvelopeV1::new(pointer)).unwrap(),
+            fixture["pointer"],
+        );
+
+        let attempts = vec![
+            RouterUsageSummaryView {
+                provider_id: "official".into(),
+                attempts: 412,
+                failures: 7,
+                input_tokens: 1_204_880,
+                output_tokens: 318_402,
+            },
+            RouterUsageSummaryView {
+                provider_id: "sol-relay".into(),
+                attempts: 168,
+                failures: 2,
+                input_tokens: 486_110,
+                output_tokens: 140_255,
+            },
+        ];
+        assert_eq!(
+            serde_json::to_value(SchemaEnvelopeV1::new(attempts)).unwrap(),
+            fixture["attempts"],
+        );
     }
 
     #[test]

@@ -1,0 +1,83 @@
+{
+  "providers": {
+    "schemaVersion": 1,
+    "data": [
+      {
+        "id": "official",
+        "displayName": "官方 ChatGPT",
+        "baseUrl": "https://chatgpt.com/backend-api",
+        "wireApi": "responses",
+        "priority": 10,
+        "enabled": true,
+        "authKind": "chatgpt_oauth",
+        "credentialKeyId": null
+      },
+      {
+        "id": "sol-relay",
+        "displayName": "Sol 中转",
+        "baseUrl": "https://api.sol-relay.dev/v1",
+        "wireApi": "responses",
+        "priority": 20,
+        "enabled": true,
+        "authKind": "bearer_key",
+        "credentialKeyId": "keychain-entry-1"
+      },
+      {
+        "id": "local-llama",
+        "displayName": "本机 llama.cpp",
+        "baseUrl": "http://127.0.0.1:8080/v1",
+        "wireApi": "chat_completions",
+        "priority": 30,
+        "enabled": false,
+        "authKind": "none",
+        "credentialKeyId": null
+      }
+    ]
+  },
+  "routes": {
+    "schemaVersion": 1,
+    "data": [
+      {
+        "providerId": "official",
+        "logicalModel": "gpt-5.6",
+        "upstreamModel": "gpt-5.6"
+      },
+      {
+        "providerId": "sol-relay",
+        "logicalModel": "gpt-5.6-sol",
+        "upstreamModel": "sol-preview-1120"
+      },
+      {
+        "providerId": "local-llama",
+        "logicalModel": "gpt-5.6",
+        "upstreamModel": "qwen3-coder-30b"
+      }
+    ]
+  },
+  "pointer": {
+    "schemaVersion": 1,
+    "data": {
+      "state": "not_ours",
+      "current": "openai"
+    }
+  },
+  "attempts": {
+    "schemaVersion": 1,
+    "data": [
+      {
+        "providerId": "official",
+        "attempts": 412,
+        "failures": 7,
+        "inputTokens": 1204880,
+        "outputTokens": 318402
+      },
+      {
+        "providerId": "sol-relay",
+        "attempts": 168,
+        "failures": 2,
+        "inputTokens": 486110,
+        "outputTokens": 140255
+      }
+    ]
+  }
+}

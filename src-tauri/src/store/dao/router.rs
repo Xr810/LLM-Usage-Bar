@@ -197,6 +197,32 @@ impl Database {
         Ok(routes)
     }
 
+    /// 供设置界面用:列出**全部**映射,含已停用 provider 的。
+    ///
+    /// 与上面的 `list_model_routes` 是两个用途,别合并:那个是路由决策路径,按单个
+    /// 逻辑模型查、且只要 `enabled = 1`;这个是编辑界面的读路径,要把用户配过的东西
+    /// 原样显示出来(面板上「已停用」的那家照样列出它的映射)。
+    pub fn list_all_model_routes(&self) -> Result<Vec<ModelRoute>, AppError> {
+        let conn = lock_conn!(self.conn);
+        let mut statement = conn.prepare(
+            "SELECT map.provider_id, map.logical_model, map.upstream_model
+             FROM router_model_map map
+             JOIN router_providers provider ON provider.id = map.provider_id
+             ORDER BY provider.priority ASC, provider.id ASC, map.logical_model ASC",
+        )?;
+        let routes = statement
+            .query_map([], |row| {
+                Ok(ModelRoute {
+                    provider_id: row.get(0)?,
+                    logical_model: row.get(1)?,
+                    upstream_model: row.get(2)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(AppError::from)?;
+        Ok(routes)
+    }
+
     pub fn upsert_router_provider(&self, p: &RouterProvider) -> Result<(), AppError> {
         let conn = lock_conn!(self.conn);
         let now = now_timestamp()?;
@@ -429,6 +455,43 @@ mod tests {
                 route("a", "gpt-5.6-sol", "sol"),
             ],
         );
+    }
+
+    #[test]
+    fn list_all_model_routes_keeps_disabled_providers_and_orders_by_priority() {
+        let db = Database::memory().unwrap();
+        db.upsert_router_provider(&provider("a", 20, true)).unwrap();
+        db.upsert_router_provider(&provider("b", 10, true)).unwrap();
+        db.upsert_router_provider(&provider("c", 5, false)).unwrap();
+        db.upsert_model_route(&route("a", "gpt-5.6-sol", "sol"))
+            .unwrap();
+        db.upsert_model_route(&route("a", "gpt-5.6", "a-56"))
+            .unwrap();
+        db.upsert_model_route(&route("b", "gpt-5.6-sol", "gpt-5.6-sol"))
+            .unwrap();
+        db.upsert_model_route(&route("c", "gpt-5.6-sol", "local"))
+            .unwrap();
+
+        let routes = db.list_all_model_routes().unwrap();
+
+        // 与 list_model_routes 的关键差别:c 已停用,但编辑界面照样要显示它的映射。
+        // 排序按 provider.priority 升序,组内按 logical_model。
+        assert_eq!(
+            routes,
+            vec![
+                route("c", "gpt-5.6-sol", "local"),
+                route("b", "gpt-5.6-sol", "gpt-5.6-sol"),
+                route("a", "gpt-5.6", "a-56"),
+                route("a", "gpt-5.6-sol", "sol"),
+            ],
+        );
+    }
+
+    #[test]
+    fn list_all_model_routes_is_empty_when_nothing_configured() {
+        let db = Database::memory().unwrap();
+
+        assert_eq!(db.list_all_model_routes().unwrap(), Vec::new());
     }
 
     #[test]

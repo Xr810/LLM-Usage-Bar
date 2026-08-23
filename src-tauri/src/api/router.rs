@@ -64,6 +64,16 @@ pub struct ModelRouteInput {
 }
 
 /// 指针当前状态,供界面显示「已接管 / 未接管 / 读不到」。
+/// 一条已存在的映射(读侧)。写侧是 `ModelRouteInput`,不带 provider —— 那边的语义是
+/// 「给这个 provider 全量替换」;读侧一次返回所有 provider 的,所以必须带 `provider_id`。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelRouteView {
+    pub provider_id: String,
+    pub logical_model: String,
+    pub upstream_model: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PointerStateView {
@@ -270,6 +280,23 @@ impl RouterApi {
             })?;
         }
         Ok(())
+    }
+
+    /// 列出全部映射(含已停用 provider 的),供设置界面渲染「模型映射」那一屏。
+    ///
+    /// T28 补:原来的九个命令里 `set_model_routes` 只能写、没有任何一条能读回来,
+    /// 面板因此无法显示用户已配好的映射。按 provider 优先级排序,与「尝试顺序」一致。
+    pub fn list_model_routes(&self) -> Result<Vec<ModelRouteView>, AppError> {
+        Ok(self
+            .db
+            .list_all_model_routes()?
+            .into_iter()
+            .map(|route| ModelRouteView {
+                provider_id: route.provider_id,
+                logical_model: route.logical_model,
+                upstream_model: route.upstream_model,
+            })
+            .collect())
     }
 
     /// 读 `router.mode`。与 T6 转发层的读侧同样宽容:读不到或解析不了都当 `"auto"`,

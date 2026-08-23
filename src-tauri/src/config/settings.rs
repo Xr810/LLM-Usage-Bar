@@ -905,6 +905,45 @@ where
     Ok(())
 }
 
+/// 在设置写锁内完成「读 → 准备 → 副作用 → 落盘 → 提交」,提供 compare-and-swap 语义。
+///
+/// T28 加回:native bridge 的客户端带着 `expectedRevision` 来,必须能可靠地拒绝过期写入。
+/// 用 `get_settings()` + `update_settings()` 两步做不到 —— 两次调用之间不持锁,并发的
+/// 两个变更会读到同一个 revision 而**双双成功**,这正是
+/// `native_bridge::tests::concurrent_settings_mutations_conflict_inside_the_settings_lock`
+/// 盯着的场景。
+///
+/// `commit` 在落盘**之前**跑,用于有副作用的开关(如开机自启):它返回 Err 就整体中止;
+/// 落盘失败则调 `rollback` 把副作用退回去。
+///
+/// **有唯一调用方(native bridge),不是死代码** —— 精简时请连同上面那条测试一起看。
+pub fn update_settings_checked<Prepare, Commit, Rollback, T, E>(
+    prepare: Prepare,
+    commit: Commit,
+    rollback: Rollback,
+) -> Result<T, E>
+where
+    Prepare: FnOnce(&AppSettings) -> Result<(AppSettings, T), E>,
+    Commit: FnOnce(&AppSettings, &AppSettings) -> Result<(), E>,
+    Rollback: FnOnce(&AppSettings, &AppSettings),
+    E: From<AppError>,
+{
+    let mut guard = settings_store().write().unwrap_or_else(|e| {
+        log::warn!("设置锁已毒化，使用恢复值: {e}");
+        e.into_inner()
+    });
+    let existing = guard.clone();
+    let (mut next, output) = prepare(&existing)?;
+    commit(&existing, &next)?;
+    next.normalize_paths();
+    if let Err(error) = save_settings_file(&next) {
+        rollback(&existing, &next);
+        return Err(E::from(error));
+    }
+    *guard = next;
+    Ok(output)
+}
+
 /// 从文件重新加载设置到内存缓存
 /// 用于导入配置等场景，确保内存缓存与文件同步
 pub fn reload_settings() -> Result<(), AppError> {

@@ -869,6 +869,21 @@ pub fn run() {
                 log::warn!("记录 router 指针缺口标记失败: {error}");
             }
 
+            // T28:native bridge 只在 bridge-only 模式下起
+            // (env `LLM_USAGE_BAR_NATIVE_BRIDGE_ONLY`)。它是 SwiftUI 壳与 Rust 核心之间
+            // 唯一的传输通道,而那个壳目前只在该模式下运行 —— 给一个尚无 UI 的功能常驻
+            // 开一个 Unix socket,只会白白增加本地攻击面和空闲功耗(§11 那条线)。
+            // 等 Swift 壳成为默认外壳时,这道闸门才该拿掉。
+            //
+            // 不接 `stop()`:退出路径有 #3998 的死锁史,而残留 socket 能自愈 ——
+            // `prepare_socket_path` 在下次启动时会删掉无人监听的旧文件,若仍有人监听
+            // 则报错中止(说明另一个实例在跑,那本来就该拦)。
+            if crate::native_bridge::bridge_only() {
+                if let Err(error) = crate::native_bridge::start(app.handle().clone()) {
+                    log::error!("[BRIDGE] native bridge 启动失败: {error}");
+                }
+            }
+
             // 1.5. 自动导入 live 配置 + seed 官方预设供应商（Claude / Codex / Gemini）
             //
             // 先 import 后 seed 是有意为之：先把用户手动配置的 settings.json / auth.json / .env
@@ -1556,6 +1571,7 @@ pub fn run() {
             commands::upsert_router_provider,
             commands::delete_router_provider,
             commands::set_model_routes,
+            commands::list_model_routes,
             commands::get_router_mode,
             commands::set_router_mode,
             commands::inspect_router_pointer,

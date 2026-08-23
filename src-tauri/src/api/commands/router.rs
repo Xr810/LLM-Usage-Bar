@@ -11,7 +11,7 @@ use crate::api::router::RouterApi;
 use crate::app_state::AppState;
 
 pub use crate::api::router::{
-    ModelRouteInput, PointerStateView, RouterProviderInput, RouterProviderView,
+    ModelRouteInput, ModelRouteView, PointerStateView, RouterProviderInput, RouterProviderView,
     RouterUsageSummaryView, DEFAULT_ROUTER_PORT, POINTER_GAP_KEY,
 };
 
@@ -55,6 +55,16 @@ pub async fn set_model_routes(
 ) -> Result<(), String> {
     RouterApi::new(state.db.clone())
         .set_model_routes(&provider_id, routes)
+        .map_err(|e| e.to_string())
+}
+
+/// 列出全部模型映射(含已停用 provider 的),供设置界面渲染。
+#[tauri::command]
+pub async fn list_model_routes(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<ModelRouteView>, String> {
+    RouterApi::new(state.db.clone())
+        .list_model_routes()
         .map_err(|e| e.to_string())
 }
 
