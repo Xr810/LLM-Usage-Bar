@@ -1,0 +1,297 @@
+<title>路由面板主题</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+:root{
+  --ground:#e9e9ec; --panel:#fbfbfc; --ink:#16171a; --ink2:#5c6069; --ink3:#8a8f99;
+  --rule:rgba(0,0,0,.10); --tag:#2b2d33; --tagink:#f4f4f6; --link:#0a66d0;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --ground:#17181b; --panel:#1f2024; --ink:#eceef2; --ink2:#a2a7b2; --ink3:#71767f;
+    --rule:rgba(255,255,255,.12); --tag:#e6e7ea; --tagink:#17181b; --link:#6aa9ff;
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#17181b; --panel:#1f2024; --ink:#eceef2; --ink2:#a2a7b2; --ink3:#71767f;
+  --rule:rgba(255,255,255,.12); --tag:#e6e7ea; --tagink:#17181b; --link:#6aa9ff;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);
+  font:15px/1.65 -apple-system,"SF Pro Text","PingFang SC","Helvetica Neue",sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1000px;margin:0 auto;padding:56px 28px 96px}
+.eyebrow{font:500 11px/1 "IBM Plex Mono",ui-monospace,monospace;letter-spacing:.14em;text-transform:uppercase;color:var(--ink3);margin:0 0 14px}
+h1{font:600 30px/1.25 -apple-system,"PingFang SC",sans-serif;letter-spacing:-.015em;margin:0 0 16px;text-wrap:balance}
+h2{font:600 20px/1.3 -apple-system,"PingFang SC",sans-serif;letter-spacing:-.012em;margin:0 0 8px}
+.lede{max-width:64ch;color:var(--ink2);margin:0 0 10px}
+.lede b{color:var(--ink);font-weight:600}
+.mono{font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace}
+hr{border:0;border-top:1px solid var(--rule);margin:46px 0}
+.spec{margin:0 0 22px}
+.spec-hd{display:flex;align-items:baseline;gap:12px;margin:0 0 6px;flex-wrap:wrap}
+.spec-id{font:600 11px/1 "IBM Plex Mono",monospace;background:var(--tag);color:var(--tagink);padding:5px 8px;border-radius:5px}
+.spec-name{font:600 19px/1.3 -apple-system,"PingFang SC",sans-serif;letter-spacing:-.01em}
+.spec-sub{color:var(--ink3);font-size:13px}
+.spec-note{max-width:66ch;color:var(--ink2);font-size:14px;margin:12px 0 20px}
+.stage{overflow-x:auto;padding:22px;border-radius:14px;background:var(--panel);border:1px solid var(--rule)}
+.cost{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px;margin:18px 0 0}
+.cost div{border-left:2px solid var(--rule);padding:2px 0 2px 12px}
+.cost h4{margin:0 0 3px;font:600 11px/1 "IBM Plex Mono",monospace;letter-spacing:.09em;text-transform:uppercase;color:var(--ink3)}
+.cost p{margin:0;font-size:13.5px;color:var(--ink2)}
+.swrow{display:flex;gap:16px;overflow-x:auto;padding:4px 0 6px}
+
+/* ============ specimen: themed macOS pane ============ */
+.thm{
+  --tint:#eceef4; --grp:rgba(255,255,255,.72); --hair:rgba(0,0,0,.07);
+  --t1:#1b1c20; --t2:rgba(27,28,32,.52); --t3:rgba(27,28,32,.34);
+  --sel:rgba(0,0,0,.055); --tb:rgba(255,255,255,.42); --acc:#3f6ae0;
+  --btn:rgba(255,255,255,.8); --btnl:rgba(0,0,0,.10);
+}
+.thm-sage{--tint:#e9eeea; --grp:rgba(255,255,255,.7); --t1:#1a201c; --t2:rgba(26,32,28,.52); --t3:rgba(26,32,28,.34); --acc:#2f7d63; --tb:rgba(255,255,255,.4)}
+.thm-ink{--tint:#191b21; --grp:rgba(255,255,255,.055); --hair:rgba(255,255,255,.08);
+  --t1:#eaecf2; --t2:rgba(234,236,242,.55); --t3:rgba(234,236,242,.34);
+  --sel:rgba(255,255,255,.075); --tb:rgba(255,255,255,.05); --acc:#7f9cf5; --btn:rgba(255,255,255,.09); --btnl:rgba(255,255,255,.12)}
+
+.win{width:820px;border-radius:12px;overflow:hidden;position:relative;
+  box-shadow:0 0 0 .5px rgba(0,0,0,.18),0 16px 44px rgba(0,0,0,.22),0 3px 10px rgba(0,0,0,.10);
+  font:13px/1.45 -apple-system,"SF Pro Text","PingFang SC",sans-serif;color:var(--t1);background:var(--tint)}
+.win.glass{background:transparent}
+.wall{position:absolute;inset:0;background:linear-gradient(158deg,#d8bd92 0%,#b58c62 22%,#8a7f70 44%,#5d7180 68%,#31424f 100%)}
+.wall::after{content:"";position:absolute;inset:0;background:
+  radial-gradient(58% 46% at 20% 14%,rgba(255,255,255,.46),transparent 72%),
+  radial-gradient(46% 38% at 84% 82%,rgba(0,0,0,.26),transparent 70%)}
+.glasslayer{position:relative;z-index:1;backdrop-filter:blur(52px) saturate(190%);-webkit-backdrop-filter:blur(52px) saturate(190%);background:rgba(236,238,244,.66)}
+.solid{position:relative;z-index:1;background:var(--tint)}
+
+.tb{display:flex;align-items:center;gap:16px;height:54px;padding:0 14px;background:var(--tb);border-bottom:.5px solid var(--hair)}
+.lights{display:flex;gap:8px}.lights i{width:12px;height:12px;border-radius:50%;display:block}
+.lights i:nth-child(1){background:#ff5f57}.lights i:nth-child(2){background:#febc2e}.lights i:nth-child(3){background:#28c840}
+.tabs{display:flex;gap:2px}
+.tab{display:flex;flex-direction:column;align-items:center;gap:3px;padding:5px 12px 4px;border-radius:7px;min-width:58px}
+.tab.on{background:var(--sel)}
+.tab svg{opacity:.52}
+.tab.on svg{opacity:1}
+.tab span{font-size:10.5px;color:var(--t2)}
+.tab.on span{color:var(--acc);font-weight:600}
+.tbr{margin-left:auto;display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--t2);background:var(--sel);padding:5px 10px;border-radius:20px}
+.live{width:7px;height:7px;border-radius:50%;background:#28cd41;flex:none}
+
+.body{padding:22px 24px 0}
+.ghd{font-size:12.5px;font-weight:600;color:var(--t2);margin:0 0 8px;padding-left:3px;letter-spacing:.005em}
+.ghd:not(:first-child){margin-top:24px}
+.gsub{font-size:11.5px;color:var(--t3);margin:-4px 0 10px;padding-left:3px;max-width:58ch;line-height:1.5}
+.grp{background:var(--grp);border-radius:12px;overflow:hidden;box-shadow:0 0 0 .5px var(--hair)}
+.row{display:flex;align-items:center;gap:11px;padding:11px 15px;border-top:.5px solid var(--hair)}
+.row:first-child{border-top:0}
+.row .lab{font-size:13.5px;font-weight:500}
+.row .sub{font-size:11.5px;color:var(--t2);margin-top:2px}
+.row .meta{font-size:11.5px;color:var(--t3)}
+.row .rt{margin-left:auto;display:flex;align-items:center;gap:12px}
+.dot{width:8px;height:8px;border-radius:50%;flex:none}
+.map{display:flex;align-items:center;gap:12px;padding:9px 15px 9px 34px;border-top:.5px solid var(--hair);font-size:12.5px}
+.map .lg{width:132px;color:var(--t1)}
+.map .up{color:var(--t2)}
+.map .tail{margin-left:auto;font-size:11.5px;color:var(--t3)}
+.map.none .lg,.map.none .up{color:var(--t3)}
+.ok{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;color:var(--t2)}
+.ok .g{width:13px;height:13px;border-radius:50%;background:#28cd41;display:grid;place-items:center;font-size:9px;color:#fff;flex:none}
+.sw{width:38px;height:22px;border-radius:11px;background:#30c94e;position:relative;flex:none;box-shadow:inset 0 0 0 .5px rgba(0,0,0,.06)}
+.sw::after{content:"";position:absolute;top:2px;left:18px;width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.25)}
+.sw.off{background:var(--btnl)}.sw.off::after{left:2px}
+.pop{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;padding:4px 9px;border-radius:7px;background:var(--btn);box-shadow:0 0 0 .5px var(--btnl)}
+.chipc{width:13px;height:13px;border-radius:4px;flex:none}
+.foot{display:flex;align-items:center;gap:9px;margin-top:20px;padding:11px 15px;border-top:.5px solid var(--hair);background:var(--tb)}
+.foot .sp{margin-left:auto;display:flex;align-items:center;gap:9px}
+.btn{font-size:12.5px;padding:5px 11px;border-radius:7px;background:var(--btn);box-shadow:0 0 0 .5px var(--btnl);color:var(--t1)}
+.btn.pri{background:var(--acc);color:#fff;font-weight:500;box-shadow:none}
+.kc{font:500 10.5px/1 "IBM Plex Mono",monospace;padding:3px 5px;border-radius:4px;background:var(--btnl);color:var(--t2);margin-left:5px}
+.cnt{font-size:11.5px;color:var(--t3)}
+
+/* mini swatch specimen */
+.mini{width:330px;flex:none;border-radius:11px;overflow:hidden;background:var(--tint);
+  box-shadow:0 0 0 .5px rgba(0,0,0,.14),0 6px 18px rgba(0,0,0,.12);
+  font:13px/1.45 -apple-system,"SF Pro Text","PingFang SC",sans-serif;color:var(--t1)}
+.mini .mh{display:flex;align-items:center;gap:7px;padding:11px 13px;background:var(--tb);border-bottom:.5px solid var(--hair);font-size:11.5px;color:var(--t2)}
+.mini .mb{padding:13px}
+.mini .grp{border-radius:9px}
+.mini .row{padding:9px 12px;gap:9px}
+.mini .row .lab{font-size:12.5px}
+.mini .map{padding:8px 12px 8px 27px;font-size:11.5px}
+.mini .map .lg{width:96px}
+.mlabel{display:flex;align-items:baseline;gap:8px;margin:10px 2px 0}
+.mlabel b{font-size:13.5px;font-weight:600}
+.mlabel span{font-size:11.5px;color:var(--ink3)}
+:focus-visible{outline:2px solid var(--link);outline-offset:2px}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+
+<div class="wrap">
+<p class="eyebrow">LLM Usage Bar · 本地路由</p>
+<h1>材质开关,加三套主题</h1>
+<p class="lede">按 C 做,但半透明是<b>可关的</b>;关掉之后不是白底,而是落到一套选定的主题上——Raycast 那个路子。</p>
+<p class="lede">这么一改,原本"用户开了『降低透明度』就退化成一块纯灰"的无障碍分支,变成了产品功能:那个系统开关现在<b>自动切到不透明主题</b>,而不是把界面降级。</p>
+
+<hr>
+
+<section class="spec">
+<div class="spec-hd"><span class="spec-id">C′</span><span class="spec-name">半透明开启</span><span class="spec-sub">整窗一层 material,底图是你的桌面</span></div>
+<p class="spec-note">行内结构换成了 Raycast 设置窗那套:分组表单行、组内细分隔线、分区标题上方留大间距、次要文字压到 52%。行高没有刻意抬高——透气来自文字对比和右对齐的元数据,不是把行撑开。底部是常驻操作条,不是浮在内容里的按钮。</p>
+<div class="stage">
+<div class="thm">
+<div class="win glass">
+  <div class="wall"></div>
+  <div class="glasslayer">
+    <div class="tb">
+      <div class="lights"><i></i><i></i><i></i></div>
+      <div class="tabs">
+        <div class="tab"><svg width="17" height="17" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="3" stroke="currentColor" stroke-width="1.4"/><path d="M8 1.7v1.7M8 12.6v1.7M1.7 8h1.7M12.6 8h1.7M3.6 3.6l1.2 1.2M11.2 11.2l1.2 1.2M12.4 3.6l-1.2 1.2M4.8 11.2l-1.2 1.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg><span>通用</span></div>
+        <div class="tab"><svg width="17" height="17" viewBox="0 0 16 16"><rect x="2.5" y="2.8" width="11" height="3" rx="1" fill="currentColor"/><rect x="2.5" y="6.9" width="11" height="3" rx="1" fill="currentColor" opacity=".7"/><rect x="2.5" y="11" width="11" height="2.4" rx="1" fill="currentColor" opacity=".45"/></svg><span>Providers</span></div>
+        <div class="tab on"><svg width="17" height="17" viewBox="0 0 16 16" fill="none" style="color:var(--acc)"><path d="M4.2 13.2V6.4c0-1.5 1.2-2.7 2.7-2.7h5.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M10.4 1.8 12.9 3.7 10.4 5.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="4.2" cy="13.2" r="1.7" fill="currentColor"/></svg><span>路由</span></div>
+        <div class="tab"><svg width="17" height="17" viewBox="0 0 16 16" fill="none"><path d="M4.4 2.4v4a3.2 3.2 0 0 0 6.4 0v-4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M7.6 9.5v1.7a2.5 2.5 0 0 0 5 0v-.8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><circle cx="12.6" cy="9.4" r="1.4" fill="currentColor"/></svg><span>诊断</span></div>
+      </div>
+      <div class="tbr"><span class="live"></span>路由运行中 · <span class="mono">127.0.0.1:8787</span></div>
+    </div>
+    <div class="body">
+      <div class="ghd">模型映射</div>
+      <div class="gsub">Codex 发来的模型名 → 每家实际认的上游 ID。先试谁、失败换谁在「模式与分账」里定。</div>
+      <div class="grp">
+        <div class="row">
+          <span class="dot" style="background:#5856d6"></span>
+          <div><div class="lab">官方 ChatGPT</div><div class="sub mono">chatgpt.com/backend-api · chatgpt_oauth</div></div>
+          <span class="rt"><span class="ok"><span class="g">✓</span>已登录</span></span>
+        </div>
+        <div class="map"><span class="lg mono">gpt-5.6</span><span class="up mono">gpt-5.6</span></div>
+        <div class="map none"><span class="lg mono">gpt-5.6-sol</span><span class="up">这家没有此模型</span><span class="tail">请求会试下一家</span></div>
+        <div class="row">
+          <span class="dot" style="background:#ff9500"></span>
+          <div><div class="lab">Sol 中转</div><div class="sub mono">api.sol-relay.dev/v1 · bearer_key</div></div>
+          <span class="rt"><span class="ok"><span class="g">✓</span>凭据已绑定</span></span>
+        </div>
+        <div class="map"><span class="lg mono">gpt-5.6</span><span class="up mono">sol-gpt-5.6-1120</span></div>
+        <div class="map"><span class="lg mono">gpt-5.6-sol</span><span class="up mono">sol-preview-1120</span></div>
+      </div>
+
+    </div>
+    <div class="foot">
+      <span class="cnt">3 家 · 5 条映射</span>
+      <span class="sp">
+        <span class="btn">添加 Provider<span class="kc">⌘N</span></span>
+        <span class="btn">拉取模型清单</span>
+        <span class="btn pri">保存映射<span class="kc" style="background:rgba(255,255,255,.22);color:rgba(255,255,255,.9)">⌘S</span></span>
+      </span>
+    </div>
+  </div>
+</div>
+</div>
+</div>
+<div class="cost">
+  <div><h4>颜色从哪来</h4><p>四个 tab 图标一律灰,只有选中那个上强调色。<b>饱和色只留给 provider 身份点</b>——Raycast 侧栏就是这么分的:设置分区灰,实体才有颜色。</p></div>
+  <div><h4>不再靠行高</h4><p>次要文字压到 52%、元数据右对齐、URL 与协议降到第二行。信息一条没少,但视线只需要扫过第一列。</p></div>
+  <div><h4>底图会变</h4><p>真机上材质采样的是你自己的桌面。这也正是要有开关的原因。</p></div>
+</div>
+</section>
+
+<hr>
+
+<section class="spec">
+<div class="spec-hd"><span class="spec-id">主题</span><span class="spec-name">关掉透明之后</span><span class="spec-sub">三套底色,同一屏内容</span></div>
+<p class="spec-note">关掉半透明不落到白底,落到主题上。三套起步:两浅一深。每套定的是底色、分组面板、三级文字、强调色——不是随便换个背景色,是一整组 token。</p>
+<div class="stage">
+<div class="swrow">
+
+<div>
+<div class="thm mini">
+  <div class="mh"><span class="live"></span>路由 · 不透明</div>
+  <div class="mb">
+    <div class="grp">
+      <div class="row"><span class="dot" style="background:#5856d6"></span><div><div class="lab">官方 ChatGPT</div><div class="sub mono">chatgpt_oauth</div></div><span class="rt ok"><span class="g">✓</span></span></div>
+      <div class="map"><span class="lg mono">gpt-5.6</span><span class="up mono">gpt-5.6</span></div>
+      <div class="row"><span class="dot" style="background:#ff9500"></span><div><div class="lab">Sol 中转</div><div class="sub mono">bearer_key</div></div><span class="rt ok"><span class="g">✓</span></span></div>
+      <div class="map"><span class="lg mono">gpt-5.6</span><span class="up mono">sol-gpt-5.6-1120</span></div>
+    </div>
+  </div>
+</div>
+<div class="mlabel"><b>Overcast</b><span>冷灰偏蓝紫 · 默认浅色</span></div>
+</div>
+
+<div>
+<div class="thm thm-sage mini">
+  <div class="mh"><span class="live"></span>路由 · 不透明</div>
+  <div class="mb">
+    <div class="grp">
+      <div class="row"><span class="dot" style="background:#5856d6"></span><div><div class="lab">官方 ChatGPT</div><div class="sub mono">chatgpt_oauth</div></div><span class="rt ok"><span class="g">✓</span></span></div>
+      <div class="map"><span class="lg mono">gpt-5.6</span><span class="up mono">gpt-5.6</span></div>
+      <div class="row"><span class="dot" style="background:#ff9500"></span><div><div class="lab">Sol 中转</div><div class="sub mono">bearer_key</div></div><span class="rt ok"><span class="g">✓</span></span></div>
+      <div class="map"><span class="lg mono">gpt-5.6</span><span class="up mono">sol-gpt-5.6-1120</span></div>
+    </div>
+  </div>
+</div>
+<div class="mlabel"><b>Sage</b><span>低饱和灰绿 · 第二套浅色</span></div>
+</div>
+
+<div>
+<div class="thm thm-ink mini">
+  <div class="mh"><span class="live"></span>路由 · 不透明</div>
+  <div class="mb">
+    <div class="grp">
+      <div class="row"><span class="dot" style="background:#5e5ce6"></span><div><div class="lab">官方 ChatGPT</div><div class="sub mono">chatgpt_oauth</div></div><span class="rt ok"><span class="g">✓</span></span></div>
+      <div class="map"><span class="lg mono">gpt-5.6</span><span class="up mono">gpt-5.6</span></div>
+      <div class="row"><span class="dot" style="background:#ff9f0a"></span><div><div class="lab">Sol 中转</div><div class="sub mono">bearer_key</div></div><span class="rt ok"><span class="g">✓</span></span></div>
+      <div class="map"><span class="lg mono">gpt-5.6</span><span class="up mono">sol-gpt-5.6-1120</span></div>
+    </div>
+  </div>
+</div>
+<div class="mlabel"><b>Ink</b><span>蓝黑 · 深色</span></div>
+</div>
+
+</div>
+</div>
+<div class="cost">
+  <div><h4>为什么现在做便宜</h4><p>HIG 计划 P1 本来就要重建 token 层,而 SwiftUI 那 14 个视图还没写。让 token 走一层主题结构是边际成本;等界面写完再抽才是返工。</p></div>
+  <div><h4>贵在哪</h4><p>不在管道,在<b>设计出几套都好看的主题</b>,以及验收矩阵乘上主题数。所以起步两浅一深,不要一上来做八套。</p></div>
+  <div><h4>身份色要跟着变</h4><p>provider 身份色在深色下要换成深色变体(<span class="mono">#5856D6 → #5E5CE6</span>),否则在深底上发闷。上面三张里已经这么处理了。</p></div>
+</div>
+</section>
+
+<hr>
+
+<section class="spec">
+<div class="spec-hd"><span class="spec-id">通用</span><span class="spec-name">外观在这里,不在路由里</span><span class="spec-sub">全 app 的设置,跟 Raycast 的 General → Appearance 同位</span></div>
+<p class="spec-note">主题和半透明是<b>整个 app</b> 的外观,不是路由的配置。放在「通用」分区下,路由那一屏只留路由的内容:模型映射 / 凭据 / 接管 / 模式与分账。</p>
+<div class="stage">
+<div class="thm">
+<div class="win">
+  <div class="solid">
+    <div class="tb">
+      <div class="lights"><i></i><i></i><i></i></div>
+      <div class="tabs">
+        <div class="tab on"><svg width="17" height="17" viewBox="0 0 16 16" fill="none" style="color:var(--acc)"><circle cx="8" cy="8" r="3" stroke="currentColor" stroke-width="1.4"/><path d="M8 1.7v1.7M8 12.6v1.7M1.7 8h1.7M12.6 8h1.7M3.6 3.6l1.2 1.2M11.2 11.2l1.2 1.2M12.4 3.6l-1.2 1.2M4.8 11.2l-1.2 1.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg><span>通用</span></div>
+        <div class="tab"><svg width="17" height="17" viewBox="0 0 16 16"><rect x="2.5" y="2.8" width="11" height="3" rx="1" fill="currentColor"/><rect x="2.5" y="6.9" width="11" height="3" rx="1" fill="currentColor" opacity=".7"/><rect x="2.5" y="11" width="11" height="2.4" rx="1" fill="currentColor" opacity=".45"/></svg><span>Providers</span></div>
+        <div class="tab"><svg width="17" height="17" viewBox="0 0 16 16" fill="none"><path d="M4.2 13.2V6.4c0-1.5 1.2-2.7 2.7-2.7h5.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M10.4 1.8 12.9 3.7 10.4 5.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="4.2" cy="13.2" r="1.7" fill="currentColor"/></svg><span>路由</span></div>
+        <div class="tab"><svg width="17" height="17" viewBox="0 0 16 16" fill="none"><path d="M4.4 2.4v4a3.2 3.2 0 0 0 6.4 0v-4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M7.6 9.5v1.7a2.5 2.5 0 0 0 5 0v-.8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><circle cx="12.6" cy="9.4" r="1.4" fill="currentColor"/></svg><span>诊断</span></div>
+      </div>
+      <div class="tbr"><span class="live"></span>路由运行中 · <span class="mono">127.0.0.1:8787</span></div>
+    </div>
+    <div class="body" style="padding-bottom:22px">
+      <div class="ghd">外观</div>
+      <div class="grp">
+        <div class="row"><div><div class="lab">半透明背景</div><div class="sub">关闭后使用下面选定的主题底色</div></div><span class="rt"><span class="sw"></span></span></div>
+        <div class="row"><div class="lab">浅色主题</div><span class="rt"><span class="pop"><span class="chipc" style="background:#eceef4;box-shadow:inset 0 0 0 .5px rgba(0,0,0,.15)"></span>Overcast ⌄</span></span></div>
+        <div class="row"><div class="lab">深色主题</div><span class="rt"><span class="pop"><span class="chipc" style="background:#191b21"></span>Ink ⌄</span></span></div>
+        <div class="row"><div><div class="lab">跟随系统「降低透明度」</div><div class="sub">系统开启后自动切到不透明主题</div></div><span class="rt"><span class="sw"></span></span></div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+</div>
+</section>
+
+<hr>
+
+<section>
+<h2>强调色归属(已定)</h2>
+<p class="lede">HIG 计划 §5.1 原本定的是「交互元素跟随用户的系统强调色」。有了主题之后这条撞车,现已裁定。</p>
+<p class="lede"><b>主题定</b>(Raycast 的做法):三套主题各自带强调色,视觉最统一,代价是不跟随用户在系统设置里选的颜色。<br><b>系统定</b>:主题只管底色和中性灰,强调色永远读 <span class="mono">accentColor</span>,更"苹果",但主题的识别度弱一半——因为最扎眼的那个颜色不归它管。</p>
+<p class="lede"><b>已定(2026-08-23):主题定,但内置一套叫「系统」的主题跟随 <span class="mono">accentColor</span>,默认就选它。</b>两边都不放弃,默认行为仍然是苹果那套,想要识别度的人自己去换。</p>
+</section>
+</div>
