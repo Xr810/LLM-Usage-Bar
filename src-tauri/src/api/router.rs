@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::AppError;
 use crate::route::pointer::PointerState;
-use crate::store::{lock_conn, Database, ModelRoute, RouterAuthKind, RouterProvider, WireApi};
+use crate::store::{lock_conn, Database, ModelRoute, RouterChainEntry};
 
 /// router 默认监听端口(settings 里没有 `router.port` 或解析不了时用)。
 pub const DEFAULT_ROUTER_PORT: u16 = 8788;
@@ -24,11 +24,16 @@ pub const DEFAULT_ROUTER_PORT: u16 = 8788;
 /// router,受影响 provider 的估算不完整。
 pub const POINTER_GAP_KEY: &str = "router.pointer_gap_since";
 
-/// 供设置界面编辑的 provider 行视图。`auth_kind` / `credential_key_id` 只是
-/// 「凭据从哪来」的描述,不是凭据本身。
+/// 链上的一家。
+///
+/// 除了 `priority` / `enabled` 之外**全部是派生值** —— 它们来自被引用的那家
+/// usage provider,面板只读不写。想改 base_url 或凭据,要去那家 provider 自己的
+/// 设置里改,不在路由面板里
+/// (见 docs/design/2026-08-24-router-references-usage-providers.md)。
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RouterProviderView {
+    /// = `usage_providers.id`
     pub id: String,
     pub display_name: String,
     pub base_url: String,
@@ -36,23 +41,37 @@ pub struct RouterProviderView {
     pub priority: i64,
     pub enabled: bool,
     pub auth_kind: String,
-    pub credential_key_id: Option<String>,
+    /// 那家有没有可用凭据。**只是一个布尔** —— 连 key 的 id 都不回传,
+    /// 面板没有任何理由知道它。
+    pub has_credential: bool,
 }
 
-/// 前端提交的 provider 行。**绝不能加 api_key / token / secret 这类字段**:
-/// 前端存 key 走仓库既有的凭据命令,router 这边只认 `credential_key_id` 引用。
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+/// 可以加进链、但还没加的一家。「添加 Provider」在新模型下是**从名单里挑**,
+/// 不是再填一遍连接信息。
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RouterProviderInput {
+pub struct RouterCandidateView {
     pub id: String,
     pub display_name: String,
     pub base_url: String,
     pub wire_api: String,
+    pub auth_kind: String,
+    pub has_credential: bool,
+    /// 按量 / 订阅。面板用它解释「这家为什么没有余额可看」之类。
+    pub billing_kind: String,
+}
+
+/// 前端提交的一条链上项。
+///
+/// **只有引用和顺序。** 连接方式与凭据都不在这里 —— 那些是被引用那家自己的属性,
+/// 路由重复存一份正是上一版凭据存不进去的根因。
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RouterChainInput {
+    /// → `usage_providers.id`
+    pub provider_id: String,
     pub priority: i64,
     pub enabled: bool,
-    pub auth_kind: String,
-    /// 指向 provider_api_keys.id 的引用。**不是 key 本身。**
-    pub credential_key_id: Option<String>,
 }
 
 /// 一条模型映射(全量替换的输入单元)。
@@ -94,21 +113,9 @@ pub struct RouterUsageSummaryView {
     pub output_tokens: i64,
 }
 
-fn wire_api_from_input(raw: &str) -> Result<WireApi, AppError> {
-    match raw {
-        "responses" => Ok(WireApi::Responses),
-        "chat_completions" => Ok(WireApi::ChatCompletions),
-        other => Err(AppError::InvalidInput(format!("非法 wire_api: {other}"))),
-    }
-}
-
-fn auth_kind_from_input(raw: &str) -> Result<RouterAuthKind, AppError> {
-    match raw {
-        "chatgpt_oauth" => Ok(RouterAuthKind::ChatgptOauth),
-        "bearer_key" => Ok(RouterAuthKind::BearerKey),
-        "none" => Ok(RouterAuthKind::None),
-        other => Err(AppError::InvalidInput(format!("非法 auth_kind: {other}"))),
-    }
+/// 模式按 agent 分开存 —— Codex 走手动、Claude 走自动,是完全正常的组合。
+fn mode_key(agent: &str) -> String {
+    format!("router.mode.{agent}")
 }
 
 /// 读 `router.port`:读不到或解析不了就用默认 8788,不报错、不写回(任务书 §1.3)。
@@ -121,14 +128,13 @@ pub(crate) fn read_router_port(db: &Database) -> u16 {
     }
 }
 
-/// provider 行是否存在(不区分启用状态)。`set_mode` 与 `set_model_routes`
-/// 的写侧校验共用。
-fn router_provider_exists(db: &Database, id: &str) -> Result<bool, AppError> {
+/// 这家在不在某个 agent 的链上(不区分启用状态)。`set_mode` 的写侧校验用。
+fn router_provider_exists(db: &Database, agent: &str, id: &str) -> Result<bool, AppError> {
     let conn = lock_conn!(db.conn);
     let count: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM router_providers WHERE id = ?1",
-            [id],
+            "SELECT COUNT(*) FROM router_chain WHERE agent = ?2 AND provider_id = ?1",
+            rusqlite::params![id, agent],
             |row| row.get(0),
         )
         .map_err(AppError::from)?;
@@ -204,76 +210,175 @@ pub struct RouterApi {
     db: Arc<Database>,
 }
 
+/// 从一家 usage provider 推出「当转发目标时」的连接方式。
+///
+/// 与 DAO 里那个 `derive_connection` 同一套规则,只是输入形态不同:那边拿的是
+/// 数据库原始列,这边拿的是已经组装好的视图。规则本身只有一处真相 ——
+/// 订阅且没有 route base = OAuth;有 base 就看 authMode。
+fn derive_candidate_connection(
+    provider: &crate::model::domain::UsageProviderView,
+) -> (String, String, String) {
+    match provider
+        .route_base_url
+        .as_deref()
+        .or(provider.canonical_endpoint.as_deref())
+    {
+        Some(base) if !base.is_empty() => {
+            let auth = if provider.has_route_credentials || !provider.api_keys.is_empty() {
+                "bearer_key"
+            } else {
+                "none"
+            };
+            (base.to_string(), "chat_completions".to_string(), auth.to_string())
+        }
+        // 没有 base 的订阅那家 = Codex 自己的 OAuth 路。
+        _ => (
+            "https://chatgpt.com/backend-api".to_string(),
+            "responses".to_string(),
+            "chatgpt_oauth".to_string(),
+        ),
+    }
+}
+
 impl RouterApi {
     pub fn new(db: Arc<Database>) -> Self {
         Self { db }
     }
 
-    /// 列出全部 provider(含未启用的)。
+    /// 这个 agent 链上的全部 provider(**含未启用的** —— 设置界面要编辑它们)。
     ///
-    /// DAO 的 `list_router_providers` 是给转发层用的、过滤 `enabled = 1`;
-    /// 设置界面要编辑未启用的行,所以这里直接查表,不借那个入口。
-    pub fn list_providers(&self) -> Result<Vec<RouterProviderView>, AppError> {
-        let conn = lock_conn!(self.db.conn);
-        let mut statement = conn.prepare(
-            "SELECT id, display_name, base_url, wire_api, priority, enabled,
-                    auth_kind, credential_key_id
-             FROM router_providers
-             ORDER BY priority ASC, id ASC",
-        )?;
-        let rows = statement
-            .query_map([], |row| {
-                Ok(RouterProviderView {
-                    id: row.get(0)?,
-                    display_name: row.get(1)?,
-                    base_url: row.get(2)?,
-                    wire_api: row.get(3)?,
-                    priority: row.get(4)?,
-                    enabled: row.get(5)?,
-                    auth_kind: row.get(6)?,
-                    credential_key_id: row.get(7)?,
+    /// 除 priority / enabled 外都是派生值:显示名、base_url、协议、认证方式
+    /// 来自被引用那家 usage provider,凭据只回一个布尔。
+    pub fn list_providers(&self, agent: &str) -> Result<Vec<RouterProviderView>, AppError> {
+        let chain = self.db.list_router_chain(agent)?;
+        if chain.is_empty() {
+            return Ok(Vec::new());
+        }
+        let catalog: std::collections::HashMap<String, _> = self
+            .db
+            .list_usage_providers()?
+            .into_iter()
+            .map(|provider| (provider.id.clone(), provider))
+            .collect();
+
+        Ok(chain
+            .into_iter()
+            .filter_map(|entry| {
+                // 链上引用的那家被删了 —— 外键是 ON DELETE CASCADE,正常不会发生;
+                // 真发生了就跳过,不要拿一行空壳去糊弄界面。
+                let provider = catalog.get(&entry.provider_id)?;
+                let (base_url, wire_api, auth_kind) = derive_candidate_connection(provider);
+                Some(RouterProviderView {
+                    id: entry.provider_id,
+                    display_name: provider.name.clone(),
+                    base_url,
+                    wire_api,
+                    priority: entry.priority,
+                    enabled: entry.enabled,
+                    auth_kind,
+                    has_credential: provider.has_route_credentials
+                        || !provider.api_keys.is_empty(),
                 })
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(rows)
+            })
+            .collect())
     }
 
-    /// 新增或更新一个 provider。`wire_api` / `auth_kind` 在入口处校验,非法值进不了库。
-    pub fn upsert_provider(&self, input: RouterProviderInput) -> Result<(), AppError> {
-        self.db.upsert_router_provider(&RouterProvider {
-            id: input.id.clone(),
-            display_name: input.display_name.clone(),
-            base_url: input.base_url.clone(),
-            wire_api: wire_api_from_input(&input.wire_api)?,
+    /// 把一家加进链,或改它的顺序 / 启用位。
+    ///
+    /// 写侧要严:引用的那家必须**存在于 usage_providers,且它的 `route_app_type`
+    /// 就是这个 agent**。否则会出现「Codex 的链上挂着一家只能给 Claude 用的
+    /// provider」,转发时才炸,错误指向完全相反的方向。
+    pub fn upsert_chain_entry(
+        &self,
+        agent: &str,
+        input: RouterChainInput,
+    ) -> Result<(), AppError> {
+        let candidate = self
+            .db
+            .list_usage_providers()?
+            .into_iter()
+            .find(|provider| provider.id == input.provider_id)
+            .ok_or_else(|| {
+                AppError::InvalidInput(format!("provider 不存在: {}", input.provider_id))
+            })?;
+
+        if candidate.route_app_type.as_deref() != Some(agent) {
+            return Err(AppError::InvalidInput(format!(
+                "{} 不能用于 {agent}(它标的是 {})",
+                input.provider_id,
+                candidate.route_app_type.as_deref().unwrap_or("未标注")
+            )));
+        }
+
+        self.db.upsert_router_chain_entry(&RouterChainEntry {
+            agent: agent.to_string(),
+            provider_id: input.provider_id,
             priority: input.priority,
             enabled: input.enabled,
-            auth_kind: auth_kind_from_input(&input.auth_kind)?,
-            credential_key_id: input.credential_key_id.clone(),
         })
     }
 
-    /// 删除一个 provider。
-    pub fn delete_provider(&self, id: &str) -> Result<(), AppError> {
-        self.db.delete_router_provider(id)
+    /// 把一家移出链。**不动那家 provider 本身** —— 用户只是不再路由到它,
+    /// 不代表不再监控它。这正是新模型和旧模型最大的语义差别。
+    pub fn remove_from_chain(&self, agent: &str, provider_id: &str) -> Result<(), AppError> {
+        self.db.remove_from_router_chain(agent, provider_id)
     }
 
-    /// 某个 provider 的模型映射全量替换:先清空再插入(任务书 §3)。
+    /// 还没加进链、但可以加的那些。「添加 Provider」在新模型下是**从名单里挑**。
+    pub fn list_candidates(&self, agent: &str) -> Result<Vec<RouterCandidateView>, AppError> {
+        let on_chain: std::collections::HashSet<String> = self
+            .db
+            .list_router_chain(agent)?
+            .into_iter()
+            .map(|entry| entry.provider_id)
+            .collect();
+
+        Ok(self
+            .db
+            .list_usage_providers()?
+            .into_iter()
+            .filter(|provider| provider.route_app_type.as_deref() == Some(agent))
+            .filter(|provider| !on_chain.contains(&provider.id))
+            .map(|provider| {
+                let (base_url, wire_api, auth_kind) = derive_candidate_connection(&provider);
+                RouterCandidateView {
+                    id: provider.id,
+                    display_name: provider.name,
+                    base_url,
+                    wire_api,
+                    auth_kind,
+                    has_credential: provider.has_route_credentials
+                        || !provider.api_keys.is_empty(),
+                    billing_kind: format!("{:?}", provider.billing_kind).to_lowercase(),
+                }
+            })
+            .collect())
+    }
+
+    /// 某家在这个 agent 上的模型映射,全量替换。
     ///
-    /// provider 不存在直接 Err:外键约束只会给一句生硬的 constraint 错误,
-    /// 写侧明确校验,错误信息才对得上(任务书 §3.2「写侧要严」)。
+    /// 那家必须已经在链上:外键只会给一句生硬的 constraint 错误,写侧明确校验,
+    /// 错误信息才对得上。
     pub fn set_model_routes(
         &self,
+        agent: &str,
         provider_id: &str,
         routes: Vec<ModelRouteInput>,
     ) -> Result<(), AppError> {
-        if !router_provider_exists(self.db.as_ref(), provider_id)? {
+        let on_chain = self
+            .db
+            .list_router_chain(agent)?
+            .into_iter()
+            .any(|entry| entry.provider_id == provider_id);
+        if !on_chain {
             return Err(AppError::InvalidInput(format!(
-                "router provider 不存在: {provider_id}"
+                "{provider_id} 还没有加进 {agent} 的路由链"
             )));
         }
-        self.db.delete_model_routes_for_provider(provider_id)?;
+        self.db.delete_model_routes_for_provider(agent, provider_id)?;
         for route in routes {
             self.db.upsert_model_route(&ModelRoute {
+                agent: agent.to_string(),
                 provider_id: provider_id.to_string(),
                 logical_model: route.logical_model,
                 upstream_model: route.upstream_model,
@@ -282,14 +387,11 @@ impl RouterApi {
         Ok(())
     }
 
-    /// 列出全部映射(含已停用 provider 的),供设置界面渲染「模型映射」那一屏。
-    ///
-    /// T28 补:原来的九个命令里 `set_model_routes` 只能写、没有任何一条能读回来,
-    /// 面板因此无法显示用户已配好的映射。按 provider 优先级排序,与「尝试顺序」一致。
-    pub fn list_model_routes(&self) -> Result<Vec<ModelRouteView>, AppError> {
+    /// 这个 agent 的全部映射(含已停用那家的),供设置界面渲染。
+    pub fn list_model_routes(&self, agent: &str) -> Result<Vec<ModelRouteView>, AppError> {
         Ok(self
             .db
-            .list_all_model_routes()?
+            .list_all_model_routes(agent)?
             .into_iter()
             .map(|route| ModelRouteView {
                 provider_id: route.provider_id,
@@ -301,8 +403,8 @@ impl RouterApi {
 
     /// 读 `router.mode`。与 T6 转发层的读侧同样宽容:读不到或解析不了都当 `"auto"`,
     /// 返回给前端的永远是合法形态(垃圾值由读侧容错,写侧见 `set_mode`)。
-    pub fn get_mode(&self) -> Result<String, AppError> {
-        let raw = self.db.get_setting("router.mode")?;
+    pub fn get_mode(&self, agent: &str) -> Result<String, AppError> {
+        let raw = self.db.get_setting(&mode_key(agent))?;
         Ok(match raw.as_deref() {
             Some("auto") | None => "auto".to_string(),
             Some(manual) => match manual.strip_prefix("manual:") {
@@ -312,22 +414,23 @@ impl RouterApi {
         })
     }
 
-    /// 写 `router.mode`,写侧要严(任务书 §3.2):
+    /// 写 `router.mode.<agent>`,写侧要严(任务书 §3.2):
     /// - `"auto"` 直接存;
-    /// - `"manual:<id>"` 要 `<id>` 在 `router_providers` 里存在;
+    /// - `"manual:<id>"` 要 `<id>` **在这个 agent 的链上**;
     /// - 其余一律 Err,垃圾进不了库。
-    pub fn set_mode(&self, mode: &str) -> Result<(), AppError> {
+    pub fn set_mode(&self, agent: &str, mode: &str) -> Result<(), AppError> {
+        let key = mode_key(agent);
         if mode == "auto" {
-            return self.db.set_setting("router.mode", "auto");
+            return self.db.set_setting(&key, "auto");
         }
         match mode.strip_prefix("manual:") {
             Some(provider_id) if !provider_id.is_empty() => {
-                if !router_provider_exists(self.db.as_ref(), provider_id)? {
+                if !router_provider_exists(self.db.as_ref(), agent, provider_id)? {
                     return Err(AppError::InvalidInput(format!(
-                        "manual 模式指向的 router provider 不存在: {provider_id}"
+                        "manual 模式指向的 provider 不在 {agent} 的链上: {provider_id}"
                     )));
                 }
-                self.db.set_setting("router.mode", mode)
+                self.db.set_setting(&key, mode)
             }
             _ => Err(AppError::InvalidInput(format!("非法 router.mode: {mode}"))),
         }

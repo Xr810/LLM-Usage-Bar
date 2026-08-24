@@ -43,7 +43,7 @@ impl RouterUpstreamAuth {
     async fn resolve_headers(&self, provider_id: &str) -> Result<Vec<(String, String)>, AppError> {
         let provider = self
             .db
-            .list_router_providers()?
+            .list_router_providers(crate::route::ROUTER_AGENT_CODEX)?
             .into_iter()
             .find(|provider| provider.id == provider_id)
             .ok_or_else(|| {

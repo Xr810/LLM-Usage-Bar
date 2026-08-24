@@ -80,17 +80,32 @@ struct UsageEventsParams {
     page_size: u64,
 }
 
-// ---- T28:本地路由面板的参数(九个命令,见 docs/tasks/T28-*.md) ----
+// ---- 本地路由面板的参数。2026-08-24 起每条都带 agent(codex / claude)。----
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct RouterProviderIdParams {
-    id: String,
+struct RouterAgentParams {
+    agent: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RouterProviderRefParams {
+    agent: String,
+    provider_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct UpsertChainParams {
+    agent: String,
+    entry: crate::api::router::RouterChainInput,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SetModelRoutesParams {
+    agent: String,
     provider_id: String,
     routes: Vec<crate::api::router::ModelRouteInput>,
 }
@@ -98,6 +113,7 @@ struct SetModelRoutesParams {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SetRouterModeParams {
+    agent: String,
     mode: String,
 }
 
@@ -1092,48 +1108,67 @@ async fn serve_client(app: AppHandle, stream: UnixStream) -> Result<(), std::io:
                 .map(SchemaEnvelopeV1::new);
                 write_app_result(&mut writer, id, result).await?;
             }
-            // ---- T28:本地路由 ----
+            // ---- 本地路由 ----
             //
-            // 两条与 tauri 那条路不同的契约,都是有意的:
-            // 1. 错误按原文回传,不走 write_app_result 的统一脱敏 ——
-            // 路由面板要把「非法 wire_api」「模式指向不存在的 provider」这类文案直接
-            // 显示给用户(设计:保存被拒时错误钉在窗口顶部),而 tauri 那条路本来也是
-            // e.to_string() 原样给前端。
-            // 2. **变更命令返回变更后的新状态**,不是 ()。tauri 那边返回 () 没问题,
-            //    但 bridge 的响应里 result 为 null 会被 Swift 侧判成畸形响应;而且
-            //    顺手返回新状态,面板就不用再回查一次,也没有读到旧值的窗口。
+            // 三条与 tauri 那条路不同、都是有意的契约:
+            // 1. 错误按原文回传,不走统一脱敏 —— 面板要把「非法 wire_api」「这家不能
+            //    用于 codex」这类文案钉在窗口顶部给用户看,而 api::router 本身已是
+            //    脱敏面,tauri 那条路同样是 e.to_string() 原样给前端。
+            // 2. 变更命令返回变更后的新状态,不是 () —— result 为 null 会被 Swift 侧
+            //    判成畸形响应;顺带也省掉面板的回查。
+            // 3. 每个命令都带 agent(codex / claude)—— 2026-08-24 起路由按 agent 分。
             "listRouterProviders" => {
+                let params = match decode_params::<RouterAgentParams>(request.params.as_ref()) {
+                    Ok(params) => params,
+                    Err(()) => {
+                        write_error(&mut writer, id, "invalid_params", "Invalid agent").await?;
+                        continue;
+                    }
+                };
                 let state = app.state::<AppState>();
                 let result = crate::api::router::RouterApi::new(state.db.clone())
-                    .list_providers()
+                    .list_providers(&params.agent)
                     .map(SchemaEnvelopeV1::new);
                 write_router_result(&mut writer, id, result).await?;
             }
-            "upsertRouterProvider" => {
-                let input = match decode_params::<crate::api::router::RouterProviderInput>(
-                    request.params.as_ref(),
-                ) {
-                    Ok(input) => input,
+            "listRouterCandidates" => {
+                let params = match decode_params::<RouterAgentParams>(request.params.as_ref()) {
+                    Ok(params) => params,
                     Err(()) => {
-                        write_error(&mut writer, id, "invalid_params", "Invalid router provider")
+                        write_error(&mut writer, id, "invalid_params", "Invalid agent").await?;
+                        continue;
+                    }
+                };
+                let state = app.state::<AppState>();
+                let result = crate::api::router::RouterApi::new(state.db.clone())
+                    .list_candidates(&params.agent)
+                    .map(SchemaEnvelopeV1::new);
+                write_router_result(&mut writer, id, result).await?;
+            }
+            "upsertRouterChainEntry" => {
+                let params = match decode_params::<UpsertChainParams>(request.params.as_ref()) {
+                    Ok(params) => params,
+                    Err(()) => {
+                        write_error(&mut writer, id, "invalid_params", "Invalid chain entry")
                             .await?;
                         continue;
                     }
                 };
                 let state = app.state::<AppState>();
                 let api = crate::api::router::RouterApi::new(state.db.clone());
+                let agent = params.agent.clone();
                 let result = api
-                    .upsert_provider(input)
-                    .and_then(|()| api.list_providers())
+                    .upsert_chain_entry(&agent, params.entry)
+                    .and_then(|()| api.list_providers(&agent))
                     .map(SchemaEnvelopeV1::new);
                 write_router_result(&mut writer, id, result).await?;
             }
-            "deleteRouterProvider" => {
-                let params = match decode_params::<RouterProviderIdParams>(request.params.as_ref())
+            "removeFromRouterChain" => {
+                let params = match decode_params::<RouterProviderRefParams>(request.params.as_ref())
                 {
                     Ok(params) => params,
                     Err(()) => {
-                        write_error(&mut writer, id, "invalid_params", "Invalid provider id")
+                        write_error(&mut writer, id, "invalid_params", "Invalid provider ref")
                             .await?;
                         continue;
                     }
@@ -1141,8 +1176,8 @@ async fn serve_client(app: AppHandle, stream: UnixStream) -> Result<(), std::io:
                 let state = app.state::<AppState>();
                 let api = crate::api::router::RouterApi::new(state.db.clone());
                 let result = api
-                    .delete_provider(&params.id)
-                    .and_then(|()| api.list_providers())
+                    .remove_from_chain(&params.agent, &params.provider_id)
+                    .and_then(|()| api.list_providers(&params.agent))
                     .map(SchemaEnvelopeV1::new);
                 write_router_result(&mut writer, id, result).await?;
             }
@@ -1157,23 +1192,38 @@ async fn serve_client(app: AppHandle, stream: UnixStream) -> Result<(), std::io:
                 };
                 let state = app.state::<AppState>();
                 let api = crate::api::router::RouterApi::new(state.db.clone());
+                let agent = params.agent.clone();
                 let result = api
-                    .set_model_routes(&params.provider_id, params.routes)
-                    .and_then(|()| api.list_model_routes())
+                    .set_model_routes(&agent, &params.provider_id, params.routes)
+                    .and_then(|()| api.list_model_routes(&agent))
                     .map(SchemaEnvelopeV1::new);
                 write_router_result(&mut writer, id, result).await?;
             }
             "listModelRoutes" => {
+                let params = match decode_params::<RouterAgentParams>(request.params.as_ref()) {
+                    Ok(params) => params,
+                    Err(()) => {
+                        write_error(&mut writer, id, "invalid_params", "Invalid agent").await?;
+                        continue;
+                    }
+                };
                 let state = app.state::<AppState>();
                 let result = crate::api::router::RouterApi::new(state.db.clone())
-                    .list_model_routes()
+                    .list_model_routes(&params.agent)
                     .map(SchemaEnvelopeV1::new);
                 write_router_result(&mut writer, id, result).await?;
             }
             "getRouterMode" => {
+                let params = match decode_params::<RouterAgentParams>(request.params.as_ref()) {
+                    Ok(params) => params,
+                    Err(()) => {
+                        write_error(&mut writer, id, "invalid_params", "Invalid agent").await?;
+                        continue;
+                    }
+                };
                 let state = app.state::<AppState>();
                 let result = crate::api::router::RouterApi::new(state.db.clone())
-                    .get_mode()
+                    .get_mode(&params.agent)
                     .map(SchemaEnvelopeV1::new);
                 write_router_result(&mut writer, id, result).await?;
             }
@@ -1189,8 +1239,8 @@ async fn serve_client(app: AppHandle, stream: UnixStream) -> Result<(), std::io:
                 let state = app.state::<AppState>();
                 let api = crate::api::router::RouterApi::new(state.db.clone());
                 let result = api
-                    .set_mode(&params.mode)
-                    .and_then(|()| api.get_mode())
+                    .set_mode(&params.agent, &params.mode)
+                    .and_then(|()| api.get_mode(&params.agent))
                     .map(SchemaEnvelopeV1::new);
                 write_router_result(&mut writer, id, result).await?;
             }
@@ -1205,7 +1255,9 @@ async fn serve_client(app: AppHandle, stream: UnixStream) -> Result<(), std::io:
                 let state = app.state::<AppState>();
                 let result = crate::api::router::RouterApi::new(state.db.clone())
                     .enable_pointer()
-                    .map(|()| SchemaEnvelopeV1::new(crate::api::router::RouterApi::inspect_pointer()));
+                    .map(|()| {
+                        SchemaEnvelopeV1::new(crate::api::router::RouterApi::inspect_pointer())
+                    });
                 write_router_result(&mut writer, id, result).await?;
             }
             "recentRouterAttempts" => {
@@ -1223,6 +1275,7 @@ async fn serve_client(app: AppHandle, stream: UnixStream) -> Result<(), std::io:
                     .map(SchemaEnvelopeV1::new);
                 write_router_result(&mut writer, id, result).await?;
             }
+
             "shutdown" => {
                 let destination = match shutdown_destination(request.params.as_ref()) {
                     Ok(destination) => destination,
@@ -1330,8 +1383,9 @@ fn capabilities_result() -> Value {
             "getAgentBreakdown",
             "getUsageEvents",
             "listRouterProviders",
-            "upsertRouterProvider",
-            "deleteRouterProvider",
+            "listRouterCandidates",
+            "upsertRouterChainEntry",
+            "removeFromRouterChain",
             "setModelRoutes",
             "listModelRoutes",
             "getRouterMode",
@@ -1343,8 +1397,8 @@ fn capabilities_result() -> Value {
         ],
         "mutations": [
             "setNativeSettings",
-            "upsertRouterProvider",
-            "deleteRouterProvider",
+            "upsertRouterChainEntry",
+            "removeFromRouterChain",
             "setModelRoutes",
             "setRouterMode",
             "enableRouterPointer"

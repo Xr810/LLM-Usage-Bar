@@ -411,7 +411,7 @@ impl Database {
                         Self::set_user_version(conn, 27)?;
                     }
                     27 => {
-                        log::info!("迁移数据库从 v27 到 v28（router_providers 增加凭据来源列）");
+                        log::info!("迁移数据库从 v27 到 v28（空操作，路由改为引用 usage_providers）");
                         Self::migrate_v27_to_v28(conn)?;
                         Self::set_user_version(conn, 28)?;
                     }
@@ -1780,23 +1780,32 @@ impl Database {
     /// 定义一次,不往 create_tables_on_conn 里抄第二份。
     fn migrate_v26_to_v27(conn: &Connection) -> Result<(), AppError> {
         conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS router_providers (
-                 id            TEXT PRIMARY KEY,      -- 稳定标识，如 packyapi、official
-                 display_name  TEXT NOT NULL,
-                 base_url      TEXT NOT NULL,
-                 wire_api      TEXT NOT NULL,         -- responses | chat_completions
-                 priority      INTEGER NOT NULL,      -- 越小越优先，全局顺序（v1 只有全局）
+            // 一条路由项 = 对 usage_providers 的引用 + 顺序,按 agent 分组。
+            //
+            // 这里**刻意不存** display_name / base_url / wire_api / 认证方式:
+            // 那些是被引用那家自己的属性,重复存会立刻分叉 —— 上一版就是因为
+            // 自带一份名单,导致「给路由里的某家绑 key」在数据库层面不成立
+            // (provider_api_keys.provider_id 外键指向 usage_providers)。
+            // 见 docs/design/2026-08-24-router-references-usage-providers.md
+            "CREATE TABLE IF NOT EXISTS router_chain (
+                 agent         TEXT NOT NULL,         -- codex | claude，对应 usage_providers.route_app_type
+                 provider_id   TEXT NOT NULL
+                     REFERENCES usage_providers(id) ON DELETE CASCADE,
+                 priority      INTEGER NOT NULL,      -- 越小越先试
                  enabled       INTEGER NOT NULL DEFAULT 1,
                  created_at    INTEGER NOT NULL,
-                 updated_at    INTEGER NOT NULL
+                 updated_at    INTEGER NOT NULL,
+                 PRIMARY KEY (agent, provider_id)
              );
              CREATE TABLE IF NOT EXISTS router_model_map (
+                 agent           TEXT NOT NULL,
                  provider_id     TEXT NOT NULL,
                  logical_model   TEXT NOT NULL,       -- Codex 发来的那个名字，如 gpt-5.6-sol
                  upstream_model  TEXT NOT NULL,       -- 该家的真实 ID，可能与 logical 相同
                  created_at      INTEGER NOT NULL,
-                 PRIMARY KEY (provider_id, logical_model),
-                 FOREIGN KEY (provider_id) REFERENCES router_providers(id) ON DELETE CASCADE
+                 PRIMARY KEY (agent, provider_id, logical_model),
+                 FOREIGN KEY (agent, provider_id)
+                     REFERENCES router_chain(agent, provider_id) ON DELETE CASCADE
              );
              CREATE TABLE IF NOT EXISTS router_attempts (
                  id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1818,24 +1827,21 @@ impl Database {
         .map_err(|error| AppError::Database(format!("v26 -> v27 创建路由存储表失败: {error}")))
     }
 
-    /// v27 -> v28 迁移:给 router_providers 加凭据来源两列。
+    /// v27 -> v28 迁移:**现在是空操作。**
     ///
-    /// `auth_kind` 只记「凭据从哪来」,`credential_key_id` 只记「去哪把凭据取出来」
-    /// (provider_api_keys.id 的引用)——两列都不承载凭据本身,不破坏 T3
-    /// 「这三张表不存凭据」的规矩。
+    /// 它原本给 `router_providers` 加 `auth_kind` / `credential_key_id` 两列。
+    /// 2026-08-24 路由改成引用 `usage_providers` 之后,那张表连同这两列一起没了 ——
+    /// 认证方式和凭据都从被引用那家派生,路由自己不再存
+    /// (见 docs/design/2026-08-24-router-references-usage-providers.md)。
     ///
-    /// 与 v26 -> v27 一样保持可重入:回卷 user_version 的迁移测试会把整条链
-    /// 重跑一遍,而内存库建库时已经带上了这两列,再 ALTER 会报重复列名,
-    /// 所以列已存在时跳过。
-    fn migrate_v27_to_v28(conn: &Connection) -> Result<(), AppError> {
-        if Self::has_column(conn, "router_providers", "auth_kind")? {
-            return Ok(());
-        }
-        conn.execute_batch(
-            "ALTER TABLE router_providers ADD COLUMN auth_kind TEXT NOT NULL DEFAULT 'none';
-             ALTER TABLE router_providers ADD COLUMN credential_key_id TEXT;",
-        )
-        .map_err(|error| AppError::Database(format!("v27 -> v28 添加路由凭据列失败: {error}")))
+    /// **为什么是改写而不是新加一版迁移**:路由功能从未发布,`router_providers`
+    /// 在任何真实用户库里都不存在(开发机自己的库当时停在 v26,即 v26 -> v27 都没跑过)。
+    /// 给一个没人处于的状态写迁移,只会多一段永远跑不到、也永远没被验证过的代码。
+    ///
+    /// 保留这一档而不是删掉,是因为 `SCHEMA_VERSION` 已经是 28,删了会让
+    /// 版本号出现空洞。
+    fn migrate_v27_to_v28(_conn: &Connection) -> Result<(), AppError> {
+        Ok(())
     }
 
     /// 插入默认模型定价数据

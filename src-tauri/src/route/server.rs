@@ -564,10 +564,10 @@ async fn handle_responses_inner(
     // 2. 逻辑模型
     let logical_model = extract_logical_model(&inbound)?;
     // 3. 该模型的路由 + provider 元数据(拿 base_url 与 wire_api)
-    let routes = state.db.list_model_routes(&logical_model)?;
+    let routes = state.db.list_model_routes(crate::route::ROUTER_AGENT_CODEX, &logical_model)?;
     let providers: HashMap<String, RouterProvider> = state
         .db
-        .list_router_providers()?
+        .list_router_providers(crate::route::ROUTER_AGENT_CODEX)?
         .into_iter()
         .map(|provider| (provider.id.clone(), provider))
         .collect();

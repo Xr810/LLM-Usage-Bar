@@ -40,7 +40,8 @@ pub(crate) use dao::provider_credentials::{
 };
 pub(crate) use dao::provider_key_usage::ProviderKeyUsageSnapshotInput;
 pub(crate) use dao::router::{
-    AttemptOutcome, ModelRoute, RouterAttempt, RouterAuthKind, RouterProvider, WireApi,
+    AttemptOutcome, ModelRoute, RouterAttempt, RouterAuthKind, RouterChainEntry, RouterProvider,
+    WireApi,
 };
 pub use dao::usage_sync_cursors::UsageSyncCursor;
 pub(crate) use identity_migration::{prepare_database_identity, DatabaseIdentityOutcome};

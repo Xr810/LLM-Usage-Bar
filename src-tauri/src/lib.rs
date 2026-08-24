@@ -1568,8 +1568,9 @@ pub fn run() {
             commands::auth_logout,
             // Local router commands (T10)
             commands::list_router_providers,
-            commands::upsert_router_provider,
-            commands::delete_router_provider,
+            commands::upsert_router_chain_entry,
+            commands::list_router_candidates,
+            commands::remove_from_router_chain,
             commands::set_model_routes,
             commands::list_model_routes,
             commands::get_router_mode,

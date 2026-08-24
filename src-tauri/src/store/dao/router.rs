@@ -3,19 +3,92 @@ use crate::store::{lock_conn, Database};
 use rusqlite::params;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// 转发链要用的一家 provider,**这是派生出来的视图,不是一张表**。
+///
+/// 2026-08-24 起路由不再自带 provider 名单:`router_chain` 只存「引用 + 顺序」,
+/// 下面这些字段全部从被引用的 `usage_providers` 那行推出来
+/// (见 docs/design/2026-08-24-router-references-usage-providers.md)。
+///
+/// 形状保持不变,是为了让转发链(`route/server.rs`、`route/auth.rs`)不受影响 ——
+/// 变的是「这份数据从哪来」,不是「转发时需要什么」。
 #[derive(Debug, Clone, PartialEq)]
 pub struct RouterProvider {
+    /// = `usage_providers.id`
     pub id: String,
     pub display_name: String,
     pub base_url: String,
     pub wire_api: WireApi,
     pub priority: i64,
     pub enabled: bool,
-    /// 这家 provider 的凭据从哪来(T9)。只描述来源,不承载凭据本身。
+    /// 从 `billing_kind` 与 `route_config.authMode` 推出来。
     pub auth_kind: RouterAuthKind,
-    /// `auth_kind = BearerKey` 时指向 provider_api_keys.id 的引用。
-    /// 它只是「去哪把凭据取出来」,不是凭据本身。
+    /// 那家 usage provider 的主 key(`provider_api_keys` 按 sort_order 的第一条)。
+    /// 只是「去哪把凭据取出来」,不是凭据本身。
     pub credential_key_id: Option<String>,
+}
+
+/// 存下来的那一条:引用 + 顺序。**只有这个是真表。**
+#[derive(Debug, Clone, PartialEq)]
+pub struct RouterChainEntry {
+    /// `codex` | `claude`,对应 `usage_providers.route_app_type`
+    pub agent: String,
+    /// → `usage_providers.id`
+    pub provider_id: String,
+    pub priority: i64,
+    pub enabled: bool,
+}
+
+/// Codex 官方订阅那条路没有 `route_config`,base_url 从这里来。
+const CHATGPT_OFFICIAL_BASE_URL: &str = "https://chatgpt.com/backend-api";
+
+/// 从 usage_providers 那一行推出连接方式。
+///
+/// 实测取值(2026-08-24,用户库):`apiFormat` 只有 `openai_chat`(bearer)与
+/// `anthropic`(x_api_key);订阅那家没有 route_config。
+fn derive_connection(
+    billing_kind: &str,
+    route_config: Option<&str>,
+) -> (String, WireApi, RouterAuthKind) {
+    let config: Option<serde_json::Value> =
+        route_config.and_then(|raw| serde_json::from_str(raw).ok());
+
+    let base_url = config
+        .as_ref()
+        .and_then(|c| c.get("base_url"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+
+    let api_format = config
+        .as_ref()
+        .and_then(|c| c.get("apiFormat"))
+        .and_then(serde_json::Value::as_str);
+    let auth_mode = config
+        .as_ref()
+        .and_then(|c| c.get("authMode"))
+        .and_then(serde_json::Value::as_str);
+
+    match (billing_kind, base_url) {
+        // 订阅且没有 route_config = Codex 自己那条 OAuth 路。
+        ("subscription", None) => (
+            CHATGPT_OFFICIAL_BASE_URL.to_string(),
+            WireApi::Responses,
+            RouterAuthKind::ChatgptOauth,
+        ),
+        (_, Some(url)) => {
+            let wire = match api_format {
+                // Codex 原生说 responses;其余 OpenAI 兼容家都是 chat completions。
+                Some("openai_responses") => WireApi::Responses,
+                _ => WireApi::ChatCompletions,
+            };
+            let auth = match auth_mode {
+                Some("bearer") | Some("x_api_key") => RouterAuthKind::BearerKey,
+                _ => RouterAuthKind::None,
+            };
+            (url, wire, auth)
+        }
+        // 既不是订阅、又没有 base_url —— 这家没法当转发目标,交给上层过滤。
+        (_, None) => (String::new(), WireApi::ChatCompletions, RouterAuthKind::None),
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,6 +106,8 @@ pub enum RouterAuthKind {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModelRoute {
+    /// 映射按 agent 分 —— Codex 挑的那几家和 Claude 挑的那几家互不相干。
+    pub agent: String,
     pub provider_id: String,
     pub logical_model: String,
     pub upstream_model: String,
@@ -130,160 +205,205 @@ fn outcome_to_db(outcome: AttemptOutcome) -> &'static str {
     }
 }
 
+fn model_route_from(row: &rusqlite::Row<'_>) -> rusqlite::Result<ModelRoute> {
+    Ok(ModelRoute {
+        agent: row.get(0)?,
+        provider_id: row.get(1)?,
+        logical_model: row.get(2)?,
+        upstream_model: row.get(3)?,
+    })
+}
+
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
 impl Database {
-    /// 全部启用的 provider，按 priority 升序。
-    pub fn list_router_providers(&self) -> Result<Vec<RouterProvider>, AppError> {
+    /// 某个 agent 的转发链,按 priority 升序,**只含启用且可用的那些**。
+    ///
+    /// 这是一次 JOIN:链上只存引用与顺序,连接方式(base_url / 协议 / 认证)
+    /// 由被引用的 usage_providers 那一行推出来。凭据取那家的主 key
+    /// (`provider_api_keys` 按 sort_order 的第一条)。
+    pub fn list_router_providers(&self, agent: &str) -> Result<Vec<RouterProvider>, AppError> {
         let conn = lock_conn!(self.conn);
         let mut statement = conn.prepare(
-            "SELECT id, display_name, base_url, wire_api, priority, enabled,
-                    auth_kind, credential_key_id
-             FROM router_providers
-             WHERE enabled = 1
-             ORDER BY priority ASC, id ASC",
+            "SELECT chain.provider_id, up.name, up.billing_kind, up.route_config,
+                    chain.priority, chain.enabled,
+                    (SELECT k.id FROM provider_api_keys k
+                      WHERE k.provider_id = chain.provider_id
+                      ORDER BY k.sort_order, k.created_at, k.id LIMIT 1)
+             FROM router_chain chain
+             JOIN usage_providers up ON up.id = chain.provider_id
+             WHERE chain.agent = ?1 AND chain.enabled = 1
+             ORDER BY chain.priority ASC, chain.provider_id ASC",
         )?;
         let rows = statement
-            .query_map([], |row| {
+            .query_map([agent], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(3)?,
                     row.get::<_, i64>(4)?,
                     row.get::<_, bool>(5)?,
-                    row.get::<_, String>(6)?,
-                    row.get::<_, Option<String>>(7)?,
+                    row.get::<_, Option<String>>(6)?,
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
-        rows.into_iter()
+
+        Ok(rows
+            .into_iter()
             .map(
-                |(id, display_name, base_url, wire_raw, priority, enabled, auth_raw, key_id)| {
-                    Ok(RouterProvider {
+                |(id, name, billing, config, priority, enabled, key_id)| {
+                    let (base_url, wire_api, auth_kind) =
+                        derive_connection(&billing, config.as_deref());
+                    RouterProvider {
                         id,
-                        display_name,
+                        display_name: name,
                         base_url,
-                        wire_api: wire_api_from_db(&wire_raw)?,
+                        wire_api,
                         priority,
                         enabled,
-                        auth_kind: auth_kind_from_db(&auth_raw)?,
+                        auth_kind,
                         credential_key_id: key_id,
-                    })
+                    }
                 },
             )
-            .collect()
+            // base_url 推不出来的那家当不了转发目标,直接不进链 —— 让它带着空
+            // base_url 往下走,只会在拼 URL 时变成一个看不懂的 404。
+            .filter(|provider| !provider.base_url.is_empty())
+            .collect())
     }
 
-    /// 某个逻辑模型在各家的映射，按 provider 的 priority 升序。
-    /// 返回的每一项都保证 provider 是 enabled 的。
-    pub fn list_model_routes(&self, logical_model: &str) -> Result<Vec<ModelRoute>, AppError> {
+    /// 链上存的原始行(含未启用的),供设置界面编辑。
+    pub fn list_router_chain(&self, agent: &str) -> Result<Vec<RouterChainEntry>, AppError> {
         let conn = lock_conn!(self.conn);
         let mut statement = conn.prepare(
-            "SELECT map.provider_id, map.logical_model, map.upstream_model
-             FROM router_model_map map
-             JOIN router_providers provider ON provider.id = map.provider_id
-             WHERE map.logical_model = ?1 AND provider.enabled = 1
-             ORDER BY provider.priority ASC, provider.id ASC",
+            "SELECT agent, provider_id, priority, enabled FROM router_chain
+             WHERE agent = ?1 ORDER BY priority ASC, provider_id ASC",
         )?;
-        let routes = statement
-            .query_map([logical_model], |row| {
-                Ok(ModelRoute {
-                    provider_id: row.get(0)?,
-                    logical_model: row.get(1)?,
-                    upstream_model: row.get(2)?,
+        let rows = statement
+            .query_map([agent], |row| {
+                Ok(RouterChainEntry {
+                    agent: row.get(0)?,
+                    provider_id: row.get(1)?,
+                    priority: row.get(2)?,
+                    enabled: row.get(3)?,
                 })
             })?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(AppError::from)?;
+        Ok(rows)
+    }
+
+    /// 某个逻辑模型在这个 agent 各家上的映射，按 priority 升序。
+    /// 返回的每一项都保证那家在链上且启用。
+    pub fn list_model_routes(
+        &self,
+        agent: &str,
+        logical_model: &str,
+    ) -> Result<Vec<ModelRoute>, AppError> {
+        let conn = lock_conn!(self.conn);
+        let mut statement = conn.prepare(
+            "SELECT map.agent, map.provider_id, map.logical_model, map.upstream_model
+             FROM router_model_map map
+             JOIN router_chain chain
+               ON chain.agent = map.agent AND chain.provider_id = map.provider_id
+             WHERE map.agent = ?1 AND map.logical_model = ?2 AND chain.enabled = 1
+             ORDER BY chain.priority ASC, chain.provider_id ASC",
+        )?;
+        let routes = statement
+            .query_map([agent, logical_model], model_route_from)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(AppError::from)?;
         Ok(routes)
     }
 
-    /// 供设置界面用:列出**全部**映射,含已停用 provider 的。
+    /// 供设置界面用:某个 agent 的**全部**映射,含已停用那些。
     ///
-    /// 与上面的 `list_model_routes` 是两个用途,别合并:那个是路由决策路径,按单个
-    /// 逻辑模型查、且只要 `enabled = 1`;这个是编辑界面的读路径,要把用户配过的东西
-    /// 原样显示出来(面板上「已停用」的那家照样列出它的映射)。
-    pub fn list_all_model_routes(&self) -> Result<Vec<ModelRoute>, AppError> {
+    /// 与上面是两个用途,别合并:那个是转发决策路径(单模型、只要启用的),
+    /// 这个是编辑界面的读路径,要把用户配过的原样显示出来。
+    pub fn list_all_model_routes(&self, agent: &str) -> Result<Vec<ModelRoute>, AppError> {
         let conn = lock_conn!(self.conn);
         let mut statement = conn.prepare(
-            "SELECT map.provider_id, map.logical_model, map.upstream_model
+            "SELECT map.agent, map.provider_id, map.logical_model, map.upstream_model
              FROM router_model_map map
-             JOIN router_providers provider ON provider.id = map.provider_id
-             ORDER BY provider.priority ASC, provider.id ASC, map.logical_model ASC",
+             JOIN router_chain chain
+               ON chain.agent = map.agent AND chain.provider_id = map.provider_id
+             WHERE map.agent = ?1
+             ORDER BY chain.priority ASC, chain.provider_id ASC, map.logical_model ASC",
         )?;
         let routes = statement
-            .query_map([], |row| {
-                Ok(ModelRoute {
-                    provider_id: row.get(0)?,
-                    logical_model: row.get(1)?,
-                    upstream_model: row.get(2)?,
-                })
-            })?
+            .query_map([agent], model_route_from)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(AppError::from)?;
         Ok(routes)
     }
 
-    pub fn upsert_router_provider(&self, p: &RouterProvider) -> Result<(), AppError> {
+    /// 把一家加进链、或改它的顺序与启用位。
+    pub fn upsert_router_chain_entry(&self, entry: &RouterChainEntry) -> Result<(), AppError> {
+        let now = now_ms();
         let conn = lock_conn!(self.conn);
-        let now = now_timestamp()?;
         conn.execute(
-            "INSERT INTO router_providers (
-                 id, display_name, base_url, wire_api, priority, enabled,
-                 auth_kind, credential_key_id, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)
-             ON CONFLICT(id) DO UPDATE SET
-                 display_name = excluded.display_name,
-                 base_url = excluded.base_url,
-                 wire_api = excluded.wire_api,
-                 priority = excluded.priority,
-                 enabled = excluded.enabled,
-                 auth_kind = excluded.auth_kind,
-                 credential_key_id = excluded.credential_key_id,
+            "INSERT INTO router_chain
+                 (agent, provider_id, priority, enabled, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?5)
+             ON CONFLICT(agent, provider_id) DO UPDATE SET
+                 priority   = excluded.priority,
+                 enabled    = excluded.enabled,
                  updated_at = excluded.updated_at",
             params![
-                p.id,
-                p.display_name,
-                p.base_url,
-                wire_api_to_db(p.wire_api),
-                p.priority,
-                p.enabled,
-                auth_kind_to_db(p.auth_kind),
-                p.credential_key_id,
-                now,
+                entry.agent,
+                entry.provider_id,
+                entry.priority,
+                entry.enabled as i64,
+                now
             ],
         )?;
         Ok(())
     }
 
-    pub fn delete_router_provider(&self, id: &str) -> Result<(), AppError> {
+    /// 把一家移出链。**不动那家 usage provider 本身** —— 用户只是不再路由到它,
+    /// 不代表不再监控它。
+    pub fn remove_from_router_chain(
+        &self,
+        agent: &str,
+        provider_id: &str,
+    ) -> Result<(), AppError> {
         let conn = lock_conn!(self.conn);
-        conn.execute("DELETE FROM router_providers WHERE id = ?1", [id])?;
+        conn.execute(
+            "DELETE FROM router_chain WHERE agent = ?1 AND provider_id = ?2",
+            [agent, provider_id],
+        )?;
         Ok(())
     }
 
     pub fn upsert_model_route(&self, r: &ModelRoute) -> Result<(), AppError> {
+        let now = now_ms();
         let conn = lock_conn!(self.conn);
         conn.execute(
-            "INSERT INTO router_model_map (
-                 provider_id, logical_model, upstream_model, created_at
-             ) VALUES (?1, ?2, ?3, ?4)
-             ON CONFLICT(provider_id, logical_model) DO UPDATE SET
+            "INSERT INTO router_model_map
+                 (agent, provider_id, logical_model, upstream_model, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(agent, provider_id, logical_model) DO UPDATE SET
                  upstream_model = excluded.upstream_model",
-            params![
-                r.provider_id,
-                r.logical_model,
-                r.upstream_model,
-                now_timestamp()?,
-            ],
+            params![r.agent, r.provider_id, r.logical_model, r.upstream_model, now],
         )?;
         Ok(())
     }
 
-    pub fn delete_model_routes_for_provider(&self, provider_id: &str) -> Result<(), AppError> {
+    pub fn delete_model_routes_for_provider(
+        &self,
+        agent: &str,
+        provider_id: &str,
+    ) -> Result<(), AppError> {
         let conn = lock_conn!(self.conn);
         conn.execute(
-            "DELETE FROM router_model_map WHERE provider_id = ?1",
-            [provider_id],
+            "DELETE FROM router_model_map WHERE agent = ?1 AND provider_id = ?2",
+            [agent, provider_id],
         )?;
         Ok(())
     }

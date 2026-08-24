@@ -2,77 +2,98 @@
 //!
 //! 这里只做参数搬运:取 state → 调 `crate::api::router::RouterApi` → 把
 //! `AppError` 转成 `String`(脱敏面)。业务编排、SQL、校验都在 api 层,
-//! 将来的 socket 面板复用 api,而不是这里。
+//! socket 面板复用 api,而不是这里。
 //!
-//! 视图/输入结构体已随业务搬进 api 层,这里 `pub use` 转出,
-//! 前端看到的类型路径不变。
+//! 2026-08-24 起路由按 agent 分,且只存对 `usage_providers` 的引用 ——
+//! 所以每个命令都带 `agent`,而「添加 provider」变成了「从候选名单里挑」。
+//! 见 docs/design/2026-08-24-router-references-usage-providers.md
 
 use crate::api::router::RouterApi;
 use crate::app_state::AppState;
 
 pub use crate::api::router::{
-    ModelRouteInput, ModelRouteView, PointerStateView, RouterProviderInput, RouterProviderView,
-    RouterUsageSummaryView, DEFAULT_ROUTER_PORT, POINTER_GAP_KEY,
+    ModelRouteInput, ModelRouteView, PointerStateView, RouterCandidateView, RouterChainInput,
+    RouterProviderView, RouterUsageSummaryView, DEFAULT_ROUTER_PORT, POINTER_GAP_KEY,
 };
 
-/// 列出全部 router provider(含未启用的,供设置界面编辑)。
+/// 某个 agent 链上的全部 provider(含未启用的,供设置界面编辑)。
 #[tauri::command]
 pub async fn list_router_providers(
     state: tauri::State<'_, AppState>,
+    agent: String,
 ) -> Result<Vec<RouterProviderView>, String> {
     RouterApi::new(state.db.clone())
-        .list_providers()
+        .list_providers(&agent)
         .map_err(|e| e.to_string())
 }
 
-/// 新增或更新一个 provider。
+/// 还没加进链、但可以加的那些。
 #[tauri::command]
-pub async fn upsert_router_provider(
+pub async fn list_router_candidates(
     state: tauri::State<'_, AppState>,
-    input: RouterProviderInput,
+    agent: String,
+) -> Result<Vec<RouterCandidateView>, String> {
+    RouterApi::new(state.db.clone())
+        .list_candidates(&agent)
+        .map_err(|e| e.to_string())
+}
+
+/// 把一家加进链,或改它的顺序 / 启用位。
+#[tauri::command]
+pub async fn upsert_router_chain_entry(
+    state: tauri::State<'_, AppState>,
+    agent: String,
+    input: RouterChainInput,
 ) -> Result<(), String> {
     RouterApi::new(state.db.clone())
-        .upsert_provider(input)
+        .upsert_chain_entry(&agent, input)
         .map_err(|e| e.to_string())
 }
 
+/// 把一家移出链。**不动那家 provider 本身。**
 #[tauri::command]
-pub async fn delete_router_provider(
+pub async fn remove_from_router_chain(
     state: tauri::State<'_, AppState>,
-    id: String,
+    agent: String,
+    provider_id: String,
 ) -> Result<(), String> {
     RouterApi::new(state.db.clone())
-        .delete_provider(&id)
+        .remove_from_chain(&agent, &provider_id)
         .map_err(|e| e.to_string())
 }
 
-/// 某个 provider 的模型映射,全量替换。
+/// 某家的模型映射,全量替换。
 #[tauri::command]
 pub async fn set_model_routes(
     state: tauri::State<'_, AppState>,
+    agent: String,
     provider_id: String,
     routes: Vec<ModelRouteInput>,
 ) -> Result<(), String> {
     RouterApi::new(state.db.clone())
-        .set_model_routes(&provider_id, routes)
+        .set_model_routes(&agent, &provider_id, routes)
         .map_err(|e| e.to_string())
 }
 
-/// 列出全部模型映射(含已停用 provider 的),供设置界面渲染。
+/// 列出这个 agent 的全部模型映射(含已停用那家的),供设置界面渲染。
 #[tauri::command]
 pub async fn list_model_routes(
     state: tauri::State<'_, AppState>,
+    agent: String,
 ) -> Result<Vec<ModelRouteView>, String> {
     RouterApi::new(state.db.clone())
-        .list_model_routes()
+        .list_model_routes(&agent)
         .map_err(|e| e.to_string())
 }
 
 /// 读路由模式。值是 `"auto"` 或 `"manual:<provider_id>"`。
 #[tauri::command]
-pub async fn get_router_mode(state: tauri::State<'_, AppState>) -> Result<String, String> {
+pub async fn get_router_mode(
+    state: tauri::State<'_, AppState>,
+    agent: String,
+) -> Result<String, String> {
     RouterApi::new(state.db.clone())
-        .get_mode()
+        .get_mode(&agent)
         .map_err(|e| e.to_string())
 }
 
@@ -80,10 +101,11 @@ pub async fn get_router_mode(state: tauri::State<'_, AppState>) -> Result<String
 #[tauri::command]
 pub async fn set_router_mode(
     state: tauri::State<'_, AppState>,
+    agent: String,
     mode: String,
 ) -> Result<(), String> {
     RouterApi::new(state.db.clone())
-        .set_mode(&mode)
+        .set_mode(&agent, &mode)
         .map_err(|e| e.to_string())
 }
 
