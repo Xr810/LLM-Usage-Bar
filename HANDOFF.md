@@ -1309,3 +1309,93 @@ services/    剩 17 个文件(同步、告警、定价调度、subscription 等)
 `/Applications/LLM Usage Bar.app` 是**旧构建**且常驻运行,它一直在写
 `~/.llm-usage-bar/llm-usage-bar.db`(该库仍停在 v26,首次启动新构建才会迁到 v28,
 迁移前自动备份,T21 已在副本上实测 25 张表零变化)。**装新构建前先退掉它。**
+
+## 19. 交接:2026-08-24 这一轮做了什么,下一步是什么
+
+分支 `feat/native-bridge-replant`(基于 main,**未合并**),7 个提交。
+`main` 未动。`docs/router-panel-visual-direction` 是另一条独立线(设计三件套)。
+
+### 19.1 这一轮的两件大事
+
+**一、把 SwiftUI 路由面板从零做出来了**(T27–T31)。
+
+- T27 弃用落后 113 commit 的 `feat/swift-native-shell`,只移栽 bridge 层
+  (`native/Sources/UsageCore` + 契约测试 + `src-tauri/src/native_bridge.rs`),
+  14 个旧视图不要 —— 它们本来就要按新视觉方向重写
+- T28 bridge 启动接线 + 路由命令接入。补了第十个命令 `listModelRoutes`(原来九个只能
+  写映射、读不回来,而模型映射是第一屏)
+- T29 token 层:主题结构(system / overcast / ink)、身份色与状态色分离、设计 lint
+- T30 四个分区(模型映射 / 凭据 / 接管 / 模式与分账),一个可滚动 pane
+- T31 两个编辑 sheet(provider 编辑器、映射编辑器 + 粘贴清单解析)
+
+**二、发现路由的数据模型是错的,正在改**(见 §19.2)。
+
+### 19.2 正在进行:路由改为引用 provider 名单
+
+权威文件:`docs/design/2026-08-24-router-references-usage-providers.md`
+
+**问题**:原设计里 `router_providers` 是独立一张表,把 provider 的身份(id、显示名、
+base_url、协议、认证)**又存了一遍**。第一个症状是凭据存不进去 ——
+`provider_api_keys.provider_id` 外键指向 `usage_providers`,而路由用的是另一份 id。
+
+**新模型**(用户拍板,参照 LiteLLM):provider 名单只有一份(`usage_providers`,
+加进来就是要监控的),**路由只是从这份名单里挑一个有序子集,按 agent 分**。
+Codex 挑 3 家、Claude 挑另外 3 家。
+
+**骨架早就在**:`usage_providers` 每行自带 `route_app_type`(codex/claude)与
+`route_config`({base_url, apiFormat, authMode}),还有一张 `route_bindings`。
+是后做的本地路由没有用它。
+
+**已完成(提交 `e9e10921`)**:表结构、DAO、api 层、tauri 命令、bridge 分发臂 ——
+Rust 生产代码全部改完,`cargo check` **零错误**。
+
+### 19.3 下一步(按顺序)
+
+**第一步:60 处测试**。`cargo test --lib` 编译不过,分布:
+
+| 文件 | 处数 |
+| --- | --- |
+| `src/store/dao/router.rs` | 25 |
+| `src/api/router.rs` | 25 |
+| `src/route/server.rs` | 4 |
+| `src/native_bridge.rs` | 3 |
+| `src/route/auth.rs` | 2 |
+| `src/route/decision.rs` | 1 |
+
+全是按旧模型写的。**这是好信号 —— 旧模型确实被测试锁着。** 改测试时注意:
+`native/Tests/UsageCoreTests/Fixtures/router-contract-v1.json` 是 Rust 与 Swift
+**共用**的契约 fixture,两侧都要跟着改(Rust 侧断言序列化结果 == fixture,
+Swift 侧断言能解回 DTO)。
+
+**第二步:Swift 侧**。DTO 形状变了:
+- `RouterProviderV1` 去掉 `credentialKeyId`,换成 `hasCredential: Bool`
+- 新增 `RouterCandidateV1`(可以加进链但还没加的那些)
+- 所有命令加 `agent` 参数;`upsertRouterProvider` → `upsertRouterChainEntry`;
+  `deleteRouterProvider` → `removeFromRouterChain`;新增 `listRouterCandidates`
+- `getRouterMode` / `setRouterMode` 也加 agent
+
+**第三步:UI 语义变化**(改动最大):
+- 「添加 Provider」从**填表**变成**从名单里挑**(`ProviderEditorSheet` 基本作废,
+  换成一个候选列表)
+- 凭据那一节从**绑 key** 变成**显示那家的凭据状态** + 跳转到那家 provider 自己的设置
+- 「移出链」不等于删 provider —— 文案要改,别让用户以为会把监控也删掉
+
+### 19.4 之后还欠的
+
+- 产品外壳(菜单栏 / 窗口 / 生命周期 / 与真实 bridge 连接)。**四个分区至今只跑在
+  `PreviewRouterRepository` 的假数据上,从没连过真后端**
+- `native/script/bridge_e2e.mjs` 对路由命令**零覆盖**(实测 `router` 出现 0 次)
+- 菜单栏 popover(设计里的 4c)。决定 30/31 的主要落点在那儿
+- 四语言:`NativeUI` 里 39 处 `Text("中文")` 全硬编码,本地化是零
+- `TODO(T28)`:`native_bridge.rs` 的 Settings 交接目的地
+- 设计 lint 没接进 CI
+
+### 19.5 两条工作方式,别再走弯路
+
+- **看 SwiftUI 界面用 Xcode 的 `#Preview`**,别 `swift run`、别手工打包 `.app`。
+  包里**不能有可执行 target** —— 有的话 Xcode 会挑它当预览宿主,报
+  `DebugDylibNotEnabled`(SwiftPM 设不了那个开关),四个预览全废
+- **无头渲图**:`PANEL_SHOTS_DIR=/tmp/shots swift test --filter renderPanelSnapshots`。
+  注意 `ImageRenderer` **渲不出 `ScrollView` 里的内容**(所以视图拆了 `.content` 层),
+  也**渲不了 `TextField`/`Picker`/`Toggle`/`List`**(会出黄色占位块)——
+  那几个控件只能在 Xcode canvas 或真窗口里验
