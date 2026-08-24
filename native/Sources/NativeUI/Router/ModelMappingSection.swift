@@ -95,7 +95,11 @@ public struct ModelMappingSection: View {
                 )
             }
         } trailing: {
-            statusBadge(for: provider)
+            HStack(spacing: NativeSpacing.xs) {
+                statusBadge(for: provider)
+                Button("编辑…") { onEditRoutes(provider) }
+                    .controlSize(.small)
+            }
         }
         .accessibilityElement(children: .combine)
 

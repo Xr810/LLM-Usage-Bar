@@ -11,45 +11,73 @@ public struct RouterPanelView: View {
     private let appearance: NativeResolvedAppearance
     private let routerPort: Int
 
-    private let onAddProvider: () -> Void
-    private let onEditRoutes: (RouterProviderV1) -> Void
+    /// 只留两个真正需要外部提供的:凭据写入还没有 bridge 通道(见 T31),
+    /// 在访达中显示要 NSWorkspace。其余动作面板自己调 model 就够了。
     private let onBindCredential: (RouterProviderV1) -> Void
     private let onUnbindCredential: (RouterProviderV1) -> Void
-    private let onEnablePointer: () -> Void
     private let onRevealInFinder: () -> Void
-    private let onModeChange: (RouterModeV1) -> Void
-    private let onMoveProviders: (IndexSet, Int) -> Void
+
+    /// 面板内部的 sheet。
+    enum PanelSheet: Identifiable {
+        case provider(RouterProviderV1?)
+        case routes(RouterProviderV1)
+
+        var id: String {
+            switch self {
+            case let .provider(existing): return "provider-\(existing?.id ?? "new")"
+            case let .routes(provider): return "routes-\(provider.id)"
+            }
+        }
+    }
+
+    @State private var sheet: PanelSheet?
 
     public init(
         model: RouterPanelModel,
         appearance: NativeResolvedAppearance,
         routerPort: Int = 8788,
-        onAddProvider: @escaping () -> Void = {},
-        onEditRoutes: @escaping (RouterProviderV1) -> Void = { _ in },
         onBindCredential: @escaping (RouterProviderV1) -> Void = { _ in },
         onUnbindCredential: @escaping (RouterProviderV1) -> Void = { _ in },
-        onEnablePointer: @escaping () -> Void = {},
-        onRevealInFinder: @escaping () -> Void = {},
-        onModeChange: @escaping (RouterModeV1) -> Void = { _ in },
-        onMoveProviders: @escaping (IndexSet, Int) -> Void = { _, _ in }
+        onRevealInFinder: @escaping () -> Void = {}
     ) {
         self.model = model
         self.appearance = appearance
         self.routerPort = routerPort
-        self.onAddProvider = onAddProvider
-        self.onEditRoutes = onEditRoutes
         self.onBindCredential = onBindCredential
         self.onUnbindCredential = onUnbindCredential
-        self.onEnablePointer = onEnablePointer
         self.onRevealInFinder = onRevealInFinder
-        self.onModeChange = onModeChange
-        self.onMoveProviders = onMoveProviders
     }
 
     private var theme: NativeTheme { appearance.theme }
 
     public var body: some View {
         ScrollView { content }
+            .sheet(item: $sheet) { which in
+                switch which {
+                case let .provider(existing):
+                    ProviderEditorSheet(
+                        theme: theme,
+                        existing: existing,
+                        takenIds: Set(model.providers.map(\.id)),
+                        onCancel: { sheet = nil },
+                        onSave: { provider in
+                            sheet = nil
+                            Task { await model.save(provider: provider) }
+                        }
+                    )
+                case let .routes(provider):
+                    ModelRoutesEditorSheet(
+                        theme: theme,
+                        provider: provider,
+                        routes: model.routes(forProvider: provider.id),
+                        onCancel: { sheet = nil },
+                        onSave: { routes in
+                            sheet = nil
+                            Task { await model.saveRoutes(providerId: provider.id, routes: routes) }
+                        }
+                    )
+                }
+            }
             .background(background)
             .tint(theme.accent)
             .environment(\.colorScheme, theme.appearance == .dark ? .dark : .light)
@@ -72,8 +100,8 @@ public struct RouterPanelView: View {
                 ModelMappingSection(
                     model: model,
                     theme: theme,
-                    onAddProvider: onAddProvider,
-                    onEditRoutes: onEditRoutes
+                    onAddProvider: { sheet = .provider(nil) },
+                    onEditRoutes: { sheet = .routes($0) }
                 )
                 CredentialsSection(
                     model: model,
@@ -85,14 +113,16 @@ public struct RouterPanelView: View {
                     model: model,
                     theme: theme,
                     routerPort: routerPort,
-                    onEnable: onEnablePointer,
+                    onEnable: { Task { await model.enablePointer() } },
                     onRevealInFinder: onRevealInFinder
                 )
                 ModeAndAccountingSection(
                     model: model,
                     theme: theme,
-                    onModeChange: onModeChange,
-                    onMove: onMoveProviders
+                    onModeChange: { mode in Task { await model.setMode(mode) } },
+                    onMove: { source, destination in
+                        Task { await model.moveProviders(fromOffsets: source, toOffset: destination) }
+                    }
                 )
         }
         .padding(NativeSpacing.lg)

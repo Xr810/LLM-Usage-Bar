@@ -64,6 +64,56 @@ enum PanelRenderer {
         ]
     }
 
+    /// 两个 sheet 单独渲 —— 它们不在面板的内容层里,渲图时要另走一遍。
+    static func renderSheets(into directory: URL) throws {
+        let theme = NativeThemeCatalog.overcast
+        let provider = PreviewRouterRepository.sampleProviders[1]
+
+        try shoot(
+            "08-sheet-provider-new",
+            ProviderEditorSheet(
+                theme: theme, existing: nil, takenIds: ["official"],
+                onCancel: {}, onSave: { _ in }
+            ),
+            into: directory
+        )
+        try shoot(
+            "09-sheet-provider-edit",
+            ProviderEditorSheet(
+                theme: theme, existing: provider,
+                takenIds: Set(PreviewRouterRepository.sampleProviders.map(\.id)),
+                onCancel: {}, onSave: { _ in }
+            ),
+            into: directory
+        )
+        try shoot(
+            "10-sheet-routes",
+            ModelRoutesEditorSheet(
+                theme: theme, provider: provider,
+                routes: PreviewRouterRepository.sampleRoutes
+                    .filter { $0.providerId == provider.id },
+                onCancel: {}, onSave: { _ in }
+            ),
+            into: directory
+        )
+    }
+
+    private static func shoot(_ name: String, _ view: some View, into directory: URL) throws {
+        let renderer = ImageRenderer(content: view)
+        renderer.scale = 2
+        guard let image = renderer.nsImage,
+              let tiff = image.tiffRepresentation,
+              let rep = NSBitmapImageRep(data: tiff),
+              let png = rep.representation(using: .png, properties: [:])
+        else {
+            FileHandle.standardError.write(Data("渲染失败: \(name)\n".utf8))
+            return
+        }
+        let url = directory.appendingPathComponent("\(name).png")
+        try png.write(to: url)
+        print("\(url.path)  \(Int(image.size.width))x\(Int(image.size.height))")
+    }
+
     static func render(into directory: URL, width: CGFloat = 880) async throws {
         try FileManager.default.createDirectory(
             at: directory, withIntermediateDirectories: true
@@ -114,5 +164,7 @@ enum PanelRenderer {
     guard let path = ProcessInfo.processInfo.environment["PANEL_SHOTS_DIR"],
           !path.isEmpty
     else { return }
-    try await PanelRenderer.render(into: URL(fileURLWithPath: path))
+    let directory = URL(fileURLWithPath: path)
+    try await PanelRenderer.render(into: directory)
+    try PanelRenderer.renderSheets(into: directory)
 }
