@@ -1,0 +1,274 @@
+{
+  "providerDashboard": {
+    "schemaVersion": 1,
+    "data": {
+      "startAt": 1775606400,
+      "endAt": 1776211200,
+      "providers": [
+        {
+          "provider": {
+            "id": "codex-work",
+            "name": "Codex Work",
+            "billingKind": "subscription",
+            "productGroupId": "chatgpt-pro",
+            "enabled": true,
+            "systemPresetKey": "codex"
+          },
+          "sharedAccount": false,
+          "eventCount": 12,
+          "inputTokens": 1200,
+          "outputTokens": 800,
+          "cacheReadTokens": 500,
+          "cacheCreationTokens": 100,
+          "totalCostUsd": null,
+          "costSourceCounts": {
+            "upstream": 0,
+            "estimated": 0,
+            "unavailable": 12
+          },
+          "quota": {
+            "snapshotId": "quota-codex-work",
+            "fetchedAt": 1776207600,
+            "sourceObservedAt": 1776207540,
+            "planType": "pro",
+            "planRenewsAt": null,
+            "fiveHourUtilizationPercent": "42.5",
+            "fiveHourResetsAt": "2026-04-15T12:00:00Z",
+            "sevenDayUtilizationPercent": null,
+            "sevenDayResetsAt": null,
+            "fiveHourPace": {
+              "status": "green",
+              "burnRatePercentPerHour": "3.25",
+              "projectedExhaustAt": null,
+              "headroomRatio": "1.4",
+              "paceBasis": "measured",
+              "rhythmAdjustment": "0.95",
+              "flatStatus": "green"
+            },
+            "sevenDayPace": {
+              "status": "unknown",
+              "burnRatePercentPerHour": null,
+              "projectedExhaustAt": null,
+              "headroomRatio": null,
+              "paceBasis": "static",
+              "rhythmAdjustment": null,
+              "flatStatus": null
+            },
+            "manualResetsRemaining": null,
+            "manualResetCredits": []
+          },
+          "quotaFetchState": {
+            "providerId": "codex-work",
+            "lastAttemptAt": 1776207600,
+            "lastSuccessAt": 1776207600,
+            "lastError": null,
+            "consecutiveFailures": 0,
+            "stale": false
+          }
+        }
+      ],
+      "trendGranularity": "day",
+      "trendBuckets": [
+        {
+          "startAt": 1776124800,
+          "endAt": 1776211200,
+          "eventCount": 12,
+          "inputTokens": 1200,
+          "outputTokens": 800,
+          "cacheReadTokens": 500,
+          "cacheCreationTokens": 100,
+          "totalTokens": 2600,
+          "totalCostUsd": null,
+          "costSourceCounts": {
+            "upstream": 0,
+            "estimated": 0,
+            "unavailable": 12
+          }
+        }
+      ],
+      "warnings": []
+    }
+  },
+  "modelDashboard": {
+    "schemaVersion": 1,
+    "data": {
+      "startAt": 1775606400,
+      "endAt": 1776211200,
+      "totalTokens": 2600,
+      "totalEventCount": 12,
+      "totalCostUsd": null,
+      "productGroups": [
+        {
+          "productGroupId": "chatgpt-pro",
+          "billingKind": "subscription",
+          "providerIds": ["codex-work"],
+          "providerNames": ["Codex Work"],
+          "eventCount": 12,
+          "inputTokens": 1200,
+          "outputTokens": 800,
+          "cacheReadTokens": 500,
+          "cacheCreationTokens": 100,
+          "totalTokens": 2600,
+          "totalCostUsd": null,
+          "costSourceCounts": {
+            "upstream": 0,
+            "estimated": 0,
+            "unavailable": 12
+          },
+          "models": [
+            {
+              "model": "gpt-5.6-codex",
+              "providerId": "codex-work",
+              "providerName": "Codex Work",
+              "productGroupId": "chatgpt-pro",
+              "billingKind": "subscription",
+              "eventCount": 12,
+              "inputTokens": 1200,
+              "outputTokens": 800,
+              "cacheReadTokens": 500,
+              "cacheCreationTokens": 100,
+              "totalTokens": 2600,
+              "totalCostUsd": null,
+              "costSourceCounts": {
+                "upstream": 0,
+                "estimated": 0,
+                "unavailable": 12
+              },
+              "firstOccurredAt": 1776124800,
+              "lastOccurredAt": 1776207600
+            }
+          ]
+        }
+      ],
+      "models": [
+        {
+          "model": "gpt-5.6-codex",
+          "providerIds": ["codex-work"],
+          "eventCount": 12,
+          "inputTokens": 1200,
+          "outputTokens": 800,
+          "cacheReadTokens": 500,
+          "cacheCreationTokens": 100,
+          "totalTokens": 2600,
+          "totalCostUsd": null,
+          "costSourceCounts": {
+            "upstream": 0,
+            "estimated": 0,
+            "unavailable": 12
+          },
+          "firstOccurredAt": 1776124800,
+          "lastOccurredAt": 1776207600
+        }
+      ],
+      "warnings": []
+    }
+  },
+  "agentBreakdown": {
+    "schemaVersion": 1,
+    "data": {
+      "startAt": 1775606400,
+      "endAt": 1776211200,
+      "totalTokens": 2600,
+      "totalEventCount": 12,
+      "totalCostUsd": null,
+      "agents": [
+        {
+          "agentModuleId": "codex",
+          "agentName": "Codex",
+          "archived": false,
+          "visible": true,
+          "eventCount": 12,
+          "inputTokens": 1200,
+          "outputTokens": 800,
+          "cacheReadTokens": 500,
+          "cacheCreationTokens": 100,
+          "totalTokens": 2600,
+          "totalCostUsd": null,
+          "costSourceCounts": {
+            "upstream": 0,
+            "estimated": 0,
+            "unavailable": 12
+          },
+          "firstOccurredAt": 1776124800,
+          "lastOccurredAt": 1776207600,
+          "providers": [
+            {
+              "providerId": "codex-work",
+              "providerName": "Codex Work",
+              "productGroupId": "chatgpt-pro",
+              "billingKind": "subscription",
+              "eventCount": 12,
+              "inputTokens": 1200,
+              "outputTokens": 800,
+              "cacheReadTokens": 500,
+              "cacheCreationTokens": 100,
+              "totalTokens": 2600,
+              "totalCostUsd": null,
+              "costSourceCounts": {
+                "upstream": 0,
+                "estimated": 0,
+                "unavailable": 12
+              }
+            }
+          ],
+          "models": [
+            {
+              "model": "gpt-5.6-codex",
+              "providerIds": ["codex-work"],
+              "eventCount": 12,
+              "inputTokens": 1200,
+              "outputTokens": 800,
+              "cacheReadTokens": 500,
+              "cacheCreationTokens": 100,
+              "totalTokens": 2600,
+              "totalCostUsd": null,
+              "costSourceCounts": {
+                "upstream": 0,
+                "estimated": 0,
+                "unavailable": 12
+              },
+              "firstOccurredAt": 1776124800,
+              "lastOccurredAt": 1776207600
+            }
+          ]
+        }
+      ],
+      "warnings": []
+    }
+  },
+  "usageEvents": {
+    "schemaVersion": 1,
+    "data": {
+      "items": [
+        {
+          "eventId": "event-1",
+          "source": "session_log",
+          "providerId": "codex-work",
+          "agentModuleId": "codex",
+          "productGroupId": "chatgpt-pro",
+          "occurredAt": 1776207600,
+          "model": "gpt-5.6-codex",
+          "inputTokens": 100,
+          "outputTokens": 50,
+          "cacheReadTokens": 25,
+          "cacheCreationTokens": 0,
+          "requestId": "request-redacted-1",
+          "sessionId": null,
+          "upstreamCorrelationId": null,
+          "inputCostUsd": null,
+          "outputCostUsd": null,
+          "cacheReadCostUsd": null,
+          "cacheCreationCostUsd": null,
+          "totalCostUsd": null,
+          "costSource": "unavailable",
+          "pricingOrigin": null,
+          "legacyRequestId": null,
+          "createdAt": 1776207601
+        }
+      ],
+      "total": 12,
+      "page": 1,
+      "pageSize": 50
+    }
+  }
+}
