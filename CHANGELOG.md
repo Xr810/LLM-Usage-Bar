@@ -1,9 +1,11 @@
 # Changelog
 
-All notable changes to CC Switch will be documented in this file.
+All notable changes to LLM Usage Bar will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+> **About this file.** LLM Usage Bar was forked from [CC Switch](https://github.com/farion1231/cc-switch) by Jason Young. Every entry below documents a CC Switch release and is kept unchanged for provenance — the version numbers in it are CC Switch's, not this project's. LLM Usage Bar has not cut a release of its own yet, so it has no entries here.
 
 ## [3.16.5] - 2026-07-01
 

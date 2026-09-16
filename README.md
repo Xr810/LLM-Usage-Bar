@@ -10,6 +10,8 @@
 
 English | [中文](README_ZH.md) | [日本語](README_JA.md) | [Deutsch](README_DE.md) | [Changelog](CHANGELOG.md)
 
+*Forked from [CC Switch](https://github.com/farion1231/cc-switch) and rebuilt around usage tracking — see [Credits](#credits).*
+
 </div>
 
 ## What it does
@@ -146,6 +148,10 @@ English, 简体中文, 繁體中文, and 日本語.
 ## Built with
 
 [Tauri 2](https://tauri.app/) · Rust · React 19 · TypeScript · SQLite
+
+## Credits
+
+LLM Usage Bar began as a fork of [CC Switch](https://github.com/farion1231/cc-switch) by Jason Young, and still builds on its provider, storage, sync and metering foundations. CC Switch's provider-switching, proxy, MCP, prompts and skills features have been removed; the quota, ingestion, aggregation, dashboard, routing and native-bridge layers are new to this project.
 
 ## License
 

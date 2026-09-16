@@ -10,6 +10,8 @@
 
 [English](README.md) | 中文 | [日本語](README_JA.md) | [Deutsch](README_DE.md) | [更新日志](CHANGELOG.md)
 
+*Fork 自 [CC Switch](https://github.com/farion1231/cc-switch)，围绕用量追踪重建 —— 见 [致谢](#致谢)。*
+
 </div>
 
 ## 它做什么
@@ -146,6 +148,10 @@ English、简体中文、繁體中文、日本語。
 ## 技术栈
 
 [Tauri 2](https://tauri.app/) · Rust · React 19 · TypeScript · SQLite
+
+## 致谢
+
+LLM Usage Bar 起初是 [CC Switch](https://github.com/farion1231/cc-switch)（作者 Jason Young）的 fork，至今仍构建在它的 Provider、存储、同步与计量基础之上。CC Switch 的 Provider 切换、代理、MCP、Prompts 与 Skills 功能已被移除；quota、ingestion、aggregation、dashboard、routing 与 native bridge 各层为本项目新增。
 
 ## 许可证
 
