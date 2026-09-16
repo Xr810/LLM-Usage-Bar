@@ -4,7 +4,7 @@
 
 ### See what your AI coding tools are actually costing you — subscription quota and API spend, in one menu bar
 
-[![Platform](https://img.shields.io/badge/platform-macOS%2012%2B-lightgrey.svg)](#install)
+[![Platform](https://img.shields.io/badge/platform-macOS%2012%2B%20%7C%20Windows%2010%2B-lightgrey.svg)](#install)
 [![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-orange.svg)](https://tauri.app/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
@@ -69,9 +69,24 @@ Three tabs over the same time range — today, 7 days, 30 days, or a year:
 
 Every request is inspectable, and cost is recomputed from pricing you control: refresh the official price list, or override any model's rate per Provider.
 
+## Cross-platform architecture
+
+The supported development direction is **React + TypeScript for the UI, Tauri 2 + Rust for the desktop backend**. macOS and Windows share the same interface and business logic, exposed through the macOS menu bar or Windows system tray. The former Swift / SwiftUI migration is discontinued; its historical branches are archives.
+
+Use Node.js 24 LTS, pnpm 11 and stable Rust. macOS requires Xcode Command Line Tools. Windows 10/11 requires Visual Studio C++ Build Tools with the Windows SDK and WebView2.
+
+```sh
+pnpm install --frozen-lockfile
+pnpm dev
+# Build on the target operating system
+pnpm build
+```
+
+macOS builds app / DMG bundles; Windows builds NSIS / MSI installers. Output is under `release/tauri-target/release/bundle/`. Windows compilation and credential tests run in Windows CI; tray interaction and installer behavior still need a real Windows smoke test before release. Claude Desktop local data sources are platform-dependent and may not be available on Windows.
+
 ## Install
 
-There are no published releases yet. Build it yourself — macOS 12 or later:
+There are no published releases yet. Use the cross-platform commands above. On macOS 12 or later, this additional helper signs a local build:
 
 ```bash
 pnpm install && pnpm build:local:mac
@@ -90,7 +105,7 @@ That builds and signs the app at `release/tauri-target/release/bundle/macos/LLM 
 | `~/.llm-usage-bar/backups/`         | Automatic pre-migration backups, 10 most recent by default |
 | `~/.llm-usage-bar/logs/`            | Application log                                            |
 
-API keys are stored in the macOS Keychain, never in the database and never in the logs. Spend figures are never written to the log file.
+API keys are stored in macOS Keychain or the current user’s Windows Credential Manager, never in the database and never in the logs. macOS debug builds keep credential storage disabled. Spend figures are never written to the log file.
 
 Optional sync — the database can be kept in a custom config directory (iCloud, Dropbox, OneDrive, NAS) or pushed to WebDAV or S3-compatible storage. Off by default.
 

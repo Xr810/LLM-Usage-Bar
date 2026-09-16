@@ -1,5 +1,8 @@
 # 模块化:一个 core + provider 模块 + 多个前端面板
 
+> **历史设计，路线已变更（2026-09-17）：** SwiftUI 相关方案已停止，当前采用 React + TypeScript / Tauri 2 + Rust 支持 macOS 与 Windows。以仓库 README 和 HANDOFF 顶部更新为准。
+
+
 > **状态:2026-08-14 已批准。** §10 的第一步、第二步已拆成
 > [`../tasks/T1-ingest-pipeline.md`](../tasks/T1-ingest-pipeline.md) 与
 > [`../tasks/T2-subscription-split.md`](../tasks/T2-subscription-split.md) 落地;

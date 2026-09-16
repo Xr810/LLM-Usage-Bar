@@ -2,9 +2,11 @@
 
 # LLM Usage Bar
 
-### AI コーディングツールに実際いくらかかっているか — サブスクリプション残量と API 支出を、メニューバーにひとつで
+#> **2026-09-17:** The SwiftUI migration is discontinued. The shared macOS / Windows frontend uses React + TypeScript with Tauri 2 + Rust. See [current build instructions](README.md#cross-platform-architecture).
 
-[![Platform](https://img.shields.io/badge/platform-macOS%2012%2B-lightgrey.svg)](#インストール)
+## AI コーディングツールに実際いくらかかっているか — サブスクリプション残量と API 支出を、メニューバーにひとつで
+
+[![Platform](https://img.shields.io/badge/platform-macOS%2012%2B%20%7C%20Windows%2010%2B-lightgrey.svg)](#インストール)
 [![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-orange.svg)](https://tauri.app/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
@@ -90,7 +92,7 @@ pnpm install && pnpm build:local:mac
 | `~/.llm-usage-bar/backups/`         | マイグレート前の自動バックアップ、既定で最新 10 件          |
 | `~/.llm-usage-bar/logs/`            | アプリケーションログ                                        |
 
-API キーは macOS キーチェーンに保存され、データベースにもログにも入りません。支出の数値がログファイルに書かれることもありません。
+API キーは macOS キーチェーンまたは Windows Credential Manager に保存され、データベースにもログにも入りません。支出の数値がログファイルに書かれることもありません。
 
 同期は任意です。データベースをカスタム設定ディレクトリ（iCloud、Dropbox、OneDrive、NAS）に置くことも、WebDAV や S3 互換ストレージへ送ることもできます。既定では無効です。
 

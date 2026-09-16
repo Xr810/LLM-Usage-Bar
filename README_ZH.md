@@ -4,7 +4,7 @@
 
 ### 你的 AI 编程工具到底花了多少 —— 订阅额度和 API 花费，都在菜单栏里
 
-[![Platform](https://img.shields.io/badge/platform-macOS%2012%2B-lightgrey.svg)](#安装)
+[![Platform](https://img.shields.io/badge/platform-macOS%2012%2B%20%7C%20Windows%2010%2B-lightgrey.svg)](#安装)
 [![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-orange.svg)](https://tauri.app/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
@@ -69,9 +69,26 @@ LLM Usage Bar 在本地把这些全读出来，在菜单栏给出一个答案：
 
 每一次请求都可以展开查看，成本按你掌控的定价重算：可以刷新官方价目表，也可以为任一模型在某个 Provider 下单独覆盖价格。
 
+## 跨平台技术栈
+
+正式技术路线为 **React + TypeScript 前端、Tauri 2 + Rust 后端**，macOS 和 Windows 共用同一套界面与业务逻辑。已停止 Swift / SwiftUI 迁移路线；历史分支仅作归档。macOS 使用菜单栏，Windows 使用系统托盘。
+
+构建需要 Node.js 24 LTS、pnpm 11 和 Rust stable。macOS 需 Xcode Command Line Tools；Windows 10/11 需 Visual Studio C++ Build Tools（含 Windows SDK）及 WebView2。
+
+```sh
+pnpm install --frozen-lockfile
+pnpm dev
+# 在目标系统上生成安装包
+pnpm build
+```
+
+macOS 生成 app / DMG，Windows 生成 NSIS / MSI；产物在 `release/tauri-target/release/bundle/`。Windows 的编译与凭据存储测试由 Windows CI 执行；发布前仍需真机验证托盘和安装体验。
+
+API key 在 macOS 存入 Keychain，在 Windows 存入当前用户的 Credential Manager。macOS 调试构建仍禁用凭据存储。Claude Desktop 本地数据源具有平台差异，Windows 不保证与 macOS 完全一致。
+
 ## 安装
 
-目前还没有发布任何 release，需要自己构建 —— 要求 macOS 12 及以上：
+目前还没有发布任何 release，请按上面的跨平台命令构建。macOS 12 及以上也可使用带签名的本地构建脚本：
 
 ```bash
 pnpm install && pnpm build:local:mac

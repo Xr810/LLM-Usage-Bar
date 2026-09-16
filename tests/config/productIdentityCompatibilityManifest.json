@@ -1046,5 +1046,165 @@
     "matchedText": "cc-switch",
     "kind": "legacyReadOnly",
     "reason": "exact read-only legacy compatibility or coexistence reference"
+  },
+  {
+    "file": "README.md",
+    "context": "*Forked from [CC Switch](https://github.com/farion1231/cc-switch) and rebuilt around usage tracking — see [Credits](#credits).*",
+    "columnNumber": 15,
+    "matchedText": "CC Switch",
+    "kind": "legacyReadOnly",
+    "reason": "Upstream attribution retained under the MIT license; not the application identity"
+  },
+  {
+    "file": "README.md",
+    "context": "*Forked from [CC Switch](https://github.com/farion1231/cc-switch) and rebuilt around usage tracking — see [Credits](#credits).*",
+    "columnNumber": 56,
+    "matchedText": "cc-switch",
+    "kind": "legacyReadOnly",
+    "reason": "Upstream attribution retained under the MIT license; not the application identity"
+  },
+  {
+    "file": "README.md",
+    "context": "LLM Usage Bar began as a fork of [CC Switch](https://github.com/farion1231/cc-switch) by Jason Young, and still builds on its provider, storage, sync and metering foundations. CC Switch's provider-switching, proxy, MCP, prompts and skills features have been removed; the quota, ingestion, aggregation, dashboard, routing and native-bridge layers are new to this project.",
+    "columnNumber": 35,
+    "matchedText": "CC Switch",
+    "kind": "legacyReadOnly",
+    "reason": "Upstream attribution retained under the MIT license; not the application identity"
+  },
+  {
+    "file": "README.md",
+    "context": "LLM Usage Bar began as a fork of [CC Switch](https://github.com/farion1231/cc-switch) by Jason Young, and still builds on its provider, storage, sync and metering foundations. CC Switch's provider-switching, proxy, MCP, prompts and skills features have been removed; the quota, ingestion, aggregation, dashboard, routing and native-bridge layers are new to this project.",
+    "columnNumber": 76,
+    "matchedText": "cc-switch",
+    "kind": "legacyReadOnly",
+    "reason": "Upstream attribution retained under the MIT license; not the application identity"
+  },
+  {
+    "file": "README.md",
+    "context": "LLM Usage Bar began as a fork of [CC Switch](https://github.com/farion1231/cc-switch) by Jason Young, and still builds on its provider, storage, sync and metering foundations. CC Switch's provider-switching, proxy, MCP, prompts and skills features have been removed; the quota, ingestion, aggregation, dashboard, routing and native-bridge layers are new to this project.",
+    "columnNumber": 177,
+    "matchedText": "CC Switch",
+    "kind": "legacyReadOnly",
+    "reason": "Upstream attribution retained under the MIT license; not the application identity"
+  },
+  {
+    "file": "README_ZH.md",
+    "context": "*Fork 自 [CC Switch](https://github.com/farion1231/cc-switch)，围绕用量追踪重建 —— 见 [致谢](#致谢)。*",
+    "columnNumber": 10,
+    "matchedText": "CC Switch",
+    "kind": "legacyReadOnly",
+    "reason": "Upstream attribution retained under the MIT license; not the application identity"
+  },
+  {
+    "file": "README_ZH.md",
+    "context": "*Fork 自 [CC Switch](https://github.com/farion1231/cc-switch)，围绕用量追踪重建 —— 见 [致谢](#致谢)。*",
+    "columnNumber": 51,
+    "matchedText": "cc-switch",
+    "kind": "legacyReadOnly",
+    "reason": "Upstream attribution retained under the MIT license; not the application identity"
+  },
+  {
+    "file": "README_ZH.md",
+    "context": "LLM Usage Bar 起初是 [CC Switch](https://github.com/farion1231/cc-switch)（作者 Jason Young）的 fork，至今仍构建在它的 Provider、存储、同步与计量基础之上。CC Switch 的 Provider 切换、代理、MCP、Prompts 与 Skills 功能已被移除；quota、ingestion、aggregation、dashboard、routing 与 native bridge 各层为本项目新增。",
+    "columnNumber": 20,
+    "matchedText": "CC Switch",
+    "kind": "legacyReadOnly",
+    "reason": "Upstream attribution retained under the MIT license; not the application identity"
+  },
+  {
+    "file": "README_ZH.md",
+    "context": "LLM Usage Bar 起初是 [CC Switch](https://github.com/farion1231/cc-switch)（作者 Jason Young）的 fork，至今仍构建在它的 Provider、存储、同步与计量基础之上。CC Switch 的 Provider 切换、代理、MCP、Prompts 与 Skills 功能已被移除；quota、ingestion、aggregation、dashboard、routing 与 native bridge 各层为本项目新增。",
+    "columnNumber": 61,
+    "matchedText": "cc-switch",
+    "kind": "legacyReadOnly",
+    "reason": "Upstream attribution retained under the MIT license; not the application identity"
+  },
+  {
+    "file": "README_ZH.md",
+    "context": "LLM Usage Bar 起初是 [CC Switch](https://github.com/farion1231/cc-switch)（作者 Jason Young）的 fork，至今仍构建在它的 Provider、存储、同步与计量基础之上。CC Switch 的 Provider 切换、代理、MCP、Prompts 与 Skills 功能已被移除；quota、ingestion、aggregation、dashboard、routing 与 native bridge 各层为本项目新增。",
+    "columnNumber": 125,
+    "matchedText": "CC Switch",
+    "kind": "legacyReadOnly",
+    "reason": "Upstream attribution retained under the MIT license; not the application identity"
+  },
+  {
+    "file": "README_DE.md",
+    "context": "*Ein Fork von [CC Switch](https://github.com/farion1231/cc-switch), neu aufgebaut rund um Nutzungs-Tracking — siehe [Credits](#credits).*",
+    "columnNumber": 16,
+    "matchedText": "CC Switch",
+    "kind": "legacyReadOnly",
+    "reason": "Upstream attribution retained under the MIT license; not the application identity"
+  },
+  {
+    "file": "README_DE.md",
+    "context": "*Ein Fork von [CC Switch](https://github.com/farion1231/cc-switch), neu aufgebaut rund um Nutzungs-Tracking — siehe [Credits](#credits).*",
+    "columnNumber": 57,
+    "matchedText": "cc-switch",
+    "kind": "legacyReadOnly",
+    "reason": "Upstream attribution retained under the MIT license; not the application identity"
+  },
+  {
+    "file": "README_DE.md",
+    "context": "LLM Usage Bar begann als Fork von [CC Switch](https://github.com/farion1231/cc-switch) von Jason Young und baut weiterhin auf dessen Provider-, Speicher-, Sync- und Metering-Fundament auf. Die Funktionen von CC Switch für Provider-Wechsel, Proxy, MCP, Prompts und Skills wurden entfernt; die Schichten für Quota, Ingestion, Aggregation, Dashboard, Routing und Native Bridge sind neu in diesem Projekt.",
+    "columnNumber": 36,
+    "matchedText": "CC Switch",
+    "kind": "legacyReadOnly",
+    "reason": "Upstream attribution retained under the MIT license; not the application identity"
+  },
+  {
+    "file": "README_DE.md",
+    "context": "LLM Usage Bar begann als Fork von [CC Switch](https://github.com/farion1231/cc-switch) von Jason Young und baut weiterhin auf dessen Provider-, Speicher-, Sync- und Metering-Fundament auf. Die Funktionen von CC Switch für Provider-Wechsel, Proxy, MCP, Prompts und Skills wurden entfernt; die Schichten für Quota, Ingestion, Aggregation, Dashboard, Routing und Native Bridge sind neu in diesem Projekt.",
+    "columnNumber": 77,
+    "matchedText": "cc-switch",
+    "kind": "legacyReadOnly",
+    "reason": "Upstream attribution retained under the MIT license; not the application identity"
+  },
+  {
+    "file": "README_DE.md",
+    "context": "LLM Usage Bar begann als Fork von [CC Switch](https://github.com/farion1231/cc-switch) von Jason Young und baut weiterhin auf dessen Provider-, Speicher-, Sync- und Metering-Fundament auf. Die Funktionen von CC Switch für Provider-Wechsel, Proxy, MCP, Prompts und Skills wurden entfernt; die Schichten für Quota, Ingestion, Aggregation, Dashboard, Routing und Native Bridge sind neu in diesem Projekt.",
+    "columnNumber": 209,
+    "matchedText": "CC Switch",
+    "kind": "legacyReadOnly",
+    "reason": "Upstream attribution retained under the MIT license; not the application identity"
+  },
+  {
+    "file": "README_JA.md",
+    "context": "*[CC Switch](https://github.com/farion1231/cc-switch) から fork し、使用量トラッキングを中心に作り直したものです — [クレジット](#クレジット)を参照。*",
+    "columnNumber": 3,
+    "matchedText": "CC Switch",
+    "kind": "legacyReadOnly",
+    "reason": "Upstream attribution retained under the MIT license; not the application identity"
+  },
+  {
+    "file": "README_JA.md",
+    "context": "*[CC Switch](https://github.com/farion1231/cc-switch) から fork し、使用量トラッキングを中心に作り直したものです — [クレジット](#クレジット)を参照。*",
+    "columnNumber": 44,
+    "matchedText": "cc-switch",
+    "kind": "legacyReadOnly",
+    "reason": "Upstream attribution retained under the MIT license; not the application identity"
+  },
+  {
+    "file": "README_JA.md",
+    "context": "LLM Usage Bar は [CC Switch](https://github.com/farion1231/cc-switch)（作者: Jason Young）の fork として始まり、現在もその Provider・ストレージ・同期・計量の基盤の上に構築されています。CC Switch の Provider 切り替え、プロキシ、MCP、Prompts、Skills の各機能は削除されており、quota・ingestion・aggregation・dashboard・routing・native bridge の各レイヤーは本プロジェクトで新規に作成したものです。",
+    "columnNumber": 18,
+    "matchedText": "CC Switch",
+    "kind": "legacyReadOnly",
+    "reason": "Upstream attribution retained under the MIT license; not the application identity"
+  },
+  {
+    "file": "README_JA.md",
+    "context": "LLM Usage Bar は [CC Switch](https://github.com/farion1231/cc-switch)（作者: Jason Young）の fork として始まり、現在もその Provider・ストレージ・同期・計量の基盤の上に構築されています。CC Switch の Provider 切り替え、プロキシ、MCP、Prompts、Skills の各機能は削除されており、quota・ingestion・aggregation・dashboard・routing・native bridge の各レイヤーは本プロジェクトで新規に作成したものです。",
+    "columnNumber": 59,
+    "matchedText": "cc-switch",
+    "kind": "legacyReadOnly",
+    "reason": "Upstream attribution retained under the MIT license; not the application identity"
+  },
+  {
+    "file": "README_JA.md",
+    "context": "LLM Usage Bar は [CC Switch](https://github.com/farion1231/cc-switch)（作者: Jason Young）の fork として始まり、現在もその Provider・ストレージ・同期・計量の基盤の上に構築されています。CC Switch の Provider 切り替え、プロキシ、MCP、Prompts、Skills の各機能は削除されており、quota・ingestion・aggregation・dashboard・routing・native bridge の各レイヤーは本プロジェクトで新規に作成したものです。",
+    "columnNumber": 141,
+    "matchedText": "CC Switch",
+    "kind": "legacyReadOnly",
+    "reason": "Upstream attribution retained under the MIT license; not the application identity"
   }
 ]

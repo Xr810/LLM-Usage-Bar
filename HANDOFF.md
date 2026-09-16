@@ -1,5 +1,8 @@
 # LLM Usage Bar — 全局交接文档(合并版)
 
+> **2026-09-17 技术路线更新（优先于下方历史记录）：** 用户决定停止 Swift / SwiftUI 路线，正式维护当前仓库中的 React + TypeScript / Tauri 2 + Rust，共用 macOS 与 Windows 前端。历史 Swift 分支保留归档，不再执行下方 Swift 迁移待办。MIT 许可证及原作者声明保留。Windows 打包改为 NSIS / MSI，凭据接入 Windows Credential Manager，CI 增加双平台构建与 Windows 凭据测试。Windows 真机交互验收尚待执行。
+
+
 最后核实:2026-08-13(所有事实当天用 git / sqlite3 / grep 逐条验证过,不是抄旧文档)
 最后更新:2026-08-13 —— ①分支与 stash 收敛、docs 重排,见 §0 与 §11.7;②§11.3 重写:
 游标 N+1 与 tokio worker 数已由提交 `52bd4559` 修掉,该节改为「已完成 / 仍未做」两栏;

@@ -2,9 +2,11 @@
 
 # LLM Usage Bar
 
-### Was deine KI-Coding-Tools wirklich kosten — Abo-Kontingent und API-Ausgaben, gebündelt in der Menüleiste
+#> **2026-09-17:** The SwiftUI migration is discontinued. The shared macOS / Windows frontend uses React + TypeScript with Tauri 2 + Rust. See [current build instructions](README.md#cross-platform-architecture).
 
-[![Platform](https://img.shields.io/badge/platform-macOS%2012%2B-lightgrey.svg)](#installation)
+## Was deine KI-Coding-Tools wirklich kosten — Abo-Kontingent und API-Ausgaben, gebündelt in der Menüleiste
+
+[![Platform](https://img.shields.io/badge/platform-macOS%2012%2B%20%7C%20Windows%2010%2B-lightgrey.svg)](#installation)
 [![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-orange.svg)](https://tauri.app/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
@@ -90,7 +92,7 @@ Das baut und signiert die App unter `release/tauri-target/release/bundle/macos/L
 | `~/.llm-usage-bar/backups/`         | Automatische Backups vor Migrationen, standardmäßig die letzten 10    |
 | `~/.llm-usage-bar/logs/`            | Anwendungsprotokoll                                                   |
 
-API-Keys liegen im macOS-Schlüsselbund — nie in der Datenbank und nie in den Logs. Ausgabenbeträge werden nie in die Logdatei geschrieben.
+API-Keys liegen im macOS-Schlüsselbund oder im Windows Credential Manager — nie in der Datenbank und nie in den Logs. Ausgabenbeträge werden nie in die Logdatei geschrieben.
 
 Synchronisierung ist optional: Die Datenbank kann in einem eigenen Konfigurationsverzeichnis liegen (iCloud, Dropbox, OneDrive, NAS) oder auf WebDAV bzw. S3-kompatiblen Speicher geschoben werden. Standardmäßig aus.
 
