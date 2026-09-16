@@ -15,7 +15,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::AppError;
 use crate::route::pointer::PointerState;
-use crate::store::{lock_conn, Database, ModelRoute, RouterChainEntry};
+use crate::store::{
+    auth_kind_to_db, lock_conn, wire_api_to_db, Database, ModelRoute, RouterChainEntry,
+    RouterProviderRef,
+};
 
 /// router 默认监听端口(settings 里没有 `router.port` 或解析不了时用)。
 pub const DEFAULT_ROUTER_PORT: u16 = 8788;
@@ -210,36 +213,6 @@ pub struct RouterApi {
     db: Arc<Database>,
 }
 
-/// 从一家 usage provider 推出「当转发目标时」的连接方式。
-///
-/// 与 DAO 里那个 `derive_connection` 同一套规则,只是输入形态不同:那边拿的是
-/// 数据库原始列,这边拿的是已经组装好的视图。规则本身只有一处真相 ——
-/// 订阅且没有 route base = OAuth;有 base 就看 authMode。
-fn derive_candidate_connection(
-    provider: &crate::model::domain::UsageProviderView,
-) -> (String, String, String) {
-    match provider
-        .route_base_url
-        .as_deref()
-        .or(provider.canonical_endpoint.as_deref())
-    {
-        Some(base) if !base.is_empty() => {
-            let auth = if provider.has_route_credentials || !provider.api_keys.is_empty() {
-                "bearer_key"
-            } else {
-                "none"
-            };
-            (base.to_string(), "chat_completions".to_string(), auth.to_string())
-        }
-        // 没有 base 的订阅那家 = Codex 自己的 OAuth 路。
-        _ => (
-            "https://chatgpt.com/backend-api".to_string(),
-            "responses".to_string(),
-            "chatgpt_oauth".to_string(),
-        ),
-    }
-}
-
 impl RouterApi {
     pub fn new(db: Arc<Database>) -> Self {
         Self { db }
@@ -254,31 +227,21 @@ impl RouterApi {
         if chain.is_empty() {
             return Ok(Vec::new());
         }
-        let catalog: std::collections::HashMap<String, _> = self
+        let catalog: std::collections::HashMap<String, RouterProviderRef> = self
             .db
-            .list_usage_providers()?
+            .router_provider_refs(agent)?
             .into_iter()
-            .map(|provider| (provider.id.clone(), provider))
+            .map(|reference| (reference.id.clone(), reference))
             .collect();
 
         Ok(chain
             .into_iter()
             .filter_map(|entry| {
-                // 链上引用的那家被删了 —— 外键是 ON DELETE CASCADE,正常不会发生;
-                // 真发生了就跳过,不要拿一行空壳去糊弄界面。
-                let provider = catalog.get(&entry.provider_id)?;
-                let (base_url, wire_api, auth_kind) = derive_candidate_connection(provider);
-                Some(RouterProviderView {
-                    id: entry.provider_id,
-                    display_name: provider.name.clone(),
-                    base_url,
-                    wire_api,
-                    priority: entry.priority,
-                    enabled: entry.enabled,
-                    auth_kind,
-                    has_credential: provider.has_route_credentials
-                        || !provider.api_keys.is_empty(),
-                })
+                // 链上引用的那家被删了、或它的 route_app_type 被改到别的 agent 去了。
+                // 外键是 ON DELETE CASCADE,前者正常不会发生;真发生了就跳过,
+                // 不要拿一行空壳去糊弄界面。
+                let reference = catalog.get(&entry.provider_id)?;
+                Some(provider_view(reference, entry.priority, entry.enabled))
             })
             .collect())
     }
@@ -335,22 +298,17 @@ impl RouterApi {
 
         Ok(self
             .db
-            .list_usage_providers()?
+            .router_provider_refs(agent)?
             .into_iter()
-            .filter(|provider| provider.route_app_type.as_deref() == Some(agent))
-            .filter(|provider| !on_chain.contains(&provider.id))
-            .map(|provider| {
-                let (base_url, wire_api, auth_kind) = derive_candidate_connection(&provider);
-                RouterCandidateView {
-                    id: provider.id,
-                    display_name: provider.name,
-                    base_url,
-                    wire_api,
-                    auth_kind,
-                    has_credential: provider.has_route_credentials
-                        || !provider.api_keys.is_empty(),
-                    billing_kind: format!("{:?}", provider.billing_kind).to_lowercase(),
-                }
+            .filter(|reference| !on_chain.contains(&reference.id))
+            .map(|reference| RouterCandidateView {
+                id: reference.id,
+                display_name: reference.display_name,
+                base_url: reference.base_url,
+                wire_api: wire_api_to_db(reference.wire_api).to_string(),
+                auth_kind: auth_kind_to_db(reference.auth_kind).to_string(),
+                has_credential: reference.credential_key_id.is_some(),
+                billing_kind: reference.billing_kind,
             })
             .collect())
     }

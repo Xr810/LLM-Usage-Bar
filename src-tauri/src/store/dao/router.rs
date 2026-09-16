@@ -27,6 +27,27 @@ pub struct RouterProvider {
     pub credential_key_id: Option<String>,
 }
 
+/// 一家 usage provider「当转发目标时」的样子。
+///
+/// 链上项与候选项(面板「从名单里挑」那一屏)都由它派生 —— 推导规则只有
+/// `derive_connection` 一处。上一版就是因为 api 层自己又推了一遍,
+/// base_url、协议、认证在面板与转发链之间会慢慢分叉。
+#[derive(Debug, Clone, PartialEq)]
+pub struct RouterProviderRef {
+    /// = `usage_providers.id`
+    pub id: String,
+    pub display_name: String,
+    /// `subscription` | `metered`,原样来自 `usage_providers`。
+    pub billing_kind: String,
+    /// 推不出来时是**空串** —— 这家当不了转发目标。转发链直接过滤掉它,
+    /// 面板则要显示成「缺连接信息」,所以这里不提前丢。
+    pub base_url: String,
+    pub wire_api: WireApi,
+    pub auth_kind: RouterAuthKind,
+    /// 那家的主 key。只是「去哪把凭据取出来」,不是凭据本身。
+    pub credential_key_id: Option<String>,
+}
+
 /// 存下来的那一条:引用 + 顺序。**只有这个是真表。**
 #[derive(Debug, Clone, PartialEq)]
 pub struct RouterChainEntry {
@@ -149,7 +170,7 @@ fn now_timestamp() -> Result<i64, AppError> {
         .map_err(|error| AppError::Database(format!("system clock before unix epoch: {error}")))
 }
 
-fn wire_api_to_db(api: WireApi) -> &'static str {
+pub(crate) fn wire_api_to_db(api: WireApi) -> &'static str {
     match api {
         WireApi::Responses => "responses",
         WireApi::ChatCompletions => "chat_completions",
@@ -164,7 +185,7 @@ fn wire_api_from_db(raw: &str) -> Result<WireApi, AppError> {
     }
 }
 
-fn auth_kind_to_db(kind: RouterAuthKind) -> &'static str {
+pub(crate) fn auth_kind_to_db(kind: RouterAuthKind) -> &'static str {
     match kind {
         RouterAuthKind::ChatgptOauth => "chatgpt_oauth",
         RouterAuthKind::BearerKey => "bearer_key",
@@ -297,6 +318,52 @@ impl Database {
             .collect::<Result<Vec<_>, _>>()
             .map_err(AppError::from)?;
         Ok(rows)
+    }
+
+    /// 能给这个 agent 当转发目标的**全部** provider,不论在不在链上,按 id 升序。
+    ///
+    /// 「添加 Provider」在新模型下是从这份名单里挑(设计文档 §4 决定 8),
+    /// 面板显示链上那几家时也用它来取派生字段 —— 两个用途共用一份推导,
+    /// 面板看到的连接方式与转发时真正用的必然一致。
+    pub fn router_provider_refs(&self, agent: &str) -> Result<Vec<RouterProviderRef>, AppError> {
+        let conn = lock_conn!(self.conn);
+        let mut statement = conn.prepare(
+            "SELECT up.id, up.name, up.billing_kind, up.route_config,
+                    (SELECT k.id FROM provider_api_keys k
+                      WHERE k.provider_id = up.id
+                      ORDER BY k.sort_order, k.created_at, k.id LIMIT 1)
+             FROM usage_providers up
+             WHERE up.route_app_type = ?1
+             ORDER BY up.id ASC",
+        )?;
+        let rows = statement
+            .query_map([agent], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(AppError::from)?;
+
+        Ok(rows
+            .into_iter()
+            .map(|(id, name, billing, config, key_id)| {
+                let (base_url, wire_api, auth_kind) = derive_connection(&billing, config.as_deref());
+                RouterProviderRef {
+                    id,
+                    display_name: name,
+                    billing_kind: billing,
+                    base_url,
+                    wire_api,
+                    auth_kind,
+                    credential_key_id: key_id,
+                }
+            })
+            .collect())
     }
 
     /// 某个逻辑模型在这个 agent 各家上的映射，按 priority 升序。
