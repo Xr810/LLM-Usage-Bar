@@ -1552,6 +1552,7 @@ pub fn run() {
             commands::auth_logout,
             // Local router commands (T10)
             commands::list_router_providers,
+            commands::list_router_model_routes,
             commands::upsert_router_provider,
             commands::delete_router_provider,
             commands::set_model_routes,
@@ -1559,6 +1560,7 @@ pub fn run() {
             commands::set_router_mode,
             commands::inspect_router_pointer,
             commands::enable_router_pointer,
+            commands::disconnect_router_pointer,
             commands::recent_router_attempts,
             // Copilot OAuth commands (multi-account support)
             // OMO commands

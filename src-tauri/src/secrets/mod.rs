@@ -5,6 +5,8 @@ mod service;
 #[cfg(target_os = "macos")]
 mod macos;
 mod unavailable;
+#[cfg(target_os = "windows")]
+mod windows;
 
 use serde::{Deserialize, Deserializer};
 use std::fmt;
@@ -67,7 +69,11 @@ pub(crate) fn production_credential_store() -> Arc<dyn CredentialStore> {
     {
         Arc::new(macos::MacOsCredentialStore)
     }
-    #[cfg(not(all(target_os = "macos", not(debug_assertions))))]
+    #[cfg(target_os = "windows")]
+    {
+        Arc::new(windows::WindowsCredentialStore)
+    }
+    #[cfg(not(any(target_os = "windows", all(target_os = "macos", not(debug_assertions)))))]
     {
         unavailable_credential_store()
     }

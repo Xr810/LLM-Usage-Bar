@@ -4,7 +4,7 @@
 
 ### See what your AI coding tools are actually costing you — subscription quota and API spend, in one menu bar
 
-[![Platform](https://img.shields.io/badge/platform-macOS%2012%2B-lightgrey.svg)](#install)
+[![Platform](https://img.shields.io/badge/platform-macOS%2012%2B%20%7C%20Windows%2010%2B-lightgrey.svg)](#install)
 [![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-orange.svg)](https://tauri.app/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
@@ -20,7 +20,7 @@ If you code with Claude Code and Codex, your usage is split across places that n
 
 LLM Usage Bar reads all of it locally and puts one answer in the menu bar: **how much is left, and how fast you are going through it.**
 
-It does not proxy your requests, does not manage your CLI configuration, and does not need an account. It reads the session logs and quota files your tools already write to disk, and calls provider billing endpoints with keys you supply.
+Monitoring reads local session logs and quota files, and calls provider billing endpoints with keys you supply. Optional local routing is configured separately in Settings; only an explicit Connect Codex confirmation changes your CLI configuration.
 
 ## Two things it tracks
 
@@ -35,6 +35,10 @@ It does not proxy your requests, does not manage your CLI configuration, and doe
 - Give a Provider a list of **named API keys** and each one reports its own daily and monthly spend, remaining budget, and when the figures were last fetched. Providers with more than one key also show a combined total.
 - Spend is read from the provider's own billing endpoint. OpenRouter is wired up today; other presets need their own endpoint before they report anything.
 - Set a daily budget per Provider, or an overall API budget, and the bar tells you when you are outrunning it.
+
+## Optional Codex routing
+
+Settings → Local routing provides provider priority, saved API-key selection, model mappings, automatic failover or a manual provider, and per-provider request/token totals. Configure a Responses-compatible endpoint and map each requested model before connecting. Connection changes are confirmed and backed up; Restore direct connection keeps your other current Codex settings. Restart Codex after either action and keep this app running while connected.
 
 ## The usage light
 
@@ -57,7 +61,7 @@ Open the popover for the detail behind the call: the pace it measured, what it p
 | Coding-plan endpoints            | Plan quota and remaining resets       | Kimi, GLM, MiniMax by API key; Volcano Ark by AK/SK signature |
 | Provider billing endpoints       | Per-key spend and limits              | Direct call with the key you saved                            |
 
-There is no local proxy and no request interception. Anything a tool does not write to disk, and no endpoint reports, the app does not know.
+Monitoring works independently of optional routing. Routed request totals count only traffic and usage actually observed by the router; they are a lower bound, not an account balance.
 
 ## Breakdowns
 
@@ -69,9 +73,24 @@ Three tabs over the same time range — today, 7 days, 30 days, or a year:
 
 Every request is inspectable, and cost is recomputed from pricing you control: refresh the official price list, or override any model's rate per Provider.
 
+## Cross-platform architecture
+
+The supported development direction is **React + TypeScript for the UI, Tauri 2 + Rust for the desktop backend**. macOS and Windows share the same interface and business logic, exposed through the macOS menu bar or Windows system tray. The former Swift / SwiftUI migration is discontinued; its historical branches are archives.
+
+Use Node.js 24 LTS, pnpm 11 and stable Rust. macOS requires Xcode Command Line Tools. Windows 10/11 requires Visual Studio C++ Build Tools with the Windows SDK and WebView2.
+
+```sh
+pnpm install --frozen-lockfile
+pnpm dev
+# Build on the target operating system
+pnpm build
+```
+
+macOS builds app / DMG bundles; Windows builds NSIS / MSI installers. Output is under `release/tauri-target/release/bundle/`. Windows CI checks compilation, credential storage, and routing connection/restore. Release builds also install the Windows NSIS package and check app startup, database initialization, and the local router. Windows tray interaction still needs manual validation. Claude Desktop local data sources are platform-dependent and may not be available on Windows.
+
 ## Install
 
-There are no published releases yet. Build it yourself — macOS 12 or later:
+Download macOS and Windows installers from [GitHub Releases](https://github.com/Xr810/LLM-Usage-Bar/releases/latest). The macOS app is ad-hoc signed and not notarized; Windows installers are unsigned. See the release notes for installation steps and SHA-256 checksums. To build from source, use the cross-platform commands above. On macOS 12 or later, this additional helper signs a local build:
 
 ```bash
 pnpm install && pnpm build:local:mac
@@ -90,7 +109,7 @@ That builds and signs the app at `release/tauri-target/release/bundle/macos/LLM 
 | `~/.llm-usage-bar/backups/`         | Automatic pre-migration backups, 10 most recent by default |
 | `~/.llm-usage-bar/logs/`            | Application log                                            |
 
-API keys are stored in the macOS Keychain, never in the database and never in the logs. Spend figures are never written to the log file.
+API keys are stored in macOS Keychain or the current user’s Windows Credential Manager, never in the database and never in the logs. macOS debug builds keep credential storage disabled. Spend figures are never written to the log file.
 
 Optional sync — the database can be kept in a custom config directory (iCloud, Dropbox, OneDrive, NAS) or pushed to WebDAV or S3-compatible storage. Off by default.
 
@@ -99,7 +118,7 @@ Optional sync — the database can be kept in a custom config directory (iCloud,
 <details>
 <summary><strong>Do I need to change how I run Claude Code or Codex?</strong></summary>
 
-No. The app reads files those tools already write. Nothing is proxied, injected, or rewritten. If you uninstall it, your CLIs are unaffected.
+Monitoring needs no CLI changes. Optional routing requires explicit confirmation and a Codex restart. Restore direct connection in Settings before uninstalling if you enabled routing.
 
 </details>
 

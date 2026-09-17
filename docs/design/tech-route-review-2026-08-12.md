@@ -1,5 +1,8 @@
 # 技术路线评审请求:LLM Usage Bar 的核心语言与 UI 层选型
 
+> **历史设计，路线已变更（2026-09-17）：** SwiftUI 相关方案已停止，当前采用 React + TypeScript / Tauri 2 + Rust 支持 macOS 与 Windows。以仓库 README 和 HANDOFF 顶部更新为准。
+
+
 > 撰写日期:2026-08-12
 > 用途:提交外部专家评审
 > 状态:**尚未决策**,本文是请求评审的输入材料

@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::AppError;
 use crate::route::pointer::PointerState;
-use crate::store::{lock_conn, Database, ModelRoute, RouterAuthKind, RouterProvider, WireApi};
+use crate::store::{lock_conn, Database, RouterAuthKind, RouterProvider, WireApi};
 
 /// router 默认监听端口(settings 里没有 `router.port` 或解析不了时用)。
 pub const DEFAULT_ROUTER_PORT: u16 = 8788;
@@ -56,7 +56,7 @@ pub struct RouterProviderInput {
 }
 
 /// 一条模型映射(全量替换的输入单元)。
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelRouteInput {
     pub logical_model: String,
@@ -230,6 +230,19 @@ impl RouterApi {
 
     /// 新增或更新一个 provider。`wire_api` / `auth_kind` 在入口处校验,非法值进不了库。
     pub fn upsert_provider(&self, input: RouterProviderInput) -> Result<(), AppError> {
+        let endpoint = url::Url::parse(&input.base_url)
+            .map_err(|_| AppError::InvalidInput("Invalid provider base URL".into()))?;
+        if input.id.trim().is_empty()
+            || input.display_name.trim().is_empty()
+            || !matches!(endpoint.scheme(), "http" | "https")
+            || endpoint.host_str().is_none()
+            || !endpoint.username().is_empty()
+            || endpoint.password().is_some()
+            || endpoint.query().is_some()
+            || endpoint.fragment().is_some()
+        {
+            return Err(AppError::InvalidInput("Provider requires a name and an HTTP(S) base URL without embedded credentials, query or fragment".into()));
+        }
         self.db.upsert_router_provider(&RouterProvider {
             id: input.id.clone(),
             display_name: input.display_name.clone(),
@@ -261,15 +274,47 @@ impl RouterApi {
                 "router provider 不存在: {provider_id}"
             )));
         }
-        self.db.delete_model_routes_for_provider(provider_id)?;
-        for route in routes {
-            self.db.upsert_model_route(&ModelRoute {
-                provider_id: provider_id.to_string(),
-                logical_model: route.logical_model,
-                upstream_model: route.upstream_model,
-            })?;
+        let mut names = std::collections::HashSet::new();
+        for route in &routes {
+            if route.logical_model.trim().is_empty()
+                || route.upstream_model.trim().is_empty()
+                || !names.insert(route.logical_model.as_str())
+            {
+                return Err(AppError::InvalidInput(
+                    "Model mappings require unique, non-empty model names".into(),
+                ));
+            }
         }
+        let mut conn = lock_conn!(self.db.conn);
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM router_model_map WHERE provider_id = ?1",
+            [provider_id],
+        )?;
+        for route in routes {
+            tx.execute(
+                "INSERT INTO router_model_map (provider_id, logical_model, upstream_model, created_at) VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![provider_id, route.logical_model, route.upstream_model, now_millis() / 1000],
+            )?;
+        }
+        tx.commit()?;
         Ok(())
+    }
+
+    pub fn list_model_routes(&self, provider_id: &str) -> Result<Vec<ModelRouteInput>, AppError> {
+        let conn = lock_conn!(self.db.conn);
+        let mut statement = conn.prepare(
+            "SELECT logical_model, upstream_model FROM router_model_map WHERE provider_id = ?1 ORDER BY logical_model",
+        )?;
+        let rows = statement
+            .query_map([provider_id], |row| {
+                Ok(ModelRouteInput {
+                    logical_model: row.get(0)?,
+                    upstream_model: row.get(1)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
     }
 
     /// 读 `router.mode`。与 T6 转发层的读侧同样宽容:读不到或解析不了都当 `"auto"`,
@@ -332,6 +377,16 @@ impl RouterApi {
         let port = read_router_port(self.db.as_ref());
         pointer_enable_guard(port, crate::route::server::listening_port())
             .map_err(AppError::Message)?;
+        let ready: bool = {
+            let conn = lock_conn!(self.db.conn);
+            conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM router_providers p JOIN router_model_map m ON m.provider_id = p.id WHERE p.enabled = 1 AND p.wire_api = 'responses')",
+                [], |row| row.get(0),
+            )?
+        };
+        if !ready {
+            return Err(AppError::InvalidInput("Configure an enabled Responses provider with model mappings before connecting Codex".into()));
+        }
         crate::route::pointer::point_codex_at_router(port)?;
         if let Err(error) =
             apply_pointer_gap_marker(self.db.as_ref(), &PointerState::OursAndCurrent)
@@ -401,6 +456,35 @@ mod tests {
             |row| row.get(0),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn mapping_failure_preserves_previous_configuration() {
+        let db = memory_db();
+        upsert_provider(&db, "primary");
+        let api = RouterApi::new(db.clone());
+        api.set_model_routes("primary", vec![route("old", "old-upstream")])
+            .unwrap();
+        db.conn.lock().unwrap().execute_batch(
+            "CREATE TRIGGER reject_mapping BEFORE INSERT ON router_model_map WHEN NEW.upstream_model = 'reject' BEGIN SELECT RAISE(ABORT, 'test failure'); END;"
+        ).unwrap();
+        assert!(api
+            .set_model_routes(
+                "primary",
+                vec![route("new", "valid"), route("bad", "reject")]
+            )
+            .is_err());
+        assert_eq!(
+            api.list_model_routes("primary").unwrap(),
+            vec![route("old", "old-upstream")]
+        );
+        assert!(api
+            .set_model_routes("primary", vec![route("same", "a"), route("same", "b")])
+            .is_err());
+        assert_eq!(
+            api.list_model_routes("primary").unwrap(),
+            vec![route("old", "old-upstream")]
+        );
     }
 
     // 任务书 §5.1:端口读取。

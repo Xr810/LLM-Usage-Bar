@@ -1,6 +1,6 @@
 [package]
 name = "llm-usage-bar"
-version = "3.16.5"
+version = "3.17.0"
 description = "All-in-One Assistant for Claude Code, Codex & Gemini CLI"
 authors = ["Jason Young"]
 license = "MIT"
@@ -91,6 +91,7 @@ winreg = "0.56"
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Globalization",
+    "Win32_Security_Credentials",
     "Win32_Storage_FileSystem",
     "Win32_UI_Shell",
 ] }

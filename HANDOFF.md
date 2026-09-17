@@ -1,5 +1,8 @@
 # LLM Usage Bar — 全局交接文档(合并版)
 
+> **2026-09-17 技术路线更新（优先于下方历史记录）：** 用户决定停止 Swift / SwiftUI 路线，正式维护当前仓库中的 React + TypeScript / Tauri 2 + Rust，共用 macOS 与 Windows 前端。历史 Swift 分支保留归档，不再执行下方 Swift 迁移待办。MIT 许可证及原作者声明保留。Windows 打包改为 NSIS / MSI，凭据接入 Windows Credential Manager，CI 增加双平台构建与 Windows 凭据测试。Windows 真机交互验收尚待执行。
+
+
 最后核实:2026-08-13(所有事实当天用 git / sqlite3 / grep 逐条验证过,不是抄旧文档)
 最后更新:2026-08-13 —— ①分支与 stash 收敛、docs 重排,见 §0 与 §11.7;②§11.3 重写:
 游标 N+1 与 tokio worker 数已由提交 `52bd4559` 修掉,该节改为「已完成 / 仍未做」两栏;
@@ -1309,3 +1312,8 @@ services/    剩 17 个文件(同步、告警、定价调度、subscription 等)
 `/Applications/LLM Usage Bar.app` 是**旧构建**且常驻运行,它一直在写
 `~/.llm-usage-bar/llm-usage-bar.db`(该库仍停在 v26,首次启动新构建才会迁到 v28,
 迁移前自动备份,T21 已在副本上实测 25 张表零变化)。**装新构建前先退掉它。**
+
+
+## 19. 跨平台完整前端与首次 release（2026-09-17）
+
+React / TypeScript + Tauri / Rust 是正式路线。Settings 新增 Local routing，接通供应商、模型映射、既有凭据选择、自动/手动模式、显式连接/恢复及用量下界表。模型映射用事务全量替换，失败保留旧配置；恢复直连只恢复 provider 选择，保留启用后修改的其他设置。补充了映射读取和恢复命令。Windows Credential Manager 与 NSIS/MSI 打包已接入。CI 同时验证 Windows/macOS 构建；release 工作流产出 Mac universal DMG/ZIP 与 Windows x64 EXE/MSI，并先创建 draft。当前仓库未配置 Apple Developer 签名和公证凭据，因此发行说明必须明确 Mac 临时签名、Windows 未签名。

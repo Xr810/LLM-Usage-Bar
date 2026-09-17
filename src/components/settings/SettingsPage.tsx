@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import { useTranslation } from "react-i18next";
-import { Activity, Blocks, Settings2, X, type LucideIcon } from "lucide-react";
+import {
+  Activity,
+  Blocks,
+  Route,
+  Settings2,
+  X,
+  type LucideIcon,
+} from "lucide-react";
 import {
   Dialog,
   DialogClose,
@@ -13,6 +20,7 @@ import { DRAG_REGION_ATTR, DRAG_REGION_STYLE, isMac } from "@/lib/platform";
 import { UsageDiagnosticsPanel } from "./UsageDiagnosticsPanel";
 import { UsageProvidersSettings } from "./UsageProvidersSettings";
 import { StartupSettings } from "./StartupSettings";
+import { RouterSettings } from "./RouterSettings";
 import { UsageLightInfo } from "./UsageLightInfo";
 
 interface SettingsDialogProps {
@@ -24,7 +32,7 @@ interface SettingsDialogProps {
   onProviderTargetHandled?: () => void;
 }
 
-type SettingsTab = "general" | "providers" | "diagnostics";
+type SettingsTab = "general" | "providers" | "router" | "diagnostics";
 
 interface SettingsTabMeta {
   value: SettingsTab;
@@ -47,6 +55,12 @@ const SETTINGS_TABS: SettingsTabMeta[] = [
     icon: Blocks,
   },
   {
+    value: "router",
+    labelKey: "router.title",
+    labelDefault: "Local routing",
+    icon: Route,
+  },
+  {
     value: "diagnostics",
     labelKey: "settings.diagnostics",
     labelDefault: "Diagnostics",
@@ -57,7 +71,7 @@ const SETTINGS_TABS: SettingsTabMeta[] = [
 const NO_DRAG_STYLE = { WebkitAppRegion: "no-drag" } as CSSProperties;
 
 function resolveSettingsTab(tab?: string): SettingsTab {
-  if (tab === "providers" || tab === "diagnostics") {
+  if (tab === "providers" || tab === "diagnostics" || tab === "router") {
     return tab;
   }
   return "general";
@@ -188,6 +202,9 @@ export function SettingsPage({
                     targetProviderId={targetProviderId ?? undefined}
                     onTargetHandled={handleProviderTargetHandled}
                   />
+                </TabsContent>
+                <TabsContent value="router" className="mt-0">
+                  <RouterSettings onManageKeys={() => setTab("providers")} />
                 </TabsContent>
                 <TabsContent value="diagnostics" className="mt-0">
                   <UsageDiagnosticsPanel />

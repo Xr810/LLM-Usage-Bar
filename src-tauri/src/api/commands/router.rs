@@ -103,3 +103,18 @@ pub async fn recent_router_attempts(
         .recent_attempts(start_at, end_at)
         .map_err(|e| e.to_string())
 }
+
+#[tauri::command]
+pub async fn list_router_model_routes(
+    state: tauri::State<'_, AppState>,
+    provider_id: String,
+) -> Result<Vec<ModelRouteInput>, String> {
+    RouterApi::new(state.db.clone())
+        .list_model_routes(&provider_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn disconnect_router_pointer() -> Result<(), String> {
+    crate::route::pointer::disconnect_codex().map_err(|e| e.to_string())
+}

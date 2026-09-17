@@ -1,5 +1,8 @@
 # 原生壳 HIG 改造计划(SwiftUI 视觉与交互)
 
+> **历史设计，路线已变更（2026-09-17）：** SwiftUI 相关方案已停止，当前采用 React + TypeScript / Tauri 2 + Rust 支持 macOS 与 Windows。以仓库 README 和 HANDOFF 顶部更新为准。
+
+
 创建:2026-08-13
 适用分支:`feat/swift-native-shell`(PR #27)
 前置结论:`docs/design/tech-route-review-2026-08-12.md` §4、HANDOFF §11.8 —— 方案 B,
