@@ -58,7 +58,7 @@ jobs:
           lipo "$APP/Contents/MacOS/llm-usage-bar" -verify_arch arm64 x86_64
           mkdir -p release-assets
           ditto -c -k --sequesterRsrc --keepParent "$APP" release-assets/LLM-Usage-Bar-macOS-universal.zip
-          cp "$ROOT"/dmg/*.dmg release-assets/
+          cp "$ROOT"/dmg/*.dmg release-assets/LLM-Usage-Bar-macOS-universal.dmg
       - name: Install and smoke test Windows package
         if: runner.os == 'Windows'
         shell: pwsh
@@ -76,8 +76,8 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path release-assets -Force
-          Copy-Item release/tauri-target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe release-assets/
-          Copy-Item release/tauri-target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi release-assets/
+          Copy-Item release/tauri-target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe release-assets/LLM-Usage-Bar-Windows-x64-setup.exe
+          Copy-Item release/tauri-target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi release-assets/LLM-Usage-Bar-Windows-x64.msi
       - uses: actions/upload-artifact@v7
         with:
           name: llm-usage-bar-${{ matrix.platform }}
