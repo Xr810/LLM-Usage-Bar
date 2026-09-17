@@ -122,3 +122,5 @@ jobs:
       - name: Test Windows Credential Manager
         if: runner.os == 'Windows'
         run: pnpm rust -- test --manifest-path src-tauri/Cargo.toml --lib secrets::windows::tests
+      - name: Test routing connection and restore
+        run: pnpm rust -- test --manifest-path src-tauri/Cargo.toml --lib route::pointer::tests

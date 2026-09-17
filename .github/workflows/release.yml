@@ -59,9 +59,18 @@ jobs:
           mkdir -p release-assets
           ditto -c -k --sequesterRsrc --keepParent "$APP" release-assets/LLM-Usage-Bar-macOS-universal.zip
           cp "$ROOT"/dmg/*.dmg release-assets/
-      - name: Smoke test packaged Windows executable
+      - name: Install and smoke test Windows package
         if: runner.os == 'Windows'
-        run: node scripts/smoke-desktop.mjs release/tauri-target/x86_64-pc-windows-msvc/release/llm-usage-bar.exe
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem release/tauri-target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe | Select-Object -First 1
+          $installDirectory = Join-Path $env:RUNNER_TEMP 'llm-release-installed'
+          $process = Start-Process -FilePath $installer.FullName -ArgumentList @('/S', "/D=$installDirectory") -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Installer exited with $($process.ExitCode)" }
+          $executable = Join-Path $installDirectory 'llm-usage-bar.exe'
+          if (-not (Test-Path $executable)) { throw "Installed executable missing: $executable" }
+          node scripts/smoke-desktop.mjs $executable
+          if ($LASTEXITCODE -ne 0) { throw 'Installed app smoke test failed' }
       - name: Collect Windows installers
         if: runner.os == 'Windows'
         shell: pwsh

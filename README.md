@@ -86,7 +86,7 @@ pnpm dev
 pnpm build
 ```
 
-macOS builds app / DMG bundles; Windows builds NSIS / MSI installers. Output is under `release/tauri-target/release/bundle/`. Windows compilation and credential tests run in Windows CI; tray interaction and installer behavior still need a real Windows smoke test before release. Claude Desktop local data sources are platform-dependent and may not be available on Windows.
+macOS builds app / DMG bundles; Windows builds NSIS / MSI installers. Output is under `release/tauri-target/release/bundle/`. Windows CI checks compilation, credential storage, and routing connection/restore. Release builds also install the Windows NSIS package and check app startup, database initialization, and the local router. Windows tray interaction still needs manual validation. Claude Desktop local data sources are platform-dependent and may not be available on Windows.
 
 ## Install
 

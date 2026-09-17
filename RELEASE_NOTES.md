@@ -5,6 +5,7 @@ LLM Usage Bar now uses one React / TypeScript frontend with Tauri 2 and Rust on 
 - Explicit connection and restore controls. Restart Codex after either action; keep LLM Usage Bar running while routing is connected.
 - Windows credentials stored in the current user's Credential Manager; macOS uses Keychain.
 - Model mapping changes are transactional: a failed save keeps the previous mappings.
+- First-time routing creates the Codex configuration directory when needed; restoring direct connection preserves private file permissions.
 
 Downloads:
 

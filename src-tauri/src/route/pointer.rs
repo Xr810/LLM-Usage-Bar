@@ -78,6 +78,10 @@ fn disconnect_codex_inner(config_path: &Path) -> Result<(), AppError> {
     let backup = tmp.with_extension("before-unroute");
     fs::copy(config_path, &backup).map_err(|e| AppError::io(&backup, e))?;
     fs::write(&tmp, doc.to_string()).map_err(|e| AppError::io(&tmp, e))?;
+    let permissions = fs::metadata(config_path)
+        .map_err(|error| AppError::io(config_path, error))?
+        .permissions();
+    fs::set_permissions(&tmp, permissions).map_err(|error| AppError::io(&tmp, error))?;
     if let Err(error) = fs::rename(&tmp, config_path) {
         let _ = fs::remove_file(&tmp);
         return Err(AppError::io(config_path, error));
@@ -163,6 +167,10 @@ fn point_codex_at_router_inner(config_path: &Path, port: u16) -> Result<(), AppE
     providers.insert(ROUTER_PROVIDER_ID, Item::Table(section));
 
     let new_text = doc.to_string();
+
+    if let Some(parent) = config_path.parent() {
+        fs::create_dir_all(parent).map_err(|error| AppError::io(parent, error))?;
+    }
 
     // 1) 写前备份(只对已存在的文件)。
     let backup_path = if existed {
@@ -406,6 +414,39 @@ wire_api = "responses"
         let before = fs::read_to_string(&path).unwrap();
         disconnect_codex_inner(&path).unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn first_connection_creates_missing_config_directory_and_can_disconnect() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".codex/config.toml");
+        assert_eq!(
+            inspect_pointer_inner(&path),
+            PointerState::NotOurs { current: None }
+        );
+        point_codex_at_router_inner(&path, PORT).unwrap();
+        assert_eq!(inspect_pointer_inner(&path), PointerState::OursAndCurrent);
+        disconnect_codex_inner(&path).unwrap();
+        assert_eq!(
+            inspect_pointer_inner(&path),
+            PointerState::NotOurs { current: None }
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn disconnect_preserves_private_config_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = config_in(dir.path(), "model_provider = 'previous'\n");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        point_codex_at_router_inner(&path, PORT).unwrap();
+        disconnect_codex_inner(&path).unwrap();
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
     }
 
     fn config_in(dir: &Path, content: &str) -> PathBuf {

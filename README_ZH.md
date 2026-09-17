@@ -86,7 +86,7 @@ pnpm dev
 pnpm build
 ```
 
-macOS 生成 app / DMG，Windows 生成 NSIS / MSI；产物在 `release/tauri-target/release/bundle/`。Windows 的编译与凭据存储测试由 Windows CI 执行；发布前仍需真机验证托盘和安装体验。
+macOS 生成 app / DMG，Windows 生成 NSIS / MSI；产物在 `release/tauri-target/release/bundle/`。Windows CI 验证编译、凭据存储和路由连接/恢复；发布构建还会安装 NSIS 包，检查应用启动、数据库初始化与本地路由。Windows 托盘交互仍需人工验证。
 
 API key 在 macOS 存入 Keychain，在 Windows 存入当前用户的 Credential Manager。macOS 调试构建仍禁用凭据存储。Claude Desktop 本地数据源具有平台差异，Windows 不保证与 macOS 完全一致。
 
