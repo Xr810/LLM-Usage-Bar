@@ -20,7 +20,7 @@
 
 LLM Usage Bar 在本地把这些全读出来，在菜单栏给出一个答案：**还剩多少，以及你消耗得有多快。**
 
-它不代理你的请求，不管理你的 CLI 配置，也不需要注册账号。它读的是你的工具本来就写在磁盘上的会话日志和额度文件，以及用你自己提供的 key 去调供应商的账单接口。
+监控功能读取工具写入本地的会话日志和额度文件，并用你提供的 key 查询供应商账单。可选的本地路由在设置中单独配置，只有明确确认「连接 Codex」才会修改 CLI 配置。
 
 ## 它跟踪两类东西
 
@@ -35,6 +35,10 @@ LLM Usage Bar 在本地把这些全读出来，在菜单栏给出一个答案：
 - 给一个 Provider 配置一列**具名 API key**，每把 key 各自报告自己的日花费、月花费、剩余预算，以及数字是什么时候抓取的。有两把以上 key 的 Provider 还会显示合计。
 - 花费来自供应商自己的账单接口。目前接好的是 OpenRouter；其他预设需要先接上各自的接口才会有数字。
 - 可以给单个 Provider 设日预算，也可以设一个总的 API 预算，超速了菜单栏会告诉你。
+
+## 可选的 Codex 本地路由
+
+设置 → 本地路由提供供应商优先级、已保存的 API key 选择、模型映射、自动故障切换或手动指定供应商，以及请求/token 分账。连接前需配置支持 Responses 的接口及模型映射；连接操作经过确认并备份配置。「恢复直连」保留当前其他 Codex 设置。连接和恢复后都需重启 Codex，路由使用期间保持应用运行。分账仅统计实际观察到的用量，是下界，并非账户余额。
 
 ## 用量红绿灯
 
@@ -88,7 +92,7 @@ API key 在 macOS 存入 Keychain，在 Windows 存入当前用户的 Credential
 
 ## 安装
 
-目前还没有发布任何 release，请按上面的跨平台命令构建。macOS 12 及以上也可使用带签名的本地构建脚本：
+从 [GitHub Releases](https://github.com/Xr810/LLM-Usage-Bar/releases/latest) 下载 macOS / Windows 安装包。macOS 使用临时签名，未经 Apple 公证；Windows 安装包未签名。安装说明和 SHA-256 校验值见 release 页面。也可按上面的跨平台命令自行构建。macOS 12 及以上也可使用带签名的本地构建脚本：
 
 ```bash
 pnpm install && pnpm build:local:mac
@@ -107,7 +111,7 @@ pnpm install && pnpm build:local:mac
 | `~/.llm-usage-bar/backups/`         | 迁移前自动备份，默认保留最近 10 份           |
 | `~/.llm-usage-bar/logs/`            | 应用日志                                     |
 
-API key 存在 macOS 钥匙串里，**不进数据库，也不进日志**。花费数字从不写入日志文件。
+API key 存在 macOS 钥匙串或 Windows Credential Manager 里，**不进数据库，也不进日志**。花费数字从不写入日志文件。
 
 可选的同步 —— 数据库可以放在自定义配置目录（iCloud、Dropbox、OneDrive、NAS），也可以推到 WebDAV 或 S3 兼容存储。默认关闭。
 
@@ -116,7 +120,7 @@ API key 存在 macOS 钥匙串里，**不进数据库，也不进日志**。花�
 <details>
 <summary><strong>我需要改变使用 Claude Code 或 Codex 的方式吗？</strong></summary>
 
-不需要。这个 app 读的是那些工具本来就在写的文件，不代理、不注入、不改写任何东西。就算你把它卸载了，你的 CLI 也不受影响。
+监控功能不需要修改 CLI。若启用了可选路由，需在设置中恢复直连后再卸载。
 
 </details>
 

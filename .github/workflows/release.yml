@@ -59,6 +59,9 @@ jobs:
           mkdir -p release-assets
           ditto -c -k --sequesterRsrc --keepParent "$APP" release-assets/LLM-Usage-Bar-macOS-universal.zip
           cp "$ROOT"/dmg/*.dmg release-assets/
+      - name: Smoke test packaged Windows executable
+        if: runner.os == 'Windows'
+        run: node scripts/smoke-desktop.mjs release/tauri-target/x86_64-pc-windows-msvc/release/llm-usage-bar.exe
       - name: Collect Windows installers
         if: runner.os == 'Windows'
         shell: pwsh

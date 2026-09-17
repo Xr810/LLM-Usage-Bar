@@ -1312,3 +1312,8 @@ services/    剩 17 个文件(同步、告警、定价调度、subscription 等)
 `/Applications/LLM Usage Bar.app` 是**旧构建**且常驻运行,它一直在写
 `~/.llm-usage-bar/llm-usage-bar.db`(该库仍停在 v26,首次启动新构建才会迁到 v28,
 迁移前自动备份,T21 已在副本上实测 25 张表零变化)。**装新构建前先退掉它。**
+
+
+## 19. 跨平台完整前端与首次 release（2026-09-17）
+
+React / TypeScript + Tauri / Rust 是正式路线。Settings 新增 Local routing，接通供应商、模型映射、既有凭据选择、自动/手动模式、显式连接/恢复及用量下界表。模型映射用事务全量替换，失败保留旧配置；恢复直连只恢复 provider 选择，保留启用后修改的其他设置。补充了映射读取和恢复命令。Windows Credential Manager 与 NSIS/MSI 打包已接入。CI 同时验证 Windows/macOS 构建；release 工作流产出 Mac universal DMG/ZIP 与 Windows x64 EXE/MSI，并先创建 draft。当前仓库未配置 Apple Developer 签名和公证凭据，因此发行说明必须明确 Mac 临时签名、Windows 未签名。

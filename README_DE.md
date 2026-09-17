@@ -2,7 +2,7 @@
 
 # LLM Usage Bar
 
-#> **2026-09-17:** The SwiftUI migration is discontinued. The shared macOS / Windows frontend uses React + TypeScript with Tauri 2 + Rust. See [current build instructions](README.md#cross-platform-architecture).
+> **2026-09-17:** The SwiftUI migration is discontinued. The shared macOS / Windows frontend uses React + TypeScript with Tauri 2 + Rust. See [current build instructions](README.md#cross-platform-architecture).
 
 ## Was deine KI-Coding-Tools wirklich kosten — Abo-Kontingent und API-Ausgaben, gebündelt in der Menüleiste
 

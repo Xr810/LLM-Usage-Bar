@@ -20,7 +20,7 @@ If you code with Claude Code and Codex, your usage is split across places that n
 
 LLM Usage Bar reads all of it locally and puts one answer in the menu bar: **how much is left, and how fast you are going through it.**
 
-It does not proxy your requests, does not manage your CLI configuration, and does not need an account. It reads the session logs and quota files your tools already write to disk, and calls provider billing endpoints with keys you supply.
+Monitoring reads local session logs and quota files, and calls provider billing endpoints with keys you supply. Optional local routing is configured separately in Settings; only an explicit Connect Codex confirmation changes your CLI configuration.
 
 ## Two things it tracks
 
@@ -35,6 +35,10 @@ It does not proxy your requests, does not manage your CLI configuration, and doe
 - Give a Provider a list of **named API keys** and each one reports its own daily and monthly spend, remaining budget, and when the figures were last fetched. Providers with more than one key also show a combined total.
 - Spend is read from the provider's own billing endpoint. OpenRouter is wired up today; other presets need their own endpoint before they report anything.
 - Set a daily budget per Provider, or an overall API budget, and the bar tells you when you are outrunning it.
+
+## Optional Codex routing
+
+Settings → Local routing provides provider priority, saved API-key selection, model mappings, automatic failover or a manual provider, and per-provider request/token totals. Configure a Responses-compatible endpoint and map each requested model before connecting. Connection changes are confirmed and backed up; Restore direct connection keeps your other current Codex settings. Restart Codex after either action and keep this app running while connected.
 
 ## The usage light
 
@@ -57,7 +61,7 @@ Open the popover for the detail behind the call: the pace it measured, what it p
 | Coding-plan endpoints            | Plan quota and remaining resets       | Kimi, GLM, MiniMax by API key; Volcano Ark by AK/SK signature |
 | Provider billing endpoints       | Per-key spend and limits              | Direct call with the key you saved                            |
 
-There is no local proxy and no request interception. Anything a tool does not write to disk, and no endpoint reports, the app does not know.
+Monitoring works independently of optional routing. Routed request totals count only traffic and usage actually observed by the router; they are a lower bound, not an account balance.
 
 ## Breakdowns
 
@@ -86,7 +90,7 @@ macOS builds app / DMG bundles; Windows builds NSIS / MSI installers. Output is 
 
 ## Install
 
-There are no published releases yet. Use the cross-platform commands above. On macOS 12 or later, this additional helper signs a local build:
+Download macOS and Windows installers from [GitHub Releases](https://github.com/Xr810/LLM-Usage-Bar/releases/latest). The macOS app is ad-hoc signed and not notarized; Windows installers are unsigned. See the release notes for installation steps and SHA-256 checksums. To build from source, use the cross-platform commands above. On macOS 12 or later, this additional helper signs a local build:
 
 ```bash
 pnpm install && pnpm build:local:mac
@@ -114,7 +118,7 @@ Optional sync — the database can be kept in a custom config directory (iCloud,
 <details>
 <summary><strong>Do I need to change how I run Claude Code or Codex?</strong></summary>
 
-No. The app reads files those tools already write. Nothing is proxied, injected, or rewritten. If you uninstall it, your CLIs are unaffected.
+Monitoring needs no CLI changes. Optional routing requires explicit confirmation and a Codex restart. Restore direct connection in Settings before uninstalling if you enabled routing.
 
 </details>
 

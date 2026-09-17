@@ -28,6 +28,63 @@ pub fn point_codex_at_router(port: u16) -> Result<(), AppError> {
     point_codex_at_router_inner(&config_path, port)
 }
 
+/// Explicit user action only. Restore the previous provider selection while
+/// preserving settings the user has changed since routing was enabled.
+pub fn disconnect_codex() -> Result<(), AppError> {
+    disconnect_codex_inner(&crate::agent_paths::get_codex_config_dir().join("config.toml"))
+}
+
+fn disconnect_codex_inner(config_path: &Path) -> Result<(), AppError> {
+    let current = fs::read_to_string(config_path).map_err(|e| AppError::io(config_path, e))?;
+    let mut doc: DocumentMut = current
+        .parse()
+        .map_err(|e| AppError::Config(format!("Invalid Codex config: {e}")))?;
+    if doc.get("model_provider").and_then(Item::as_str) != Some(ROUTER_PROVIDER_ID) {
+        return Ok(());
+    }
+    let dir = config_path
+        .parent()
+        .ok_or_else(|| AppError::Config("Missing config directory".into()))?;
+    let mut backups: Vec<_> = fs::read_dir(dir)
+        .map_err(|e| AppError::io(dir, e))?
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            name.starts_with("config.toml.bak-") && name.ends_with(BACKUP_NAME_SUFFIX)
+        })
+        .collect();
+    backups.sort_by_key(|entry| entry.metadata().and_then(|m| m.modified()).ok());
+    let mut previous = None;
+    for backup in backups.into_iter().rev() {
+        let text = fs::read_to_string(backup.path()).map_err(|e| AppError::io(backup.path(), e))?;
+        let original: DocumentMut = text
+            .parse()
+            .map_err(|e| AppError::Config(format!("Invalid routing backup: {e}")))?;
+        let selection = original.get("model_provider").cloned();
+        if selection.as_ref().and_then(Item::as_str) != Some(ROUTER_PROVIDER_ID) {
+            previous = selection;
+            break;
+        }
+    }
+    match previous {
+        Some(value) => {
+            doc["model_provider"] = value;
+        }
+        None => {
+            doc.as_table_mut().remove("model_provider");
+        }
+    }
+    let tmp = temp_sibling_path(config_path);
+    let backup = tmp.with_extension("before-unroute");
+    fs::copy(config_path, &backup).map_err(|e| AppError::io(&backup, e))?;
+    fs::write(&tmp, doc.to_string()).map_err(|e| AppError::io(&tmp, e))?;
+    if let Err(error) = fs::rename(&tmp, config_path) {
+        let _ = fs::remove_file(&tmp);
+        return Err(AppError::io(config_path, error));
+    }
+    Ok(())
+}
+
 /// 启动时检查指针是不是自己写的,由上层决定怎么提示用户。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PointerState {
@@ -241,6 +298,9 @@ fn temp_sibling_path(config_path: &Path) -> PathBuf {
 fn inspect_pointer_inner(config_path: &Path) -> PointerState {
     let text = match fs::read_to_string(config_path) {
         Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return PointerState::NotOurs { current: None };
+        }
         Err(_) => return PointerState::Unreadable,
     };
     let doc: DocumentMut = match text.parse() {
@@ -332,6 +392,22 @@ wire_api = "responses"
 "#;
 
     /// 测试里绝不碰真实 ~/.codex/config.toml:全部用 tempfile 造临时文件。
+    #[test]
+    fn disconnect_restores_selection_without_reverting_new_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = config_in(dir.path(), "model_provider = 'previous'\nmodel = 'old'\n");
+        point_codex_at_router_inner(&path, 8788).unwrap();
+        let current = fs::read_to_string(&path).unwrap().replace("'old'", "'new'");
+        fs::write(&path, current).unwrap();
+        disconnect_codex_inner(&path).unwrap();
+        let doc: DocumentMut = fs::read_to_string(&path).unwrap().parse().unwrap();
+        assert_eq!(doc["model_provider"].as_str(), Some("previous"));
+        assert_eq!(doc["model"].as_str(), Some("new"));
+        let before = fs::read_to_string(&path).unwrap();
+        disconnect_codex_inner(&path).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), before);
+    }
+
     fn config_in(dir: &Path, content: &str) -> PathBuf {
         let path = dir.join("config.toml");
         fs::write(&path, content).unwrap();
@@ -491,10 +567,10 @@ wire_api = "responses"
 
         assert_eq!(inspect_pointer_inner(&path), PointerState::Unreadable);
 
-        // 文件不存在同样返回 Unreadable(启动时可能还没跑过 codex)。
+        // 首次使用尚无配置文件也可以显式连接；损坏的文件仍然不可写。
         assert_eq!(
             inspect_pointer_inner(&dir.path().join("does-not-exist.toml")),
-            PointerState::Unreadable
+            PointerState::NotOurs { current: None }
         );
     }
 
