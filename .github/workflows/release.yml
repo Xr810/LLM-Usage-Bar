@@ -55,7 +55,7 @@ jobs:
           ROOT=release/tauri-target/universal-apple-darwin/release/bundle
           APP="$ROOT/macos/LLM Usage Bar.app"
           codesign --verify --deep --strict "$APP"
-          lipo -verify_arch arm64 x86_64 "$APP/Contents/MacOS/llm-usage-bar"
+          lipo "$APP/Contents/MacOS/llm-usage-bar" -verify_arch arm64 x86_64
           mkdir -p release-assets
           ditto -c -k --sequesterRsrc --keepParent "$APP" release-assets/LLM-Usage-Bar-macOS-universal.zip
           cp "$ROOT"/dmg/*.dmg release-assets/
