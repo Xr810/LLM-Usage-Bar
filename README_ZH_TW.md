@@ -16,15 +16,26 @@ _Fork 自 [CC Switch](https://github.com/farion1231/cc-switch)，圍繞用量追
 
 ## 介面預覽
 
-這套 React + Tauri 介面同時面向 macOS 和 Windows。下面展示主面板、Provider 設定和系統匣彈窗：
+這套 React + Tauri 介面同時面向 macOS 和 Windows。下面使用淺色主題展示幾個主要流程：
 
-<p align="center">
-  <img src="docs/images/redesign/after-main-dark.png" alt="LLM Usage Bar 主面板" width="49%" />
-  <img src="docs/images/redesign/after-settings-dark.png" alt="Provider 設定和路由控制" width="49%" />
-</p>
-<p align="center">
-  <img src="docs/images/redesign/after-tray-dark.png" alt="系統匣用量彈窗" width="32%" />
-</p>
+<table>
+  <tr>
+    <td width="62%"><img src="docs/images/redesign/after-main-light.png" alt="LLM Usage Bar 主面板" /></td>
+    <td width="38%"><strong>主面板</strong><br />在一個頁面查看訂閱視窗、API 花費、token 總量、請求次數和各 Provider 狀態。</td>
+  </tr>
+  <tr>
+    <td width="62%"><img src="docs/images/codex-deepseek-routing/02-deepseek-codex-routing-form.png" alt="Codex Provider 設定表單" /></td>
+    <td width="38%"><strong>Provider 設定</strong><br />選擇預設、填寫 API key、檢查端點地址，並配置 Codex 所需的模型和路由選項。</td>
+  </tr>
+  <tr>
+    <td width="62%"><img src="docs/images/codex-deepseek-routing/03-local-route-codex-takeover.png" alt="Codex 本地路由設定" /></td>
+    <td width="38%"><strong>本地路由</strong><br />啟用 Codex 路由，選擇要接管的客戶端，查看本地服務地址並確認連線狀態。</td>
+  </tr>
+  <tr>
+    <td width="38%"><img src="docs/images/redesign/after-tray-light.png" alt="系統匣用量彈窗" /></td>
+    <td width="62%"><strong>系統匣</strong><br />無需打開完整面板，就能快速查看額度健康度和重置時間。</td>
+  </tr>
+</table>
 
 ## 它做什麼
 
