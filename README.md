@@ -8,9 +8,9 @@
 [![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-orange.svg)](https://tauri.app/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-English | [中文](README_ZH.md) | [日本語](README_JA.md) | [Deutsch](README_DE.md) | [Changelog](CHANGELOG.md)
+English | [简体中文](README_ZH.md) | [繁體中文](README_ZH_TW.md) | [Changelog](CHANGELOG.md)
 
-*Forked from [CC Switch](https://github.com/farion1231/cc-switch) and rebuilt around usage tracking — see [Credits](#credits).*
+_Forked from [CC Switch](https://github.com/farion1231/cc-switch) and rebuilt around usage tracking — see [Credits](#credits)._
 
 </div>
 
@@ -153,7 +153,7 @@ No. Everything is read from this machine's local files and from key-scoped endpo
 <details>
 <summary><strong>Which languages does the interface support?</strong></summary>
 
-English, 简体中文, 繁體中文, and 日本語.
+The interface supports English, 简体中文, 繁體中文, and 日本語. This repository currently maintains README translations in English, 简体中文, and 繁體中文.
 
 </details>
 

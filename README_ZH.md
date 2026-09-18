@@ -8,9 +8,9 @@
 [![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-orange.svg)](https://tauri.app/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-[English](README.md) | 中文 | [日本語](README_JA.md) | [Deutsch](README_DE.md) | [更新日志](CHANGELOG.md)
+[English](README.md) | 简体中文 | [繁體中文](README_ZH_TW.md) | [更新日志](CHANGELOG.md)
 
-*Fork 自 [CC Switch](https://github.com/farion1231/cc-switch)，围绕用量追踪重建 —— 见 [致谢](#致谢)。*
+_Fork 自 [CC Switch](https://github.com/farion1231/cc-switch)，围绕用量追踪重建 —— 见 [致谢](#致谢)。_
 
 </div>
 
@@ -155,7 +155,7 @@ Claude 的两个本地数据源里只有一个带重置时刻 —— Claude Code
 <details>
 <summary><strong>界面支持哪些语言？</strong></summary>
 
-English、简体中文、繁體中文、日本語。
+界面支持 English、简体中文、繁體中文、日本語。本仓库目前维护英文、简体中文和繁体中文 README。
 
 </details>
 
