@@ -14,6 +14,18 @@ _Forked from [CC Switch](https://github.com/farion1231/cc-switch) and rebuilt ar
 
 </div>
 
+## UI preview
+
+The shared React and Tauri interface is designed for both macOS and Windows. These screenshots show the dashboard, provider settings, and system tray views:
+
+<p align="center">
+  <img src="docs/images/redesign/after-main-dark.png" alt="LLM Usage Bar dashboard" width="49%" />
+  <img src="docs/images/redesign/after-settings-dark.png" alt="Provider settings and routing controls" width="49%" />
+</p>
+<p align="center">
+  <img src="docs/images/redesign/after-tray-dark.png" alt="System tray usage popover" width="32%" />
+</p>
+
 ## What it does
 
 If you code with Claude Code and Codex, your usage is split across places that never add up: a five-hour window and a weekly window on the Claude subscription, an OAuth quota on Codex, and a separate pile of API keys billed by the token. Each has its own page, its own reset clock, and no shared total.
@@ -159,7 +171,7 @@ The interface supports English, 简体中文, 繁體中文, and 日本語. This 
 
 ## Documentation
 
-- [Changelog](CHANGELOG.md)
+- [Changelog](CHANGELOG.md) · [Release notes](RELEASE_NOTES.md)
 - [Contributing](CONTRIBUTING.md) · [Security policy](SECURITY.md) · [Support](SUPPORT.md)
 
 > `docs/user-manual/` still describes the provider-switching, proxy, MCP, prompts and skills features that were removed — it is not linked here until it has been rewritten.

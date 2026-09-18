@@ -5,7 +5,23 @@ All notable changes to LLM Usage Bar will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-> **About this file.** LLM Usage Bar was forked from [CC Switch](https://github.com/farion1231/cc-switch) by Jason Young. Every entry below documents a CC Switch release and is kept unchanged for provenance — the version numbers in it are CC Switch's, not this project's. LLM Usage Bar has not cut a release of its own yet, so it has no entries here.
+> **About this file.** LLM Usage Bar was forked from [CC Switch](https://github.com/farion1231/cc-switch) by Jason Young. Entries through v3.16.5 preserve the upstream CC Switch release history for provenance. Releases from v3.17.0 onward are maintained by LLM Usage Bar itself. The short summary for the current release is in [RELEASE_NOTES.md](RELEASE_NOTES.md).
+
+## [3.17.0] - 2026-09-17
+
+The first LLM Usage Bar release with a shared desktop application for macOS and Windows.
+
+### Added
+
+- Shared React and TypeScript frontend with a Tauri 2 and Rust backend.
+- Windows Credential Manager storage and NSIS/MSI installer packages.
+- Local Codex routing settings with provider management, model mappings, saved credentials, automatic or manual routing, and explicit connect/restore controls.
+- Startup, database initialization, routing, connection, and restore validation in CI.
+
+### Distribution
+
+- macOS builds are ad-hoc signed and not notarized.
+- Windows installers are unsigned and may trigger a SmartScreen warning.
 
 ## [3.16.5] - 2026-07-01
 
