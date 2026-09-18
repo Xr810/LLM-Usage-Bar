@@ -16,15 +16,26 @@ _Forked from [CC Switch](https://github.com/farion1231/cc-switch) and rebuilt ar
 
 ## UI preview
 
-The shared React and Tauri interface is designed for both macOS and Windows. These screenshots show the dashboard, provider settings, and system tray views:
+The shared React and Tauri interface is designed for both macOS and Windows. The light-theme views below show the main workflows:
 
-<p align="center">
-  <img src="docs/images/redesign/after-main-dark.png" alt="LLM Usage Bar dashboard" width="49%" />
-  <img src="docs/images/redesign/after-settings-dark.png" alt="Provider settings and routing controls" width="49%" />
-</p>
-<p align="center">
-  <img src="docs/images/redesign/after-tray-dark.png" alt="System tray usage popover" width="32%" />
-</p>
+<table>
+  <tr>
+    <td width="62%"><img src="docs/images/redesign/after-main-light.png" alt="LLM Usage Bar dashboard" /></td>
+    <td width="38%"><strong>Dashboard</strong><br />See subscription windows, API spend, token totals, request counts, and Provider status in one view.</td>
+  </tr>
+  <tr>
+    <td width="62%"><img src="docs/images/codex-deepseek-routing/02-deepseek-codex-routing-form.png" alt="Codex Provider setup form" /></td>
+    <td width="38%"><strong>Provider setup</strong><br />Choose a preset, enter a key, check the endpoint, and configure the model and routing options needed by Codex.</td>
+  </tr>
+  <tr>
+    <td width="62%"><img src="docs/images/codex-deepseek-routing/03-local-route-codex-takeover.png" alt="Local Codex routing settings" /></td>
+    <td width="38%"><strong>Local routing</strong><br />Enable Codex routing, choose which clients use it, inspect the local endpoint, and monitor connection health.</td>
+  </tr>
+  <tr>
+    <td width="38%"><img src="docs/images/redesign/after-tray-light.png" alt="System tray usage popover" /></td>
+    <td width="62%"><strong>System tray</strong><br />Check quota health and reset windows quickly without opening the full dashboard.</td>
+  </tr>
+</table>
 
 ## What it does
 
