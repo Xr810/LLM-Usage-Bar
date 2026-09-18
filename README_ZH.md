@@ -14,6 +14,18 @@ _Fork 自 [CC Switch](https://github.com/farion1231/cc-switch)，围绕用量追
 
 </div>
 
+## 界面预览
+
+这套 React + Tauri 界面同时面向 macOS 和 Windows。下面展示主面板、Provider 设置和系统托盘弹窗：
+
+<p align="center">
+  <img src="docs/images/redesign/after-main-dark.png" alt="LLM Usage Bar 主面板" width="49%" />
+  <img src="docs/images/redesign/after-settings-dark.png" alt="Provider 设置和路由控制" width="49%" />
+</p>
+<p align="center">
+  <img src="docs/images/redesign/after-tray-dark.png" alt="系统托盘用量弹窗" width="32%" />
+</p>
+
 ## 它做什么
 
 同时用 Claude Code 和 Codex 的话，用量是散在几个永远对不上的地方的：Claude 订阅有五小时窗口和每周窗口，Codex 有自己的 OAuth 额度，另外还有一堆按 token 计费的 API key。每个都有自己的页面、自己的重置时钟，没有一个共同的总数。
@@ -161,7 +173,7 @@ Claude 的两个本地数据源里只有一个带重置时刻 —— Claude Code
 
 ## 文档
 
-- [更新日志](CHANGELOG.md)
+- [更新日志](CHANGELOG.md) · [发布说明](RELEASE_NOTES.md)
 - [贡献指南](CONTRIBUTING.md) · [安全策略](SECURITY.md) · [支持](SUPPORT.md)
 
 > `docs/user-manual/` 讲的仍然是已经移除的 Provider 切换、代理、MCP、Prompts 与 Skills 功能 —— 在重写之前不从这里链接。
