@@ -30,7 +30,7 @@ log = "0.4"
 # 见 lib.rs 的 on_thread_start。
 libc = "0.2"
 notify = "8.2"
-portable-pty = "0.8"
+portable-pty = "0.9"
 chrono = { version = "0.4", features = ["serde"] }
 tauri = { version = "2.11.5", features = [
     "tray-icon",
