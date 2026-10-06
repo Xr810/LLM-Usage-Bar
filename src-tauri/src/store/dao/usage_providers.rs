@@ -8,8 +8,8 @@ use crate::model::{
     RouteBinding, SystemProviderKeyUsageView, TokenSource, UsageProviderInput, UsageProviderStored,
     UsageProviderView, UsageSourceBinding,
 };
+use crate::store::migrations::budget_migration::canonicalize_daily_budget;
 use crate::store::{lock_conn, to_json_string, Database};
-use crate::usage::budget_migration::canonicalize_daily_budget;
 use rusqlite::{params, types::Type, OptionalExtension, Row};
 use rust_decimal::Decimal;
 use serde::de::DeserializeOwned;
@@ -733,8 +733,12 @@ impl Database {
     pub(crate) fn reconcile_system_providers(&self) -> Result<(), AppError> {
         let mut conn = lock_conn!(self.conn);
         let transaction = conn.transaction()?;
-        crate::usage::system_provider_migration::reconcile_system_provider_catalog(&transaction)?;
-        crate::usage::system_provider_migration::validate_schema_v17_complete(&transaction)?;
+        crate::store::migrations::system_provider_migration::reconcile_system_provider_catalog(
+            &transaction,
+        )?;
+        crate::store::migrations::system_provider_migration::validate_schema_v17_complete(
+            &transaction,
+        )?;
         transaction.commit()?;
         Ok(())
     }

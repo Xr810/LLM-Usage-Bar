@@ -1,3 +1,4 @@
+//! Storage schema migration for agent modules and historical ownership.
 use crate::error::AppError;
 use crate::store::Database;
 use rusqlite::{params, Connection, OptionalExtension};

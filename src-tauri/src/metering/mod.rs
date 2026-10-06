@@ -1,4 +1,4 @@
-//! Token accounting and cost arithmetic.
+//! Shared token accounting and cost arithmetic, independent of feature domains.
 //!
 //! These are the primitives every usage source shares: the token-usage shape
 //! parsed out of a session log or an upstream response, the per-million-token

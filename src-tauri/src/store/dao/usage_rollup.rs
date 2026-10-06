@@ -3,8 +3,8 @@
 //! Aggregates proxy_request_logs into daily rollups and prunes old detail rows.
 
 use crate::error::AppError;
+use crate::store::usage_stats::effective_usage_log_filter;
 use crate::store::{lock_conn, Database};
-use crate::usage::usage_stats::effective_usage_log_filter;
 use chrono::{Duration, Local, TimeZone};
 
 /// Compute the rollup/prune cutoff aligned to a local-day boundary.
@@ -68,7 +68,7 @@ impl Database {
             .ok_or_else(|| {
                 AppError::Database("prediction retention cutoff overflow".to_string())
             })?;
-        let pruned_predictions = crate::usage::usage_light_prediction::prune_resolved_predictions(
+        let pruned_predictions = crate::store::usage_light_prediction::prune_resolved_predictions(
             &conn,
             prediction_cutoff,
         )?;

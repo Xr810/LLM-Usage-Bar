@@ -1,3 +1,4 @@
+//! Legacy provider classification and schema v13 migration.
 use crate::error::AppError;
 use crate::model::{BillingKind, TokenSource};
 use crate::store::Database;

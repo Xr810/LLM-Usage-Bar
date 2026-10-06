@@ -16,6 +16,7 @@ mod linux_fix;
 mod macos_fix;
 #[cfg(any(target_os = "macos", test))]
 mod macos_material;
+pub mod metering;
 mod model;
 mod panic_hook;
 pub mod product_identity;
@@ -247,7 +248,7 @@ pub fn create_schema_v13_fixture_test_hook(path: &Path) -> Result<(), AppError> 
          CREATE TABLE stream_check_logs (id TEXT);",
     )
     .map_err(|error| AppError::Database(format!("create fixed v13 retired tables: {error}")))?;
-    usage::migration::migrate_v12_to_v13(&conn)?;
+    store::migrations::migration::migrate_v12_to_v13(&conn)?;
     Database::set_user_version(
         &conn,
         product_identity::DATABASE_IDENTITY_SOURCE_SCHEMA_VERSION,

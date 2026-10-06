@@ -1,3 +1,4 @@
+//! Parse explicitly reported upstream costs without depending on usage collection.
 use crate::error::AppError;
 use rust_decimal::Decimal;
 use serde_json::Value;

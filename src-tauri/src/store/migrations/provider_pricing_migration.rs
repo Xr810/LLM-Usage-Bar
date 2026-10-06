@@ -1,4 +1,4 @@
-//! Schema v20: per-Provider-account model pricing.
+//! Storage schema v20: per-Provider-account model pricing.
 //!
 //! `model_pricing` keeps its global `model_id` primary key and stays the
 //! official reference catalogue. It prices subscription equivalents and is the

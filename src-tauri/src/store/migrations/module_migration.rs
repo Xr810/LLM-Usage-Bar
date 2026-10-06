@@ -1,3 +1,4 @@
+//! Dashboard module schema migration.
 use crate::error::AppError;
 use crate::store::Database;
 use rusqlite::Connection;

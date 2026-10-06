@@ -1,6 +1,7 @@
 pub mod app_config;
 pub mod provider_defaults;
 pub mod settings;
+pub(crate) mod source_roots;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};

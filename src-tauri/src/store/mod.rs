@@ -22,7 +22,11 @@ pub(crate) mod backup;
 mod dao;
 mod identity_migration;
 mod migration;
+pub(crate) mod migrations;
 mod schema;
+pub mod sql_helpers;
+pub(crate) mod usage_light_prediction;
+pub mod usage_stats;
 
 #[cfg(test)]
 mod tests;
@@ -124,7 +128,7 @@ impl Database {
         let db_exists = db_path.exists();
         // Resolve external source roots before opening or migrating SQLite so
         // v13 cursor classification never depends on post-database state.
-        let usage_source_roots = crate::usage::source_roots::UsageSourceRoots::resolve_runtime();
+        let usage_source_roots = crate::config::source_roots::UsageSourceRoots::resolve_runtime();
 
         // 确保父目录存在
         if let Some(parent) = db_path.parent() {

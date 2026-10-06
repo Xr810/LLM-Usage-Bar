@@ -15,15 +15,14 @@
 
 use crate::error::AppError;
 use crate::model::TokenSource;
+pub use crate::store::usage_stats::{get_data_source_breakdown, DataSourceSummary};
 use crate::store::{lock_conn, Database, UsageSyncCursor};
 use crate::usage::ingestion::{LegacyLogInput, UsageIngestionInput, UsageIngestionService};
 use crate::usage::metering::calculator::CostCalculator;
 use crate::usage::metering::cost_parser::UpstreamCost;
 use crate::usage::metering::parser::TokenUsage;
 use crate::usage::session::validate_bound_session_agent;
-use crate::usage::usage_stats::{
-    effective_usage_log_filter, find_model_pricing, should_skip_session_insert, DedupKey,
-};
+use crate::usage::usage_stats::{find_model_pricing, should_skip_session_insert, DedupKey};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -48,15 +47,6 @@ pub struct SessionSyncResult {
     pub files_scanned: u32,
     pub files_pruned: u32,
     pub errors: Vec<String>,
-}
-
-/// 数据来源分布
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DataSourceSummary {
-    pub data_source: String,
-    pub request_count: u32,
-    pub total_cost_usd: String,
 }
 
 /// 流水线打开文件之后交给解析器的一切。
@@ -955,38 +945,6 @@ pub(crate) fn update_sync_state_for_resource(
         Some(legacy_cursor_key) => db.promote_usage_sync_cursor(source, legacy_cursor_key, &cursor),
         None => db.put_usage_sync_cursor(&cursor),
     }
-}
-
-/// 查询数据来源分布统计
-pub fn get_data_source_breakdown(db: &Database) -> Result<Vec<DataSourceSummary>, AppError> {
-    let conn = lock_conn!(db.conn);
-
-    let effective_filter = effective_usage_log_filter("l");
-    let sql = format!(
-        "SELECT COALESCE(l.data_source, 'proxy') as ds, COUNT(*) as cnt,
-                COALESCE(SUM(CAST(l.total_cost_usd AS REAL)), 0) as cost
-         FROM proxy_request_logs l
-         WHERE {effective_filter}
-         GROUP BY ds
-         ORDER BY cnt DESC"
-    );
-
-    let mut stmt = conn.prepare(&sql)?;
-
-    let rows = stmt.query_map([], |row| {
-        Ok(DataSourceSummary {
-            data_source: row.get(0)?,
-            request_count: row.get::<_, i64>(1)? as u32,
-            total_cost_usd: format!("{:.6}", row.get::<_, f64>(2)?),
-        })
-    })?;
-
-    let mut summaries = Vec::new();
-    for row in rows {
-        summaries.push(row.map_err(|e| AppError::Database(e.to_string()))?);
-    }
-
-    Ok(summaries)
 }
 
 #[cfg(test)]

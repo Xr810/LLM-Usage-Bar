@@ -9,8 +9,7 @@ use crate::store::Database;
 use chrono::DateTime;
 use rust_decimal::Decimal;
 
-pub(crate) const FIVE_HOUR_WINDOW_KIND: &str = "five_hour";
-pub(crate) const SEVEN_DAY_WINDOW_KIND: &str = "seven_day";
+pub(crate) use crate::model::usage_status::{FIVE_HOUR_WINDOW_KIND, SEVEN_DAY_WINDOW_KIND};
 
 const FIVE_HOUR_WINDOW_SECONDS: i64 = 18_000;
 const SEVEN_DAY_WINDOW_SECONDS: i64 = 604_800;

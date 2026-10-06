@@ -1,4 +1,4 @@
-//! Cost Calculator - 计算 API 请求成本
+//! Cost Calculator - shared API 请求成本计算
 //!
 //! 使用高精度 Decimal 类型避免浮点数精度问题
 

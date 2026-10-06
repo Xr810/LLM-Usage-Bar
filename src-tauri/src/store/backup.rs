@@ -1508,12 +1508,16 @@ impl Database {
         // 补齐缺失表/索引并进行基础校验
         Self::create_tables_on_conn(&temp_conn)?;
         if Self::get_user_version(&temp_conn)? == crate::store::SCHEMA_VERSION {
-            crate::usage::system_provider_migration::reconcile_system_provider_catalog(&temp_conn)?;
+            super::migrations::system_provider_migration::reconcile_system_provider_catalog(
+                &temp_conn,
+            )?;
         }
         Self::apply_schema_migrations_on_conn(&temp_conn)?;
-        crate::usage::system_provider_migration::reconcile_system_provider_catalog(&temp_conn)?;
-        crate::usage::system_provider_migration::validate_schema_v17_complete(&temp_conn)?;
-        crate::usage::budget_migration::normalize_daily_budgets(&temp_conn)?;
+        super::migrations::system_provider_migration::reconcile_system_provider_catalog(
+            &temp_conn,
+        )?;
+        super::migrations::system_provider_migration::validate_schema_v17_complete(&temp_conn)?;
+        super::migrations::budget_migration::normalize_daily_budgets(&temp_conn)?;
         Self::validate_basic_state(&temp_conn)?;
         Self::validate_import_schema_allowlist(&temp_conn)?;
         if let Some(local_snapshot) = local_snapshot.as_ref() {
@@ -1993,14 +1997,16 @@ impl Database {
         }
         Self::create_tables_on_conn(&staged_conn)?;
         if Self::get_user_version(&staged_conn)? == crate::store::SCHEMA_VERSION {
-            crate::usage::system_provider_migration::reconcile_system_provider_catalog(
+            super::migrations::system_provider_migration::reconcile_system_provider_catalog(
                 &staged_conn,
             )?;
         }
         Self::apply_schema_migrations_on_conn(&staged_conn)?;
-        crate::usage::system_provider_migration::reconcile_system_provider_catalog(&staged_conn)?;
-        crate::usage::system_provider_migration::validate_schema_v17_complete(&staged_conn)?;
-        crate::usage::budget_migration::normalize_daily_budgets(&staged_conn)?;
+        super::migrations::system_provider_migration::reconcile_system_provider_catalog(
+            &staged_conn,
+        )?;
+        super::migrations::system_provider_migration::validate_schema_v17_complete(&staged_conn)?;
+        super::migrations::budget_migration::normalize_daily_budgets(&staged_conn)?;
         Self::validate_import_schema_allowlist(&staged_conn)?;
 
         // Step 3: Preserve device-local credential lifecycle state, then restore.

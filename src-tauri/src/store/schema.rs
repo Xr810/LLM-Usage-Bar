@@ -210,13 +210,13 @@ impl Database {
 
     /// 应用 Schema 迁移
     pub(crate) fn apply_schema_migrations(&self) -> Result<(), AppError> {
-        let roots = crate::usage::source_roots::UsageSourceRoots::resolve_runtime();
+        let roots = crate::config::source_roots::UsageSourceRoots::resolve_runtime();
         self.apply_schema_migrations_with_roots(&roots)
     }
 
     pub(crate) fn apply_schema_migrations_with_roots(
         &self,
-        roots: &crate::usage::source_roots::UsageSourceRoots,
+        roots: &crate::config::source_roots::UsageSourceRoots,
     ) -> Result<(), AppError> {
         let conn = lock_conn!(self.conn);
         Self::apply_schema_migrations_on_conn_with_roots(&conn, roots)
@@ -224,13 +224,13 @@ impl Database {
 
     /// 在指定连接上应用 Schema 迁移
     pub(crate) fn apply_schema_migrations_on_conn(conn: &Connection) -> Result<(), AppError> {
-        let roots = crate::usage::source_roots::UsageSourceRoots::resolve_runtime();
+        let roots = crate::config::source_roots::UsageSourceRoots::resolve_runtime();
         Self::apply_schema_migrations_on_conn_with_roots(conn, &roots)
     }
 
     pub(crate) fn apply_schema_migrations_on_conn_with_roots(
         conn: &Connection,
-        roots: &crate::usage::source_roots::UsageSourceRoots,
+        roots: &crate::config::source_roots::UsageSourceRoots,
     ) -> Result<(), AppError> {
         conn.execute("SAVEPOINT schema_migration;", [])
             .map_err(|e| AppError::Database(format!("开启迁移 savepoint 失败: {e}")))?;
@@ -246,7 +246,9 @@ impl Database {
             // bump. Reconcile it before versioned validators inspect the
             // protected catalog so an existing v17+ database can open safely.
             if version >= 17 {
-                crate::usage::system_provider_migration::reconcile_system_provider_catalog(conn)?;
+                super::migrations::system_provider_migration::reconcile_system_provider_catalog(
+                    conn,
+                )?;
             }
             while version < SCHEMA_VERSION {
                 match version {
@@ -314,19 +316,19 @@ impl Database {
                     }
                     12 => {
                         log::info!("迁移数据库从 v12 到 v13（添加供应商感知的用量表）");
-                        crate::usage::migration::migrate_v12_to_v13(conn)?;
+                        super::migrations::migration::migrate_v12_to_v13(conn)?;
                         Self::set_user_version(conn, 13)?;
                     }
                     13 => {
                         log::info!("迁移数据库从 v13 到 v14（归档行游标并建立来源感知字节游标）");
-                        crate::usage::cursor_migration::migrate_v13_to_v14(conn, roots)?;
+                        super::migrations::cursor_migration::migrate_v13_to_v14(conn, roots)?;
                         migrate_app_owned_identity_v14(conn)?;
                         Self::set_user_version(conn, 14)?;
                     }
                     14 => {
                         log::info!("迁移数据库从 v14 到 v15（添加动态用量模块和 Provider 归属）");
                         Self::validate_schema_v14_complete(conn)?;
-                        crate::usage::module_migration::migrate_v14_to_v15(conn)?;
+                        super::migrations::module_migration::migrate_v14_to_v15(conn)?;
                         Self::set_user_version(conn, 15)?;
                     }
                     15 => {
@@ -334,7 +336,7 @@ impl Database {
                             "迁移数据库从 v15 到 v16（添加 Agent 模块、Provider 绑定和历史归属）"
                         );
                         Self::validate_schema_v15_complete(conn)?;
-                        crate::usage::agent_module_migration::migrate_v15_to_v16(conn)?;
+                        super::migrations::agent_module_migration::migrate_v15_to_v16(conn)?;
                         Self::set_user_version(conn, 16)?;
                     }
                     16 => {
@@ -342,30 +344,34 @@ impl Database {
                             "迁移数据库从 v16 到 v17（添加固定系统 Provider 和分层凭据元数据）"
                         );
                         Self::validate_schema_v15_complete(conn)?;
-                        crate::usage::agent_module_migration::validate_schema_v16_complete(conn)?;
-                        crate::usage::system_provider_migration::migrate_v16_to_v17(conn)?;
+                        super::migrations::agent_module_migration::validate_schema_v16_complete(
+                            conn,
+                        )?;
+                        super::migrations::system_provider_migration::migrate_v16_to_v17(conn)?;
                         Self::set_user_version(conn, 17)?;
                     }
                     17 => {
                         log::info!("迁移数据库从 v17 到 v18（添加 Provider 每日用量预算）");
-                        crate::usage::system_provider_migration::validate_schema_v17_complete(
+                        super::migrations::system_provider_migration::validate_schema_v17_complete(
                             conn,
                         )?;
-                        crate::usage::budget_migration::migrate_v17_to_v18(conn)?;
+                        super::migrations::budget_migration::migrate_v17_to_v18(conn)?;
                     }
                     18 => {
                         log::info!("迁移数据库从 v18 到 v19（持久化配额刷新失败退避状态）");
-                        crate::usage::budget_migration::validate_schema_v18_complete(conn)?;
-                        crate::usage::quota_retry_migration::migrate_v18_to_v19(conn)?;
+                        super::migrations::budget_migration::validate_schema_v18_complete(conn)?;
+                        super::migrations::quota_retry_migration::migrate_v18_to_v19(conn)?;
                     }
                     19 => {
                         log::info!("迁移数据库从 v19 到 v20（Provider 维度的自定义模型定价）");
-                        crate::usage::quota_retry_migration::validate_schema_v19_complete(conn)?;
-                        crate::usage::provider_pricing_migration::migrate_v19_to_v20(conn)?;
+                        super::migrations::quota_retry_migration::validate_schema_v19_complete(
+                            conn,
+                        )?;
+                        super::migrations::provider_pricing_migration::migrate_v19_to_v20(conn)?;
                     }
                     20 => {
                         log::info!("迁移数据库从 v20 到 v21（删除已退役的功能表）");
-                        crate::usage::provider_pricing_migration::validate_schema_v20_complete(
+                        super::migrations::provider_pricing_migration::validate_schema_v20_complete(
                             conn,
                         )?;
                         Self::migrate_v20_to_v21(conn)?;
@@ -374,25 +380,29 @@ impl Database {
                     21 => {
                         log::info!("迁移数据库从 v21 到 v22（补算缺失的历史用量成本）");
                         Self::validate_schema_v21_complete(conn)?;
-                        crate::usage::cost_backfill_migration::migrate_v21_to_v22(conn)?;
+                        super::migrations::cost_backfill_migration::migrate_v21_to_v22(conn)?;
                         Self::set_user_version(conn, 22)?;
                     }
                     22 => {
                         log::info!(
                             "迁移数据库从 v22 到 v23（Provider 自定义价格支持逐项回落官方价）"
                         );
-                        crate::usage::cost_backfill_migration::validate_schema_v22_complete(conn)?;
+                        super::migrations::cost_backfill_migration::validate_schema_v22_complete(
+                            conn,
+                        )?;
                         Self::migrate_v22_to_v23(conn)?;
                         Self::set_user_version(conn, 23)?;
                     }
                     23 => {
                         log::info!("迁移数据库从 v23 到 v24（添加用量灯预测与结果日志）");
                         Self::validate_schema_v23_complete(conn)?;
-                        crate::usage::usage_light_prediction_migration::migrate_v23_to_v24(conn)?;
+                        super::migrations::usage_light_prediction_migration::migrate_v23_to_v24(
+                            conn,
+                        )?;
                     }
                     24 => {
                         log::info!("迁移数据库从 v24 到 v25（添加 Provider API Key 用量快照）");
-                        crate::usage::usage_light_prediction_migration::validate_schema_v24_complete(
+                        super::migrations::usage_light_prediction_migration::validate_schema_v24_complete(
                             conn,
                         )?;
                         Self::migrate_v24_to_v25(conn)?;
@@ -425,31 +435,33 @@ impl Database {
             }
             if version >= 16 {
                 Self::validate_schema_v15_complete(conn)?;
-                crate::usage::agent_module_migration::validate_schema_v16_complete(conn)?;
+                super::migrations::agent_module_migration::validate_schema_v16_complete(conn)?;
             }
             if version >= 17 {
-                crate::usage::system_provider_migration::validate_schema_v17_complete(conn)?;
+                super::migrations::system_provider_migration::validate_schema_v17_complete(conn)?;
             }
             if version >= 18 {
-                crate::usage::budget_migration::validate_schema_v18_complete(conn)?;
+                super::migrations::budget_migration::validate_schema_v18_complete(conn)?;
             }
             if version >= 19 {
-                crate::usage::quota_retry_migration::validate_schema_v19_complete(conn)?;
+                super::migrations::quota_retry_migration::validate_schema_v19_complete(conn)?;
             }
             if version >= 20 {
-                crate::usage::provider_pricing_migration::validate_schema_v20_complete(conn)?;
+                super::migrations::provider_pricing_migration::validate_schema_v20_complete(conn)?;
             }
             if version >= 21 {
                 Self::validate_schema_v21_complete(conn)?;
             }
             if version >= 22 {
-                crate::usage::cost_backfill_migration::validate_schema_v22_complete(conn)?;
+                super::migrations::cost_backfill_migration::validate_schema_v22_complete(conn)?;
             }
             if version >= 23 {
                 Self::validate_schema_v23_complete(conn)?;
             }
             if version >= 24 {
-                crate::usage::usage_light_prediction_migration::validate_schema_v24_complete(conn)?;
+                super::migrations::usage_light_prediction_migration::validate_schema_v24_complete(
+                    conn,
+                )?;
             }
             // v25's snapshot table is Provider-scoped; v26 rebuilds it around
             // key_id, so its validator only applies at exactly 25.

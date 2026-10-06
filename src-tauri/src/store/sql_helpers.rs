@@ -1,4 +1,4 @@
-//! SQL fragment helpers shared across usage aggregation queries.
+//! Storage-owned SQL fragments shared across usage aggregation queries.
 //!
 //! Anthropic reports `input_tokens` as fresh (cache reads counted
 //! separately); OpenAI Responses API and Google Gemini's

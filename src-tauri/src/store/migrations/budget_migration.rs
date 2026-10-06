@@ -1,3 +1,4 @@
+//! Stored daily-budget validation and schema migration.
 use crate::error::AppError;
 use crate::store::Database;
 use rusqlite::Connection;

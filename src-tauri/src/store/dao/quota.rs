@@ -112,7 +112,7 @@ impl Database {
         let state = fetch_state_on_conn(&transaction, &snapshot.provider_id)?
             .ok_or_else(|| AppError::Database("quota fetch state was not saved".to_string()))?;
         if let Some(previous) = previous {
-            if let Err(error) = crate::usage::usage_light_prediction::resolve_snapshot_rollovers(
+            if let Err(error) = crate::store::usage_light_prediction::resolve_snapshot_rollovers(
                 &transaction,
                 &previous,
                 snapshot,

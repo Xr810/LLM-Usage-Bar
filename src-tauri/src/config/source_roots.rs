@@ -1,3 +1,4 @@
+//! External log locations resolved before database initialization or ingestion.
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

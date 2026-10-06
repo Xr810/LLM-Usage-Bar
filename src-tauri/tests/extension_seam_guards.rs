@@ -144,6 +144,12 @@ struct LayerRule {
 
 const LAYER_RULES: &[LayerRule] = &[
     LayerRule {
+        module: "metering",
+        allowed_dependencies: &["error"],
+        enforcement: Enforcement::AllowOnly,
+        availability: Availability::Required,
+    },
+    LayerRule {
         module: "model",
         allowed_dependencies: &[],
         enforcement: Enforcement::AllowOnly,
@@ -220,62 +226,6 @@ struct ExpectedViolation {
 }
 
 const ALLOWLIST: &[ExpectedViolation] = &[
-    ExpectedViolation {
-        boundary: "store",
-        file: "src-tauri/src/store/backup.rs",
-        dependency: "usage",
-        kind: "地基上行依赖",
-        reason: "备份恢复流程直接调用 usage 迁移与校验逻辑",
-    },
-    ExpectedViolation {
-        boundary: "store",
-        file: "src-tauri/src/store/dao/provider_model_pricing.rs",
-        dependency: "usage",
-        kind: "地基上行依赖",
-        reason: "定价 DAO 复用 usage::usage_stats 的模型 ID 清理函数",
-    },
-    ExpectedViolation {
-        boundary: "store",
-        file: "src-tauri/src/store/dao/quota.rs",
-        dependency: "usage",
-        kind: "地基上行依赖",
-        reason: "quota DAO 复用 usage::usage_light_prediction 的快照滚动逻辑",
-    },
-    ExpectedViolation {
-        boundary: "store",
-        file: "src-tauri/src/store/dao/usage_providers.rs",
-        dependency: "usage",
-        kind: "地基上行依赖",
-        reason: "用量 provider DAO 复用 usage 的预算与迁移逻辑",
-    },
-    ExpectedViolation {
-        boundary: "store",
-        file: "src-tauri/src/store/dao/usage_rollup.rs",
-        dependency: "usage",
-        kind: "地基上行依赖",
-        reason: "用量汇总 DAO 复用 usage 的过滤与预测清理逻辑",
-    },
-    ExpectedViolation {
-        boundary: "store",
-        file: "src-tauri/src/store/mod.rs",
-        dependency: "usage",
-        kind: "地基上行依赖",
-        reason: "数据库初始化依赖 usage::source_roots 解析运行时路径",
-    },
-    ExpectedViolation {
-        boundary: "store",
-        file: "src-tauri/src/store/schema.rs",
-        dependency: "usage",
-        kind: "地基上行依赖",
-        reason: "schema 迁移调度直接调用 usage 的迁移与校验函数",
-    },
-    ExpectedViolation {
-        boundary: "store",
-        file: "src-tauri/src/store/tests.rs",
-        dependency: "usage",
-        kind: "测试边界上行依赖",
-        reason: "store 集成测试直接驱动 usage 迁移并构造系统 provider fixture",
-    },
     // —— 以下 9 条随 T26 建出 providers/ 而暴露(2026-08-15) ——
     //
     // 全部是搬入文件**自带的既有依赖**:T26 是纯搬运,一条都不是搬运新增的。
@@ -343,13 +293,6 @@ const ALLOWLIST: &[ExpectedViolation] = &[
         dependency: "usage_events",
         kind: "(a) 顶层未归类模块",
         reason: "调 notify_dashboard_invalidated() 通知前端;这是上行的 UI 关注点,不是工具",
-    },
-    ExpectedViolation {
-        boundary: "providers",
-        file: "src-tauri/src/providers/shared/official_pricing.rs",
-        dependency: "usage",
-        kind: "(b) providers → usage",
-        reason: "复用 usage::usage_stats::clean_model_id_for_pricing 清理 model id",
     },
 ];
 

@@ -4,10 +4,10 @@
 //! predictions and resolves completed subscription windows so a later calibration
 //! pass has honest local outcome data instead of reconstructing past decisions.
 
-use super::status::{PaceBasis, SourceClassification, UsageStatus};
-use super::subscription_pace::{FIVE_HOUR_WINDOW_KIND, SEVEN_DAY_WINDOW_KIND};
 use crate::error::AppError;
+use crate::model::usage_status::{FIVE_HOUR_WINDOW_KIND, SEVEN_DAY_WINDOW_KIND};
 use crate::model::QuotaSnapshot;
+use crate::model::{PaceBasis, SourceClassification, UsageStatus};
 use crate::store::Database;
 use chrono::DateTime;
 use rusqlite::{params, Connection, OptionalExtension};

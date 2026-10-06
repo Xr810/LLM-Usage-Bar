@@ -1,3 +1,4 @@
+//! Prediction history schema migration.
 use crate::error::AppError;
 use crate::store::Database;
 use rusqlite::{Connection, OptionalExtension};

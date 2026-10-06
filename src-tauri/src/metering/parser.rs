@@ -1,4 +1,4 @@
-//! Response Parser - 从 API 响应中提取 token 使用量
+//! Response Parser - shared API 响应 token 使用量提取
 //!
 //! 支持多种 API 格式：
 //! - Claude API (非流式和流式)

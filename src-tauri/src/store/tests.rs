@@ -179,7 +179,7 @@ mod usage_sync_cursor_tests {
 
 mod schema_v14_cursor_migration_tests {
     use super::*;
-    use crate::usage::source_roots::UsageSourceRoots;
+    use crate::config::source_roots::UsageSourceRoots;
     use std::path::PathBuf;
 
     fn roots() -> UsageSourceRoots {
@@ -194,7 +194,7 @@ mod schema_v14_cursor_migration_tests {
     fn v13_current_tables() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         Database::create_tables_on_conn(&conn).unwrap();
-        crate::usage::migration::migrate_v12_to_v13(&conn).unwrap();
+        migrations::migration::migrate_v12_to_v13(&conn).unwrap();
         Database::set_user_version(&conn, 13).unwrap();
         conn
     }
@@ -379,7 +379,7 @@ mod schema_v14_cursor_migration_tests {
 
 mod schema_v15_dashboard_module_migration_tests {
     use super::*;
-    use crate::usage::source_roots::UsageSourceRoots;
+    use crate::config::source_roots::UsageSourceRoots;
     use std::path::PathBuf;
 
     fn roots() -> UsageSourceRoots {
@@ -394,8 +394,8 @@ mod schema_v15_dashboard_module_migration_tests {
     fn v14_usage_fixture() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         Database::create_tables_on_conn(&conn).unwrap();
-        crate::usage::migration::migrate_v12_to_v13(&conn).unwrap();
-        crate::usage::cursor_migration::migrate_v13_to_v14(&conn, &roots()).unwrap();
+        migrations::migration::migrate_v12_to_v13(&conn).unwrap();
+        migrations::cursor_migration::migrate_v13_to_v14(&conn, &roots()).unwrap();
         Database::set_user_version(&conn, 14).unwrap();
         conn
     }
@@ -488,7 +488,7 @@ mod schema_v15_dashboard_module_migration_tests {
             ("openrouter".into(), None),
         ];
         expected_memberships.extend(
-            crate::usage::system_providers::system_provider_definitions()
+            crate::model::system_providers::system_provider_definitions()
                 .into_iter()
                 .map(|definition| (definition.id.to_string(), None)),
         );
@@ -562,10 +562,10 @@ mod schema_v15_dashboard_module_migration_tests {
 
 mod migration_v15_to_v16 {
     use super::*;
-    use crate::usage::agent_module_migration::{
+    use crate::config::source_roots::UsageSourceRoots;
+    use crate::store::migrations::agent_module_migration::{
         migrate_v15_to_v16_with_failure, MigrationFailurePoint,
     };
-    use crate::usage::source_roots::UsageSourceRoots;
     use std::collections::{HashMap, HashSet};
     use std::path::PathBuf;
 
@@ -583,32 +583,31 @@ mod migration_v15_to_v16 {
         conn.execute_batch("PRAGMA foreign_keys = ON;")
             .expect("enable foreign keys");
         Database::create_tables_on_conn(&conn).expect("create application tables");
-        crate::usage::migration::migrate_v12_to_v13(&conn).expect("create v13 usage schema");
-        crate::usage::cursor_migration::migrate_v13_to_v14(&conn, &roots())
+        migrations::migration::migrate_v12_to_v13(&conn).expect("create v13 usage schema");
+        migrations::cursor_migration::migrate_v13_to_v14(&conn, &roots())
             .expect("create v14 cursor schema");
         Database::set_user_version(&conn, 14).expect("set v14 version");
-        crate::usage::module_migration::migrate_v14_to_v15(&conn)
-            .expect("create v15 module schema");
+        migrations::module_migration::migrate_v14_to_v15(&conn).expect("create v15 module schema");
         Database::set_user_version(&conn, 15).expect("set v15 version");
         conn
     }
 
     fn migrate_fixture_to_v16(conn: &Connection) {
         Database::validate_schema_v15_complete(conn).expect("validate complete v15 fixture");
-        crate::usage::agent_module_migration::migrate_v15_to_v16(conn)
+        migrations::agent_module_migration::migrate_v15_to_v16(conn)
             .expect("migrate fixture from v15 to v16");
         Database::set_user_version(conn, 16).expect("set v16 fixture version");
-        crate::usage::agent_module_migration::validate_schema_v16_complete(conn)
+        migrations::agent_module_migration::validate_schema_v16_complete(conn)
             .expect("validate complete v16 fixture");
     }
 
     fn migrate_v12_fixture_to_v16(conn: &Connection) {
-        crate::usage::migration::migrate_v12_to_v13(conn).expect("migrate fixture to v13");
+        migrations::migration::migrate_v12_to_v13(conn).expect("migrate fixture to v13");
         Database::set_user_version(conn, 13).expect("set v13 fixture version");
-        crate::usage::cursor_migration::migrate_v13_to_v14(conn, &roots())
+        migrations::cursor_migration::migrate_v13_to_v14(conn, &roots())
             .expect("migrate fixture to v14");
         Database::set_user_version(conn, 14).expect("set v14 fixture version");
-        crate::usage::module_migration::migrate_v14_to_v15(conn).expect("migrate fixture to v15");
+        migrations::module_migration::migrate_v14_to_v15(conn).expect("migrate fixture to v15");
         Database::set_user_version(conn, 15).expect("set v15 fixture version");
         migrate_fixture_to_v16(conn);
     }
@@ -1529,7 +1528,7 @@ mod migration_v16_to_v17 {
 
     fn v16_usage_fixture() -> Connection {
         let conn = super::migration_v15_to_v16::v15_usage_fixture();
-        crate::usage::agent_module_migration::migrate_v15_to_v16(&conn)
+        migrations::agent_module_migration::migrate_v15_to_v16(&conn)
             .expect("create complete v16 fixture");
         Database::set_user_version(&conn, 16).expect("set v16 fixture version");
         assert_eq!(Database::get_user_version(&conn).unwrap(), 16);
@@ -1980,10 +1979,10 @@ mod migration_v16_to_v17 {
             );
         };
 
-        crate::usage::system_provider_migration::reconcile_system_provider_catalog(&conn)
+        migrations::system_provider_migration::reconcile_system_provider_catalog(&conn)
             .expect("reconcile canonical card metadata");
         assert_catalog_metadata();
-        crate::usage::system_provider_migration::reconcile_system_provider_catalog(&conn)
+        migrations::system_provider_migration::reconcile_system_provider_catalog(&conn)
             .expect("repeat catalog reconciliation");
         assert_catalog_metadata();
 
@@ -2227,13 +2226,13 @@ mod migration_v17_to_v18 {
 
     fn v17_usage_fixture() -> Connection {
         let conn = super::migration_v15_to_v16::v15_usage_fixture();
-        crate::usage::agent_module_migration::migrate_v15_to_v16(&conn)
+        migrations::agent_module_migration::migrate_v15_to_v16(&conn)
             .expect("create complete v16 fixture");
         Database::set_user_version(&conn, 16).expect("set v16 fixture version");
-        crate::usage::system_provider_migration::migrate_v16_to_v17(&conn)
+        migrations::system_provider_migration::migrate_v16_to_v17(&conn)
             .expect("create complete v17 fixture");
         Database::set_user_version(&conn, 17).expect("set v17 fixture version");
-        crate::usage::system_provider_migration::validate_schema_v17_complete(&conn)
+        migrations::system_provider_migration::validate_schema_v17_complete(&conn)
             .expect("validate complete v17 fixture");
         conn
     }
@@ -2255,7 +2254,7 @@ mod migration_v17_to_v18 {
             [],
         )
         .expect("insert custom v17 Provider");
-        crate::usage::system_provider_migration::reconcile_system_provider_catalog(&conn)
+        migrations::system_provider_migration::reconcile_system_provider_catalog(&conn)
             .expect("reconcile v17 system Provider catalog");
 
         Database::apply_schema_migrations_on_conn_with_roots(
@@ -2303,7 +2302,7 @@ mod migration_v17_to_v18 {
             [],
         )
         .unwrap();
-        crate::usage::system_provider_migration::reconcile_system_provider_catalog(&conn)
+        migrations::system_provider_migration::reconcile_system_provider_catalog(&conn)
             .expect("reconcile v18 system Provider catalog");
         assert_eq!(
             conn.query_row(
@@ -2329,7 +2328,7 @@ mod migration_v17_to_v18 {
         }))
         .expect("install forced v18 migration failure");
 
-        let error = crate::usage::budget_migration::migrate_v17_to_v18(&conn)
+        let error = migrations::budget_migration::migrate_v17_to_v18(&conn)
             .expect_err("forced v18 migration failure must roll back");
 
         conn.authorizer(None::<fn(AuthContext<'_>) -> Authorization>)
@@ -2771,9 +2770,9 @@ fn schema_migration_v20_to_v21_drops_retired_tables_and_preserves_live_data() {
 
 #[test]
 fn schema_migration_v21_to_v22_backfills_eligible_costs_and_restores_immutability() {
-    use crate::usage::metering::calculator::{CostCalculator, ModelPricing};
-    use crate::usage::metering::parser::TokenUsage;
-    use crate::usage::system_providers::CHATGPT_SUBSCRIPTION_ID;
+    use crate::metering::calculator::{CostCalculator, ModelPricing};
+    use crate::metering::parser::TokenUsage;
+    use crate::model::system_providers::CHATGPT_SUBSCRIPTION_ID;
     use rust_decimal::Decimal;
 
     let db = Database::memory().expect("create current in-memory database");
@@ -3984,7 +3983,7 @@ fn migration_v12_to_v13_preserves_legacy_rows_and_imports_only_proxy_events() {
     assert_eq!(
         count(&conn, "usage_providers"),
         legacy_provider_count
-            + crate::usage::system_providers::system_provider_definitions().len() as i64
+            + crate::model::system_providers::system_provider_definitions().len() as i64
     );
     assert_eq!(
         scalar_i64(
@@ -4081,7 +4080,7 @@ fn migration_v12_to_v13_preserves_legacy_rows_and_imports_only_proxy_events() {
     assert_eq!(
         count(&conn, "usage_providers"),
         legacy_provider_count
-            + crate::usage::system_providers::system_provider_definitions().len() as i64
+            + crate::model::system_providers::system_provider_definitions().len() as i64
     );
     assert_eq!(count(&conn, "usage_events"), 1);
 

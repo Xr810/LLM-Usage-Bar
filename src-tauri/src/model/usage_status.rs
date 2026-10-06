@@ -5,6 +5,9 @@ use chrono::{DateTime, SecondsFormat};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
+pub(crate) const FIVE_HOUR_WINDOW_KIND: &str = "five_hour";
+pub(crate) const SEVEN_DAY_WINDOW_KIND: &str = "seven_day";
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum UsageStatus {

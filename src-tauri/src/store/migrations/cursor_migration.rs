@@ -1,6 +1,6 @@
+use crate::config::source_roots::UsageSourceRoots;
 use crate::error::AppError;
 use crate::store::{Database, UsageSyncCursor};
-use crate::usage::source_roots::UsageSourceRoots;
 use rusqlite::Connection;
 use std::path::Path;
 
