@@ -1,5 +1,6 @@
 use super::rhythm::RhythmProfile;
-use chrono::{DateTime, SecondsFormat};
+// Keep the existing feature-level import path while model owns shared values.
+pub use crate::model::{PaceBasis, SourceClassification, UsageStatus};
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -16,21 +17,10 @@ const PARTIAL_COST: &str = "partial_cost";
 pub const EXHAUSTED_PERCENT: u8 = 5;
 pub const EXHAUSTED_GRACE_SECONDS: i64 = 900;
 pub const MIN_RATE_SPAN_SECONDS: i64 = 600;
-const SECONDS_PER_HOUR: i64 = 3_600;
 // The yellow band is the fixed error bar around "runs out at reset", not a
 // user preference. Keep these product constants out of persisted settings.
 const PACE_GREEN_HEADROOM_PERCENT: u16 = 115;
 const PACE_RED_HEADROOM_PERCENT: u16 = 85;
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum UsageStatus {
-    Green,
-    Yellow,
-    Red,
-    #[default]
-    Unknown,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -39,20 +29,6 @@ pub enum CostQuality {
     Estimated,
     Partial,
     Unavailable,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum PaceBasis {
-    /// Tier 1 — rate measured from quota or cost history.
-    Measured,
-    /// Tier 2 — rate inferred from the current window average.
-    WindowAverage,
-    /// Tier 3 — no usable clock, static percentage thresholds.
-    #[default]
-    Static,
-    /// Idle: no measurable burn.
-    Idle,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,25 +45,6 @@ pub struct PaceInput {
     pub measured_rate_per_second: Option<Decimal>,
     pub measured_intervals: Vec<(i64, i64)>,
     pub rhythm_profile: Option<Arc<RhythmProfile>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SourceClassification {
-    pub status: UsageStatus,
-    pub used_percent: Option<String>,
-    pub remaining_percent: Option<String>,
-    pub consumed_percent: Option<String>,
-    pub reason: Option<&'static str>,
-    pub burn_rate_per_second: Option<Decimal>,
-    pub projected_exhaust_at: Option<i64>,
-    pub headroom_ratio: Option<Decimal>,
-    pub pace_basis: PaceBasis,
-    pub rhythm_adjustment: Option<Decimal>,
-    /// What the verdict would have been had the rhythm profile not been
-    /// applied. `Some` only when a profile was applied, so a caller can tell
-    /// whether the rhythm actually moved the colour or merely nudged the
-    /// ratio. `None` means there is nothing to compare against.
-    pub flat_status: Option<UsageStatus>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,30 +74,6 @@ impl From<&crate::config::settings::AppSettings> for SubscriptionThresholds {
 }
 
 impl SourceClassification {
-    /// Burn rate as a decimal string in units-per-hour — quota-percent per hour
-    /// for subscription windows, USD per hour for the daily budget. Every other
-    /// numeric on these view structs is a decimal string, so this matches.
-    pub fn burn_rate_per_hour(&self) -> Option<String> {
-        self.burn_rate_per_second
-            .and_then(|rate| rate.checked_mul(Decimal::from(SECONDS_PER_HOUR)))
-            .map(|rate| rate.normalize().to_string())
-    }
-
-    pub fn projected_exhaust_at_rfc3339(&self) -> Option<String> {
-        DateTime::from_timestamp(self.projected_exhaust_at?, 0)
-            .map(|value| value.to_rfc3339_opts(SecondsFormat::AutoSi, true))
-    }
-
-    pub fn headroom_ratio_string(&self) -> Option<String> {
-        self.headroom_ratio
-            .map(|value| value.normalize().to_string())
-    }
-
-    pub fn rhythm_adjustment_string(&self) -> Option<String> {
-        self.rhythm_adjustment
-            .map(|value| value.normalize().to_string())
-    }
-
     fn unknown(reason: &'static str) -> Self {
         Self {
             status: UsageStatus::Unknown,

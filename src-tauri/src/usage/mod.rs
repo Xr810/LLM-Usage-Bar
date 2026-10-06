@@ -20,7 +20,8 @@ pub mod sql_helpers;
 pub mod status;
 pub(crate) mod subscription_pace;
 pub(crate) mod system_provider_migration;
-pub(crate) mod system_providers;
+// Compatibility path for feature consumers; the catalog is owned by model.
+pub(crate) use crate::model::system_providers;
 pub mod tray_snapshot;
 pub mod tray_usage;
 pub mod tray_usage_scheduler;

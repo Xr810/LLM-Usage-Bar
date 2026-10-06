@@ -1,4 +1,7 @@
-use crate::model::{BillingKind, SystemProviderAuthKind, TokenSource};
+//! Built-in provider catalog and binding policy shared by storage and features.
+//! This module contains no I/O or usage collection logic.
+
+use super::{BillingKind, SystemProviderAuthKind, TokenSource};
 
 pub const CHATGPT_SUBSCRIPTION_ID: &str = "system-chatgpt-subscription";
 pub const CLAUDE_SUBSCRIPTION_ID: &str = "system-claude-subscription";

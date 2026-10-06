@@ -35,8 +35,8 @@
 //!
 //! ## 已知违规见 `ALLOWLIST`
 //!
-//! 每一条都记了类型与成因。**红线:不要为了让 allowlist 空掉去改业务代码** ——
-//! 那份清单本身就是下一个任务的输入(`model/domain.rs` 那条见 HANDOFF §15.1)。
+//! 每一条都记了类型与成因。修复依赖方向时同步删除对应例外，不改变业务行为。
+//! 共享状态与系统供应商目录已归入 model；model 不再需要上行依赖例外。
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -221,39 +221,11 @@ struct ExpectedViolation {
 
 const ALLOWLIST: &[ExpectedViolation] = &[
     ExpectedViolation {
-        boundary: "model",
-        file: "src-tauri/src/model/domain.rs",
-        dependency: "usage",
-        kind: "地基上行依赖",
-        reason: "三个纯状态枚举仍位于 usage::status；拆分文件不在 T17 只搬不改范围内",
-    },
-    ExpectedViolation {
         boundary: "store",
         file: "src-tauri/src/store/backup.rs",
         dependency: "usage",
         kind: "地基上行依赖",
         reason: "备份恢复流程直接调用 usage 迁移与校验逻辑",
-    },
-    ExpectedViolation {
-        boundary: "store",
-        file: "src-tauri/src/store/dao/agent_provider_bindings.rs",
-        dependency: "usage",
-        kind: "地基上行依赖",
-        reason: "DAO 复用 usage::system_providers 的系统 provider 判定",
-    },
-    ExpectedViolation {
-        boundary: "store",
-        file: "src-tauri/src/store/dao/binding_credentials.rs",
-        dependency: "usage",
-        kind: "地基上行依赖",
-        reason: "凭据 DAO 复用 usage::system_providers 的固定 API 判定",
-    },
-    ExpectedViolation {
-        boundary: "store",
-        file: "src-tauri/src/store/dao/provider_credentials.rs",
-        dependency: "usage",
-        kind: "地基上行依赖",
-        reason: "凭据 DAO 复用 usage::system_providers 的固定 API 判定",
     },
     ExpectedViolation {
         boundary: "store",
@@ -274,7 +246,7 @@ const ALLOWLIST: &[ExpectedViolation] = &[
         file: "src-tauri/src/store/dao/usage_providers.rs",
         dependency: "usage",
         kind: "地基上行依赖",
-        reason: "用量 provider DAO 复用 usage 的预算、系统 provider 与迁移逻辑",
+        reason: "用量 provider DAO 复用 usage 的预算与迁移逻辑",
     },
     ExpectedViolation {
         boundary: "store",
@@ -357,13 +329,6 @@ const ALLOWLIST: &[ExpectedViolation] = &[
         dependency: "agent_paths",
         kind: "(a) 顶层未归类模块",
         reason: "取 get_gemini_dir;同上",
-    },
-    ExpectedViolation {
-        boundary: "providers",
-        file: "src-tauri/src/providers/shared/connection.rs",
-        dependency: "usage",
-        kind: "(b) providers → usage",
-        reason: "连通性探测按 usage::system_providers::system_provider_definition 构造",
     },
     ExpectedViolation {
         boundary: "providers",

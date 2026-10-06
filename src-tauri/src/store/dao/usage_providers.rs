@@ -2,6 +2,7 @@ use super::agent_provider_bindings::bindings_for_provider_on_conn;
 use super::provider_api_keys::{list_provider_api_keys_on_conn, ProviderApiKeyRow};
 use super::provider_key_usage::provider_key_usage_view_on_conn;
 use crate::error::AppError;
+use crate::model::system_providers::{system_binding_route_protocol, system_provider_definitions};
 use crate::model::{
     session_agent_module_id, BillingKind, BindingCredentialStatus, ProviderApiKeyView,
     RouteBinding, SystemProviderKeyUsageView, TokenSource, UsageProviderInput, UsageProviderStored,
@@ -9,7 +10,6 @@ use crate::model::{
 };
 use crate::store::{lock_conn, to_json_string, Database};
 use crate::usage::budget_migration::canonicalize_daily_budget;
-use crate::usage::system_providers::{system_binding_route_protocol, system_provider_definitions};
 use rusqlite::{params, types::Type, OptionalExtension, Row};
 use rust_decimal::Decimal;
 use serde::de::DeserializeOwned;
@@ -900,12 +900,12 @@ impl Database {
 
 #[cfg(test)]
 mod tests {
+    use crate::model::system_providers::system_provider_definitions;
     use crate::model::{
         AgentProviderBindingInput, BillingKind, SystemProviderAuthKind, TokenSource,
         UsageProviderInput,
     };
     use crate::store::Database;
-    use crate::usage::system_providers::system_provider_definitions;
     use serde_json::json;
     use std::sync::{mpsc, Arc};
     use std::time::Duration;

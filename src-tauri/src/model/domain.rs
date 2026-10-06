@@ -1,7 +1,7 @@
 use serde::{de, Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
-use crate::usage::status::{PaceBasis, SourceClassification, UsageStatus};
+use super::{PaceBasis, SourceClassification, UsageStatus};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

@@ -3,9 +3,9 @@ use super::agent_provider_bindings::{
     BINDING_RECORD_QUERY,
 };
 use crate::error::AppError;
+use crate::model::system_providers::is_fixed_api_preset;
 use crate::model::{AgentProviderBindingView, BindingCredentialStatus};
 use crate::store::{lock_conn, Database};
-use crate::usage::system_providers::is_fixed_api_preset;
 use rusqlite::{params, OptionalExtension, TransactionBehavior};
 use std::time::{SystemTime, UNIX_EPOCH};
 use subtle::ConstantTimeEq;
