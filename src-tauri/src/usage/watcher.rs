@@ -463,9 +463,9 @@ mod tests {
         drop(watcher);
     }
 
-    #[test]
-    fn watcher_watches_existing_roots_without_error() {
-        let (dir, roots) = test_roots();
+    #[tokio::test]
+    async fn watcher_delivers_file_events_and_releases_callback_on_stop() {
+        let (_dir, roots) = test_roots();
         for root in [
             &roots.claude_projects,
             &roots.codex,
@@ -474,10 +474,36 @@ mod tests {
         ] {
             std::fs::create_dir_all(root).expect("create root");
         }
+        let log = roots.codex.join("session.jsonl");
         let schedule = test_schedule();
         let wake = Arc::new(Notify::new());
-        let watcher = UsageWatcher::start(roots, schedule, wake).expect("start watcher");
-        drop(watcher); // Drop 停止监听线程,不 panic 即可
-        drop(dir);
+        let watcher =
+            UsageWatcher::start(roots, schedule.clone(), wake.clone()).expect("start watcher");
+        std::fs::write(&log, "{}\n").unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                wake.notified().await;
+                if schedule.lock().unwrap().state(SourceId::Codex).is_dirty() {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("real file event must reach the schedule");
+
+        watcher.stop();
+        drop(watcher);
+        // notify can finish dropping its callback on its own thread. Wait for
+        // actual release, not an arbitrary grace period with no observed event.
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while Arc::strong_count(&wake) != 1 || Arc::strong_count(&schedule) != 1 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("watcher callback must not remain alive after drop");
+        std::fs::write(log, "{}\n{}\n").unwrap();
+        assert!(schedule.lock().unwrap().is_shutdown());
+        assert!(schedule.lock().unwrap().begin_due(u64::MAX).is_empty());
     }
 }

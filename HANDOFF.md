@@ -1344,6 +1344,42 @@ React / TypeScript + Tauri / Rust 是正式路线。Settings 新增 Local routin
 - 在资源足够的环境执行完整 Rust 测试；在 Windows、macOS 原生环境验证启动中退出、同步中退出、托盘主动退出及重复退出请求。Linux 的编译或测试不能代替这两个平台的交互验证。
 - **验收门：** 为每个平台与场景记录通过／失败／未执行、命令或操作步骤、代码版本和证据。修复发现的问题并复测后，才把本项标为完成；未执行项保留为明确缺口。
 
+#### 2026-10-06 本轮进展：退出边界修复，验收门仍未通过
+
+基线为 `339a699825dcfcd218c8c0d0aea05cdb086ff2f7`（fetch 后与 `origin/main` 一致）。本批修改只涉及后台生命周期、退出事件处理和对应测试；不是 CLI 拆分，也不是纯搬运。
+
+- **关闭登记后仍可启动调度器：** 原来的 `BackgroundTasks::take` 对四个调度器只调用可重启的 `TaskSlot::take`。现在应用退出使用永久关闭的 `close`，普通 stop/start 仍沿用 `take`，保留运行期间重启语义。新增测试区分空槽、已有句柄、重复关闭和关闭后的构造拒绝。
+- **重复退出可提前终止第一次清理：** 第二个用户退出事件原来会再启动一份清理；它取不到已被第一份取走的句柄，却仍会调用 `process::exit`。现在事件循环只允许第一次主动退出启动清理，其余主动退出请求只阻止默认退出；无退出码和 Tauri restart 的原有分支不变。
+- `background/tests.rs` 新增真实 `AppState`／`BackgroundTasks` 测试：关闭后拒绝所有 worker、顺序重复清理、已完成／panic／挂起 worker，以及在临时文件数据库事务内请求取消、等待提交后重开数据库核对两条不同金额和 `PRAGMA integrity_check`。关键交错通过通道控制，等待上限 5 秒；运行成功时会输出实际清理耗时。**这些用例不是完整 Tauri 桌面退出测试，也还没有覆盖实际会话摄取与启动初始化的完整链路。**
+- watcher 测试由“Drop 不 panic”加强为真实临时日志写入触发通知，停止后等待回调持有的引用释放、确认调度关闭；没有用任意 sleep 判断成功。
+
+验证与缺口（本轮 Linux x64 orb，约 2 GB 内存、无 swap）：
+
+| 场景／检查 | 本轮结果与证据 |
+| --- | --- |
+| Rust `check --tests` | **通过（39.05 秒）**：`CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0 pnpm rust -- check --locked --manifest-path src-tauri/Cargo.toml --tests`；先前与另一验证进程并存、启用增量编译的尝试被 OOM 终止。保留 3 条既有测试告警，不称 clippy 全绿 |
+| 独立生产源码测试 | **3 通过／0 失败**：临时 Cargo harness 用 `#[path]` 直接引用 `background/slot.rs`、`background/runtime.rs`，仅依赖 `log`；`pnpm rust -- test --offline --manifest-path /tmp/llm-background-harness/Cargo.toml`。未复制实现，覆盖关闭拒绝、重复关闭、并发启动一次与普通停止后重启；不等价于 AppState／Tauri 集成测试。临时 harness 验证后删除，正式用例留在源码中 |
+| 应用后台生命周期集成用例 | **未运行**：`CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml --lib app_state:: -- --nocapture` 在应用测试构建阶段被 OOM 终止；停止其他验证进程并加 `CARGO_INCREMENTAL=0` 后重试仍退出 137。没有测试结果或退出耗时可报 |
+| Linux 真实文件通知／释放回调 | **未运行**：用例已写，仍需在资源足够的环境执行下方 watcher 命令 |
+| 完整 Rust 测试与依赖守卫 | **未运行**：应用测试构建受内存限制；不可把独立源码测试或 `check` 当作通过 |
+| Windows 原生：启动中退出、同步中退出、托盘退出、重复退出 | **全部未执行**：无 Windows 环境；本轮 `list_runners` 返回无连接 runner |
+| macOS 原生：启动中退出、同步中退出、托盘退出、重复退出 | **全部未执行**：无 macOS 环境；本轮 `list_runners` 返回无连接 runner |
+| `pnpm typecheck`、包装器 `fmt --check`、`git diff --check`、§17 冲突标记扫描 | **通过** |
+| `pnpm test:unit tests/config/productIdentity.test.ts` | **3 通过／2 失败（基线遗留）**：兼容性清单仍指向 `api/commands/misc.rs` 等旧位置，4 处实际字面量已在 `cli/mod.rs`；本轮未修改这些源码／清单，不混入修复 |
+
+**慢任务边界：** 取消是协作式的，已开始的同步写库必须执行完，再等 worker 退出；5 秒只是测试失败界限，不是生产强杀期限。永久阻塞的磁盘／同步调用是否导致无限等待，尚未验证或解决，不能宣称有全局退出时限。
+
+**下一步仍是第 1 项：** 在资源足够的环境运行以下命令并记录耗时；补齐真实摄取、启动初始化与全局 watcher 登记交错，然后在 Windows/macOS 使用可丢弃数据目录分别操作启动中退出、同步中退出、托盘退出和连续退出请求，记录退出日志、残留进程／监听器及重开数据库完整性。完成这些之前不得启动 §20.3。
+
+```bash
+pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml --lib app_state:: -- --nocapture
+pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml --lib usage::watcher::tests:: -- --nocapture
+pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml
+pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml --test extension_seam_guards
+```
+
+维护性证据：以后修改调度器退出登记只需改 `app_state/background`，不必改 CLI、供应商业务或接口格式；重复退出门控仍归 `lib.rs` 的事件处理。未修改依赖守卫规则或例外。本批作为本地提交交付，未推送、未发布、未安装应用，未操作真实用户数据库。
+
 ### 20.3 第 2 项：按职责拆 CLI，分离计划与执行
 
 入口：`src-tauri/src/cli/`；保持 `src-tauri/src/api/commands/tools.rs` 为薄适配层，保留现有命令名与传输格式。

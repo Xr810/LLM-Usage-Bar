@@ -1,6 +1,8 @@
 //! Application-owned scheduler handles and ordered shutdown.
 mod runtime;
 mod slot;
+#[cfg(test)]
+mod tests;
 use crate::providers::shared::{
     key_usage_scheduler::ProviderKeyUsageSchedulerHandle,
     official_pricing::OfficialPricingSchedulerHandle,
@@ -41,10 +43,10 @@ impl BackgroundTasks {
         }
         BackgroundShutdown {
             runtime,
-            quota: self.quota.take(),
-            midnight: self.midnight.take(),
-            official_pricing: self.official_pricing.take(),
-            provider_key_usage: self.provider_key_usage.take(),
+            quota: self.quota.close(),
+            midnight: self.midnight.close(),
+            official_pricing: self.official_pricing.close(),
+            provider_key_usage: self.provider_key_usage.close(),
         }
     }
 }

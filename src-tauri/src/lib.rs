@@ -1575,7 +1575,8 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while running tauri application");
 
-    app.run(|app_handle, event| {
+    let mut exit_cleanup_started = false;
+    app.run(move |app_handle, event| {
         // 处理退出请求（所有平台）
         if let RunEvent::ExitRequested { api, code, .. } = &event {
             match classify_exit_request(*code) {
@@ -1611,12 +1612,19 @@ pub fn run() {
                 ExitRequestAction::CleanupAndExit => {}
             }
 
+            api.prevent_exit();
+            // Run events are serialized. Only the first request may own the
+            // cleanup and process exit: a second cleanup would find no handles
+            // and exit while the first is still waiting for database writes.
+            if std::mem::replace(&mut exit_cleanup_started, true) {
+                return;
+            }
+
             // 停止文件监听与同步调度（驱动循环看到 is_shutdown 后退出，
             // 不留下永远跑不完的 spawn）；重启路径走 re-exec，无需显式清理。
             usage::watcher::stop_usage_watcher();
 
             log::info!("收到用户主动退出请求 (code={code:?})，开始清理...");
-            api.prevent_exit();
 
             let app_handle = app_handle.clone();
             tauri::async_runtime::spawn(async move {
