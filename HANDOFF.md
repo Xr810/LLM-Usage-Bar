@@ -1365,7 +1365,7 @@ React / TypeScript + Tauri / Rust 是正式路线。Settings 新增 Local routin
 | Windows 原生：启动中退出、同步中退出、托盘退出、重复退出 | **全部未执行**：无 Windows 环境；本轮 `list_runners` 返回无连接 runner |
 | macOS 原生：启动中退出、同步中退出、托盘退出、重复退出 | **全部未执行**：无 macOS 环境；本轮 `list_runners` 返回无连接 runner |
 | `pnpm typecheck`、包装器 `fmt --check`、`git diff --check`、§17 冲突标记扫描 | **通过** |
-| `pnpm test:unit tests/config/productIdentity.test.ts` | **3 通过／2 失败（基线遗留）**：兼容性清单仍指向 `api/commands/misc.rs` 等旧位置，4 处实际字面量已在 `cli/mod.rs`；本轮未修改这些源码／清单，不混入修复 |
+| `pnpm test:unit tests/config/productIdentity.test.ts` | 当时 **3 通过／2 失败（基线遗留）**；已在下方同日兼容性清单修复批次解决，现为 **5 通过／0 失败** |
 
 **慢任务边界：** 取消是协作式的，已开始的同步写库必须执行完，再等 worker 退出；5 秒只是测试失败界限，不是生产强杀期限。永久阻塞的磁盘／同步调用是否导致无限等待，尚未验证或解决，不能宣称有全局退出时限。
 
@@ -1379,6 +1379,18 @@ pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml --test extension
 ```
 
 维护性证据：以后修改调度器退出登记只需改 `app_state/background`，不必改 CLI、供应商业务或接口格式；重复退出门控仍归 `lib.rs` 的事件处理。未修改依赖守卫规则或例外。本批作为本地提交交付，未推送、未发布、未安装应用，未操作真实用户数据库。
+
+#### 2026-10-06 兼容性清单修复与 Orb 可执行回归
+
+基线为 `09ae2e36`（上一批后台退出修复现已推送 GitHub main，取代上段当时的“未推送”状态）。先重现身份测试 **2 失败／3 通过**，再逐条核对实际源码，仅将清单中 4 条 Windows CLI 字符串记录的文件位置由 `api/commands/misc.rs` 改为 `cli/mod.rs`。字符串、列号、出现次数和分类均不变；未扩大允许范围、停用断言或改动运行时代码。
+
+本批在同一 Linux orb 实际执行：
+
+- `pnpm test:unit tests/config/productIdentity.test.ts tests/config/frontendIdentityContract.test.ts src/lib/api/toolContracts.test.ts --maxWorkers=1`：**3 文件、12 项通过／0 失败**（身份测试 5 项、前端身份契约 4 项、CLI 前端契约 3 项）。这是前端消费／参数检查，不代表 Rust 端契约测试已执行。
+- `node --test scripts/cargo-cache-lib.test.mjs`：**46 通过／0 失败／0 跳过**；覆盖缓存保留与剪枝边界、租约和子进程退出、信号转发、包装器参数传递。测试使用临时仓库及假缓存，不清理真实构建缓存；其中 Windows 快照用例不等价于 Windows 原生运行。
+- `pnpm exec prettier --check tests/config/productIdentityCompatibilityManifest.json`、`pnpm typecheck`、`git diff --check`：**通过**。
+
+本批本地提交，未推送、未发布。第 1 项的 Rust 运行验证、真实摄取／启动交错及 Windows/macOS 原生退出缺口不变，不因此推进 CLI 拆分或勾选验收门。
 
 ### 20.3 第 2 项：按职责拆 CLI，分离计划与执行
 
