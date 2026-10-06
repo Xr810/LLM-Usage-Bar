@@ -1206,7 +1206,7 @@ pub fn run() {
 
                 // Periodic maintenance timer: run once per day while the app is running
                 let db_for_timer = state.db.clone();
-                tauri::async_runtime::spawn(async move {
+                state.spawn_background(async move {
                     const PERIODIC_MAINTENANCE_INTERVAL_SECS: u64 = 24 * 60 * 60;
                     let mut interval = tokio::time::interval(std::time::Duration::from_secs(
                         PERIODIC_MAINTENANCE_INTERVAL_SECS,
@@ -1230,8 +1230,8 @@ pub fn run() {
                     ),
                 ));
                 let sync_wake = Arc::new(tokio::sync::Notify::new());
-                usage::watcher::start_usage_watcher(Arc::clone(&sync_schedule), Arc::clone(&sync_wake));
-                tauri::async_runtime::spawn(async move {
+                state.spawn_background(async move {
+                    usage::watcher::start_usage_watcher(Arc::clone(&sync_schedule), Arc::clone(&sync_wake));
                     fn run_step<T>(name: &str, result: Result<T, crate::error::AppError>) {
                         if let Err(e) = result {
                             log::warn!("{name} failed: {e}");
@@ -1670,33 +1670,11 @@ pub fn run() {
 /// 确保 Claude Code/Codex/Gemini 的配置不会处于损坏状态。
 /// 使用 stop_with_restore_keep_state 保留 settings 表中的代理状态，下次启动时自动恢复。
 pub async fn cleanup_before_exit(app_handle: &tauri::AppHandle) {
-    let cleanup_resources = app_handle.try_state::<app_state::AppState>().map(|state| {
-        (
-            state.take_quota_scheduler(),
-            state.take_midnight_scheduler(),
-            state.take_official_pricing_scheduler(),
-            state.take_provider_key_usage_scheduler(),
-        )
-    });
-    if let Some((
-        quota_scheduler,
-        midnight_scheduler,
-        official_pricing_scheduler,
-        provider_key_usage_scheduler,
-    )) = cleanup_resources
-    {
-        if let Some(scheduler) = quota_scheduler {
-            scheduler.stop().await;
-        }
-        if let Some(scheduler) = midnight_scheduler {
-            scheduler.stop().await;
-        }
-        if let Some(scheduler) = official_pricing_scheduler {
-            scheduler.stop().await;
-        }
-        if let Some(scheduler) = provider_key_usage_scheduler {
-            scheduler.stop().await;
-        }
+    let cleanup_resources = app_handle
+        .try_state::<app_state::AppState>()
+        .map(|state| state.take_background_tasks());
+    if let Some(tasks) = cleanup_resources {
+        tasks.stop().await;
     }
 }
 

@@ -1,12 +1,9 @@
 #[cfg(test)]
 use crate::providers::claude::cli_auth::ClaudeAuthCommandRunner;
+mod background;
 use crate::providers::{
-    shared::key_usage_scheduler::{
-        start_scheduler as start_provider_key_usage_scheduler, ProviderKeyUsageSchedulerHandle,
-    },
-    shared::official_pricing::{
-        start_scheduler as start_official_pricing_scheduler, OfficialPricingSchedulerHandle,
-    },
+    shared::key_usage_scheduler::start_scheduler as start_provider_key_usage_scheduler,
+    shared::official_pricing::start_scheduler as start_official_pricing_scheduler,
     ClaudeCliAuthService, SystemProviderConnectionService,
 };
 use crate::quota::{QuotaCycleCallback, QuotaSchedulerHandle, QuotaService};
@@ -18,7 +15,9 @@ use crate::usage::tray_usage_scheduler::{
     start_local_midnight_scheduler, TraySnapshotPublisher, TrayUsageSchedulerHandle,
 };
 use crate::usage::usage_cache::UsageCache;
-use std::sync::{Arc, Mutex};
+pub(crate) use background::BackgroundShutdown;
+use background::BackgroundTasks;
+use std::sync::Arc;
 
 /// 全局应用状态
 pub struct AppState {
@@ -31,10 +30,7 @@ pub struct AppState {
     pub quota_service: Arc<QuotaService>,
     pub session_usage_service: Arc<SessionUsageService>,
     pub tray_usage_service: Arc<TrayUsageService>,
-    quota_scheduler: Mutex<Option<QuotaSchedulerHandle>>,
-    midnight_scheduler: Mutex<Option<TrayUsageSchedulerHandle>>,
-    official_pricing_scheduler: Mutex<Option<OfficialPricingSchedulerHandle>>,
-    provider_key_usage_scheduler: Mutex<Option<ProviderKeyUsageSchedulerHandle>>,
+    background: BackgroundTasks,
 }
 
 impl AppState {
@@ -116,23 +112,14 @@ impl AppState {
             quota_service,
             session_usage_service,
             tray_usage_service,
-            quota_scheduler: Mutex::new(None),
-            midnight_scheduler: Mutex::new(None),
-            official_pricing_scheduler: Mutex::new(None),
-            provider_key_usage_scheduler: Mutex::new(None),
+            background: BackgroundTasks::default(),
         }
     }
 
     pub fn start_quota_scheduler(&self, after_cycle: QuotaCycleCallback) -> bool {
-        let Ok(mut scheduler) = self.quota_scheduler.lock() else {
-            log::error!("quota scheduler lock is poisoned");
-            return false;
-        };
-        if scheduler.is_some() {
-            return false;
-        }
-        *scheduler = Some(self.quota_service.clone().start_scheduler(after_cycle));
-        true
+        self.background
+            .quota
+            .start(|| self.quota_service.clone().start_scheduler(after_cycle))
     }
 
     pub async fn stop_quota_scheduler(&self) {
@@ -142,28 +129,13 @@ impl AppState {
     }
 
     pub(crate) fn take_quota_scheduler(&self) -> Option<QuotaSchedulerHandle> {
-        match self.quota_scheduler.lock() {
-            Ok(mut scheduler) => scheduler.take(),
-            Err(_) => {
-                log::error!("quota scheduler lock is poisoned");
-                None
-            }
-        }
+        self.background.quota.take()
     }
 
     pub fn start_midnight_scheduler(&self, publish: TraySnapshotPublisher) -> bool {
-        let Ok(mut scheduler) = self.midnight_scheduler.lock() else {
-            log::error!("tray usage midnight scheduler lock is poisoned");
-            return false;
-        };
-        if scheduler.is_some() {
-            return false;
-        }
-        *scheduler = Some(start_local_midnight_scheduler(
-            self.tray_usage_service.clone(),
-            publish,
-        ));
-        true
+        self.background
+            .midnight
+            .start(|| start_local_midnight_scheduler(self.tray_usage_service.clone(), publish))
     }
 
     pub async fn stop_midnight_scheduler(&self) {
@@ -173,62 +145,33 @@ impl AppState {
     }
 
     pub(crate) fn take_midnight_scheduler(&self) -> Option<TrayUsageSchedulerHandle> {
-        match self.midnight_scheduler.lock() {
-            Ok(mut scheduler) => scheduler.take(),
-            Err(_) => {
-                log::error!("tray usage midnight scheduler lock is poisoned");
-                None
-            }
-        }
+        self.background.midnight.take()
     }
 
     pub fn start_official_pricing_scheduler(&self) -> bool {
-        let Ok(mut scheduler) = self.official_pricing_scheduler.lock() else {
-            log::error!("official pricing scheduler lock is poisoned");
-            return false;
-        };
-        if scheduler.is_some() {
-            return false;
-        }
-        *scheduler = Some(start_official_pricing_scheduler(self.db.clone()));
-        true
-    }
-
-    pub(crate) fn take_official_pricing_scheduler(&self) -> Option<OfficialPricingSchedulerHandle> {
-        match self.official_pricing_scheduler.lock() {
-            Ok(mut scheduler) => scheduler.take(),
-            Err(_) => {
-                log::error!("official pricing scheduler lock is poisoned");
-                None
-            }
-        }
+        self.background
+            .official_pricing
+            .start(|| start_official_pricing_scheduler(self.db.clone()))
     }
 
     pub fn start_provider_key_usage_scheduler(&self) -> bool {
-        let Ok(mut scheduler) = self.provider_key_usage_scheduler.lock() else {
-            log::error!("provider key usage scheduler lock is poisoned");
-            return false;
-        };
-        if scheduler.is_some() {
-            return false;
-        }
-        *scheduler = Some(start_provider_key_usage_scheduler(
-            self.binding_credential_service.clone(),
-            self.system_provider_connection_service.clone(),
-        ));
-        true
+        self.background.provider_key_usage.start(|| {
+            start_provider_key_usage_scheduler(
+                self.binding_credential_service.clone(),
+                self.system_provider_connection_service.clone(),
+            )
+        })
     }
 
-    pub(crate) fn take_provider_key_usage_scheduler(
+    pub(crate) fn spawn_background(
         &self,
-    ) -> Option<ProviderKeyUsageSchedulerHandle> {
-        match self.provider_key_usage_scheduler.lock() {
-            Ok(mut scheduler) => scheduler.take(),
-            Err(_) => {
-                log::error!("provider key usage scheduler lock is poisoned");
-                None
-            }
-        }
+        task: impl std::future::Future<Output = ()> + Send + 'static,
+    ) {
+        self.background.spawn(task);
+    }
+
+    pub(crate) fn take_background_tasks(&self) -> BackgroundShutdown {
+        self.background.take()
     }
 }
 
