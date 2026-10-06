@@ -55,6 +55,23 @@ pub(crate) struct SourceRoots {
 }
 
 impl SourceRoots {
+    /// Match the paths emitted by native watchers, including macOS /var aliases.
+    /// Resolve once at registration, not in callbacks: removed event paths no
+    /// longer exist, and the callback must remain free of filesystem I/O.
+    fn canonicalized(mut self) -> Self {
+        for root in [
+            &mut self.claude_projects,
+            &mut self.codex,
+            &mut self.gemini,
+            &mut self.opencode_root,
+        ] {
+            if let Ok(canonical) = root.canonicalize() {
+                *root = canonical;
+            }
+        }
+        self
+    }
+
     /// 按当前运行配置解析四个源的监听根目录。
     pub(crate) fn from_runtime_config() -> Self {
         let opencode_db = crate::agent_paths::get_opencode_db_path();
@@ -108,6 +125,7 @@ impl UsageWatcher {
         schedule: Arc<Mutex<WatcherSchedule>>,
         wake: Arc<Notify>,
     ) -> Option<Self> {
+        let roots = roots.canonicalized();
         let targets: [(SourceId, &Path, RecursiveMode); 4] = [
             (
                 SourceId::Claude,
@@ -258,6 +276,29 @@ mod tests {
 
     fn test_schedule() -> Arc<Mutex<WatcherSchedule>> {
         Arc::new(Mutex::new(WatcherSchedule::new(SYNC_MIN_INTERVAL_SECS)))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn canonical_roots_match_events_through_aliases_even_after_file_removal() {
+        let (dir, mut roots) = test_roots();
+        let real = dir.path().join("real-codex");
+        std::fs::create_dir(&real).unwrap();
+        std::os::unix::fs::symlink(&real, &roots.codex).unwrap();
+        let event_path = real.canonicalize().unwrap().join("session.jsonl");
+        std::fs::write(&event_path, "{}\n").unwrap();
+        // The old lexical comparison drops native events using the real path.
+        assert_eq!(roots.source_for_path(&event_path), None);
+        let missing_root = roots.gemini.clone();
+        roots = roots.canonicalized();
+        assert_eq!(roots.source_for_path(&event_path), Some(SourceId::Codex));
+        std::fs::remove_file(&event_path).unwrap();
+        assert_eq!(roots.source_for_path(&event_path), Some(SourceId::Codex));
+        assert_eq!(roots.gemini, missing_root);
+        assert_eq!(
+            roots.source_for_path(&dir.path().join("real-codex-other/session.jsonl")),
+            None
+        );
     }
 
     #[test]
@@ -473,6 +514,14 @@ mod tests {
             &roots.opencode_root,
         ] {
             std::fs::create_dir_all(root).expect("create root");
+        }
+        #[cfg(unix)]
+        {
+            // Exercise an explicit alias on Linux too, rather than relying on
+            // macOS's /var -> /private/var temporary-directory layout.
+            let real = roots.codex.with_file_name("real-codex");
+            std::fs::rename(&roots.codex, &real).unwrap();
+            std::os::unix::fs::symlink(real, &roots.codex).unwrap();
         }
         let log = roots.codex.join("session.jsonl");
         let schedule = test_schedule();

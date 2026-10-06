@@ -1408,6 +1408,18 @@ pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml --test extension
 
 交付为本地提交，未推送或触发远端 workflow。第 1 项仍欠真实初始化／摄取交错、Windows/macOS 退出运行验证、托盘交互与慢 I/O 边界；不启动第 2 项。
 
+#### 2026-10-06 macOS watcher CI 失败与路径别名修复
+
+上述两批提交已推送，随后 [CI run 37476858054](https://github.com/Xr810/LLM-Usage-Bar/actions/runs/37476858054)（`8f9d3232`）的前端、Linux 后端、Windows 全部通过；macOS 后台退出 10 项通过，事务退出等待 508.708µs（测试限时 5 秒）。**唯一失败步骤是 macOS watcher：6 通过／1 失败**，`watcher_delivers_file_events_and_releases_callback_on_stop` 等待真实文件事件 5 秒超时，尚未进入停止释放断言。它不是构建错误，也不是后台退出测试失败。
+
+已确认的代码缺陷：`SourceRoots::source_for_path` 用词法 `starts_with`，而注册根目录未经 canonicalize。符号链接别名（macOS 常见 `/var` → `/private/var`）与真实路径指向同一位置但前缀不同，事件会被静默丢弃。[notify 8.2.0 FSEvents 源码](https://github.com/notify-rs/notify/blob/notify-8.2.0/notify/src/fsevent.rs) 的 `append_path` 记录 canonical 路径，回调按该路径过滤后交付原生事件，不改回应用的别名。**原失败日志没有记录事件路径，因此该缺陷与此次 macOS 超时的因果关系仍需修复后原生复测最终确认。**
+
+本批在 `UsageWatcher::start` 统一四个根目录的 canonical 路径，再同时用于 watch 注册与事件分类。只在启动时解析目录，不在回调里访问磁盘；无法解析的根保留原路径，原有缺目录跳过／慢速兜底不变。不延长超时，不跳过测试。新增确定性符号链接测试，覆盖真实路径归属、删除后的事件路径、缺失根目录及相似前缀不误匹配；真实通知测试也显式使用目录别名。
+
+验证：临时轻量 Cargo harness 通过 `#[path]` 直接编译生产 `watcher.rs` 与 `watcher_state.rs`，使用真实 notify 8.2.0／inotify 和临时文件系统；仅将测试不使用的四个运行配置路径入口替换为 panic，避免读真实 HOME。`pnpm rust -- test --offline --manifest-path /tmp/llm-watcher-tests/Cargo.toml -- --nocapture`：**19 通过／0 失败**，包含真实通知及回调释放，临时 harness 随后删除。低内存参数下的完整 `check --locked --tests`、`fmt --check` 和 `git diff --check` 通过。**这不是完整应用运行验证，也不能代替 macOS FSEvents／Windows 原生复测。**
+
+修复本地提交，未推送。下一步推送后复跑既有双平台 CI；未取得通过结果前，不把 macOS watcher 问题或第 1 项验收标为完成。
+
 ### 20.3 第 2 项：按职责拆 CLI，分离计划与执行
 
 入口：`src-tauri/src/cli/`；保持 `src-tauri/src/api/commands/tools.rs` 为薄适配层，保留现有命令名与传输格式。
