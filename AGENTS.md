@@ -9,6 +9,12 @@
 - 任何 Kimi 失败都立即回到 Codex；同一任务不自动重试 Kimi。
 <!-- END KIMI CODING PLAN DELEGATION (managed) -->
 
+## 模块化维护与交接
+
+- 接手模块化、CLI、后台任务或接口契约工作前，先读并遵循 [HANDOFF.md §20：模块化维护路线](HANDOFF.md#modularity-maintenance-roadmap)。
+- 优先完成后台退出集成测试与跨平台验证，再推进 CLI 的安装发现、安装／升级计划、平台执行拆分；之后逐条消除依赖守卫例外、扩展核心接口契约覆盖。
+- 按该节的验收标准分批执行并回填验证证据；环境受限的未执行项必须明确记录，不能当作通过。不要另建重复的交接清单。
+
 ## Local Cargo build cache
 
 - Run local Rust commands through `pnpm rust -- <cargo arguments>`.
