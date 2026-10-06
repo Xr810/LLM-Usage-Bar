@@ -1359,9 +1359,9 @@ React / TypeScript + Tauri / Rust 是正式路线。Settings 新增 Local routin
 | --- | --- |
 | Rust `check --tests` | **通过（39.05 秒）**：`CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0 pnpm rust -- check --locked --manifest-path src-tauri/Cargo.toml --tests`；先前与另一验证进程并存、启用增量编译的尝试被 OOM 终止。保留 3 条既有测试告警，不称 clippy 全绿 |
 | 独立生产源码测试 | **3 通过／0 失败**：临时 Cargo harness 用 `#[path]` 直接引用 `background/slot.rs`、`background/runtime.rs`，仅依赖 `log`；`pnpm rust -- test --offline --manifest-path /tmp/llm-background-harness/Cargo.toml`。未复制实现，覆盖关闭拒绝、重复关闭、并发启动一次与普通停止后重启；不等价于 AppState／Tauri 集成测试。临时 harness 验证后删除，正式用例留在源码中 |
-| 应用后台生命周期集成用例 | **未运行**：`CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml --lib app_state:: -- --nocapture` 在应用测试构建阶段被 OOM 终止；停止其他验证进程并加 `CARGO_INCREMENTAL=0` 后重试仍退出 137。没有测试结果或退出耗时可报 |
-| Linux 真实文件通知／释放回调 | **未运行**：用例已写，仍需在资源足够的环境执行下方 watcher 命令 |
-| 完整 Rust 测试与依赖守卫 | **未运行**：应用测试构建受内存限制；不可把独立源码测试或 `check` 当作通过 |
+| 应用后台生命周期集成用例 | Orb 构建两次 OOM（137），但随后核实 **Linux CI 已通过**该批 3 项用例，见下方 CI 验证补充；CI 未使用 `--nocapture`，没有单项退出耗时可报 |
+| Linux 真实文件通知／释放回调 | **Linux CI 已通过** `watcher_delivers_file_events_and_releases_callback_on_stop`，见下方 CI 验证补充 |
+| 完整 Rust 测试与依赖守卫 | **Linux CI 已通过**常规完整测试与守卫；3 项 ignored 用例未运行，不能称全部场景通过 |
 | Windows 原生：启动中退出、同步中退出、托盘退出、重复退出 | **全部未执行**：无 Windows 环境；本轮 `list_runners` 返回无连接 runner |
 | macOS 原生：启动中退出、同步中退出、托盘退出、重复退出 | **全部未执行**：无 macOS 环境；本轮 `list_runners` 返回无连接 runner |
 | `pnpm typecheck`、包装器 `fmt --check`、`git diff --check`、§17 冲突标记扫描 | **通过** |
@@ -1391,6 +1391,22 @@ pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml --test extension
 - `pnpm exec prettier --check tests/config/productIdentityCompatibilityManifest.json`、`pnpm typecheck`、`git diff --check`：**通过**。
 
 本批本地提交，未推送、未发布。第 1 项的 Rust 运行验证、真实摄取／启动交错及 Windows/macOS 原生退出缺口不变，不因此推进 CLI 拆分或勾选验收门。
+
+#### 2026-10-06 CI 验证补充与双平台退出测试接线
+
+直接读取 [CI run 37451071136](https://github.com/Xr810/LLM-Usage-Bar/actions/runs/37451071136) 的完整日志（`gh run view 37451071136 --log`），核实代码版本为 `09ae2e36`，不是用其他提交的绿灯代替：
+
+- **Linux 后端：** 格式与 Clippy 通过；`cargo test --manifest-path src-tauri/Cargo.toml` 共 **1268 通过／0 失败／3 ignored**（lib 1253、集成 15），其中包括三个后台退出用例、真实 watcher 回调释放用例及两项依赖守卫。lib 耗时 33.83 秒。此前“未运行”只适用于 orb，本节据 CI 实际输出更新状态。
+- **macOS：** 桌面构建通过，路由指针测试 11 项通过。**Windows：** 桌面构建通过，凭据测试 2 项、路由指针测试 10 项通过。两边当时均未执行后台退出／watcher 用例，更没有托盘交互验收。
+- 该 run 总体失败来自前端身份清单的两项失败；已由本地 `561bf16e` 修复并定向复测，不能将旧 run 的状态写成整体成功。
+
+本批在 `561bf16e` 之上为 desktop matrix 增加 `app_state::` 和 `usage::watcher::tests::` 两组执行步骤，均保留 `--nocapture`，供之后在 Windows/macOS 原生 runner 运行并记录退出耗时。新增一个通道控制的启动中退出测试，验证**被 BackgroundTasks 管理的**初始化 future 在后续 worker 登记前被取消、join 完成且释放引用；不依赖 sleep。
+
+**尚未解决的真实启动边界：** `lib.rs` 的凭据恢复／启动备份初始化仍直接使用 `tauri::async_runtime::spawn`，不是受管理的初始化 future。新增测试不能证明该实际启动链安全；纳入取消前必须检查凭据恢复的取消安全性，不能仅换一行 spawn 就当作修复。
+
+本批本地验证：低内存参数 `CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0` 下，包装器 `check --locked --tests` 通过（43.42 秒，3 条既有告警）；`fmt --check`、CI YAML 的 Prettier 检查、`git diff --check` 通过；缓存脚本回归 46 项通过。**新启动用例只完成编译检查，新增双平台 CI 步骤尚未执行**，上一提交的运行结果不能算作它的证据。
+
+交付为本地提交，未推送或触发远端 workflow。第 1 项仍欠真实初始化／摄取交错、Windows/macOS 退出运行验证、托盘交互与慢 I/O 边界；不启动第 2 项。
 
 ### 20.3 第 2 项：按职责拆 CLI，分离计划与执行
 

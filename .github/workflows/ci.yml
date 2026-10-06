@@ -124,3 +124,9 @@ jobs:
         run: pnpm rust -- test --manifest-path src-tauri/Cargo.toml --lib secrets::windows::tests
       - name: Test routing connection and restore
         run: pnpm rust -- test --manifest-path src-tauri/Cargo.toml --lib route::pointer::tests
+      - name: Test background shutdown lifecycle
+        run: |
+          pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml --lib app_state:: -- --nocapture
+      - name: Test native filesystem watcher shutdown
+        run: |
+          pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml --lib usage::watcher::tests:: -- --nocapture

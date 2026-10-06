@@ -7,6 +7,43 @@ use tokio::sync::oneshot;
 const DEADLINE: Duration = Duration::from_secs(5);
 
 #[tokio::test]
+async fn shutdown_during_startup_joins_initializer_before_it_can_spawn_workers() {
+    let tasks = Arc::new(BackgroundTasks::default());
+    let startup_tasks = tasks.clone();
+    let (started, ready) = oneshot::channel();
+    let (resume, paused) = oneshot::channel::<()>();
+    let (spawned, mut worker_result) = oneshot::channel::<()>();
+    let (finished, mut startup_result) = oneshot::channel::<()>();
+    tasks.spawn(async move {
+        let _guard = finished;
+        started.send(()).unwrap();
+        paused.await.unwrap();
+        startup_tasks.spawn(async move {
+            spawned.send(()).unwrap();
+        });
+    });
+    tokio::time::timeout(DEADLINE, ready)
+        .await
+        .unwrap()
+        .unwrap();
+    tokio::time::timeout(DEADLINE, tasks.take().stop())
+        .await
+        .unwrap();
+    // Check completion immediately: requesting abort without joining is not
+    // sufficient, and the initializer must not reach child registration.
+    assert_eq!(
+        startup_result.try_recv(),
+        Err(oneshot::error::TryRecvError::Closed)
+    );
+    assert_eq!(
+        worker_result.try_recv(),
+        Err(oneshot::error::TryRecvError::Closed)
+    );
+    assert!(resume.send(()).is_err());
+    assert_eq!(Arc::strong_count(&tasks), 1);
+}
+
+#[tokio::test]
 async fn shutdown_before_startup_rejects_every_worker_and_is_repeatable() {
     let state = AppState::new(Arc::new(Database::memory().unwrap()));
     let shutdown = state.take_background_tasks();
