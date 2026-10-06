@@ -108,6 +108,7 @@ const PROVIDERS: &[&str] = &[
     "model",
     "store",
     "config",
+    "cli",
     "secrets",
     "error",
     "http_client",
@@ -143,6 +144,12 @@ struct LayerRule {
 }
 
 const LAYER_RULES: &[LayerRule] = &[
+    LayerRule {
+        module: "cli",
+        allowed_dependencies: &["config", "http_client", "product_identity"],
+        enforcement: Enforcement::AllowOnly,
+        availability: Availability::Required,
+    },
     LayerRule {
         module: "metering",
         allowed_dependencies: &["error"],
@@ -251,13 +258,6 @@ const ALLOWLIST: &[ExpectedViolation] = &[
         dependency: "provider",
         kind: "(a) 顶层未归类模块",
         reason: "余额查询返回顶层 provider.rs 的 UsageData/UsageResult;该文件疑似应归入 model",
-    },
-    ExpectedViolation {
-        boundary: "providers",
-        file: "src-tauri/src/providers/claude/cli_auth.rs",
-        dependency: "api",
-        kind: "(c) 上行依赖顶层",
-        reason: "auth login 复用 api::commands::launch_terminal_running 启动终端;本批最严重的一条",
     },
     ExpectedViolation {
         boundary: "providers",

@@ -14,6 +14,7 @@ mod router;
 mod settings;
 pub mod subscription;
 pub(crate) mod sync_support;
+mod tools;
 mod tray_usage;
 
 mod s3_sync;
@@ -34,6 +35,7 @@ pub use provider_usage_activity::*;
 pub use router::*;
 pub use settings::*;
 pub use subscription::*;
+pub use tools::*;
 pub use tray_usage::*;
 
 pub use s3_sync::*;

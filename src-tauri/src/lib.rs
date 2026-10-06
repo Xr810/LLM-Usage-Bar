@@ -4,6 +4,7 @@ mod app_store;
 mod auto_launch;
 mod claude_desktop_config;
 mod claude_plugin;
+mod cli;
 mod config;
 mod error;
 pub mod http_client;
