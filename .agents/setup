@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+step() {
+  local label="$1" start=$SECONDS
+  shift
+  printf '\n==> %s\n' "$label"
+  "$@"
+  printf '==> %s finished in %ss\n' "$label" "$((SECONDS - start))"
+}
+
+install_system_packages() {
+  local package
+  local missing=()
+  for package in ca-certificates curl xz-utils build-essential pkg-config \
+    libssl-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev \
+    libwebkit2gtk-4.1-dev libsoup-3.0-dev patchelf; do
+    if [[ "$(dpkg-query -W -f='${Status}' "$package" 2>/dev/null || true)" != 'install ok installed' ]]; then
+      missing+=("$package")
+    fi
+  done
+  if ((${#missing[@]})); then
+    sudo apt-get update -qq
+    sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${missing[@]}"
+  fi
+}
+
+# Match CI's Node 24: .node-version's 22.12 cannot run the pinned pnpm 11.
+node_home="$HOME/.local/share/llm-usage-bar/node-24"
+export PATH="$node_home/bin:$HOME/.cargo/bin:$PATH"
+
+install_node() {
+  if [[ -x "$node_home/bin/node" ]] && [[ "$("$node_home/bin/node" -p 'process.versions.node.split(".")[0]')" == 24 ]]; then
+    return
+  fi
+  local arch archive scratch
+  case "$(uname -m)" in
+    x86_64) arch=x64 ;;
+    aarch64) arch=arm64 ;;
+    *) echo 'Unsupported Node architecture' >&2; return 1 ;;
+  esac
+  scratch=$(mktemp -d)
+  curl -fsSL --retry 3 https://nodejs.org/dist/latest-v24.x/SHASUMS256.txt -o "$scratch/SHASUMS256.txt"
+  archive=$(awk -v suffix="-linux-$arch.tar.xz" 'index($2, suffix) {print $2}' "$scratch/SHASUMS256.txt")
+  [[ -n "$archive" ]]
+  curl -fsSL --retry 3 "https://nodejs.org/dist/latest-v24.x/$archive" -o "$scratch/$archive"
+  (cd "$scratch"; grep "  $archive$" SHASUMS256.txt | sha256sum -c -)
+  mkdir -p "$node_home"
+  tar -xJf "$scratch/$archive" --strip-components=1 -C "$node_home"
+  rm -rf "$scratch"
+}
+
+install_pnpm() {
+  local version
+  version=$(node -p 'JSON.parse(require("fs").readFileSync("package.json", "utf8")).packageManager.split("@")[1]')
+  if [[ ! -x "$node_home/bin/pnpm" ]] || [[ "$("$node_home/bin/pnpm" --version)" != "$version" ]]; then
+    npm install --global --prefix "$node_home" "pnpm@$version" --no-audit --no-fund
+  fi
+}
+
+install_rust() {
+  if ! command -v rustup >/dev/null; then
+    curl --proto '=https' --tlsv1.2 -fsSL --retry 3 https://sh.rustup.rs | \
+      sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
+  fi
+  # rustup reads rust-toolchain.toml, including rustfmt and clippy.
+  rustup show active-toolchain
+}
+
+step 'Linux desktop build prerequisites' install_system_packages
+step 'Node 24 (CI version)' install_node
+step 'Pinned pnpm' install_pnpm
+step 'Pinned Rust toolchain and components' install_rust
+
+# Amp and supervised services start in fresh login shells, not this process.
+profile_marker='# LLM Usage Bar orb toolchains'
+if ! grep -Fqx "$profile_marker" "$HOME/.bash_profile" 2>/dev/null; then
+  cat >> "$HOME/.bash_profile" <<'PROFILE'
+
+# LLM Usage Bar orb toolchains
+export PATH="$HOME/.local/share/llm-usage-bar/node-24/bin:$HOME/.cargo/bin:$PATH"
+PROFILE
+fi
+
+step 'JavaScript dependencies (frozen lockfile)' pnpm install --frozen-lockfile
+step 'Rust dependency cache (locked, Linux host)' pnpm rust -- fetch --locked \
+  --manifest-path src-tauri/Cargo.toml --target "$(rustc -vV | sed -n 's/^host: //p')"
+
+printf '\nReady: Node %s, pnpm %s, %s\n' "$(node --version)" "$(pnpm --version)" "$(rustc --version)"

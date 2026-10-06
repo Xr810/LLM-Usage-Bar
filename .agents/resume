@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Dependencies and toolchains are preserved in the orb snapshot. This desktop
+# app has no external database or thread-specific authentication to reconnect.
+printf 'LLM Usage Bar orb resumed; no repair or authentication required.\n'
