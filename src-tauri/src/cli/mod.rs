@@ -1,10 +1,12 @@
 //! CLI installation discovery, lifecycle actions and terminal launching.
 //! No Tauri command or window types belong in this module.
 
+mod types;
 mod version;
 use std::collections::HashMap;
 use std::path::Path;
 use std::str::FromStr;
+pub use types::{ToolInstallation, ToolInstallationReport, ToolVersion, WslShellPreferenceInput};
 #[cfg(test)]
 use version::compare_semver;
 use version::{extract_version, pick_latest_version};
@@ -15,33 +17,9 @@ use std::os::windows::process::CommandExt;
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-#[derive(serde::Serialize)]
-pub struct ToolVersion {
-    name: String,
-    version: Option<String>,
-    latest_version: Option<String>, // 新增字段：最新版本
-    error: Option<String>,
-    /// 已定位到可执行文件、但 `--version` 报错退出（装了却跑不起来，如 Node 版本不达标）。
-    /// 供前端区分"未安装"与"已安装·无法运行"，无需匹配 error 文案反推语义。
-    installed_but_broken: bool,
-    /// 工具运行环境: "windows", "wsl", "macos", "linux", "unknown"
-    env_type: String,
-    /// 当 env_type 为 "wsl" 时，返回该工具绑定的 WSL distro（用于按 distro 探测 shells）
-    wsl_distro: Option<String>,
-}
-
 const VALID_TOOLS: [&str; 6] = [
     "claude", "codex", "gemini", "opencode", "openclaw", "hermes",
 ];
-
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WslShellPreferenceInput {
-    #[serde(default)]
-    pub wsl_shell: Option<String>,
-    #[serde(default)]
-    pub wsl_shell_flag: Option<String>,
-}
 
 // Keep platform-specific env detection in one place to avoid repeating cfg blocks.
 #[cfg(target_os = "windows")]
@@ -1436,32 +1414,6 @@ fn scan_cli_version(tool: &str) -> ShellProbe {
     }
 }
 
-/// 单个工具在系统中的一处安装，用于"多处安装互相打架"的冲突诊断。
-/// 字段保持 snake_case（与 `ToolVersion` 一致），前端按同名字段读取。
-#[derive(Debug, serde::Serialize)]
-pub struct ToolInstallation {
-    /// 候选入口路径（用户实际在 PATH 里看到/输入的那个，未解析软链）。
-    path: String,
-    /// `--version` 成功时解析出的版本号。
-    version: Option<String>,
-    /// `--version` 是否 exit 0（装了且能在当前环境跑起来）。
-    runnable: bool,
-    /// 跑不起来时的诊断信息末尾若干行。
-    error: Option<String>,
-    /// 由路径前缀推断的安装来源（nvm/homebrew/...），驱动 UI 徽章。
-    source: String,
-    /// 是否为 PATH 解析到的那处（= 命令行默认，也是升级会作用的目标）。
-    is_path_default: bool,
-    /// canonicalize 解析后的真身路径(brew 形如 `Cellar/<formula>/...`、claude 原生形如
-    /// `~/.local/share/claude/versions/...`),用于 `anchored_command_from_paths` 的真身
-    /// 判定。`enumerate_tool_installations` 已经为去重算过一次,这里复用避免上游
-    /// `installs_anchored_command` 再 canonicalize 一遍——消除冗余 syscall + 闭合
-    /// "enumerate 与 anchor 看到同一真身"的一致性边界(否则两次 canonicalize 之间
-    /// symlink 被换会让锚定指向不同真身)。`#[serde(skip)]` 不外露给前端。
-    #[serde(skip)]
-    real: std::path::PathBuf,
-}
-
 /// 由可执行文件路径前缀推断安装来源。纯字符串匹配、无副作用。
 /// 顺序敏感：Homebrew 的 Cellar 真身要先于通用规则命中。
 fn infer_install_source(path: &Path) -> &'static str {
@@ -2195,25 +2147,6 @@ fn is_conflicting(installs: &[ToolInstallation]) -> bool {
     let runnable_mixed =
         installs.iter().any(|i| i.runnable) && installs.iter().any(|i| !i.runnable);
     distinct_versions.len() > 1 || runnable_mixed
-}
-
-/// 一次"探测工具安装分布"的结果：枚举到的所有安装 + 各项衍生判定。同时服务两条
-/// 路径——诊断展示（`is_conflict`）与升级确认（`needs_confirmation`/`command`/`anchored`）。
-/// 字段保持 snake_case（与 `ToolInstallation` 一致），前端按同名读取。
-#[derive(Debug, serde::Serialize)]
-pub struct ToolInstallationReport {
-    tool: String,
-    /// 该工具枚举到的所有安装。
-    installs: Vec<ToolInstallation>,
-    /// 严阈值：≥2 且(版本分歧或运行态混合)。诊断按钮/自动补诊据此展示冲突。
-    is_conflict: bool,
-    /// 宽阈值：≥2 处。升级确认据此弹窗（升级只动一处，任何多处都该让用户知情）。
-    needs_confirmation: bool,
-    /// 锚定后将执行的升级命令（仅展示；真正执行时后端会重新生成，不信任前端回传）。
-    command: String,
-    /// 是否成功锚定到某处具体安装。false = 退到裸 fallback 命令（无法确定命令行实际
-    /// 命中哪处，或该处无同级 npm）；前端据此给出"默认入口无法确定"的诚实文案。
-    anchored: bool,
 }
 
 /// 探测各工具的安装分布：枚举所有安装、标记冲突、生成锚定升级命令。只读、无副作用。

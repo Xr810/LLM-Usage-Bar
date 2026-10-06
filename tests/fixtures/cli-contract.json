@@ -1,0 +1,29 @@
+{
+  "version": {
+    "name": "codex",
+    "version": null,
+    "latest_version": "1.2.3",
+    "error": "node unavailable",
+    "installed_but_broken": true,
+    "env_type": "wsl",
+    "wsl_distro": "Ubuntu"
+  },
+  "report": {
+    "tool": "codex",
+    "installs": [
+      {
+        "path": "/opt/bin/codex",
+        "version": "1.2.1",
+        "runnable": true,
+        "error": null,
+        "source": "npm",
+        "is_path_default": true
+      }
+    ],
+    "is_conflict": false,
+    "needs_confirmation": false,
+    "command": "codex update",
+    "anchored": true
+  },
+  "wsl": { "wslShell": "zsh", "wslShellFlag": "-ic" }
+}

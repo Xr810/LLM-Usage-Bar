@@ -6,6 +6,12 @@ import type {
   RemoteSnapshotInfo,
 } from "@/types";
 import type { AppId } from "./types";
+import type {
+  ToolVersion,
+  ToolInstallationReport,
+  WslShellPreferenceInput,
+} from "./toolContracts";
+export type { ToolInstallation, ToolInstallationReport } from "./toolContracts";
 
 export interface ConfigTransferResult {
   success: boolean;
@@ -225,31 +231,15 @@ export const settingsApi = {
 
   async getToolVersions(
     tools?: string[],
-    wslShellByTool?: Record<
-      string,
-      { wslShell?: string | null; wslShellFlag?: string | null }
-    >,
-  ): Promise<
-    Array<{
-      name: string;
-      version: string | null;
-      latest_version: string | null;
-      error: string | null;
-      installed_but_broken: boolean;
-      env_type: "windows" | "wsl" | "macos" | "linux" | "unknown";
-      wsl_distro: string | null;
-    }>
-  > {
+    wslShellByTool?: Record<string, WslShellPreferenceInput>,
+  ): Promise<ToolVersion[]> {
     return await invoke("get_tool_versions", { tools, wslShellByTool });
   },
 
   async runToolLifecycleAction(
     tools: string[],
     action: "install" | "update",
-    wslShellByTool?: Record<
-      string,
-      { wslShell?: string | null; wslShellFlag?: string | null }
-    >,
+    wslShellByTool?: Record<string, WslShellPreferenceInput>,
   ): Promise<void> {
     await invoke("run_tool_lifecycle_action", {
       tools,
@@ -290,26 +280,6 @@ export const settingsApi = {
     return await invoke("set_log_config", { config });
   },
 };
-
-/** 单处工具安装的诊断信息（多处安装冲突检测）。字段对应后端 ToolInstallation。 */
-export interface ToolInstallation {
-  path: string;
-  version: string | null;
-  runnable: boolean;
-  error: string | null;
-  source: string;
-  is_path_default: boolean;
-}
-
-/** 一次"探测工具安装分布"的结果。字段对应后端 ToolInstallationReport。 */
-export interface ToolInstallationReport {
-  tool: string;
-  installs: ToolInstallation[];
-  is_conflict: boolean;
-  needs_confirmation: boolean;
-  command: string;
-  anchored: boolean;
-}
 
 export interface RectifierConfig {
   enabled: boolean;
