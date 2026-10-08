@@ -1471,6 +1471,8 @@ pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml --test extension
 
 #62 精确 v2 的单 Codex 原生日志随后已下载核读，1,156 bytes／SHA256 `95722954424e8d49b8dd08c81d643b5079be6779ac17934f56eb0f330f4719de`：编译1m50s、1 passed／0 failed／COMMAND_EXIT=0，93.22s，事务停止 join5.681917ms；两持久化表均实际打印 `[(10,5,7,0,10001)]`。结合同 candidate 夹具断言，9999补尾、10001唯一 event／legacy、cursor offset10001、再同步0重复与 integrity 均通过；本夹具未观察到数据丢失，旧 input=3 预期混淆 inclusive 与 billable input，旧失败证据保留。owner 报 Mac 在再次核对精确 v2 后开始完整 Rust，结果仍待返，不重复成功聚焦；修复 Orb `check --tests` 38.35s仅为编译检查。Windows策略阻塞及双平台真实10k摄取中生产 Quit／恢复／残留、Mac AX／GUI／Keychain隔离缺口仍在，#62不推／不关闭／不归档；5s只是局部fixture界限，不是SLA。
 
+#62 Mac v2 完整自动化随后完成，取代上方“完整 Rust 待返”：协调已下载完整日志／summary／identity 并核对 SHA256 分别为 `26960e6c5794f255364d44a96bd9b896fcf6fa3577c6f9312d4df0fb03fab699`／`c2f828b297940d42a03f04858bcfec662fb32298170ed2582ba7ac85231707a8`／`9855dc695b0c6ebc47bc3e92b09b4dfdc1f8fcea756a6b698a31e8ca66c1c022`，大小121,893／6,215／433 bytes。实际 `pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml` exit0，编译50.10s；lib1284 passed／0 failed／2 ignored（150.82s），integration15 passed／0 failed／1 ignored，总1299 passed／0 failed／3 ignored，含 extension_seam_guards 2 passed（0.04s）。两个 live S3 与一个 router probe 未执行，不当通过。身份记录确认全量前后与 d49879f3 排除 HANDOFF 的 diff exit0，除 tests.rs 外与旧候选生产源码 diff0。测试后无进程／8788监听不等于 GUI 退出证据；Windows运行及双平台真实生产 Quit／连续 Quit／托盘／安全 release Keychain 端到端仍未验。**自动化已通过，应用门未过，#62继续未推／OPEN／不归档**，不扩权、强杀或用 AppleEvent 替代。
+
 #### 当前未关闭项（后续接手以此及 §20.3–20.5 为准）
 
 1. **macOS watcher 超时：修复已写，原生复验待完成。** 检查包含 `9c48788d` 的新 CI，确认 macOS 真实文件事件测试通过，并核对 Windows/Linux 无回归。若仍超时，采集注册根目录、实际事件路径和 watch 返回错误后再定位；不要仅增大超时或跳过测试。
