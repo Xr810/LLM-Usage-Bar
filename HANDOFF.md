@@ -1465,6 +1465,8 @@ pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml --test extension
 
 原 Mac runner 随后报告 #62 最新结果，取代上方“恢复测试进行中／流水线与 watcher 待验”状态：旧 code-only candidate `2b3abe9c` 的 app_state **11 过／1 失败**，Codex 恢复虽有10001唯一 event，token 元组断言匹配0（line 208），后续 legacy 最后断言未到；Claude 恢复通过，通知后 join 分别6.02／4.35ms。共享流水线1／1、watcher8／8通过，不抵消 app_state 失败；旧 candidate 全量已暂停，owner 准备预期／实际元组诊断增量，尚未确定原因，不能直接归因生产数据或测试预期。协调尚未核读此次完整原始日志，保留为 runner 回执，#62 继续不推／不关闭。#66 诊断 mock native 编译仍在串行执行，不等于问题解决。
 
+#66 原生诊断测试随后完成，取代上方“编译仍在执行”状态：协调已下载并完整核读 `issue66-macos-secrets.log`（6,917 bytes／SHA256 `6409a3dcd87fb3bebdb599279dfd076994d2dfa31c7d8fef819c7d147897d08e`）及 summary。原 Mac aa828178＋两文件 patch `5064f91e634ff084ebc8119c6fc831d170bb05aa53294f4772d834d505b63770`，summary 记录 macos.rs／tests.rs SHA256 与 owner candidate 一致；`pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml --lib secrets:: -- --nocapture` 实际 **66 passed／0 failed／0 ignored，6.68s，COMMAND_EXIT=0**，编译1m53s（2026-10-09 01:04–01:06:04 +08）。新增 startup 一次／3 binding／保留 journal／memory healthy 恢复和两个 adapter 纯测试通过，无需重复同 candidate 测试。只验证 mock／memory 及诊断编译，未运行 production adapter／默认 Keychain，未执行 disposable probe 或改锁状态／search list；尚无实际失败 OSStatus／操作 elapsed 或 app store 端到端证据。24s 仍只是 router→sync 窗口，环境／权限／签名／服务根因未区分；**不满足问题解决或条件 push gate，#66 保持 OPEN、未推／未归档**。
+
 #### 当前未关闭项（后续接手以此及 §20.3–20.5 为准）
 
 1. **macOS watcher 超时：修复已写，原生复验待完成。** 检查包含 `9c48788d` 的新 CI，确认 macOS 真实文件事件测试通过，并核对 Windows/Linux 无回归。若仍超时，采集注册根目录、实际事件路径和 watch 返回错误后再定位；不要仅增大超时或跳过测试。
