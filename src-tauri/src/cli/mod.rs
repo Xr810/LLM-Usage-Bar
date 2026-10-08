@@ -2897,15 +2897,12 @@ mod tests {
             // tempdir 路径里不含 "volta" 子串,所以在 tempdir 下手建一个 `Volta` 子目录
             // 才能让 `infer_install_source` 通过路径 normalize 后命中 `/volta/` 分支。
             // sibling 候选顺序 `[exe, cmd]`——Volta 是 Rust 写的 native binary,首选 .exe。
+            // Codex 刻意不走 self-update，直接锚定到 sibling 包管理器，避免假成功。
             // expected 通过 `expect_quoted_path` 算出,以适应 temp 根目录含特殊字符的环境。
             let (_dir, sub, bin_path) = setup_sibling("Volta", "codex.cmd", &["volta.exe"]);
             let cmd = anchored_command_from_paths("codex", &bin_path, &bin_path);
             let volta_full = format!("{}\\volta.exe", sub.to_string_lossy());
-            let expected = format!(
-                "{} update || call {} install @openai/codex",
-                expect_quoted_path(&bin_path),
-                expect_quoted_path(&volta_full)
-            );
+            let expected = format!("{} install @openai/codex", expect_quoted_path(&volta_full));
             assert_eq!(cmd.as_deref(), Some(expected.as_str()));
         }
 
@@ -2918,8 +2915,7 @@ mod tests {
             let cmd = anchored_command_from_paths("codex", &bin_path, &bin_path);
             let pnpm_full = format!("{}\\pnpm.cmd", sub.to_string_lossy());
             let expected = format!(
-                "{} update || call {} add -g @openai/codex@latest",
-                expect_quoted_path(&bin_path),
+                "{} add -g @openai/codex@latest",
                 expect_quoted_path(&pnpm_full)
             );
             assert_eq!(cmd.as_deref(), Some(expected.as_str()));
@@ -2952,21 +2948,18 @@ mod tests {
             let cmd = anchored_command_from_paths("codex", &bin_path, &bin_path);
             let npm_full = format!("{}\\npm.cmd", sub.to_string_lossy());
             let expected = format!(
-                "{} update || call {} i -g @openai/codex@latest",
-                expect_quoted_path(&bin_path),
+                "{} i -g @openai/codex@latest",
                 expect_quoted_path(&npm_full)
             );
             assert_eq!(cmd.as_deref(), Some(expected.as_str()));
         }
 
         #[test]
-        fn windows_no_sibling_uses_cli_update_without_package_fallback() {
-            // sibling npm.cmd 不存在(纯独立二进制)时,仍可锚定到 CLI 自身跑官方 update。
-            // 只是没有包管理器 fallback。
+        fn windows_codex_no_sibling_returns_none_without_self_update() {
+            // Codex 不走 self-update；没有 sibling npm 时无法锚定，交给上游静态兜底。
             let (_dir, _sub, bin_path) = setup_sibling("", "codex.cmd", &[]);
             let cmd = anchored_command_from_paths("codex", &bin_path, &bin_path);
-            let expected = format!("{} update", expect_quoted_path(&bin_path));
-            assert_eq!(cmd.as_deref(), Some(expected.as_str()));
+            assert_eq!(cmd, None);
         }
 
         #[test]
@@ -3041,8 +3034,7 @@ mod tests {
             let cmd = anchored_command_from_paths("codex", &bin_path, &bin_path);
             let npm_full = format!("{}\\npm.cmd", sub.to_string_lossy());
             let expected = format!(
-                "{} update || call {} i -g @openai/codex@latest",
-                expect_quoted_path(&bin_path),
+                "{} i -g @openai/codex@latest",
                 expect_quoted_path(&npm_full)
             );
             assert_eq!(cmd.as_deref(), Some(expected.as_str()));
@@ -3065,8 +3057,7 @@ mod tests {
             // 会让 expected 漏引号、假失败)。
             let npm_full = format!("{}\\npm.cmd", sub.to_string_lossy());
             let expected = format!(
-                "call {} update || call {} i -g @openai/codex@latest",
-                expect_quoted_path(&bin_path),
+                "call {} i -g @openai/codex@latest",
                 expect_quoted_path(&npm_full)
             );
             assert_eq!(batch_line, expected);
