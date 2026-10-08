@@ -24,6 +24,8 @@ const SHELL_WRAPPER_EXTENSIONS = new Set([".bat", ".cmd", ".ps1"]);
 let cachedBootIdentity;
 
 export function sha256File(file) {
+  // Cache identity is the on-disk bytes, including line endings. Keep target
+  // selection and worktree reference collection on this same contract.
   return createHash("sha256").update(readFileSync(file)).digest("hex");
 }
 

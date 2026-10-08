@@ -119,11 +119,17 @@ function git(cwd, ...args) {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 }
 
-async function makeRepo(lockText) {
+async function makeRepo(lockText, { autocrlf } = {}) {
   const root = await mkdtemp(path.join(tmpdir(), "llm-cache-"));
   git(root, "init");
   git(root, "config", "user.email", "cache@test.invalid");
   git(root, "config", "user.name", "Cache Test");
+  if (autocrlf !== undefined) {
+    git(root, "config", "core.autocrlf", String(autocrlf));
+  }
+  // These fixtures exercise byte-identical locks, not Git's text conversion.
+  // Preserve even CRLF fixtures through add/checkout regardless of host config.
+  await writeFile(path.join(root, ".gitattributes"), "src-tauri/Cargo.lock -text\n");
   await mkdir(path.join(root, "src-tauri"));
   await writeFile(path.join(root, "src-tauri", "Cargo.lock"), lockText);
   git(root, "add", ".");
@@ -762,15 +768,52 @@ test("apply stops on the first deletion error and reports prior deletions", asyn
   assert.match(result.error, /synthetic delete failure/);
 });
 
-test("main and linked worktree with the same lockfile share one bucket", async () => {
-  const root = await makeRepo("version = 4\n");
-  const linked = `${root}-linked`;
-  git(root, "worktree", "add", "-b", "linked", linked);
+test("main and linked worktree with the same lockfile share one bucket", async (t) => {
+  for (const autocrlf of [true, false]) {
+    await t.test(`core.autocrlf=${autocrlf}`, async (t) => {
+      const lockText = "version = 4\n";
+      const root = await makeRepo(lockText, { autocrlf });
+      const linked = `${root}-linked`;
+      t.after(() => rm(linked, { recursive: true, force: true }));
+      t.after(() => rm(root, { recursive: true, force: true }));
+      git(root, "worktree", "add", "-b", "linked", linked);
 
-  assert.equal(
-    resolveCargoTarget(root).targetDir,
-    resolveCargoTarget(linked).targetDir,
-  );
+      for (const worktree of [root, linked]) {
+        assert.deepEqual(
+          await readFile(path.join(worktree, "src-tauri", "Cargo.lock")),
+          Buffer.from(lockText),
+        );
+      }
+      const main = resolveCargoTarget(root);
+      assert.equal(main.targetDir, resolveCargoTarget(linked).targetDir);
+
+      await writeFile(path.join(linked, "src-tauri", "Cargo.lock"), "version = 4\n[[package]]\nname = 'two'\n");
+      const changed = resolveCargoTarget(linked);
+      assert.notEqual(main.lockHash, changed.lockHash);
+      assert.notEqual(main.targetDir, changed.targetDir);
+      assert.deepEqual(
+        createPruneSnapshot(root).referencedHashes,
+        new Set([main.lockHash, changed.lockHash]),
+      );
+    });
+  }
+});
+
+test("LF and CRLF lockfile bytes remain distinct target and prune identities", async (t) => {
+  const root = await makeRepo("version = 4\n");
+  const linked = `${root}-crlf`;
+  t.after(() => rm(linked, { recursive: true, force: true }));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  git(root, "worktree", "add", "-b", "crlf", linked);
+  await writeFile(path.join(linked, "src-tauri", "Cargo.lock"), "version = 4\r\n");
+
+  // Independently known SHA-256 values for these exact fixture bytes.
+  const lfHash = "083791b01c1a67ae66aca99070c9ee48082d04307473d494376e6de7cf9a654a";
+  const crlfHash = "a09508a526f322ba3d2df3c4d72ce00172a46d0a44b2f781211b323d2d38850c";
+  assert.equal(resolveCargoTarget(root).lockHash, lfHash);
+  assert.equal(resolveCargoTarget(linked).lockHash, crlfHash);
+  assert.notEqual(resolveCargoTarget(root).targetDir, resolveCargoTarget(linked).targetDir);
+  assert.deepEqual(createPruneSnapshot(root).referencedHashes, new Set([lfHash, crlfHash]));
 });
 
 test("Tauri builds use a worktree-local target while dev and Cargo stay shared", async (t) => {
