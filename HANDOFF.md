@@ -1441,6 +1441,26 @@ pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml --test extension
 
 原 Windows 运行证据见[原 runner 线程](https://ampcode.com/threads/T-01a11bf4-b63e-74af-a5ab-e451b45d515c)消息 #324–325（#59）、#299–300／#306／#329（#63）、#330–335（#61）及 #338–343／#350–352（#65 补丁、结果、配置及日志上传）；Mac 证据见[原 runner 线程](https://ampcode.com/threads/T-01a11bf4-ad56-7654-9c3d-1c33db239277)。原始本机路径不表示 Orb 可访问文件；本节不附原日志／数据库／安装包／修复补丁。仅文档记录推送被授权，所有 Issue 保持开放，修复推送、合并与发布仍未授权。
 
+#### 2026-10-09 新授权后的实际交付与归档
+
+用户随后明确授权修复推送到独立 GitHub 分支、精确验证满足后关闭对应 Issue，并归档已完成修复线程；**仍未授权合并 main 或发布，不使用 ship**。此授权和以下实际状态取代上段当时的“不得推修复／所有 Issue 开放”记录，不改写原始失败证据。协调已独立 fetch 实际远端 revision，读取完整 diff，核对父 aa828178、授权文件范围及源码 blob 与原生已验 candidate 完全一致；无代码漂移，不重复同一代码已完成测试。
+
+| Issue | 实际推送分支／提交 | 满足的限定验证与关闭状态 |
+| --- | --- | --- |
+| [#59](https://github.com/Xr810/LLM-Usage-Bar/issues/59) | [fix/issue-59-windows-cli-contract](https://github.com/Xr810/LLM-Usage-Bar/tree/fix/issue-59-windows-cli-contract)／[afd51ee4](https://github.com/Xr810/LLM-Usage-Bar/commit/afd51ee4f7f30f9b02749bfea5b782aa9c75d940) | Windows anchored 10、CLI 55 通过，exit 0；仅测试契约，生产升级／repair 不变。**CLOSED** |
+| [#60](https://github.com/Xr810/LLM-Usage-Bar/issues/60) | [fix/issue-60-verified](https://github.com/Xr810/LLM-Usage-Bar/tree/fix/issue-60-verified)／[b41d0d81](https://github.com/Xr810/LLM-Usage-Bar/commit/b41d0d8157735f4f68ac6a2f99a9779f29a011e8) | 原 Windows 完整 identity 40／0／0、未 skip 的 app_config_load 7／0／0，均 exit 0（2.60／1.17s），普通 DML fence／WAL／恢复／sharing-denial／panic 隔离覆盖；**CLOSED** |
+| [#61](https://github.com/Xr810/LLM-Usage-Bar/issues/61) | [fix/issue-61-native-cursor-fixtures](https://github.com/Xr810/LLM-Usage-Bar/tree/fix/issue-61-native-cursor-fixtures)／[5692ff61](https://github.com/Xr810/LLM-Usage-Bar/commit/5692ff61e7587fa0154bfa82a402d9fdd41e4be2) | Windows cursor 4、schema 7 通过，exit 0；仅测试 fixture／注入，生产分类和回滚不变。**CLOSED**；未宣称 Mac／Linux runtime 或完整套件通过 |
+| [#63](https://github.com/Xr810/LLM-Usage-Bar/issues/63) | [fix/issue-63-cache-worktree-newlines](https://github.com/Xr810/LLM-Usage-Bar/tree/fix/issue-63-cache-worktree-newlines)／[571bbe9a](https://github.com/Xr810/LLM-Usage-Bar/commit/571bbe9a3cbff93dd1a6a16d9961d04c8f1edb31) | Windows 两 autocrlf 条件各 focused 5、full 43 通过＋6 明确 Unix-only skip，exit 0；Linux 两条件49通过为补充。**CLOSED** |
+| [#65](https://github.com/Xr810/LLM-Usage-Bar/issues/65) | [fix/issue-65-dashboard-test-scope](https://github.com/Xr810/LLM-Usage-Bar/tree/fix/issue-65-dashboard-test-scope)／[83657cab](https://github.com/Xr810/LLM-Usage-Bar/commit/83657cabc06751aab1d0cb11330db5fa11a1a67d) | Mac 默认定向／全量各3次、Windows 默认定向3次／全量1次（352项）通过，保持5s超时及默认并发。**CLOSED** |
+
+五项修复分支均只包含本 Issue 授权代码，不含整份 HANDOFF、其他 Issue、锁文件或文档提交；关闭说明已回填分支、完整提交、执行命令、证据及限制。#60 原 Windows 只读 receipt 核对源码 blobs `09f0b28ba36229391143fface0185a2378c6c708`／`9d372a78ad3d6a78b29e3096baa97de7d74cc042`；协调读取完整脱敏40／7日志及 receipt，fence 契约不扩张为防主动 DDL 移除 triggers，未宣称整个 Rust／Mac／桌面退出通过。此前 Linux OOM、首次环境失败及 skip 均保留。
+
+对应五个[修复线程（索引）](docs/acceptance/aa828178/README.md#independent-root-cause-tracking-and-repair-ownership)已实际调用 `update_thread archived=true, remove_worktree=false` 归档，证据已保存在协调工作区；未删除 worktree。原 Mac／Windows 验证线程及协调线程不归档。**main 未合并，未发布；整体验收门仍未通过。**
+
+剩余 **#62／#64／#66／#67 OPEN，未推作已解决，也未归档**：#62 Mac 屏障恢复测试进行中，Windows debug 构建被 App Control 4551／CodeIntegrity 3077 阻止，尚无新 runtime 通过；流水线／watcher／全套及真正 in-flight production quit、重启补尾完整性仍欠。#64 原 Mac 空实际 target 默认 universal 构建、双 slice／codesign／profile 回归已通过，release GUI／安全 Keychain 隔离与追加 host argv 仍欠。#66 仅诊断交付，Keychain 根因／安全探针／production-store 问题解决未成立。#67 原生构建、增量后9项配置测试与编译 MSI 表只读检查通过（首次CRLF parity 7／1失败保留），真实8格路径／upgrade／repair／UI／installed hash／卸载矩阵仍缺可丢弃 Windows VM 或明确隔离授权；没有写宿主注册表／Installer、启用组件、创建用户或重启。不能以局部成绩、AppleEvent 或 HOME 隔离替代这些必需场景。
+
+原 Windows runner 本轮最终回执进一步确认：#62 默认／alternate release 测试和正式 build 同样全部被 Smart App Control 4551 阻止，CodeIntegrity 3077 已核对，**新测试及应用 10k quit 均未执行**；code-only candidate `2b3abe9c` 与原补丁的 src-tauri 树 `1858b4a0e150cfe172b8c97235954321bd4d7f12` 一致。#67 的隔离资源／授权仍未取得。runner 当前无 cargo／rustc／node／app 进程；没有改 policy 或扩大权限，不能以更换 profile、旧二进制或宿主 TEST_HOME 视为验收通过。
+
 #### 当前未关闭项（后续接手以此及 §20.3–20.5 为准）
 
 1. **macOS watcher 超时：修复已写，原生复验待完成。** 检查包含 `9c48788d` 的新 CI，确认 macOS 真实文件事件测试通过，并核对 Windows/Linux 无回归。若仍超时，采集注册根目录、实际事件路径和 watch 返回错误后再定位；不要仅增大超时或跳过测试。

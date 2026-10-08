@@ -88,3 +88,19 @@ Each repair Orb must report implementation, verification and remaining limits to
 the requesting Puck thread and coordinator. Local repair commits may be retained,
 but repair pushes, main merges, package publication and releases are not authorized.
 Only this test-record documentation branch is authorized to be pushed.
+
+## Subsequent authorization and delivery
+
+The statements above preserve the original acceptance and authorization snapshot.
+The user subsequently authorized independent repair-branch pushes, closing issues
+after exact-code verification, and archiving completed repair threads without
+deleting worktrees. Main merges and releases remain unauthorized.
+
+Actual delivery and remaining gates are recorded in
+[HANDOFF §20](../../../HANDOFF.md#2026-10-09-新授权后的实际交付与归档),
+the existing maintenance handoff, rather than a separate checklist. Issues #59,
+#60, #61, #63 and #65 have been pushed to independent branches, verified against
+their exact native-tested source blobs, closed and their repair threads archived.
+Issues #62, #64, #66 and #67 remain open with mandatory verification gaps; their
+repair threads and both original platform-verification threads remain available.
+These scoped closures do not establish the complete release acceptance gate.
