@@ -1,6 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use llm_usage_bar_lib::product_identity::{
     DATABASE_FILE, DATABASE_IDENTITY_ARCHIVE_FILE, LEGACY_DATABASE_FILE, LOG_BASENAME,
@@ -11,19 +11,17 @@ use llm_usage_bar_lib::{
 };
 
 fn ensure_test_home() -> &'static Path {
-    static HOME: OnceLock<PathBuf> = OnceLock::new();
+    static HOME: OnceLock<tempfile::TempDir> = OnceLock::new();
     HOME.get_or_init(|| {
-        let base = std::env::temp_dir().join(format!(
-            "llm-usage-bar-app-config-load-{}",
-            std::process::id()
-        ));
-        let _ = fs::remove_dir_all(&base);
-        fs::create_dir_all(&base).expect("create isolated test home");
-        std::env::set_var("LLM_USAGE_BAR_TEST_HOME", &base);
-        std::env::set_var("HOME", &base);
+        let base = tempfile::Builder::new()
+            .prefix("llm-usage-bar-app-config-load-")
+            .tempdir()
+            .expect("create isolated test home");
+        std::env::set_var("LLM_USAGE_BAR_TEST_HOME", base.path());
+        std::env::set_var("HOME", base.path());
         base
     })
-    .as_path()
+    .path()
 }
 
 fn reset_test_fs() {
@@ -41,6 +39,17 @@ fn test_mutex() -> &'static Mutex<()> {
     MUTEX.get_or_init(|| Mutex::new(()))
 }
 
+fn test_guard() -> MutexGuard<'static, ()> {
+    // This mutex protects disposable fixtures, not production invariants.
+    // Preserve the original panic, but reset its residue before the next test.
+    let guard = test_mutex()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    reset_test_fs();
+    test_mutex().clear_poison();
+    guard
+}
+
 fn cfg_path() -> PathBuf {
     let home = std::env::var("HOME").expect("HOME should be set by ensure_test_home");
     PathBuf::from(home)
@@ -50,8 +59,7 @@ fn cfg_path() -> PathBuf {
 
 #[test]
 fn database_identity_migrates_v13_and_threads_authoritative_runtime_paths() {
-    let _guard = test_mutex().lock().expect("acquire test mutex");
-    reset_test_fs();
+    let _guard = test_guard();
     let home = ensure_test_home();
     let app_dir = home.join(".llm-usage-bar");
     fs::create_dir_all(&app_dir).expect("create app config dir");
@@ -121,8 +129,7 @@ fn database_identity_migrates_v13_and_threads_authoritative_runtime_paths() {
 
 #[test]
 fn database_runtime_fresh_install_opens_the_prepared_authoritative_path() {
-    let _guard = test_mutex().lock().expect("acquire test mutex");
-    reset_test_fs();
+    let _guard = test_guard();
     let home = ensure_test_home();
     let app_dir = home.join(".llm-usage-bar");
     fs::create_dir_all(&app_dir).expect("create fresh app config dir");
@@ -143,8 +150,7 @@ fn database_runtime_fresh_install_opens_the_prepared_authoritative_path() {
 
 #[test]
 fn load_v1_config_returns_error_and_does_not_write() {
-    let _guard = test_mutex().lock().expect("acquire test mutex");
-    reset_test_fs();
+    let _guard = test_guard();
     let home = ensure_test_home();
     let path = cfg_path();
     fs::create_dir_all(path.parent().unwrap()).expect("create cfg dir");
@@ -169,8 +175,7 @@ fn load_v1_config_returns_error_and_does_not_write() {
 
 #[test]
 fn load_v1_with_extra_version_still_treated_as_v1() {
-    let _guard = test_mutex().lock().expect("acquire test mutex");
-    reset_test_fs();
+    let _guard = test_guard();
     let home = ensure_test_home();
     let path = cfg_path();
     std::fs::create_dir_all(path.parent().unwrap()).expect("create cfg dir");
@@ -194,8 +199,7 @@ fn load_v1_with_extra_version_still_treated_as_v1() {
 
 #[test]
 fn load_invalid_json_returns_parse_error_and_does_not_write() {
-    let _guard = test_mutex().lock().expect("acquire test mutex");
-    reset_test_fs();
+    let _guard = test_guard();
     let home = ensure_test_home();
     let path = cfg_path();
     fs::create_dir_all(path.parent().unwrap()).expect("create cfg dir");
@@ -217,8 +221,7 @@ fn load_invalid_json_returns_parse_error_and_does_not_write() {
 
 #[test]
 fn load_valid_v2_config_succeeds() {
-    let _guard = test_mutex().lock().expect("acquire test mutex");
-    reset_test_fs();
+    let _guard = test_guard();
     let _home = ensure_test_home();
     let path = cfg_path();
     fs::create_dir_all(path.parent().unwrap()).expect("create cfg dir");
@@ -232,4 +235,28 @@ fn load_valid_v2_config_succeeds() {
     assert_eq!(loaded.version, 2);
     assert!(loaded.get_manager(&AppType::Claude).is_some());
     assert!(loaded.get_manager(&AppType::Codex).is_some());
+}
+
+#[test]
+fn panicking_fixture_does_not_poison_subsequent_config_load() {
+    let panic = std::panic::catch_unwind(|| {
+        let _guard = test_guard();
+        let path = cfg_path();
+        fs::create_dir_all(path.parent().unwrap()).expect("create failed fixture dir");
+        fs::write(path, "{failed fixture").expect("write failed fixture residue");
+        panic!("injected first-test failure");
+    });
+    assert!(panic.is_err());
+    let _guard = test_guard();
+    assert!(
+        !cfg_path().exists(),
+        "failed fixture must be reset under the lock"
+    );
+    assert_eq!(
+        MultiAppConfig::load()
+            .expect("load after fixture panic")
+            .version,
+        2
+    );
+    assert!(!test_mutex().is_poisoned());
 }
