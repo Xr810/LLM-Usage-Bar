@@ -122,6 +122,18 @@ pub fn sync_opencode_usage(db: &Database) -> Result<SessionSyncResult, AppError>
     sync_with_parser(db, &OpenCodeParser::new(get_opencode_db_path()), None)
 }
 
+pub(crate) fn sync_opencode_usage_until(
+    db: &Database,
+    stopped: &dyn Fn() -> bool,
+) -> Result<SessionSyncResult, AppError> {
+    super::sync_with_parser_until(
+        db,
+        &OpenCodeParser::new(get_opencode_db_path()),
+        None,
+        stopped,
+    )
+}
+
 /// 把整个 opencode.db 解析成归一化用量记录。
 ///
 /// 会话级水位从 `ctx.parser_state` 载入(JSON 对象 {session_id: watermark});
