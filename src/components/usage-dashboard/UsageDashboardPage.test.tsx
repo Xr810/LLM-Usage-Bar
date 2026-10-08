@@ -1,19 +1,38 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { usageDashboardKeys } from "@/lib/query/usageDashboard";
 import { commandCalls } from "../../../tests/msw/tauriMocks";
 import { UsageDashboardPage } from "./UsageDashboardPage";
+
+const clients = new Set<QueryClient>();
+
+afterEach(() => {
+  // Unmount observers before cancelling queries and removing their GC timers.
+  cleanup();
+  for (const client of clients) client.clear();
+  clients.clear();
+  vi.restoreAllMocks();
+});
 
 function renderPage() {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  return render(
+  clients.add(client);
+  render(
     <QueryClientProvider client={client}>
       <UsageDashboardPage />
     </QueryClientProvider>,
   );
+  return client;
 }
 
 describe("UsageDashboardPage Provider-only contract", () => {
@@ -58,58 +77,69 @@ describe("UsageDashboardPage Provider-only contract", () => {
   });
 
   it("queries exact Provider-wide ranges for today, 7 days, 30 days, and 1 year", async () => {
+    // Fix only the range clock; user-event, MSW and query notifications use real timers.
+    const now = new Date(2026, 6, 15, 12, 34, 56).getTime();
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const endAt = Math.floor(now / 1_000) + 1;
     const user = userEvent.setup();
-    renderPage();
+    const client = renderPage();
     await screen.findByText("ChatGPT");
+    expect(commandCalls("get_provider_usage_dashboard")[0]?.[1]).toEqual({
+      startAt: Math.floor(new Date(2026, 5, 16).getTime() / 1_000),
+      endAt,
+    });
 
-    await user.click(screen.getByRole("button", { name: "Today" }));
-    await waitFor(() =>
-      expect(
-        commandCalls("get_provider_usage_dashboard").length,
-      ).toBeGreaterThan(1),
+    const trend = within(screen.getByRole("region", { name: "Usage trend" }));
+    // The activity heatmap has 365 day buttons unrelated to range selection.
+    const controls = within(
+      trend.getByRole("group", {
+        name: /time range/i,
+      }),
     );
-    expect(await screen.findByText("Hourly")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "7 days" }));
-    await waitFor(() =>
-      expect(
-        commandCalls("get_provider_usage_dashboard").length,
-      ).toBeGreaterThan(2),
-    );
-    expect(await screen.findByText("Daily")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "30 days" }));
-    await waitFor(() =>
-      expect(
-        commandCalls("get_provider_usage_dashboard").length,
-      ).toBeGreaterThan(3),
-    );
-    await user.click(screen.getByRole("button", { name: "1 year" }));
-    await waitFor(() =>
-      expect(
-        commandCalls("get_provider_usage_dashboard").length,
-      ).toBeGreaterThan(4),
-    );
-    expect(screen.getByTestId("usage-trend-range")).toHaveTextContent("1 year");
+    const ranges = [
+      { name: "Today", startAt: new Date(2026, 6, 15), granularity: "hour" },
+      { name: "7 days", startAt: new Date(2026, 6, 9), granularity: "day" },
+      { name: "30 days", startAt: new Date(2026, 5, 16), granularity: "day" },
+      { name: "1 year", startAt: new Date(2025, 6, 16), granularity: "day" },
+    ];
 
-    for (const call of commandCalls("get_provider_usage_dashboard")) {
-      const args = call[1] ?? {};
-      expect(args).not.toHaveProperty("agentModuleId");
-      expect(Number(args.endAt)).toBeGreaterThan(Number(args.startAt));
+    for (const [index, range] of ranges.entries()) {
+      const startAt = Math.floor(range.startAt.getTime() / 1_000);
+      await user.click(controls.getByRole("button", { name: range.name }));
+      await waitFor(() => {
+        const calls = commandCalls("get_provider_usage_dashboard");
+        expect(calls).toHaveLength(index + 2);
+        expect(calls.at(-1)?.[1]).toEqual({ startAt, endAt });
+        // A recorded invoke is not a completed query. In particular the range
+        // label changes before keepPreviousData has been replaced.
+        const key = usageDashboardKeys.providerDashboard(startAt, endAt);
+        expect(client.getQueryState(key)).toMatchObject({
+          status: "success",
+          fetchStatus: "idle",
+        });
+        expect(client.getQueryData(key)).toMatchObject({
+          startAt,
+          endAt,
+          trendGranularity: range.granularity,
+        });
+      });
+      expect(
+        await trend.findByText(
+          range.granularity === "hour" ? "Hourly" : "Daily",
+        ),
+      ).toBeInTheDocument();
+      expect(
+        controls.getByRole("button", { name: range.name }),
+      ).toHaveAttribute("aria-pressed", "true");
     }
-
-    const oneYearCall = commandCalls("get_provider_usage_dashboard").at(-1);
-    const oneYearArgs = oneYearCall?.[1] ?? {};
-    const oneYearDuration =
-      Number(oneYearArgs.endAt) - Number(oneYearArgs.startAt);
-    expect(oneYearDuration).toBeGreaterThan(364 * 24 * 60 * 60);
-    expect(oneYearDuration).toBeLessThan(366 * 24 * 60 * 60);
+    expect(trend.getByTestId("usage-trend-range")).toHaveTextContent("1 year");
 
     const activityCalls = commandCalls("get_provider_usage_activity");
     expect(activityCalls).toHaveLength(1);
-    const activityArgs = activityCalls[0]?.[1] ?? {};
-    expect(activityArgs).not.toHaveProperty("agentModuleId");
-    expect(
-      Number(activityArgs.endAt) - Number(activityArgs.startAt),
-    ).toBeGreaterThan(300 * 24 * 60 * 60);
+    expect(activityCalls[0]?.[1]).toEqual({
+      startAt: Math.floor(new Date(2025, 6, 16).getTime() / 1_000),
+      endAt: Math.floor(new Date(2026, 6, 16).getTime() / 1_000),
+    });
   });
 
   it("does not expose manual Provider actions in the monitoring dashboard", async () => {
