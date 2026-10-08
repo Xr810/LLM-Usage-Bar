@@ -1437,7 +1437,9 @@ pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml --test extension
 - **[#60 安全身份迁移](https://github.com/Xr810/LLM-Usage-Bar/issues/60)进度：** 修复 Orb 回报仅改 `identity_migration.rs`／`app_config_load.rs`，不改 #61 文件；原始首错为 2 个目标备份 `sync_all` code 5、7 个预退休拒绝，`quick_check` 原用例尚未执行到。候选保留快照写屏障，在持久 fence 提交后关闭 Windows 句柄；失败处理拟按同一 identity 恢复 fence，再撤销快照，不确定状态保留快照。此安全策略尚未经协调独立验证或原生验收，不宣称数据安全问题已解决。Orb 报告 Linux `app_config_load` 7／0 实际通过，完整 lib test 构建 OOM 137，`check --tests` 进行中；精确补丁已交 Windows runner，原生运行结果待回报。
 - **仍未关闭：** #60 安全身份迁移及级联、#62 真实 10000 条摄取时约 175.66s 自然退出等待，以及启动／写库／连续退出、全局 watcher 登记、永久阻塞 I/O 等整体验收缺口。局部测试通过不关闭其他根因或完整发行门。
 
-原 Windows 运行证据见[原 runner 线程](https://ampcode.com/threads/T-01a11bf4-b63e-74af-a5ab-e451b45d515c)消息 #324–325（#59）、#299–300／#306／#329（#63）、#330–335（#61）及 #338–342（#65 尚无结果）；Mac 证据见[原 runner 线程](https://ampcode.com/threads/T-01a11bf4-ad56-7654-9c3d-1c33db239277)。原始本机路径不表示 Orb 可访问文件；本节不附原日志／数据库／安装包／修复补丁。仅文档记录推送被授权，所有 Issue 保持开放，修复推送、合并与发布仍未授权。
+**后续补充：#65 Windows 默认并发回归已完成，不再待结果。** 原 Windows runner 消息 #342–343 的实际输出为默认定向 3 次各 **3／0，exit 0**（2.93／2.77／2.75s，范围用例 601／606／599ms），默认全量 **54 文件／352 项通过，exit 0，7.70s**。同一候选补丁 SHA256 `17b13cdb8809978a6b71182ba66ef5af770a32b5723669556ca2f2546ab1b65e`、目标 blob `1f9827392ce3bbc4ca96e0c0ea5d69758b7ec5b1` 已核对。Node 24.21.0／pnpm 11.11.0／Vitest 4.1.10，配置探针确认 pool=forks、maxWorkers 未设、fileParallelism 未设、testTimeout=5000ms；CLI 无 worker／超时覆盖。Windows 全量仅执行一次，不与 Mac 三次混算。26,577 字节脱敏日志已实际传回修复 Orb，SHA256 `12ea6b1763c9fabf8f1e04d2ea1654c6fc83020708978285f19362f7d749d81d`，Vite／MSW／jsdom 告警保留。有限重复通过不证明任意负载可靠性，诊断仍未重建原超时；修复未推送、Issue 未关闭，其他验收缺口不变。
+
+原 Windows 运行证据见[原 runner 线程](https://ampcode.com/threads/T-01a11bf4-b63e-74af-a5ab-e451b45d515c)消息 #324–325（#59）、#299–300／#306／#329（#63）、#330–335（#61）及 #338–343／#350–352（#65 补丁、结果、配置及日志上传）；Mac 证据见[原 runner 线程](https://ampcode.com/threads/T-01a11bf4-ad56-7654-9c3d-1c33db239277)。原始本机路径不表示 Orb 可访问文件；本节不附原日志／数据库／安装包／修复补丁。仅文档记录推送被授权，所有 Issue 保持开放，修复推送、合并与发布仍未授权。
 
 #### 当前未关闭项（后续接手以此及 §20.3–20.5 为准）
 
