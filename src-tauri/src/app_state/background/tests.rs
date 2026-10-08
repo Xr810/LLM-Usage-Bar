@@ -69,7 +69,8 @@ async fn shutdown_during_real_ingestion(codex: bool) {
     let line = |i: u32| {
         if codex {
             // Asymmetric cumulative values expose replay baseline mistakes:
-            // cached input is included in input; delta input must be 3, not 10.
+            // stored input includes cached input: the delta is 10, with 7 cached.
+            // Only cost calculation subtracts cache to obtain 3 billable input.
             format!(
                 r#"{{"timestamp":"2026-07-14T00:00:00Z","type":"event_msg","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":{},"cached_input_tokens":{},"output_tokens":{}}}}}}}}}"#,
                 i * 10,
@@ -200,15 +201,33 @@ async fn shutdown_during_real_ingestion(codex: bool) {
         10_001
     );
     let conn = reopened.conn.lock().unwrap();
+    // Record actual persisted values before assertions, so a failure can be
+    // diagnosed without mistaking billable input for the storage contract.
+    for table in ["usage_events", "proxy_request_logs"] {
+        let mut statement = conn.prepare(&format!(
+            "SELECT input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, COUNT(*) FROM {table} GROUP BY input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens"
+        )).unwrap();
+        let tuples: Vec<(i64, i64, i64, i64, i64)> = statement
+            .query_map([], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            })
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        eprintln!("{source} restored {table} token tuples (input, output, read, creation, count): {tuples:?}");
+    }
+    // Independently derived from the fixture: cumulative input rises by 10
+    // including cache, whereas Claude explicitly supplies 3 fresh input.
+    let expected_input = if codex { 10 } else { 3 };
     let expected_creation = if codex { 0 } else { 11 };
     let counts: (i64, i64, i64) = conn.query_row(
-        "SELECT COUNT(*), COUNT(DISTINCT event_id), SUM(CASE WHEN input_tokens=3 AND output_tokens=5 AND cache_read_tokens=7 AND cache_creation_tokens=?1 THEN 1 ELSE 0 END) FROM usage_events",
-        [expected_creation], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        "SELECT COUNT(*), COUNT(DISTINCT event_id), SUM(CASE WHEN input_tokens=?1 AND output_tokens=5 AND cache_read_tokens=7 AND cache_creation_tokens=?2 THEN 1 ELSE 0 END) FROM usage_events",
+        [expected_input, expected_creation], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
     ).unwrap();
     assert_eq!(counts, (10_001, 10_001, 10_001));
     let legacy: (i64, i64, i64) = conn.query_row(
-        "SELECT COUNT(*), COUNT(DISTINCT request_id), SUM(CASE WHEN input_tokens=3 AND output_tokens=5 AND cache_read_tokens=7 AND cache_creation_tokens=?1 THEN 1 ELSE 0 END) FROM proxy_request_logs",
-        [expected_creation], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        "SELECT COUNT(*), COUNT(DISTINCT request_id), SUM(CASE WHEN input_tokens=?1 AND output_tokens=5 AND cache_read_tokens=7 AND cache_creation_tokens=?2 THEN 1 ELSE 0 END) FROM proxy_request_logs",
+        [expected_input, expected_creation], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
     ).unwrap();
     assert_eq!(legacy, (10_001, 10_001, 10_001));
     assert_eq!(
