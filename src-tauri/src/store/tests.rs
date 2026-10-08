@@ -183,11 +183,16 @@ mod schema_v14_cursor_migration_tests {
     use std::path::PathBuf;
 
     fn roots() -> UsageSourceRoots {
+        let home = if cfg!(windows) {
+            PathBuf::from("C:/Users/test")
+        } else {
+            PathBuf::from("/Users/test")
+        };
         UsageSourceRoots {
-            claude: PathBuf::from("/Users/test/.claude/projects"),
-            codex: PathBuf::from("/Users/test/.codex"),
-            gemini: PathBuf::from("/Users/test/.gemini/tmp"),
-            opencode: PathBuf::from("/Users/test/.local/share/opencode"),
+            claude: home.join(".claude/projects"),
+            codex: home.join(".codex"),
+            gemini: home.join(".gemini/tmp"),
+            opencode: home.join(".local/share/opencode"),
         }
     }
 
@@ -202,15 +207,19 @@ mod schema_v14_cursor_migration_tests {
     #[test]
     fn migration_v13_to_current_archives_line_state_and_sets_version_once() {
         let conn = v13_current_tables();
+        let roots = roots();
+        let path = roots.claude.join("p/session.jsonl");
+        assert!(path.is_absolute());
+        let path = path.to_str().unwrap();
         conn.execute(
             "INSERT INTO session_log_sync
              (file_path, last_modified, last_line_offset, last_synced_at)
              VALUES (?1, 11, 3, 33)",
-            ["/Users/test/.claude/projects/p/session.jsonl"],
+            [path],
         )
         .unwrap();
 
-        Database::apply_schema_migrations_on_conn_with_roots(&conn, &roots()).unwrap();
+        Database::apply_schema_migrations_on_conn_with_roots(&conn, &roots).unwrap();
 
         assert_eq!(Database::get_user_version(&conn).unwrap(), SCHEMA_VERSION);
         assert!(!Database::table_exists(&conn, "session_log_sync").unwrap());
@@ -219,7 +228,7 @@ mod schema_v14_cursor_migration_tests {
             .query_row(
                 "SELECT source, byte_offset, line_offset
                  FROM usage_sync_cursors WHERE cursor_key = ?1",
-                ["/Users/test/.claude/projects/p/session.jsonl"],
+                [path],
                 |row| {
                     Ok((
                         row.get::<_, String>(0)?,
@@ -241,38 +250,79 @@ mod schema_v14_cursor_migration_tests {
     #[test]
     fn v14_migration_failure_rolls_back_archive_cursor_and_version() {
         let conn = v13_current_tables();
-        conn.execute("DROP TABLE IF EXISTS usage_sync_cursors", [])
-            .unwrap();
-        conn.execute_batch(
-            "CREATE TABLE usage_sync_cursors (
-                 source TEXT NOT NULL CHECK (source != 'claude'),
-                 cursor_key TEXT NOT NULL,
-                 resource_path TEXT,
-                 resource_identity TEXT,
-                 modified_at_ns INTEGER NOT NULL DEFAULT 0,
-                 size_bytes INTEGER NOT NULL DEFAULT 0,
-                 byte_offset INTEGER NOT NULL DEFAULT 0,
-                 line_offset INTEGER NOT NULL DEFAULT 0,
-                 parser_state_json TEXT,
-                 last_success_at INTEGER NOT NULL DEFAULT 0,
-                 PRIMARY KEY (source, cursor_key)
-             );",
+        let roots = roots();
+        let first_path = roots.claude.join("p/a.jsonl");
+        let failing_path = roots.claude.join("p/z.jsonl");
+        assert!(first_path.is_absolute());
+        assert!(failing_path.is_absolute());
+        let first_path = first_path.to_str().unwrap();
+        let failing_path = failing_path.to_str().unwrap();
+        Database::create_usage_sync_cursors_table_on_conn(&conn).unwrap();
+        // Match the key, not the classified source, and prove a prior insert happened.
+        conn.execute(
+            "CREATE TEMP TABLE forced_cursor_failure (cursor_key TEXT PRIMARY KEY)",
+            [],
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO session_log_sync
-             (file_path, last_modified, last_line_offset, last_synced_at)
-             VALUES (?1, 11, 3, 33)",
-            ["/Users/test/.claude/projects/p/session.jsonl"],
+            "INSERT INTO forced_cursor_failure VALUES (?1)",
+            [failing_path],
         )
         .unwrap();
+        conn.execute_batch(
+            "CREATE TEMP TRIGGER fail_cursor_insert BEFORE INSERT ON usage_sync_cursors
+             WHEN NEW.cursor_key IN (SELECT cursor_key FROM forced_cursor_failure)
+             BEGIN
+                 SELECT CASE WHEN (SELECT COUNT(*) FROM usage_sync_cursors) = 1
+                     THEN RAISE(ABORT, 'forced cursor failure after prior insert')
+                     ELSE RAISE(ABORT, 'prior cursor insert missing') END;
+             END;",
+        )
+        .unwrap();
+        for (path, modified, line, synced) in [(first_path, 11, 3, 33), (failing_path, 22, 7, 44)] {
+            conn.execute(
+                "INSERT INTO session_log_sync VALUES (?1, ?2, ?3, ?4)",
+                params![path, modified, line, synced],
+            )
+            .unwrap();
+        }
 
-        Database::apply_schema_migrations_on_conn_with_roots(&conn, &roots())
+        let error = Database::apply_schema_migrations_on_conn_with_roots(&conn, &roots)
             .expect_err("forced cursor insert failure must roll back the outer savepoint");
+        assert!(
+            error
+                .to_string()
+                .contains("forced cursor failure after prior insert"),
+            "{error}"
+        );
 
         assert_eq!(Database::get_user_version(&conn).unwrap(), 13);
         assert!(Database::table_exists(&conn, "session_log_sync").unwrap());
         assert!(!Database::table_exists(&conn, "session_log_sync_v13_archive").unwrap());
+        let legacy_rows = conn
+            .prepare(
+                "SELECT file_path, last_modified, last_line_offset, last_synced_at
+             FROM session_log_sync ORDER BY file_path",
+            )
+            .unwrap()
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(
+            legacy_rows,
+            vec![
+                (first_path.to_string(), 11, 3, 33),
+                (failing_path.to_string(), 22, 7, 44),
+            ]
+        );
         let rows: i64 = conn
             .query_row("SELECT COUNT(*) FROM usage_sync_cursors", [], |row| {
                 row.get(0)

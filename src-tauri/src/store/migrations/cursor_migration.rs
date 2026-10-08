@@ -92,11 +92,16 @@ mod tests {
     use std::path::PathBuf;
 
     fn roots() -> UsageSourceRoots {
+        let home = if cfg!(windows) {
+            PathBuf::from("C:/Users/test")
+        } else {
+            PathBuf::from("/Users/test")
+        };
         UsageSourceRoots {
-            claude: PathBuf::from("/Users/test/.claude/projects"),
-            codex: PathBuf::from("/Users/test/.codex"),
-            gemini: PathBuf::from("/Users/test/.gemini/tmp"),
-            opencode: PathBuf::from("/Users/test/.local/share/opencode"),
+            claude: home.join(".claude/projects"),
+            codex: home.join(".codex"),
+            gemini: home.join(".gemini/tmp"),
+            opencode: home.join(".local/share/opencode"),
         }
     }
 
@@ -122,47 +127,129 @@ mod tests {
     #[test]
     fn classifies_only_paths_below_resolved_external_roots() {
         let roots = roots();
-        assert_eq!(
-            classify_legacy_cursor("/Users/test/.claude/projects/p/a.jsonl", &roots),
-            "claude"
-        );
-        assert_eq!(
-            classify_legacy_cursor("/Users/test/.codex/sessions/a.jsonl", &roots),
-            "codex"
-        );
-        assert_eq!(
-            classify_legacy_cursor("/Users/test/.gemini/tmp/p/chats/session-a.json", &roots),
-            "gemini"
-        );
-        assert_eq!(
-            classify_legacy_cursor("/Users/test/.local/share/opencode/opencode.db", &roots),
-            "opencode"
-        );
-        assert_eq!(
-            classify_legacy_cursor("/Users/test/.llm-usage-bar/session.jsonl", &roots),
-            "legacy"
-        );
+        for (path, source) in [
+            (roots.claude.join("p/a.jsonl"), "claude"),
+            (roots.codex.join("sessions/a.jsonl"), "codex"),
+            (roots.gemini.join("p/chats/session-a.json"), "gemini"),
+            (roots.opencode.join("opencode.db"), "opencode"),
+            (
+                roots
+                    .claude
+                    .with_file_name("projects-other")
+                    .join("a.jsonl"),
+                "legacy",
+            ),
+            (
+                roots.codex.with_file_name(".codex-other").join("a.jsonl"),
+                "legacy",
+            ),
+            (
+                roots.gemini.with_file_name("tmp-other").join("a.json"),
+                "legacy",
+            ),
+            (
+                roots.opencode.with_file_name("opencode-other").join("a.db"),
+                "legacy",
+            ),
+            (
+                roots.claude.parent().unwrap().join("outside.jsonl"),
+                "legacy",
+            ),
+        ] {
+            assert!(
+                path.is_absolute(),
+                "fixture must be native absolute: {path:?}"
+            );
+            assert_eq!(
+                classify_legacy_cursor(path.to_str().unwrap(), &roots),
+                source
+            );
+        }
         assert_eq!(classify_legacy_cursor("relative.jsonl", &roots), "legacy");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_paths_require_a_drive_or_unc_prefix_and_a_root() {
+        let mut roots = roots();
+        for path in [
+            r"C:\Users\test\.claude\projects\p\a.jsonl",
+            "C:/Users/test/.claude/projects/p/a.jsonl",
+        ] {
+            assert_eq!(classify_legacy_cursor(path, &roots), "claude");
+        }
+        for path in [
+            r"C:Users\test\.claude\projects\p\a.jsonl",
+            r"\Users\test\.claude\projects\p\a.jsonl",
+            "/Users/test/.claude/projects/p/a.jsonl",
+            r"D:\Users\test\.claude\projects\p\a.jsonl",
+        ] {
+            assert_eq!(classify_legacy_cursor(path, &roots), "legacy");
+        }
+        for root in [
+            r"\\server\share\.claude\projects",
+            r"\\?\C:\Users\test\.claude\projects",
+        ] {
+            roots.claude = PathBuf::from(root);
+            assert!(roots.claude.is_absolute());
+            let path = roots.claude.join(r"p\a.jsonl");
+            assert_eq!(
+                classify_legacy_cursor(path.to_str().unwrap(), &roots),
+                "claude"
+            );
+            let outside = roots
+                .claude
+                .with_file_name("projects-other")
+                .join("a.jsonl");
+            assert_eq!(
+                classify_legacy_cursor(outside.to_str().unwrap(), &roots),
+                "legacy"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn windows_prefixes_do_not_make_unix_paths_absolute() {
+        let mut roots = roots();
+        for root in [
+            r"C:\Users\test\.claude\projects",
+            r"\\server\share\.claude\projects",
+        ] {
+            roots.claude = PathBuf::from(root);
+            let path = roots.claude.join("a.jsonl");
+            assert!(!path.is_absolute());
+            assert_eq!(
+                classify_legacy_cursor(path.to_str().unwrap(), &roots),
+                "legacy"
+            );
+        }
     }
 
     #[test]
     fn migration_archives_v13_rows_and_builds_conservative_source_cursors() {
         let conn = v13_connection();
+        let roots = roots();
         for (path, modified, line, synced) in [
-            ("/Users/test/.claude/projects/p/a.jsonl", 11, 3, 101),
-            ("/Users/test/.codex/sessions/a.jsonl", 12, 4, 102),
-            ("/Users/test/.gemini/tmp/p/chats/session-a.json", 13, 5, 103),
-            ("/Users/test/.local/share/opencode/opencode.db", 14, 6, 104),
-            ("/tmp/unknown.jsonl", 15, 7, 105),
+            (roots.claude.join("p/a.jsonl"), 11, 3, 101),
+            (roots.codex.join("sessions/a.jsonl"), 12, 4, 102),
+            (roots.gemini.join("p/chats/session-a.json"), 13, 5, 103),
+            (roots.opencode.join("opencode.db"), 14, 6, 104),
+            (
+                roots.claude.parent().unwrap().join("unknown.jsonl"),
+                15,
+                7,
+                105,
+            ),
         ] {
             conn.execute(
                 "INSERT INTO session_log_sync VALUES (?1, ?2, ?3, ?4)",
-                rusqlite::params![path, modified, line, synced],
+                rusqlite::params![path.to_str().unwrap(), modified, line, synced],
             )
             .unwrap();
         }
 
-        migrate_v13_to_v14(&conn, &roots()).unwrap();
+        migrate_v13_to_v14(&conn, &roots).unwrap();
 
         assert!(!Database::table_exists(&conn, "session_log_sync").unwrap());
         assert!(Database::table_exists(&conn, "session_log_sync_v13_archive").unwrap());
