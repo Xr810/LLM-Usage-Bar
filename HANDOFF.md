@@ -1457,9 +1457,13 @@ pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml --test extension
 
 对应五个[修复线程（索引）](docs/acceptance/aa828178/README.md#independent-root-cause-tracking-and-repair-ownership)已实际调用 `update_thread archived=true, remove_worktree=false` 归档，证据已保存在协调工作区；未删除 worktree。原 Mac／Windows 验证线程及协调线程不归档。**main 未合并，未发布；整体验收门仍未通过。**
 
-剩余 **#62／#64／#66／#67 OPEN，未推作已解决，也未归档**：#62 Mac 屏障恢复测试进行中，Windows debug 构建被 App Control 4551／CodeIntegrity 3077 阻止，尚无新 runtime 通过；流水线／watcher／全套及真正 in-flight production quit、重启补尾完整性仍欠。#64 原 Mac 空实际 target 默认 universal 构建、双 slice／codesign／profile 回归已通过，release GUI／安全 Keychain 隔离与追加 host argv 仍欠。#66 仅诊断交付，Keychain 根因／安全探针／production-store 问题解决未成立。#67 原生构建、增量后9项配置测试与编译 MSI 表只读检查通过（首次CRLF parity 7／1失败保留），真实8格路径／upgrade／repair／UI／installed hash／卸载矩阵仍缺可丢弃 Windows VM 或明确隔离授权；没有写宿主注册表／Installer、启用组件、创建用户或重启。不能以局部成绩、AppleEvent 或 HOME 隔离替代这些必需场景。
+剩余 **#62／#64／#66／#67 OPEN，未推作已解决，也未归档**：#62 Mac 屏障恢复测试进行中，Windows debug 构建被 App Control 4551／CodeIntegrity 3077 阻止，尚无新 runtime 通过；流水线／watcher／全套及真正 in-flight production quit、重启补尾完整性仍欠。#64 原 Mac 空实际 target 默认 universal 构建、双 slice／codesign／profile 回归已通过，追加 serde host argv 已补齐，release GUI／安全 Keychain 隔离仍欠。#66 仅诊断交付，Keychain 根因／安全探针／production-store 问题解决未成立。#67 原生构建、增量后9项配置测试与编译 MSI 表只读检查通过（首次CRLF parity 7／1失败保留），真实8格路径／upgrade／repair／UI／installed hash／卸载矩阵仍缺可丢弃 Windows VM 或明确隔离授权；没有写宿主注册表／Installer、启用组件、创建用户或重启。不能以局部成绩、AppleEvent 或 HOME 隔离替代这些必需场景。
 
 原 Windows runner 本轮最终回执进一步确认：#62 默认／alternate release 测试和正式 build 同样全部被 Smart App Control 4551 阻止，CodeIntegrity 3077 已核对，**新测试及应用 10k quit 均未执行**；code-only candidate `2b3abe9c` 与原补丁的 src-tauri 树 `1858b4a0e150cfe172b8c97235954321bd4d7f12` 一致。#67 的隔离资源／授权仍未取得。runner 当前无 cargo／rustc／node／app 进程；没有改 policy 或扩大权限，不能以更换 profile、旧二进制或宿主 TEST_HOME 视为验收通过。
+
+#64 追加原生日志已下载核读，13,407 bytes／SHA256 `5918c3f1c91cf4901dc560331776d805bfd62efd194dab56b960cdbcd34a1d00`：独立空 target fixture 使用当前 release／build-override 和 serde 1.0.229 derive，实际 serde_derive host argv 无 `-C strip`，main 仍为 `strip=symbols`；build exit 0、ARM `profile-ok`／exec 0，宏 stroff 2387408 对齐8字节。这是独立 fixture，不是 universal 宏 stroff 2438088 的产物；fixture／target 已清理，未重复已通过构建。该补证只关闭 host strip 机制证据缺口，不代替尚未执行的安全隔离 release GUI 验收。
+
+原 Mac runner 随后报告 #62 最新结果，取代上方“恢复测试进行中／流水线与 watcher 待验”状态：旧 code-only candidate `2b3abe9c` 的 app_state **11 过／1 失败**，Codex 恢复虽有10001唯一 event，token 元组断言匹配0（line 208），后续 legacy 最后断言未到；Claude 恢复通过，通知后 join 分别6.02／4.35ms。共享流水线1／1、watcher8／8通过，不抵消 app_state 失败；旧 candidate 全量已暂停，owner 准备预期／实际元组诊断增量，尚未确定原因，不能直接归因生产数据或测试预期。协调尚未核读此次完整原始日志，保留为 runner 回执，#62 继续不推／不关闭。#66 诊断 mock native 编译仍在串行执行，不等于问题解决。
 
 #### 当前未关闭项（后续接手以此及 §20.3–20.5 为准）
 
