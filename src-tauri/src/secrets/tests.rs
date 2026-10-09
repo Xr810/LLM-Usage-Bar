@@ -1684,6 +1684,68 @@ async fn local_binding_create_store_failure_leaves_no_enabled_or_orphaned_bindin
 }
 
 #[tokio::test]
+async fn unavailable_startup_attempts_each_missing_binding_once_without_publishing() {
+    #[derive(Default)]
+    struct RejectingStore {
+        puts: AtomicUsize,
+        gets: AtomicUsize,
+    }
+
+    impl CredentialStore for RejectingStore {
+        fn put(&self, _slot: &str, _secret: &[u8]) -> Result<(), CredentialStoreError> {
+            self.puts.fetch_add(1, Ordering::SeqCst);
+            Err(CredentialStoreError::Unavailable)
+        }
+
+        fn get(&self, _slot: &str) -> Result<Option<Vec<u8>>, CredentialStoreError> {
+            self.gets.fetch_add(1, Ordering::SeqCst);
+            Err(CredentialStoreError::Unavailable)
+        }
+
+        fn delete(&self, _slot: &str) -> Result<(), CredentialStoreError> {
+            Err(CredentialStoreError::Unavailable)
+        }
+    }
+
+    let db = Arc::new(Database::memory().unwrap());
+    let before = all_binding_credential_state(&db);
+    let store = Arc::new(RejectingStore::default());
+    let service = BindingCredentialService::new(db.clone(), store.clone());
+
+    // Use the exact startup entry points, not the UI status-producing API.
+    service.reconcile_startup_journals().await.unwrap();
+    service.initialize_startup_binding_keys().await.unwrap();
+
+    assert_eq!(store.puts.load(Ordering::SeqCst), 3);
+    assert_eq!(store.gets.load(Ordering::SeqCst), 0);
+    assert_eq!(all_binding_credential_state(&db), before);
+    for snapshot in db.credential_binding_snapshots(None).unwrap() {
+        if snapshot.is_fixed_system_api() {
+            assert!(snapshot.fingerprint.is_none());
+            assert!(snapshot.credential_slot.is_none());
+            // Failed cleanup remains journaled for recovery, not forgotten.
+            assert_eq!(journal_count(&db, &snapshot.id), 1);
+        }
+    }
+
+    // A later healthy store can reconcile the journal and initialize normally.
+    let healthy = Arc::new(MemoryCredentialStore::default());
+    let service = BindingCredentialService::new(db.clone(), healthy.clone());
+    service.reconcile_startup_journals().await.unwrap();
+    service.initialize_startup_binding_keys().await.unwrap();
+    assert_eq!(healthy.item_count(), 3);
+    assert_eq!(healthy.get_call_count(), 0);
+    for snapshot in db.credential_binding_snapshots(None).unwrap() {
+        if snapshot.is_fixed_system_api() {
+            assert!(snapshot.fingerprint.is_some());
+            assert!(snapshot.credential_slot.is_some());
+            assert_eq!(snapshot.credential_version, 1);
+            assert_eq!(journal_count(&db, &snapshot.id), 0);
+        }
+    }
+}
+
+#[tokio::test]
 async fn local_binding_startup_generation_failure_preserves_selection_and_reports_unavailable() {
     let db = Arc::new(Database::memory().unwrap());
     let service = BindingCredentialService::new(db.clone(), super::unavailable_credential_store());

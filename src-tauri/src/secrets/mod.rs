@@ -67,7 +67,7 @@ pub(crate) fn unavailable_credential_store() -> Arc<dyn CredentialStore> {
 pub(crate) fn production_credential_store() -> Arc<dyn CredentialStore> {
     #[cfg(all(target_os = "macos", not(debug_assertions)))]
     {
-        Arc::new(macos::MacOsCredentialStore)
+        Arc::new(macos::MacOsCredentialStore::default())
     }
     #[cfg(target_os = "windows")]
     {
