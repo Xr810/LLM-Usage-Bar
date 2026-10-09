@@ -1473,6 +1473,20 @@ pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml --test extension
 
 #62 Mac v2 完整自动化随后完成，取代上方“完整 Rust 待返”：协调已下载完整日志／summary／identity 并核对 SHA256 分别为 `26960e6c5794f255364d44a96bd9b896fcf6fa3577c6f9312d4df0fb03fab699`／`c2f828b297940d42a03f04858bcfec662fb32298170ed2582ba7ac85231707a8`／`9855dc695b0c6ebc47bc3e92b09b4dfdc1f8fcea756a6b698a31e8ca66c1c022`，大小121,893／6,215／433 bytes。实际 `pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml` exit0，编译50.10s；lib1284 passed／0 failed／2 ignored（150.82s），integration15 passed／0 failed／1 ignored，总1299 passed／0 failed／3 ignored，含 extension_seam_guards 2 passed（0.04s）。两个 live S3 与一个 router probe 未执行，不当通过。身份记录确认全量前后与 d49879f3 排除 HANDOFF 的 diff exit0，除 tests.rs 外与旧候选生产源码 diff0。测试后无进程／8788监听不等于 GUI 退出证据；Windows运行及双平台真实生产 Quit／连续 Quit／托盘／安全 release Keychain 端到端仍未验。**自动化已通过，应用门未过，#62继续未推／OPEN／不归档**，不扩权、强杀或用 AppleEvent 替代。
 
+#### 2026-10-09 安全原生复验与 #64／#66 交付更新
+
+本段取代上方对应项目的历史“待验”状态，不改写首错。#64 已正常推送独立分支 `fix/issue-64-verified`，协调 fetch 后核读代码，并将原候选 patch 应用于临时 index：整树与 [48096da](https://github.com/Xr810/LLM-Usage-Bar/commit/48096da8879a51794cc90fee74db2181fe6d7531) 完全相同，仅 Cargo host build-override／profile 回归；app `strip=symbols` 保留。默认空 target universal、两 slice、codesign 结构、host/app argv 与 ARM 桌面 GUI 均已通过。实际 release binary SHA256 `c0507d95c574fa27b57f7687eda2c6e419fda36f98f54d21eb01cbd8bcf131e0`，PID34883 ARM64；Usage 26 tokens／1 active day 和最终 native menu 截图已独立 inspect。issue 已关闭、修复线程已归档，worktree 保留；未合并 main／发布，Intel 真机、可信签名／公证仍未执行。
+
+旧宽泛 AX 匹配误选左应用菜单、零尺寸菜单 success 均撤回；首次截图不见菜单及原 Quit 编排缺菜单导致 exit1 保留。最终实际 adapter source SHA256 `5f2f165dd597d39d8514917e89a82571b5b89abbd4bc74ecc45c412048da4d24` 已全文核读，限定本 PID Extras＋Help、已有事件授权和正尺寸菜单。严格 retry 成功 Open／Quit，16:14:55 真实 callback1／cleanup1、自然 exit0，退出后 fixture safety PASS、PID／AX absent、8788 closed。40.864s 含 QA 等待／重试，不是产品 Quit SLA；#64 release 不替代 #62 debug 物理托盘定向补验。
+
+#66 原生显式 private reference probe 已核读：exact ignored test 1 passed／0 failed／exit0，healthy 双文件隔离 CRUD、owned-lock OSStatus -128、真实 adapter startup failclosed3／无发布、清理自建目录且 default/search list 未变。locked get 10.405313s，UI-fail 不保证快速返回。对象 receipt 将 patch `e6b076b20b1161a7a4949df0e50cda9f7a6cde31cba76111663bbd2015949529` 绑定 code-only 候选 `0ca7f4d435fd20abc0ce8831a9e22cf346b869c6`，parent aa828178、src-tauri tree `8ce3efedfc9557e381f5dceebc88b99063e6024a`，worktree/index diff0。支持的隔离设置为新绝对 HOME、完整内置 catalog disabled、synthetic SessionOnly sourceNULL、seeded=true、bindings/keys/双 journal/protected metadata 空及 enabled quota0；不能只靠 TEST_HOME 或 disabled binding。安全 #64 release launch16:00:28.771→router/init/first-sync1 同16:00:29，credential error0（秒精度、非 native store I/O 测量）。协调接受调查／诊断范围并通知 owner 条件 push，仍待精确远端核验后关闭／归档；不宣称旧24s唯一根因或默认 production store 已修复，不新增真实账户测试门。
+
+#66 随后正常推送 `fix/issue-66-verified`，协调 fetch 确认 [0ca7f4d](https://github.com/Xr810/LLM-Usage-Bar/commit/0ca7f4d435fd20abc0ce8831a9e22cf346b869c6) 与原生已验 patch 的整树完全相同，仅六文件。按上述调查／诊断范围关闭 issue、归档修复线程并保留 worktree，取代上段“待远端核验”状态；未合并／发布，也未归因为生产凭据修复。
+
+#62 debug 物理托盘受影响 UI 已定向补验，协调收到证据包 SHA256 `595e90f24a7b733021badb795c0c72c0c574ea31fcb239757a78892ffebc7f20` 并核读 driver／实际源码／日志／JSON、inspect 两张截图。原 binary SHA256 `5bf35aecfa8593356bff82fb5babbcb257c2d092da6ccc8b60371f7683c7183e` 绑定 d49879f3，严格 adapter 与 #64 final source 同 hash。PID36639 Extras／Help、已有授权、positive menu 成立；首 Open 缺菜单失败保留，retry 真实 show_main 后 Quit callback1／cleanup1／tray removal，自然 exit0、driver PASS，PID／AX absent／8788 closed。前后 snapshot 完全相等（10001 唯一 event／legacy、cursor10001、integrity ok），三次 safety PASS；局部 observed1.064709s 不是 SLA。最终菜单有 Open／Quit，Usage260K／$1.27 非 blank/error，底部图表越出视口不作为完整布局通过。本轮只补单次物理 menu/Open/Quit，不冒充新 triple／inflight／恢复测试、不重跑已过套件。
+
+#62 Windows 最终离线 kit 已获只读 receipt（UTF8、offline release --no-bundle、PS AST0／Node check0），#67 原 MSI 离线 kit 已准备；这些不是 runtime 验收。仍须现成 policy 允许本地开发 binary 的 disposable Windows x64 交互 guest 及 guest-only 测试授权。没有改宿主策略／注册表／Installer、启组件、建用户或重启；#62／#67 不推作已解决、不关闭／归档，第 1 项整体验收门仍未通过。
+
 #### 当前未关闭项（后续接手以此及 §20.3–20.5 为准）
 
 1. **macOS watcher 超时：修复已写，原生复验待完成。** 检查包含 `9c48788d` 的新 CI，确认 macOS 真实文件事件测试通过，并核对 Windows/Linux 无回归。若仍超时，采集注册根目录、实际事件路径和 watch 返回错误后再定位；不要仅增大超时或跳过测试。
