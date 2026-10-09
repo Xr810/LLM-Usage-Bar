@@ -116,6 +116,12 @@ opt-level = "s"
 panic = "unwind"
 strip = "symbols"
 
+# Host proc-macros are loaded by rustc, not shipped in the app. On macOS 27,
+# Rust 1.95's rust-objcopy can misalign their LINKEDIT string pool (#64).
+# Keep app symbol stripping, but do not rewrite build-time executables/dylibs.
+[profile.release.build-override]
+strip = "none"
+
 [dev-dependencies]
 serial_test = "4"
 tempfile = "3"
