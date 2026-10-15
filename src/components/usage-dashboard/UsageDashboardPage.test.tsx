@@ -79,6 +79,22 @@ describe("UsageDashboardPage Provider-only contract", () => {
       expect(
         screen.queryByRole("button", { name: "Why this colour?" }),
       ).toBeNull();
+      finish!(HttpResponse.json(fixture));
+      await waitFor(() =>
+        expect(
+          screen.getByRole("button", { name: "Why this colour?" }),
+        ).toHaveAttribute("aria-expanded", "true"),
+      );
+      expect(
+        screen.getByRole("button", { name: "common.confirm" }),
+      ).toBeVisible();
+      expect(document.querySelectorAll('input[type="time"]')[1]).toBe(endTime);
+      expect(endTime).toHaveValue("10:30");
+      finish = undefined;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+      await waitFor(() => expect(finish).toBeDefined());
       finish!(HttpResponse.text("Live refresh unavailable", { status: 500 }));
       await waitFor(() =>
         expect(screen.getByText("Live refresh unavailable")).toBeVisible(),
