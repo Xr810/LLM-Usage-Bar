@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
   fireEvent,
+  isInaccessible,
   render,
   screen,
   waitFor,
@@ -80,7 +81,10 @@ describe("usage breakdown dimensions", () => {
           ),
         );
         expect(commandCalls(command).at(-1)![1]!.startAt).toBe(before.startAt);
-        expect(screen.queryByTestId("breakdown-total-tokens")).toBeNull();
+        expect(screen.getByTestId("breakdown-total-tokens")).not.toBeVisible();
+        expect(
+          isInaccessible(screen.getByTestId("breakdown-total-tokens")),
+        ).toBe(true);
         expect(screen.getByRole("button", { name: "7 days" })).toBeEnabled();
         finish(
           HttpResponse.json({
@@ -134,7 +138,9 @@ describe("usage breakdown dimensions", () => {
           expect(args.startAt).toBe(before.startAt);
           if (customEnd) expect(Number(args.endAt) - customEnd).toBe(3600);
           customEnd = Number(args.endAt);
-          expect(screen.queryByTestId("breakdown-total-tokens")).toBeNull();
+          expect(
+            screen.getByTestId("breakdown-total-tokens"),
+          ).not.toBeVisible();
           if (time === "11:00") {
             finish(
               HttpResponse.text("Custom range unavailable", { status: 500 }),
@@ -142,8 +148,13 @@ describe("usage breakdown dimensions", () => {
             await screen.findByRole("alert", {
               name: "Custom range unavailable",
             });
-            expect(screen.queryByTestId("breakdown-total-tokens")).toBeNull();
+            expect(
+              screen.getByTestId("breakdown-total-tokens"),
+            ).not.toBeVisible();
             expect(document.querySelector(".animate-pulse")).toBeNull();
+            expect(
+              isInaccessible(screen.getByTestId("breakdown-total-tokens")),
+            ).toBe(true);
             await user.click(screen.getByRole("button", { name: "Retry" }));
             await waitFor(() =>
               expect(commandCalls(command)).toHaveLength(callsBefore + 2),
@@ -186,7 +197,7 @@ describe("usage breakdown dimensions", () => {
       ),
     );
     await user.click(screen.getByRole("button", { name: "7 days" }));
-    expect(screen.queryByText("ChatGPT")).toBeNull();
+    expect(screen.getByText("ChatGPT")).not.toBeVisible();
     expect(screen.getByRole("button", { name: "Custom range" })).toBeEnabled();
     finish(HttpResponse.text("Range unavailable", { status: 500 }));
     await screen.findByRole("alert", { name: "Range unavailable" });

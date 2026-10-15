@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Activity,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactElement,
+} from "react";
 import { useTranslation } from "react-i18next";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -23,7 +30,7 @@ import {
 import type { UsageRangeSelection } from "@/types/usage";
 import type { AgentModuleView } from "@/types/usageDashboard";
 import { ProviderUsagePage } from "./ProviderUsagePage";
-import { ModelUsagePage, type ModelGrouping } from "./ModelUsagePage";
+import { ModelUsagePage } from "./ModelUsagePage";
 import { AgentBreakdownPage } from "./AgentBreakdownPage";
 import { projectProviderDashboard } from "./usageDashboardProjection";
 import { DEFAULT_REMAINING_THRESHOLDS } from "./usagePresentation";
@@ -38,6 +45,19 @@ type RangePreset = "today" | "7d" | "30d" | "1y";
 
 /** How usage is classified. The time range is shared across all three. */
 type UsageDimension = "provider" | "model" | "agent";
+
+/** Preserve disclosure/grouping state, but never display another range's data. */
+function RangeContent({ children }: { children: ReactElement | null }) {
+  const [previous, setPrevious] = useState(children);
+  if (children !== null && children !== previous) {
+    setPrevious(children);
+  }
+  return (
+    <Activity mode={children === null ? "hidden" : "visible"}>
+      {children ?? previous}
+    </Activity>
+  );
+}
 
 export function UsageDashboardPage({
   onOpenSettings,
@@ -55,15 +75,6 @@ export function UsageDashboardPage({
   const [selection, setSelection] = useState<UsageRangeSelection>({
     preset: "30d",
   });
-  // Range queries may temporarily have no data. Keep reading preferences
-  // above their data-backed children so live ticks do not reset the view.
-  const [modelGrouping, setModelGrouping] = useState<ModelGrouping>("product");
-  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>(
-    {},
-  );
-  const [expandedAgents, setExpandedAgents] = useState<Record<string, boolean>>(
-    {},
-  );
   const [warnings, setWarnings] = useState<string[]>([]);
   const [errors, setErrors] = useState<string[]>([]);
   const range = useMemo(
@@ -281,7 +292,7 @@ export function UsageDashboardPage({
         </Tabs>
       </div>
 
-      {!(breakdownQuery ?? dashboard).data && rangeControls}
+      {rangeControls}
 
       {[
         ...(dimension === "provider" ? (dashboard.data?.warnings ?? []) : []),
@@ -309,8 +320,8 @@ export function UsageDashboardPage({
         </Alert>
       ))}
 
-      {dimension === "provider" ? (
-        dashboard.isLoading ? (
+      {(breakdownQuery ?? dashboard).isLoading &&
+        (dimension === "provider" ? (
           <div className="space-y-4" aria-hidden="true">
             <div className="grid gap-4 min-[900px]:grid-cols-[300px_minmax(0,1fr)]">
               <div className="h-[28rem] animate-pulse rounded-xl bg-muted/60" />
@@ -321,56 +332,45 @@ export function UsageDashboardPage({
             </div>
             <div className="h-16 animate-pulse rounded-xl bg-muted/60" />
           </div>
-        ) : projection ? (
-          <ProviderUsagePage
-            projection={projection}
-            startAt={range.startDate}
-            endAt={range.endDate}
-            rangeLabel={rangeLabel}
-            rangeControls={rangeControls}
-            activityBuckets={activity.data ?? []}
-            activityStartAt={activityRange.startDate}
-            activityEndAt={activityRange.endDate}
-            isActivityLoading={activity.isLoading}
-            onOpenSettings={onOpenSettings}
-            onRefreshQuota={(providerId) =>
-              run(() => refreshQuota.mutateAsync(providerId))
-            }
-            onSyncSessions={sync}
-            isRefreshingQuota={refreshQuota.isPending}
-            isSyncingSessions={syncSession.isPending}
-            remainingThresholds={remainingThresholds}
-          />
-        ) : null
-      ) : dimension === "model" ? (
-        modelDashboard.data ? (
-          <ModelUsagePage
-            dashboard={modelDashboard.data}
-            rangeLabel={rangeLabel}
-            rangeControls={rangeControls}
-            grouping={modelGrouping}
-            onGroupingChange={setModelGrouping}
-            expandedGroups={expandedGroups}
-            onExpandedChange={(id, expanded) =>
-              setExpandedGroups((groups) => ({ ...groups, [id]: expanded }))
-            }
-          />
-        ) : modelDashboard.isLoading ? (
+        ) : (
           breakdownSkeleton
-        ) : null
-      ) : agentBreakdown.data ? (
-        <AgentBreakdownPage
-          breakdown={agentBreakdown.data}
-          rangeLabel={rangeLabel}
-          rangeControls={rangeControls}
-          expandedAgents={expandedAgents}
-          onExpandedChange={(id, expanded) =>
-            setExpandedAgents((agents) => ({ ...agents, [id]: expanded }))
-          }
-        />
-      ) : agentBreakdown.isLoading ? (
-        breakdownSkeleton
-      ) : null}
+        ))}
+      <RangeContent key={dimension}>
+        {dimension === "provider" ? (
+          projection ? (
+            <ProviderUsagePage
+              projection={projection}
+              startAt={range.startDate}
+              endAt={range.endDate}
+              rangeLabel={rangeLabel}
+              activityBuckets={activity.data ?? []}
+              activityStartAt={activityRange.startDate}
+              activityEndAt={activityRange.endDate}
+              isActivityLoading={activity.isLoading}
+              onOpenSettings={onOpenSettings}
+              onRefreshQuota={(providerId) =>
+                run(() => refreshQuota.mutateAsync(providerId))
+              }
+              onSyncSessions={sync}
+              isRefreshingQuota={refreshQuota.isPending}
+              isSyncingSessions={syncSession.isPending}
+              remainingThresholds={remainingThresholds}
+            />
+          ) : null
+        ) : dimension === "model" ? (
+          modelDashboard.data ? (
+            <ModelUsagePage
+              dashboard={modelDashboard.data}
+              rangeLabel={rangeLabel}
+            />
+          ) : null
+        ) : agentBreakdown.data ? (
+          <AgentBreakdownPage
+            breakdown={agentBreakdown.data}
+            rangeLabel={rangeLabel}
+          />
+        ) : null}
+      </RangeContent>
     </div>
   );
 }

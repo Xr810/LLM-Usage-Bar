@@ -1,4 +1,4 @@
-import { useId, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatSharePercent } from "./breakdownPresentation";
@@ -21,8 +21,7 @@ interface UsageBreakdownRowProps {
   costMuted?: boolean;
   /** Present only for rows that drill down; makes the row a disclosure. */
   children?: ReactNode;
-  expanded?: boolean;
-  onExpandedChange?: (expanded: boolean) => void;
+  defaultExpanded?: boolean;
   /** `nested` rows sit inside an expanded parent and read one level quieter. */
   variant?: "primary" | "nested";
   "data-testid"?: string;
@@ -46,11 +45,11 @@ export function UsageBreakdownRow({
   costText,
   costMuted = false,
   children,
-  expanded = false,
-  onExpandedChange,
+  defaultExpanded = false,
   variant = "primary",
   "data-testid": testId,
 }: UsageBreakdownRowProps) {
+  const [expanded, setExpanded] = useState(defaultExpanded);
   const panelId = useId();
   const expandable = Boolean(children);
   const nested = variant === "nested";
@@ -141,7 +140,7 @@ export function UsageBreakdownRow({
           )}
           aria-expanded={expanded}
           aria-controls={panelId}
-          onClick={() => onExpandedChange?.(!expanded)}
+          onClick={() => setExpanded((open) => !open)}
         >
           {content}
         </button>
