@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SegmentedControl } from "@/components/common/SegmentedControl";
 import { UsageDateRangePicker } from "@/components/usage/UsageDateRangePicker";
@@ -130,6 +131,12 @@ export function UsageDashboardPage({
     }
   };
 
+  const breakdownQuery =
+    dimension === "model"
+      ? modelDashboard
+      : dimension === "agent"
+        ? agentBreakdown
+        : null;
   const renderedErrors = [
     ...(dimension === "provider" && dashboard.error
       ? [errorText(dashboard.error)]
@@ -265,6 +272,8 @@ export function UsageDashboardPage({
         </Tabs>
       </div>
 
+      {breakdownQuery && !breakdownQuery.data && rangeControls}
+
       {[
         ...(dimension === "provider" ? (dashboard.data?.warnings ?? []) : []),
         ...warnings,
@@ -276,6 +285,18 @@ export function UsageDashboardPage({
       {renderedErrors.map((message) => (
         <Alert key={message} variant="destructive" aria-label={message}>
           <AlertDescription>{message}</AlertDescription>
+          {breakdownQuery?.error &&
+            message === errorText(breakdownQuery.error) && (
+              <Button
+                className="mt-3"
+                variant="outline"
+                size="sm"
+                disabled={breakdownQuery.isFetching}
+                onClick={() => void breakdownQuery.refetch()}
+              >
+                {t("common.retry", { defaultValue: "Retry" })}
+              </Button>
+            )}
         </Alert>
       ))}
 
@@ -319,18 +340,18 @@ export function UsageDashboardPage({
             rangeLabel={rangeLabel}
             rangeControls={rangeControls}
           />
-        ) : (
+        ) : modelDashboard.isLoading ? (
           breakdownSkeleton
-        )
+        ) : null
       ) : agentBreakdown.data ? (
         <AgentBreakdownPage
           breakdown={agentBreakdown.data}
           rangeLabel={rangeLabel}
           rangeControls={rangeControls}
         />
-      ) : (
+      ) : agentBreakdown.isLoading ? (
         breakdownSkeleton
-      )}
+      ) : null}
     </div>
   );
 }
