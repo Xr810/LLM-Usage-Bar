@@ -1420,6 +1420,19 @@ pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml --test extension
 
 路径修复提交为 `9c48788d`，本次按用户授权与交接更新一起推送 GitHub main；未发布或安装应用。推送自动触发既有 CI，**本文记录时修复后的远端结果仍待确认**，不能沿用修复前其他平台的通过结果。
 
+#### 2026-10-15 #62 协作式摄取退出：独立 PR 交付，原生验收仍阻塞
+
+本批只处理 [#62](https://github.com/Xr810/LLM-Usage-Bar/issues/62)，不合并默认分支、不部署、不关闭 Issue。用户已授权独立分支／PR，并明确暂缓 Windows/macOS 设备验收、禁止本轮访问设备或真实账户。旧证据见[修复线程](https://ampcode.com/threads/T-01a11c4d-03e6-77ed-841c-709e547ef2e3)及[文档分支交接记录](https://github.com/Xr810/LLM-Usage-Bar/blob/966d49117e8a05963694710119e20a49b1d10baa/HANDOFF.md)；下述历史结果不冒充本轮原生复测。
+
+- **精确复用而非重写：** 从旧线程实际下载 `issue62-code-only-v2.bundle`（10,623 bytes，SHA256 `be94c87b82daa30cce8dd6f0229f98dcbcb744bfb23eb88b0eebaf7df48a55cc`），通过 `git bundle verify` 后导入独立分支 `fix/issue-62-review`。保留原始两个代码提交，最终代码为 [d49879f3](https://github.com/Xr810/LLM-Usage-Bar/commit/d49879f3fc370bd29c542804c7de8d69be064154)，`src-tauri` tree 为 `674d99bf3ac5d836f60ce9f0c7a78faf0b43068b`。完整审阅十个 Rust 文件 diff，确认本轮 `origin/main` 仍为其基线 `aa828178`，未重复实现或混入其他 Issue 修复。
+- **生产取消边界：** 用户退出事件先发布共享停止标记，再安排保存窗口与 cleanup；后台关闭也在 abort/join 前发布。四源共享摄取在扫描项、文件、记录间协作停止，已经进入的单条事务继续提交。未完成文件保留旧 offset／mtime／身份／parser state，重启重放并按稳定 ID 去重。重复 quit 的单 cleanup owner 继续沿用，不修改凭据初始化所有权或手动同步契约。
+- **真实回归契约：** Claude／Codex 用临时文件数据库和真实解析／摄取，SQLite INSERT hook 固定写入中的交错；重复清理、等待 worker、重开检查两表、旧游标、补尾到 10001 条、精确 token 元组、唯一 ID 和 integrity。另有共享流水线 parser-state 停止回归。5 秒仅是受控通知／屏障释放后的测试界限，不是产品退出 SLA。
+- **本轮 Linux orb：** `CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0 pnpm rust -- check --locked --manifest-path src-tauri/Cargo.toml --tests` 通过（6m02s，保留 3 条既有测试告警）；`pnpm rust -- fmt --manifest-path src-tauri/Cargo.toml --check`、`git diff --check origin/main` 通过。相同低内存参数的 `pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml --lib app_state:: -- --nocapture` 已启动，本文初次记录时尚未完成；不预报运行通过。
+- **历史 Mac 限定证据：** 精确旧代码候选全 Rust 1299 passed／0 failed／3 ignored；debug unavailable-store 恢复链 partial260／cursor1 → restart10001／cursor10001 → repeat 不变，inflight 三个生产 quit callbacks／一个 cleanup owner，自然 exit0。旧宽泛 AX 的物理托盘结论已撤回，后来严格 Extras 菜单只补验一次 Open／Quit，不冒充重新执行 triple／inflight。不是 release/default-Keychain 验收，也不是本轮设备复验。
+- **未通过门槛：** Windows 候选历史构建被 Smart App Control 4551／CodeIntegrity 3077 阻止，新的 10k 场景没有 runtime 结果；本轮不访问设备、不改安全策略。Windows 10k 原生摄取中重复 quit、精确恢复与完整性、残留检查和有依据的墙钟退出界限仍待验；Mac 最终提交的启动／inflight／托盘原生复验按用户决定暂缓。整文件读取解析、Codex 剪枝、启动成本回填和永久阻塞 I/O 没有全局有界退出保证；不得把 Linux／托管 CI 或历史局部耗时替代原生交互验收。
+
+最终交付提交、PR URL 和针对 PR head 的验证结果记录在 PR／[本轮线程](https://ampcode.com/threads/T-01a13f24-8f1e-72aa-9a86-ee8ce2fbc564)，以免在提交内自引用其 hash。第 1 项验收门保持未通过，后续重构仍阻塞。
+
 #### 当前未关闭项（后续接手以此及 §20.3–20.5 为准）
 
 1. **macOS watcher 超时：修复已写，原生复验待完成。** 检查包含 `9c48788d` 的新 CI，确认 macOS 真实文件事件测试通过，并核对 Windows/Linux 无回归。若仍超时，采集注册根目录、实际事件路径和 watch 返回错误后再定位；不要仅增大超时或跳过测试。
