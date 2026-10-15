@@ -23,7 +23,7 @@ import {
 import type { UsageRangeSelection } from "@/types/usage";
 import type { AgentModuleView } from "@/types/usageDashboard";
 import { ProviderUsagePage } from "./ProviderUsagePage";
-import { ModelUsagePage } from "./ModelUsagePage";
+import { ModelUsagePage, type ModelGrouping } from "./ModelUsagePage";
 import { AgentBreakdownPage } from "./AgentBreakdownPage";
 import { projectProviderDashboard } from "./usageDashboardProjection";
 import { DEFAULT_REMAINING_THRESHOLDS } from "./usagePresentation";
@@ -55,6 +55,15 @@ export function UsageDashboardPage({
   const [selection, setSelection] = useState<UsageRangeSelection>({
     preset: "30d",
   });
+  // Range queries may temporarily have no data. Keep reading preferences
+  // above their data-backed children so live ticks do not reset the view.
+  const [modelGrouping, setModelGrouping] = useState<ModelGrouping>("product");
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>(
+    {},
+  );
+  const [expandedAgents, setExpandedAgents] = useState<Record<string, boolean>>(
+    {},
+  );
   const [warnings, setWarnings] = useState<string[]>([]);
   const [errors, setErrors] = useState<string[]>([]);
   const range = useMemo(
@@ -272,7 +281,7 @@ export function UsageDashboardPage({
         </Tabs>
       </div>
 
-      {breakdownQuery && !breakdownQuery.data && rangeControls}
+      {!(breakdownQuery ?? dashboard).data && rangeControls}
 
       {[
         ...(dimension === "provider" ? (dashboard.data?.warnings ?? []) : []),
@@ -339,6 +348,12 @@ export function UsageDashboardPage({
             dashboard={modelDashboard.data}
             rangeLabel={rangeLabel}
             rangeControls={rangeControls}
+            grouping={modelGrouping}
+            onGroupingChange={setModelGrouping}
+            expandedGroups={expandedGroups}
+            onExpandedChange={(id, expanded) =>
+              setExpandedGroups((groups) => ({ ...groups, [id]: expanded }))
+            }
           />
         ) : modelDashboard.isLoading ? (
           breakdownSkeleton
@@ -348,6 +363,10 @@ export function UsageDashboardPage({
           breakdown={agentBreakdown.data}
           rangeLabel={rangeLabel}
           rangeControls={rangeControls}
+          expandedAgents={expandedAgents}
+          onExpandedChange={(id, expanded) =>
+            setExpandedAgents((agents) => ({ ...agents, [id]: expanded }))
+          }
         />
       ) : agentBreakdown.isLoading ? (
         breakdownSkeleton

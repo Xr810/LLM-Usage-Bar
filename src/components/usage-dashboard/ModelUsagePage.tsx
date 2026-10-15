@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
@@ -18,12 +18,16 @@ import { BreakdownSummary } from "./BreakdownSummary";
 import { BreakdownEmpty } from "./BreakdownEmpty";
 import { dashboardProviderIcon } from "./usagePresentation";
 
-type ModelGrouping = "product" | "model";
+export type ModelGrouping = "product" | "model";
 
 interface ModelUsagePageProps {
   dashboard: ModelUsageDashboardView;
   rangeLabel: string;
   rangeControls?: ReactNode;
+  grouping: ModelGrouping;
+  onGroupingChange: (grouping: ModelGrouping) => void;
+  expandedGroups: Record<string, boolean>;
+  onExpandedChange: (groupId: string, expanded: boolean) => void;
 }
 
 /**
@@ -40,9 +44,12 @@ export function ModelUsagePage({
   dashboard,
   rangeLabel,
   rangeControls,
+  grouping,
+  onGroupingChange,
+  expandedGroups,
+  onExpandedChange,
 }: ModelUsagePageProps) {
   const { t } = useTranslation();
-  const [grouping, setGrouping] = useState<ModelGrouping>("product");
 
   const providerNameById = useMemo(() => {
     const names = new Map<string, string>();
@@ -111,7 +118,7 @@ export function ModelUsagePage({
             <SegmentedControl
               options={groupingOptions}
               value={grouping}
-              onChange={setGrouping}
+              onChange={onGroupingChange}
             />
           </div>
 
@@ -144,6 +151,10 @@ export function ModelUsagePage({
                     <UsageBreakdownRow
                       key={group.productGroupId}
                       data-testid={`model-group-${group.productGroupId}`}
+                      expanded={expandedGroups[group.productGroupId] ?? false}
+                      onExpandedChange={(expanded) =>
+                        onExpandedChange(group.productGroupId, expanded)
+                      }
                       title={label}
                       subtitle={
                         accountsText === label ? undefined : accountsText

@@ -23,6 +23,8 @@ interface AgentBreakdownPageProps {
   breakdown: AgentUsageBreakdownView;
   rangeLabel: string;
   rangeControls?: ReactNode;
+  expandedAgents: Record<string, boolean>;
+  onExpandedChange: (agentId: string, expanded: boolean) => void;
 }
 
 /**
@@ -36,6 +38,8 @@ export function AgentBreakdownPage({
   breakdown,
   rangeLabel,
   rangeControls,
+  expandedAgents,
+  onExpandedChange,
 }: AgentBreakdownPageProps) {
   const { t } = useTranslation();
   const empty =
@@ -92,6 +96,16 @@ export function AgentBreakdownPage({
                 key={agent.agentModuleId ?? "__unassigned__"}
                 agent={agent}
                 rangeTotalTokens={breakdown.totalTokens}
+                expanded={
+                  expandedAgents[agent.agentModuleId ?? "__unassigned__"] ??
+                  false
+                }
+                onExpandedChange={(expanded) =>
+                  onExpandedChange(
+                    agent.agentModuleId ?? "__unassigned__",
+                    expanded,
+                  )
+                }
               />
             ))}
           </div>
@@ -104,9 +118,13 @@ export function AgentBreakdownPage({
 function AgentRow({
   agent,
   rangeTotalTokens,
+  expanded,
+  onExpandedChange,
 }: {
   agent: AgentUsageRow;
   rangeTotalTokens: number;
+  expanded: boolean;
+  onExpandedChange: (expanded: boolean) => void;
 }) {
   const { t } = useTranslation();
   const label = agentLabel(agent.agentModuleId, agent.agentName, t);
@@ -128,6 +146,8 @@ function AgentRow({
   return (
     <UsageBreakdownRow
       data-testid={`agent-row-${agent.agentModuleId ?? "unassigned"}`}
+      expanded={expanded}
+      onExpandedChange={onExpandedChange}
       title={label}
       subtitle={t("usageBreakdown.agentProviderCount", {
         count: agent.providers.length,
