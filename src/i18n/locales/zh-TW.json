@@ -440,7 +440,7 @@
     "modelIdRequired": "模型 ID 不能為空",
     "invalidPrice": "價格必須為非負數",
     "invalidTimeRange": "請選擇完整的開始/結束時間",
-    "invalidTimeRangeOrder": "開始時間不能晚於結束時間"
+    "invalidTimeRangeOrder": "開始時間必須早於結束時間"
   },
   "dbUpgrade": {
     "title": "資料庫版本過新",

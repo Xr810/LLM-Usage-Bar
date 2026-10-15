@@ -227,8 +227,8 @@ export function UsageDateRangePicker({
 
   const handleApply = () => {
     setError(null);
-    if (draftStart > draftEnd) {
-      setError(t("usage.invalidTimeRangeOrder", "开始时间不能晚于结束时间"));
+    if (draftStart >= draftEnd) {
+      setError(t("usage.invalidTimeRangeOrder", "开始时间必须早于结束时间"));
       return;
     }
     onApply({
@@ -382,7 +382,11 @@ export function UsageDateRangePicker({
               </span>
             </label>
 
-            {error && <p className="text-xs text-destructive">{error}</p>}
+            {error && (
+              <p role="alert" className="text-xs text-destructive">
+                {error}
+              </p>
+            )}
 
             <div className="flex gap-2 pt-1">
               <Button
