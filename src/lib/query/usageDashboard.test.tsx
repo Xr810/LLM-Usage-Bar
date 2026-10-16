@@ -12,6 +12,8 @@ import {
   useRefreshProviderQuota,
   useReorderAgentModules,
   useProviderUsageDashboard,
+  useModelUsageDashboard,
+  useAgentUsageBreakdown,
   useSaveAgentModule,
   useSaveAgentProviderBinding,
   useSaveUsageProvider,
@@ -313,10 +315,16 @@ describe("Agent cache isolation", () => {
   });
 });
 
-describe("Provider dashboard range continuity", () => {
-  beforeEach(() => invokeMock.mockReset());
+describe.each([
+  ["Providers", useProviderUsageDashboard],
+  ["Models", useModelUsageDashboard],
+  ["Agents", useAgentUsageBreakdown],
+] as const)("%s dashboard range isolation", (_name, useDashboard) => {
+  beforeEach(() => {
+    invokeMock.mockReset();
+  });
 
-  it("keeps the previous dashboard mounted while the selected range changes", async () => {
+  it("clears previous-range data until the new range succeeds", async () => {
     let resolveNextDashboard:
       | ((dashboard: {
           startAt: number;
@@ -329,10 +337,10 @@ describe("Provider dashboard range continuity", () => {
       | undefined;
     invokeMock.mockImplementation(
       (
-        command: string,
+        _command: string,
         args: { startAt: number; endAt: number } | undefined,
       ) => {
-        if (command !== "get_provider_usage_dashboard" || !args) {
+        if (!args) {
           return Promise.resolve(undefined);
         }
         if (args.startAt === 10 && args.endAt === 20) {
@@ -354,7 +362,7 @@ describe("Provider dashboard range continuity", () => {
       defaultOptions: { queries: { retry: false } },
     });
     const dashboard = renderHook(
-      ({ startAt, endAt }) => useProviderUsageDashboard(startAt, endAt),
+      ({ startAt, endAt }) => useDashboard(startAt, endAt),
       {
         initialProps: { startAt: 10, endAt: 20 },
         wrapper: wrapper(client),
@@ -364,9 +372,9 @@ describe("Provider dashboard range continuity", () => {
     await waitFor(() => expect(dashboard.result.current.data?.endAt).toBe(20));
     dashboard.rerender({ startAt: 100, endAt: 200 });
 
-    expect(dashboard.result.current.data?.startAt).toBe(10);
-    expect(dashboard.result.current.isPlaceholderData).toBe(true);
-    expect(dashboard.result.current.isLoading).toBe(false);
+    expect(dashboard.result.current.data).toBeUndefined();
+    expect(dashboard.result.current.isPlaceholderData).toBe(false);
+    expect(dashboard.result.current.isLoading).toBe(true);
 
     await act(async () =>
       resolveNextDashboard?.({
@@ -383,7 +391,7 @@ describe("Provider dashboard range continuity", () => {
     );
   });
 
-  it("keeps the previous dashboard mounted while only the live end advances", async () => {
+  it("also isolates ranges with the same start and different ends", async () => {
     let resolveNextDashboard:
       | ((dashboard: {
           startAt: number;
@@ -396,10 +404,10 @@ describe("Provider dashboard range continuity", () => {
       | undefined;
     invokeMock.mockImplementation(
       (
-        command: string,
+        _command: string,
         args: { startAt: number; endAt: number } | undefined,
       ) => {
-        if (command !== "get_provider_usage_dashboard" || !args) {
+        if (!args) {
           return Promise.resolve(undefined);
         }
         if (args.endAt === 20) {
@@ -420,19 +428,16 @@ describe("Provider dashboard range continuity", () => {
     const client = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
-    const dashboard = renderHook(
-      ({ endAt }) => useProviderUsageDashboard(10, endAt),
-      {
-        initialProps: { endAt: 20 },
-        wrapper: wrapper(client),
-      },
-    );
+    const dashboard = renderHook(({ endAt }) => useDashboard(10, endAt), {
+      initialProps: { endAt: 20 },
+      wrapper: wrapper(client),
+    });
 
     await waitFor(() => expect(dashboard.result.current.data?.endAt).toBe(20));
     dashboard.rerender({ endAt: 30 });
 
-    expect(dashboard.result.current.data?.endAt).toBe(20);
-    expect(dashboard.result.current.isPlaceholderData).toBe(true);
+    expect(dashboard.result.current.data).toBeUndefined();
+    expect(dashboard.result.current.isLoading).toBe(true);
 
     await act(async () =>
       resolveNextDashboard?.({
@@ -445,6 +450,34 @@ describe("Provider dashboard range continuity", () => {
       }),
     );
     await waitFor(() => expect(dashboard.result.current.data?.endAt).toBe(30));
+  });
+
+  it("never exposes another range on failure, but retains same-range cached data", async () => {
+    const previous = { startAt: 10, endAt: 20 };
+    invokeMock.mockResolvedValueOnce(previous);
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    const dashboard = renderHook(({ startAt }) => useDashboard(startAt, 20), {
+      initialProps: { startAt: 10 },
+      wrapper: wrapper(client),
+    });
+    await waitFor(() =>
+      expect(dashboard.result.current.data).toEqual(previous),
+    );
+
+    invokeMock.mockRejectedValue(new Error("range unavailable"));
+    dashboard.rerender({ startAt: 15 });
+    await waitFor(() => expect(dashboard.result.current.isError).toBe(true));
+    expect(dashboard.result.current.data).toBeUndefined();
+
+    dashboard.rerender({ startAt: 10 });
+    expect(dashboard.result.current.data).toEqual(previous);
+    await act(async () => {
+      await dashboard.result.current.refetch();
+    });
+    await waitFor(() => expect(dashboard.result.current.isError).toBe(true));
+    expect(dashboard.result.current.data).toEqual(previous);
   });
 });
 

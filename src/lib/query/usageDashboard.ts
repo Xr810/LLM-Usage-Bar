@@ -1,10 +1,5 @@
 import { useState } from "react";
-import {
-  keepPreviousData,
-  useMutation,
-  useQuery,
-  useQueryClient,
-} from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { usageDashboardApi } from "@/lib/api/usageDashboard";
 import { claudeCliAuthApi } from "@/lib/api/claudeCliAuth";
 import type {
@@ -185,7 +180,6 @@ export function useProviderUsageDashboard(startAt: number, endAt: number) {
   return useQuery({
     queryKey: usageDashboardKeys.providerDashboard(startAt, endAt),
     queryFn: () => usageDashboardApi.getProviderDashboard(startAt, endAt),
-    placeholderData: keepPreviousData,
     enabled: startAt < endAt,
   });
 }
@@ -202,7 +196,6 @@ export function useModelUsageDashboard(
   return useQuery({
     queryKey: usageDashboardKeys.modelDashboard(startAt, endAt),
     queryFn: () => usageDashboardApi.getModelDashboard(startAt, endAt),
-    placeholderData: keepPreviousData,
     enabled: enabled && startAt < endAt,
   });
 }
@@ -216,7 +209,6 @@ export function useAgentUsageBreakdown(
   return useQuery({
     queryKey: usageDashboardKeys.agentBreakdown(startAt, endAt),
     queryFn: () => usageDashboardApi.getAgentBreakdown(startAt, endAt),
-    placeholderData: keepPreviousData,
     enabled: enabled && startAt < endAt,
   });
 }

@@ -1,7 +1,17 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { http, HttpResponse } from "msw";
+import { server } from "../../../tests/msw/server";
+import { usageDashboardApi } from "@/lib/api/usageDashboard";
 import { commandCalls } from "../../../tests/msw/tauriMocks";
 import { UsageDashboardPage } from "./UsageDashboardPage";
 
@@ -17,6 +27,101 @@ function renderPage() {
 }
 
 describe("UsageDashboardPage Provider-only contract", () => {
+  it("preserves an open range draft and quota disclosure across a minute tick", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    vi.setSystemTime(new Date("2026-10-15T12:00:00Z"));
+    try {
+      const fixture = await usageDashboardApi.getProviderDashboard(
+        1,
+        Date.now() / 1000,
+      );
+      fixture.providers[0].quota!.fiveHourPace = {
+        status: "green",
+        paceBasis: "measured",
+        burnRatePercentPerHour: "12",
+      };
+      fixture.providers[0].quota!.fiveHourResetsAt = "2026-10-15T15:00:00Z";
+      let finish: ((response: Response) => void) | undefined;
+      server.use(
+        http.post("http://tauri.local/get_provider_usage_dashboard", () =>
+          HttpResponse.json(fixture),
+        ),
+      );
+      const user = userEvent.setup();
+      renderPage();
+      await user.click(
+        await screen.findByRole("button", { name: "Why this colour?" }),
+      );
+      await user.click(screen.getByRole("button", { name: "Custom range" }));
+      const endTime = document.querySelectorAll(
+        'input[type="time"]',
+      )[1] as HTMLInputElement;
+      fireEvent.change(endTime, { target: { value: "10:30" } });
+      server.use(
+        http.post(
+          "http://tauri.local/get_provider_usage_dashboard",
+          () =>
+            new Promise<Response>((resolve) => {
+              finish = resolve;
+            }),
+        ),
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+      await waitFor(() => expect(finish).toBeDefined());
+      expect(
+        screen.getByRole("button", { name: "common.confirm" }),
+      ).toBeVisible();
+      expect(document.querySelectorAll('input[type="time"]')[1]).toHaveValue(
+        "10:30",
+      );
+      expect(
+        screen.queryByRole("button", { name: "Why this colour?" }),
+      ).toBeNull();
+      finish!(HttpResponse.json(fixture));
+      await waitFor(() =>
+        expect(
+          screen.getByRole("button", { name: "Why this colour?" }),
+        ).toHaveAttribute("aria-expanded", "true"),
+      );
+      expect(
+        screen.getByRole("button", { name: "common.confirm" }),
+      ).toBeVisible();
+      expect(document.querySelectorAll('input[type="time"]')[1]).toBe(endTime);
+      expect(endTime).toHaveValue("10:30");
+      finish = undefined;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+      await waitFor(() => expect(finish).toBeDefined());
+      finish!(HttpResponse.text("Live refresh unavailable", { status: 500 }));
+      await waitFor(() =>
+        expect(screen.getByText("Live refresh unavailable")).toBeVisible(),
+      );
+      expect(document.querySelectorAll('input[type="time"]')[1]).toHaveValue(
+        "10:30",
+      );
+      server.use(
+        http.post("http://tauri.local/get_provider_usage_dashboard", () =>
+          HttpResponse.json(fixture),
+        ),
+      );
+      await user.click(screen.getByRole("button", { name: "common.confirm" }));
+      await waitFor(() =>
+        expect(
+          screen.getByRole("button", { name: "Why this colour?" }),
+        ).toHaveAttribute("aria-expanded", "true"),
+      );
+      expect(screen.getByText("12%/h")).toBeVisible();
+      const args = commandCalls("get_provider_usage_dashboard").at(-1)![1]!;
+      expect(new Date(Number(args.endAt) * 1000).getHours()).toBe(10);
+      expect(new Date(Number(args.endAt) * 1000).getMinutes()).toBe(30);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("renders subscription and metered Provider accounts without Agent navigation", async () => {
     renderPage();
 
@@ -37,8 +142,7 @@ describe("UsageDashboardPage Provider-only contract", () => {
     expect(
       screen.getByRole("heading", { name: "Usage trend" }),
     ).toBeInTheDocument();
-    const trend = screen.getByRole("region", { name: "Usage trend" });
-    const rangeControls = within(trend).getByRole("group", {
+    const rangeControls = screen.getByRole("group", {
       name: /time range/i,
     });
     expect(
