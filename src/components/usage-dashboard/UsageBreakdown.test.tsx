@@ -2,6 +2,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
+import { http, HttpResponse } from "msw";
+import { server } from "../../../tests/msw/server";
 import { commandCalls } from "../../../tests/msw/tauriMocks";
 import { UsageDashboardPage } from "./UsageDashboardPage";
 
@@ -25,6 +27,51 @@ const openTab = async (name: string) => {
 };
 
 describe("usage breakdown dimensions", () => {
+  it.each([
+    ["Models", "get_model_usage_dashboard", "model-group-claude-subscription"],
+    ["Agents", "get_agent_usage_breakdown", "agent-row-claude-code"],
+  ])(
+    "recovers %s from a failed request without a permanent skeleton",
+    async (tab, command, resultId) => {
+      let finish: (response: Response) => void = () => {};
+      server.use(
+        http.post(
+          `http://tauri.local/${command}`,
+          () =>
+            new Promise<Response>((resolve) => {
+              finish = resolve;
+            }),
+        ),
+      );
+      const user = await openTab(tab);
+      await waitFor(() => expect(commandCalls(command)).toHaveLength(1));
+      expect(document.querySelector(".animate-pulse")).not.toBeNull();
+      finish(
+        HttpResponse.text("Simulated database unavailable", { status: 500 }),
+      );
+      await screen.findByRole("alert", {
+        name: "Simulated database unavailable",
+      });
+      expect(document.querySelector(".animate-pulse")).toBeNull();
+      expect(screen.getByRole("button", { name: "7 days" })).toBeEnabled();
+
+      await user.click(screen.getByRole("button", { name: "Retry" }));
+      await waitFor(() => expect(commandCalls(command)).toHaveLength(2));
+      expect(document.querySelector(".animate-pulse")).not.toBeNull();
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+      finish(HttpResponse.text("Still unavailable", { status: 500 }));
+      await screen.findByRole("alert", { name: "Still unavailable" });
+      expect(document.querySelector(".animate-pulse")).toBeNull();
+
+      server.resetHandlers();
+      await user.click(screen.getByRole("button", { name: "Retry" }));
+      expect(await screen.findByTestId(resultId)).toBeInTheDocument();
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(document.querySelector(".animate-pulse")).toBeNull();
+      expect(screen.getAllByRole("button", { name: "7 days" })).toHaveLength(1);
+    },
+  );
+
   it("keeps the model and agent dimensions idle until their tab is opened", async () => {
     renderPage();
     await screen.findByText("ChatGPT");
