@@ -440,7 +440,7 @@
     "modelIdRequired": "模型 ID 不能为空",
     "invalidPrice": "价格必须为非负数",
     "invalidTimeRange": "请选择完整的开始/结束时间",
-    "invalidTimeRangeOrder": "开始时间不能晚于结束时间"
+    "invalidTimeRangeOrder": "开始时间必须早于结束时间"
   },
   "dbUpgrade": {
     "title": "数据库版本过新",

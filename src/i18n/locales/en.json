@@ -440,7 +440,7 @@
     "modelIdRequired": "Model ID is required",
     "invalidPrice": "Price must be non-negative",
     "invalidTimeRange": "Please select complete start/end time",
-    "invalidTimeRangeOrder": "Start time cannot be later than end time"
+    "invalidTimeRangeOrder": "Start time must be earlier than end time"
   },
   "dbUpgrade": {
     "title": "Database version is too new",
