@@ -1224,6 +1224,7 @@ pub fn run() {
                 // 15 分钟慢速兜底保证监听彻底失效时用量仍会更新（安全底线，见 usage/watcher）。
                 let db_for_session_sync = state.db.clone();
                 let provider_session_sync = state.session_usage_service.clone();
+                let session_sync_stop = state.session_sync_stop();
                 let sync_schedule = Arc::new(std::sync::Mutex::new(
                     usage::watcher_state::WatcherSchedule::new(
                         usage::watcher::SYNC_MIN_INTERVAL_SECS,
@@ -1231,6 +1232,10 @@ pub fn run() {
                 ));
                 let sync_wake = Arc::new(tokio::sync::Notify::new());
                 state.spawn_background(async move {
+                    let stopped = || session_sync_stop.load(std::sync::atomic::Ordering::Acquire);
+                    if stopped() {
+                        return;
+                    }
                     usage::watcher::start_usage_watcher(Arc::clone(&sync_schedule), Arc::clone(&sync_wake));
                     fn run_step<T>(name: &str, result: Result<T, crate::error::AppError>) {
                         if let Err(e) = result {
@@ -1247,42 +1252,50 @@ pub fn run() {
                     );
                     run_step(
                         "Session usage initial sync",
-                        provider_session_sync.sync_source("claude"),
+                        provider_session_sync.sync_source_until("claude", &stopped),
                     );
                     run_step(
                         "Codex usage initial sync",
-                        provider_session_sync.sync_source("codex"),
+                        provider_session_sync.sync_source_until("codex", &stopped),
                     );
                     run_step(
                         "Gemini usage initial sync",
-                        crate::ingest::gemini::sync_gemini_usage(db),
+                        crate::ingest::gemini::sync_gemini_usage_until(db, &stopped),
                     );
                     run_step(
                         "OpenCode usage initial sync",
-                        crate::ingest::opencode::sync_opencode_usage(db),
+                        crate::ingest::opencode::sync_opencode_usage_until(db, &stopped),
                     );
+                    if stopped() {
+                        return;
+                    }
 
                     // 单个源的一次同步，把结果映射成调度退避信号：
                     // Err(AppError) 与「Ok 但 errors 非空」（个别文件解析失败）都算失败——
                     // 游标按文件推进，坏文件下次同步自然会重试；退避只是避免坏文件把
                     // 事件驱动的同步重新拖成每 60 秒的全量扫描。
                     let mut sync_source = |source: usage::watcher_state::SourceId| {
+                        if stopped() {
+                            return Ok(());
+                        }
                         let clean = match source {
                             usage::watcher_state::SourceId::Claude => provider_session_sync
-                                .sync_source("claude")
+                                .sync_source_until("claude", &stopped)
                                 .map(|r| r.errors.is_empty()),
                             usage::watcher_state::SourceId::Codex => provider_session_sync
-                                .sync_source("codex")
+                                .sync_source_until("codex", &stopped)
                                 .map(|r| r.errors.is_empty()),
                             usage::watcher_state::SourceId::Gemini => {
-                                crate::ingest::gemini::sync_gemini_usage(
+                                crate::ingest::gemini::sync_gemini_usage_until(
                                     &db_for_session_sync,
+                                    &stopped,
                                 )
                                 .map(|r| r.errors.is_empty())
                             }
                             usage::watcher_state::SourceId::OpenCode => {
-                                crate::ingest::opencode::sync_opencode_usage(
+                                crate::ingest::opencode::sync_opencode_usage_until(
                                     &db_for_session_sync,
+                                    &stopped,
                                 )
                                 .map(|r| r.errors.is_empty())
                             }
@@ -1618,6 +1631,14 @@ pub fn run() {
             // and exit while the first is still waiting for database writes.
             if std::mem::replace(&mut exit_cleanup_started, true) {
                 return;
+            }
+
+            // Publish on the event thread, before window-state persistence or
+            // scheduling async cleanup can wait behind a synchronous writer.
+            if let Some(state) = app_handle.try_state::<app_state::AppState>() {
+                state
+                    .session_sync_stop()
+                    .store(true, std::sync::atomic::Ordering::Release);
             }
 
             // 停止文件监听与同步调度（驱动循环看到 is_shutdown 后退出，

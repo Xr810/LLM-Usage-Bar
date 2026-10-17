@@ -170,6 +170,10 @@ impl AppState {
         self.background.spawn(task);
     }
 
+    pub(crate) fn session_sync_stop(&self) -> Arc<std::sync::atomic::AtomicBool> {
+        self.background.sync_stop.clone()
+    }
+
     pub(crate) fn take_background_tasks(&self) -> BackgroundShutdown {
         self.background.take()
     }
