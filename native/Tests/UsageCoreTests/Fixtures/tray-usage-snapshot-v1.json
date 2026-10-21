@@ -1,0 +1,142 @@
+{
+  "status": "yellow",
+  "generatedAt": 1710000000,
+  "lastSuccessAt": 1709999995,
+  "stale": false,
+  "refreshError": null,
+  "refreshInProgress": false,
+  "apiBudget": {
+    "mode": "shared",
+    "providerCount": 2,
+    "todayCostUsd": "4.25",
+    "dailyBudgetUsd": "10.00",
+    "budgetConsumedPercent": "42.5",
+    "costQuality": "complete",
+    "status": "green",
+    "warningReason": null,
+    "burnRateUsdPerHour": "0.75",
+    "projectedExhaustAt": "2024-03-10T23:00:00Z",
+    "headroomRatio": "1.50",
+    "paceBasis": "measured",
+    "rhythmAdjustment": "1.10",
+    "flatStatus": "yellow"
+  },
+  "agents": [
+    {
+      "agentModuleId": "codex",
+      "name": "Codex",
+      "sortOrder": 10,
+      "status": "yellow",
+      "providers": [
+        {
+          "providerId": "openai-account-a",
+          "providerName": "OpenAI Account A",
+          "systemPresetKey": "openai",
+          "billingKind": "subscription",
+          "status": "yellow",
+          "warningReason": null,
+          "recentUsage": {
+            "startAt": 1707408000,
+            "endAt": 1710000000,
+            "todayTokens": 1200,
+            "totalTokens": 9000,
+            "todayCostUsd": "1.25",
+            "totalCostUsd": "8.00",
+            "costQuality": "estimated",
+            "mostUsedModel": "gpt-5",
+            "trendBuckets": [
+              {
+                "startAt": 1709913600,
+                "endAt": 1710000000,
+                "eventCount": 4,
+                "inputTokens": 700,
+                "outputTokens": 300,
+                "cacheReadTokens": 100,
+                "cacheCreationTokens": 100,
+                "totalTokens": 1200,
+                "totalCostUsd": "1.25",
+                "costSourceCounts": {
+                  "upstream": 2,
+                  "estimated": 2,
+                  "unavailable": 0
+                }
+              }
+            ]
+          },
+          "subscription": {
+            "planLabel": "Pro",
+            "windows": [
+              {
+                "kind": "five_hour",
+                "usedPercent": "66.5",
+                "remainingPercent": "33.5",
+                "resetsAt": "2024-03-10T20:00:00Z",
+                "status": "yellow",
+                "unavailableReason": null,
+                "burnRatePercentPerHour": "11.2",
+                "projectedExhaustAt": "2024-03-10T19:30:00Z",
+                "headroomRatio": "0.90",
+                "paceBasis": "window_average",
+                "rhythmAdjustment": null,
+                "flatStatus": null
+              },
+              {
+                "kind": "seven_day",
+                "usedPercent": null,
+                "remainingPercent": null,
+                "resetsAt": null,
+                "status": "unknown",
+                "unavailableReason": "quota_unavailable",
+                "burnRatePercentPerHour": null,
+                "projectedExhaustAt": null,
+                "headroomRatio": null,
+                "paceBasis": "static",
+                "rhythmAdjustment": null,
+                "flatStatus": null
+              }
+            ],
+            "manualResetsRemaining": 2,
+            "manualResetCredits": [
+              {
+                "id": "credit-1",
+                "title": "Bonus reset",
+                "expiresAt": "2024-04-01T00:00:00Z"
+              }
+            ]
+          },
+          "metered": null
+        },
+        {
+          "providerId": "api-account-b",
+          "providerName": "API Account B",
+          "systemPresetKey": null,
+          "billingKind": "metered",
+          "status": "green",
+          "warningReason": null,
+          "recentUsage": {
+            "startAt": 1707408000,
+            "endAt": 1710000000,
+            "todayTokens": 3000,
+            "totalTokens": 40000,
+            "todayCostUsd": "3.00",
+            "totalCostUsd": "18.00",
+            "costQuality": "complete",
+            "mostUsedModel": "provider-model",
+            "trendBuckets": []
+          },
+          "subscription": null,
+          "metered": {
+            "todayCostUsd": "3.00",
+            "rolling30DayCostUsd": "18.00",
+            "dailyBudgetUsd": "8.00",
+            "budgetConsumedPercent": "37.5",
+            "totalTokens": 40000,
+            "costQuality": "complete",
+            "rhythmAdjustment": null,
+            "flatStatus": "green"
+          }
+        }
+      ]
+    }
+  ]
+}
