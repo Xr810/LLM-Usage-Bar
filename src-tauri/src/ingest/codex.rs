@@ -399,13 +399,24 @@ pub fn sync_codex_usage(db: &Database) -> Result<SessionSyncResult, AppError> {
 
 /// Provider-aware Codex import. The binding check happens before any file scan,
 /// and bound-path insertion errors abort the file before its offset is stored.
+#[cfg(test)]
 pub fn sync_codex_usage_bound(
     db: &Database,
     provider_id: &str,
 ) -> Result<ProviderSessionSyncResult, AppError> {
+    sync_codex_usage_bound_until(db, provider_id, &|| false)
+}
+
+pub(crate) fn sync_codex_usage_bound_until(
+    db: &Database,
+    provider_id: &str,
+    stopped: &dyn Fn() -> bool,
+) -> Result<ProviderSessionSyncResult, AppError> {
     let legacy = db.with_bound_usage_source("codex", provider_id, || {
         validate_bound_session_agent(db, "codex", provider_id)?;
-        sync_codex_usage_impl(db, Some(provider_id))
+        let cursors = db.list_usage_sync_cursors("codex")?;
+        let parser = CodexParser::new(get_codex_config_dir(), cursors, CODEX_PARTITION_FRESH_DAYS);
+        super::sync_with_parser_until(db, &parser, Some(provider_id), stopped)
     })?;
     let Some(legacy) = legacy else {
         return Ok(ProviderSessionSyncResult {
