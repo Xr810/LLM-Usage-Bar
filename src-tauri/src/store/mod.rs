@@ -41,6 +41,7 @@ pub(crate) use dao::binding_credentials::{
     CredentialOperationReservation,
 };
 pub(crate) use dao::hourly_rollup::{upsert_hourly_delta, HourlyLogDelta};
+pub use dao::hourly_rollup::{CommunityRetentionPolicy, RetentionPolicy, RetentionPolicyProvider};
 pub(crate) use dao::provider_credentials::{
     ProviderCredentialJournalEntry, ProviderCredentialOperationReservation,
     ProviderCredentialSnapshot,
@@ -94,6 +95,7 @@ pub struct Database {
     pub(crate) usage_source_binding_operation: Mutex<()>,
     pub(crate) rhythm_cache_identity: u64,
     database_path: Option<PathBuf>,
+    retention_policy: Box<dyn RetentionPolicyProvider>,
 }
 
 static NEXT_RHYTHM_CACHE_ID: AtomicU64 = AtomicU64::new(1);
@@ -128,6 +130,15 @@ impl Database {
 
     /// 使用调用方已经选定的权威路径初始化数据库。
     pub fn init_at(db_path: &Path) -> Result<Self, AppError> {
+        Self::init_at_with_retention_policy(db_path, Box::new(CommunityRetentionPolicy))
+    }
+
+    /// Inject before opening the database so startup cannot prune private history
+    /// with the community window. The scheduler retains this same provider.
+    pub fn init_at_with_retention_policy(
+        db_path: &Path,
+        retention_policy: Box<dyn RetentionPolicyProvider>,
+    ) -> Result<Self, AppError> {
         let db_exists = db_path.exists();
         // Resolve external source roots before opening or migrating SQLite so
         // v13 cursor classification never depends on post-database state.
@@ -156,6 +167,7 @@ impl Database {
             usage_source_binding_operation: Mutex::new(()),
             rhythm_cache_identity: next_rhythm_cache_identity(),
             database_path: Some(db_path.to_path_buf()),
+            retention_policy,
         };
         db.create_tables()?;
 
@@ -232,6 +244,7 @@ impl Database {
             usage_source_binding_operation: Mutex::new(()),
             rhythm_cache_identity: next_rhythm_cache_identity(),
             database_path: None,
+            retention_policy: Box::new(CommunityRetentionPolicy),
         };
         db.create_tables()?;
         db.apply_schema_migrations()?;

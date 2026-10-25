@@ -51,6 +51,19 @@ pub struct RetentionPolicy {
     pub hourly_days: i64,
 }
 
+/// Build-provided policy used by both startup and scheduled maintenance.
+pub trait RetentionPolicyProvider: Send + Sync {
+    fn retention_policy(&self, detail_days: i64) -> RetentionPolicy;
+}
+
+pub struct CommunityRetentionPolicy;
+
+impl RetentionPolicyProvider for CommunityRetentionPolicy {
+    fn retention_policy(&self, detail_days: i64) -> RetentionPolicy {
+        RetentionPolicy::community(detail_days)
+    }
+}
+
 impl RetentionPolicy {
     pub const fn community(detail_days: i64) -> Self {
         Self {

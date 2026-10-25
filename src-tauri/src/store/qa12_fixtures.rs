@@ -16,6 +16,48 @@ use super::{lock_conn, Database};
 use crate::error::AppError;
 
 #[test]
+fn injected_retention_survives_startup_and_periodic_maintenance() -> Result<(), AppError> {
+    struct PrivateRetention;
+    impl super::RetentionPolicyProvider for PrivateRetention {
+        fn retention_policy(&self, detail_days: i64) -> RetentionPolicy {
+            RetentionPolicy {
+                detail_days,
+                hourly_days: 730,
+            }
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("retention.db");
+    {
+        let db = Database::init_at(&path)?;
+        let conn = lock_conn!(db.conn);
+        for days in [100, 500, 800] {
+            conn.execute(
+                "INSERT INTO usage_hourly_rollups
+                 (hour_utc, app_type, provider_id, model, billing_identity, data_source, request_count)
+                 VALUES (?1, 'claude', 'anthropic', 'claude', '', 'proxy', 1)",
+                [hour_bucket_utc(chrono::Utc::now().timestamp() - days * 86_400)],
+            )?;
+        }
+    }
+    let db = Database::init_at_with_retention_policy(&path, Box::new(PrivateRetention))?;
+    db.periodic_backup_if_needed()?;
+    let count =
+        |db: &Database| -> Result<i64, AppError> {
+            Ok(lock_conn!(db.conn).query_row(
+                "SELECT COUNT(*) FROM usage_hourly_rollups",
+                [],
+                |r| r.get(0),
+            )?)
+        };
+    assert_eq!(count(&db)?, 2);
+    drop(db);
+    let community = Database::init_at(&path)?;
+    assert_eq!(count(&community)?, 1);
+    Ok(())
+}
+
+#[test]
 fn heatmap_window_is_52_weeks_for_both_tiers() {
     assert_eq!(HEATMAP_MAX_WEEKS, 52);
     assert_eq!(

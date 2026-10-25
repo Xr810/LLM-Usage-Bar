@@ -59,12 +59,10 @@ fn compute_local_midnight_cutoff(
 }
 
 impl Database {
-    /// Aggregate and prune using the saved detail window and the community
-    /// hourly default (400 days). A private build calls
-    /// [`Self::rollup_and_prune_with_policy`] with its own hourly window.
+    /// Aggregate and prune using the saved detail window and injected policy.
     pub fn rollup_and_prune_configured(&self) -> Result<u64, AppError> {
         let detail_days = self.detail_retention_days()?;
-        self.rollup_and_prune_with_policy(RetentionPolicy::community(detail_days))
+        self.rollup_and_prune_with_policy(self.retention_policy.retention_policy(detail_days))
     }
 
     /// Aggregate proxy_request_logs older than `retain_days` into usage_daily_rollups,
