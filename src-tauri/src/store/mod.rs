@@ -40,7 +40,9 @@ pub(crate) use dao::binding_credentials::{
     CredentialBindingSnapshot, CredentialJournalEntry, CredentialMutationKind,
     CredentialOperationReservation,
 };
-pub(crate) use dao::hourly_rollup::{upsert_hourly_delta, HourlyLogDelta};
+pub(crate) use dao::hourly_rollup::{
+    insert_proxy_settlement, upsert_hourly_delta, HourlyLogDelta, ProxySettlement,
+};
 pub use dao::hourly_rollup::{CommunityRetentionPolicy, RetentionPolicy, RetentionPolicyProvider};
 pub(crate) use dao::provider_credentials::{
     ProviderCredentialJournalEntry, ProviderCredentialOperationReservation,
