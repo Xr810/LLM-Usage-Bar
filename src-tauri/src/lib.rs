@@ -1586,6 +1586,8 @@ pub fn run() {
             // BE-12: Rust i18n (C8). No language-changed event.
             commands::get_language,
             commands::set_language,
+            // BE-5b: quota source status (C4)
+            commands::get_quota_status,
         ]);
 
     let app = builder

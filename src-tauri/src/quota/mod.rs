@@ -1,5 +1,6 @@
 use crate::error::AppError;
 pub mod claude_quota;
+pub mod source_status;
 use crate::model::{
     BillingKind, QuotaFetchState, QuotaSnapshot, QuotaStatusView, UsageProviderStored,
 };
