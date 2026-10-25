@@ -319,11 +319,15 @@ pub enum ApiBudgetMode {
     PerProvider,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApiBudgetConfig {
     pub mode: ApiBudgetMode,
     pub shared_daily_budget_usd: Option<String>,
+    /// C10. `null` when the user has not set a month cap. Omitted keys in
+    /// configs written before BE-20 deserialize as `null`.
+    #[serde(default)]
+    pub monthly_budget_usd: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -427,6 +431,10 @@ pub struct AppSettings {
     pub api_budget_mode: ApiBudgetMode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shared_api_daily_budget_usd: Option<String>,
+    /// Month cap for metered / API-key spend (C10). Device-local, like the
+    /// daily cap. `null` means no month cap. Not a database column.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub monthly_budget_usd: Option<String>,
     /// User has confirmed the stream check first-run notice
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stream_check_confirmed: Option<bool>,
@@ -582,6 +590,7 @@ impl Default for AppSettings {
             usage_critical_remaining_percent: default_usage_critical_remaining_percent(),
             api_budget_mode: ApiBudgetMode::Shared,
             shared_api_daily_budget_usd: None,
+            monthly_budget_usd: None,
             stream_check_confirmed: None,
             enable_failover_toggle: false,
             preserve_codex_official_auth_on_switch: false,
@@ -631,6 +640,13 @@ impl AppSettings {
             .min(self.usage_warning_remaining_percent);
         self.shared_api_daily_budget_usd = self
             .shared_api_daily_budget_usd
+            .as_deref()
+            .map(crate::usage::budget_migration::canonicalize_daily_budget)
+            .transpose()
+            .ok()
+            .flatten();
+        self.monthly_budget_usd = self
+            .monthly_budget_usd
             .as_deref()
             .map(crate::usage::budget_migration::canonicalize_daily_budget)
             .transpose()
@@ -705,6 +721,7 @@ impl AppSettings {
         ApiBudgetConfig {
             mode: self.api_budget_mode,
             shared_daily_budget_usd: self.shared_api_daily_budget_usd.clone(),
+            monthly_budget_usd: self.monthly_budget_usd.clone(),
         }
     }
 
@@ -1175,7 +1192,41 @@ mod tests {
             ApiBudgetConfig {
                 mode: ApiBudgetMode::Shared,
                 shared_daily_budget_usd: Some("20".to_string()),
+                monthly_budget_usd: None,
             }
+        );
+    }
+
+    #[test]
+    fn old_settings_json_leaves_the_monthly_budget_null() {
+        let (settings, _) = AppSettings::decode_settings_json("{}").expect("defaults");
+        assert_eq!(settings.monthly_budget_usd, None);
+        assert_eq!(settings.api_budget_config().monthly_budget_usd, None);
+
+        let legacy = serde_json::from_str::<ApiBudgetConfig>(
+            r#"{"mode":"shared","sharedDailyBudgetUsd":"10"}"#,
+        )
+        .expect("legacy config");
+        assert_eq!(legacy.monthly_budget_usd, None);
+        assert_eq!(legacy.shared_daily_budget_usd.as_deref(), Some("10"));
+    }
+
+    #[test]
+    fn monthly_budget_round_trips_and_canonicalizes_without_clearing_the_daily_cap() {
+        let (mut settings, _) = AppSettings::decode_settings_json(
+            r#"{"sharedApiDailyBudgetUsd":"10","monthlyBudgetUsd":"020.50"}"#,
+        )
+        .expect("settings");
+        settings.normalize_paths();
+        assert_eq!(settings.shared_api_daily_budget_usd.as_deref(), Some("10"));
+        assert_eq!(settings.monthly_budget_usd.as_deref(), Some("20.5"));
+
+        settings.api_budget_mode = ApiBudgetMode::PerProvider;
+        settings.shared_api_daily_budget_usd = Some("12".to_string());
+        assert_eq!(settings.monthly_budget_usd.as_deref(), Some("20.5"));
+        assert_eq!(
+            settings.api_budget_config().monthly_budget_usd.as_deref(),
+            Some("20.5")
         );
     }
 

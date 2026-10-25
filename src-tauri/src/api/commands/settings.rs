@@ -44,6 +44,10 @@ fn merge_settings_for_save(
     // 前端表单不携带该字段，按 incoming 透传会在任意一次保存设置时把冷却清掉，
     // 于是被拒绝过的系统对话框又会重新弹出来。
     incoming.claude_oauth_denied_until = existing.claude_oauth_denied_until;
+    // BE-20: the month cap is written only by `set_monthly_budget`. A full
+    // `save_settings` payload from an older client omits the field, and serde
+    // would turn that omission into null. Keep the stored cap.
+    incoming.monthly_budget_usd = existing.monthly_budget_usd.clone();
     incoming
 }
 
@@ -458,6 +462,25 @@ mod tests {
         let merged = merge_settings_for_save(incoming, &existing);
 
         assert!(merged.local_migrations.is_none());
+    }
+
+    #[test]
+    fn save_settings_keeps_the_monthly_budget_when_the_payload_omits_it() {
+        let existing = AppSettings {
+            monthly_budget_usd: Some("40".to_string()),
+            shared_api_daily_budget_usd: Some("10".to_string()),
+            ..AppSettings::default()
+        };
+        let incoming = AppSettings {
+            shared_api_daily_budget_usd: Some("12".to_string()),
+            monthly_budget_usd: None,
+            ..AppSettings::default()
+        };
+
+        let merged = merge_settings_for_save(incoming, &existing);
+
+        assert_eq!(merged.monthly_budget_usd.as_deref(), Some("40"));
+        assert_eq!(merged.shared_api_daily_budget_usd.as_deref(), Some("12"));
     }
 }
 

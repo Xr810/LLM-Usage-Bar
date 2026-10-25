@@ -279,6 +279,7 @@ mod tests {
             pace_basis: PaceBasis::Static,
             rhythm_adjustment: None,
             flat_status: None,
+            ..TrayApiBudgetView::default()
         };
         snapshot
     }
