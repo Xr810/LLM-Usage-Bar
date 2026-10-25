@@ -9,5 +9,6 @@ pub(crate) mod migration;
 pub(crate) mod module_migration;
 pub(crate) mod provider_pricing_migration;
 pub(crate) mod quota_retry_migration;
+pub(crate) mod schema_v29;
 pub(crate) mod system_provider_migration;
 pub(crate) mod usage_light_prediction_migration;

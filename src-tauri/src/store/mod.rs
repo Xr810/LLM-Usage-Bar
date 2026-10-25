@@ -29,6 +29,8 @@ pub(crate) mod usage_light_prediction;
 pub mod usage_stats;
 
 #[cfg(test)]
+mod qa12_fixtures;
+#[cfg(test)]
 mod tests;
 
 // DAO 类型导出供外部使用
@@ -38,6 +40,8 @@ pub(crate) use dao::binding_credentials::{
     CredentialBindingSnapshot, CredentialJournalEntry, CredentialMutationKind,
     CredentialOperationReservation,
 };
+pub(crate) use dao::hourly_rollup::{upsert_hourly_delta, HourlyLogDelta};
+pub use dao::hourly_rollup::{CommunityRetentionPolicy, RetentionPolicy, RetentionPolicyProvider};
 pub(crate) use dao::provider_credentials::{
     ProviderCredentialJournalEntry, ProviderCredentialOperationReservation,
     ProviderCredentialSnapshot,
@@ -62,7 +66,7 @@ use std::sync::Mutex;
 
 /// 当前 Schema 版本号
 /// 每次修改表结构时递增，并在 schema.rs 中添加相应的迁移逻辑
-pub(crate) const SCHEMA_VERSION: i32 = 28;
+pub(crate) const SCHEMA_VERSION: i32 = 29;
 
 /// 安全地序列化 JSON，避免 unwrap panic
 pub(crate) fn to_json_string<T: Serialize>(value: &T) -> Result<String, AppError> {
@@ -91,6 +95,7 @@ pub struct Database {
     pub(crate) usage_source_binding_operation: Mutex<()>,
     pub(crate) rhythm_cache_identity: u64,
     database_path: Option<PathBuf>,
+    retention_policy: Box<dyn RetentionPolicyProvider>,
 }
 
 static NEXT_RHYTHM_CACHE_ID: AtomicU64 = AtomicU64::new(1);
@@ -125,6 +130,15 @@ impl Database {
 
     /// 使用调用方已经选定的权威路径初始化数据库。
     pub fn init_at(db_path: &Path) -> Result<Self, AppError> {
+        Self::init_at_with_retention_policy(db_path, Box::new(CommunityRetentionPolicy))
+    }
+
+    /// Inject before opening the database so startup cannot prune private history
+    /// with the community window. The scheduler retains this same provider.
+    pub fn init_at_with_retention_policy(
+        db_path: &Path,
+        retention_policy: Box<dyn RetentionPolicyProvider>,
+    ) -> Result<Self, AppError> {
         let db_exists = db_path.exists();
         // Resolve external source roots before opening or migrating SQLite so
         // v13 cursor classification never depends on post-database state.
@@ -153,6 +167,7 @@ impl Database {
             usage_source_binding_operation: Mutex::new(()),
             rhythm_cache_identity: next_rhythm_cache_identity(),
             database_path: Some(db_path.to_path_buf()),
+            retention_policy,
         };
         db.create_tables()?;
 
@@ -178,7 +193,7 @@ impl Database {
         db.ensure_model_pricing_seeded()?;
 
         // Startup cleanup: prune old logs and reclaim space
-        if let Err(e) = db.rollup_and_prune(30) {
+        if let Err(e) = db.rollup_and_prune_configured() {
             log::warn!("Startup rollup_and_prune failed: {e}");
         }
         // Reclaim disk space after cleanup
@@ -229,6 +244,7 @@ impl Database {
             usage_source_binding_operation: Mutex::new(()),
             rhythm_cache_identity: next_rhythm_cache_identity(),
             database_path: None,
+            retention_policy: Box::new(CommunityRetentionPolicy),
         };
         db.create_tables()?;
         db.apply_schema_migrations()?;

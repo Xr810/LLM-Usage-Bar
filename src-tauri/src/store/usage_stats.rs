@@ -1802,6 +1802,7 @@ impl Database {
 
         if updated > 0 {
             log::info!("已回填 {updated} 条缺失的用量成本");
+            super::dao::hourly_rollup::backfill_dirty_hours(conn)?;
         }
 
         Ok(updated)
@@ -1889,6 +1890,7 @@ impl Database {
             ],
         )
         .map_err(|e| AppError::Database(format!("更新请求成本失败: {e}")))?;
+        super::dao::hourly_rollup::mark_rollup_hour_dirty(conn, log.created_at)?;
 
         Ok(true)
     }
@@ -2028,13 +2030,16 @@ pub(crate) fn is_placeholder_pricing_model(model_id: &str) -> bool {
     normalized.is_empty() || matches!(normalized.as_str(), "unknown" | "null" | "none")
 }
 
+/// Cache rates became nullable in schema v29. A missing rate bills as zero,
+/// which is what the old `DEFAULT '0'` did for rows that never set one.
 fn query_model_pricing_exact(
     conn: &Connection,
     model_id: &str,
 ) -> Result<Option<(String, String, String, String)>, AppError> {
     conn.query_row(
         "SELECT input_cost_per_million, output_cost_per_million,
-                cache_read_cost_per_million, cache_creation_cost_per_million
+                COALESCE(cache_read_cost_per_million, '0'),
+                COALESCE(cache_creation_cost_per_million, '0')
          FROM model_pricing
          WHERE model_id = ?1",
         [model_id],
@@ -2058,7 +2063,8 @@ fn query_model_pricing_prefix(
     let pattern = format!("{model_id}-%");
     conn.query_row(
         "SELECT input_cost_per_million, output_cost_per_million,
-                cache_read_cost_per_million, cache_creation_cost_per_million
+                COALESCE(cache_read_cost_per_million, '0'),
+                COALESCE(cache_creation_cost_per_million, '0')
          FROM model_pricing
          WHERE model_id LIKE ?1
          ORDER BY LENGTH(model_id) ASC

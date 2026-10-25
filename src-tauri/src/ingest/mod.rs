@@ -675,7 +675,7 @@ fn insert_legacy_usage_record(
     parsed: &ParsedUsage,
     request_id: &str,
 ) -> Result<bool, AppError> {
-    let conn = lock_conn!(db.conn);
+    let mut conn = lock_conn!(db.conn);
 
     let dedup_key = DedupKey {
         app_type: profile.app_type,
@@ -743,7 +743,10 @@ fn insert_legacy_usage_record(
         }
     };
 
-    let inserted_rows = conn
+    let transaction = conn
+        .transaction()
+        .map_err(|e| AppError::Database(format!("{}失败: {e}", profile.insert_error_prefix)))?;
+    let inserted_rows = transaction
         .execute(
             "INSERT OR IGNORE INTO proxy_request_logs (
             request_id, provider_id, app_type, model, request_model,
@@ -779,6 +782,30 @@ fn insert_legacy_usage_record(
                 profile.provider_type,
             ],
         )
+        .map_err(|e| AppError::Database(format!("{}失败: {e}", profile.insert_error_prefix)))?;
+    if inserted_rows > 0 {
+        crate::store::upsert_hourly_delta(
+            &transaction,
+            &crate::store::HourlyLogDelta {
+                created_at: parsed.occurred_at,
+                app_type: profile.app_type.to_string(),
+                provider_id: profile.legacy_provider_id.to_string(),
+                model: parsed.model.clone(),
+                billing_identity: String::new(),
+                data_source: profile.provider_type.to_string(),
+                status_code: 200,
+                end_reason: None,
+                input_tokens: i64::from(parsed.input_tokens),
+                output_tokens: i64::from(parsed.output_tokens),
+                cache_read_tokens: i64::from(parsed.cache_read_tokens),
+                cache_creation_tokens: i64::from(parsed.cache_creation_tokens),
+                total_cost_usd: total_cost.clone(),
+                latency_ms: 0,
+            },
+        )?;
+    }
+    transaction
+        .commit()
         .map_err(|e| AppError::Database(format!("{}失败: {e}", profile.insert_error_prefix)))?;
 
     // 仅在确实写入新行时通知前端,避免 INSERT OR IGNORE 跳过时产生空刷新
