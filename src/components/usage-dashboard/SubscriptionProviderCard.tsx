@@ -98,6 +98,21 @@ export function SubscriptionProviderCard({
         })
       : null;
 
+  const fiveHourUsed = parsePercentValue(quota?.fiveHourUtilizationPercent);
+  const sevenDayUsed = parsePercentValue(quota?.sevenDayUtilizationPercent);
+  // C13 omits usedPct when a known subscription has no quota window. That is
+  // stale (or a failed read), never a compatibility 0% and never "this plan
+  // does not provide the window". A single empty sibling keeps that sentence.
+  const knownQuotaWithoutWindows =
+    quota != null && fiveHourUsed == null && sevenDayUsed == null;
+  const missingWindowCaption = knownQuotaWithoutWindows
+    ? fetchState?.lastError
+      ? t("usageDashboard.quotaReadFailed", {
+          defaultValue: "Couldn't read usage",
+        })
+      : t("usageDashboard.stale", { defaultValue: "Stale" })
+    : null;
+
   const quotaWindow = (
     label: string,
     value: string | null | undefined,
@@ -132,9 +147,11 @@ export function SubscriptionProviderCard({
         : reset;
     const used = parsePercentValue(value);
     const remaining = used == null ? null : Math.max(0, 100 - used);
-    const unavailableText = t("usageDashboard.quotaWindowUnavailable", {
-      defaultValue: "This subscription does not provide this quota window",
-    });
+    const unavailableText =
+      missingWindowCaption ??
+      t("usageDashboard.quotaWindowUnavailable", {
+        defaultValue: "This subscription does not provide this quota window",
+      });
     return (
       <QuotaMeter
         key={label}
@@ -142,6 +159,7 @@ export function SubscriptionProviderCard({
         label={label}
         meterLabel={label}
         fillPercent={remaining}
+        // Pace status colors this bar only. It does not set tray warn.
         // The backend projects the burn rate against the reset clock, which
         // this side cannot reproduce — it never sees the rate history. Only
         // fall back to the static bands when no verdict came through.
@@ -159,7 +177,7 @@ export function SubscriptionProviderCard({
               })
         }
         footer={
-          absoluteReset ? (
+          missingWindowCaption ? undefined : absoluteReset ? (
             <>
               {/* The exact timestamp is long and rarely what you want at a
                   glance; lead with "in 2h" and keep it on hover. */}
