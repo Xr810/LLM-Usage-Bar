@@ -23,6 +23,7 @@ use crate::store::Database;
 use chrono::{DateTime, Datelike, Local, LocalResult, NaiveDate, SecondsFormat, TimeZone, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 const ROLLING_30_DAYS_SECONDS: i64 = 30 * 86_400;
@@ -30,7 +31,7 @@ const METERED_RATE_LOOKBACK_SECONDS: i64 = 3_600;
 const INVALID_RESET_TIMESTAMP: &str = "invalid_reset_timestamp";
 const RESET_PENDING_REFRESH: &str = "reset_pending_refresh";
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TrayUsageSnapshot {
     pub status: UsageStatus,
@@ -41,6 +42,9 @@ pub struct TrayUsageSnapshot {
     pub refresh_in_progress: bool,
     pub api_budget: TrayApiBudgetView,
     pub agents: Vec<TrayAgentUsageView>,
+    /// C13 source rows. Absent in older cached JSON.
+    #[serde(default)]
+    pub sources: Vec<crate::usage::source_row::SourceRowView>,
 }
 
 /// "pro" as the upstream reports it, "Pro" as a person reads it. Only the first
@@ -64,6 +68,7 @@ impl TrayUsageSnapshot {
             refresh_in_progress: false,
             api_budget: TrayApiBudgetView::default(),
             agents: Vec::new(),
+            sources: Vec::new(),
         }
     }
 }
@@ -475,6 +480,19 @@ impl TrayUsageProjector {
                 .map(|provider| provider.status)
                 .chain(std::iter::once(api_budget.status)),
         );
+        let mut metered_value_usd = HashMap::new();
+        for provider in &projected_providers {
+            if provider.billing_kind == BillingKind::Metered {
+                if let Some(cost) = provider.recent_usage.today_cost_usd.clone() {
+                    metered_value_usd.insert(provider.provider_id.clone(), cost);
+                }
+            }
+        }
+        let sources = crate::usage::source_row::source_rows_at(
+            self.db.as_ref(),
+            generated_at,
+            &metered_value_usd,
+        )?;
         let projected_agents = vec![TrayAgentUsageView {
             agent_module_id: "providers".to_string(),
             name: "Providers".to_string(),
@@ -492,6 +510,7 @@ impl TrayUsageProjector {
             refresh_in_progress: false,
             api_budget,
             agents: projected_agents,
+            sources,
         })
     }
 
@@ -2343,6 +2362,7 @@ mod tests {
             refresh_in_progress: false,
             api_budget: TrayApiBudgetView::default(),
             agents: Vec::new(),
+            sources: Vec::new(),
         };
 
         assert_eq!(snapshot.status, UsageStatus::Red);
@@ -2430,6 +2450,7 @@ mod tests {
                     }),
                 }],
             }],
+            sources: Vec::new(),
         };
 
         let value = serde_json::to_value(&snapshot).unwrap();
@@ -2533,7 +2554,8 @@ mod tests {
                             "rhythmAdjustment": null
                         }
                     }]
-                }]
+                }],
+                "sources": []
             }),
         );
 

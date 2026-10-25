@@ -11,6 +11,7 @@ pub mod dashboard;
 pub mod ingestion;
 pub(crate) mod rhythm;
 pub mod session;
+pub mod source_row;
 pub mod status;
 pub(crate) mod subscription_pace;
 // Compatibility path for feature consumers; the catalog is owned by model.
