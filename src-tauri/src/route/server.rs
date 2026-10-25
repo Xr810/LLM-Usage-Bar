@@ -5,10 +5,10 @@
 //! T5 的 `classify` 判定换不换家,每次尝试记进 T3 的 `router_attempts`。
 //!
 //! 安全面(§4.3,本任务唯一的网络出口):API Key 和 unknown 转给上游的头只有白名单
-//! `content-type`、`accept`,加上 `UpstreamAuth` 注入的凭据头。客户端来的
+//! `content-type`、`accept`、`anthropic-version`,加上 `UpstreamAuth` 注入的凭据头。客户端来的
 //! `authorization` / `cookie` / `x-api-key` / `openai-organization` 在这两类上丢弃。
-//! 订阅请求是例外:原样转发 `authorization`、`anthropic-beta`、`chatgpt-account-id`,
-//! 不换存储凭据。分类发生在丢头之前。
+//! Anthropic 订阅仅在持久化 C22 同意后直达官方 HTTPS 地址，不参与模型路由、重试或重定向。
+//! Codex 订阅只分类记录，不透传。分类发生在丢头之前。
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -31,7 +31,9 @@ use crate::policy::{AllowAllGate, PolicyGate, ReqMeta};
 use crate::route::decision::{candidates_for, Blacklisted, Candidate, RouteMode};
 use crate::route::failure::{classify, AttemptResult, BlacklistScope, FailureKind};
 use crate::route::identity::{
-    classify_headers, identity_label, passthrough_headers, ClassifiedRequest,
+    classify_headers, identity_label, is_anthropic_subscription, passthrough_headers,
+    subscription_terms_acknowledged, subscription_url_allowed, ClassifiedRequest,
+    SUBSCRIPTION_TERMS_KEY,
 };
 use crate::store::{
     insert_proxy_settlement, AttemptOutcome, Database, ProxySettlement, RouterAttempt,
@@ -50,7 +52,7 @@ const ERROR_SNIPPET_MAX: usize = 8 * 1024;
 /// 排干(丢弃)一个不会再转发的错误体时最多读多少字节:恶意上游可以无限发
 /// 错误体,不能陪它读完,读一点让连接有机会回池即可。
 const ERROR_DRAIN_MAX: usize = 1024 * 1024;
-/// 进程内只记一次。订阅流量照常透传;提醒不是拒绝。
+/// 进程内只记一次。检测不代表同意；转发另行检查持久化 C22 记录。
 static SUBSCRIPTION_SEEN: AtomicBool = AtomicBool::new(false);
 
 /// 上游认证头的提供方。**router 自己不持有任何凭据**——它只在要发请求的那一刻
@@ -171,6 +173,7 @@ struct OutboundRequest {
     url: String,
     headers: Vec<(String, String)>,
     body: OutboundBody,
+    subscription: bool,
 }
 
 enum OutboundBody {
@@ -211,7 +214,15 @@ impl UpstreamSender for ReqwestSender {
 }
 
 async fn send_with_reqwest(request: OutboundRequest) -> Result<reqwest::Response, SendFailure> {
-    let client = crate::http_client::get();
+    let client = if request.subscription {
+        // Validate at the network boundary as well as bypassing model routing.
+        if !subscription_url_allowed(&request.url, &[]) {
+            return Err(SendFailure::Connect);
+        }
+        crate::http_client::get_without_redirects().map_err(|_| SendFailure::Connect)?
+    } else {
+        crate::http_client::get()
+    };
     let mut builder = client
         .post(&request.url)
         // 坑一:覆盖共享 client 的 600 秒总超时,长 SSE 流跑过 10 分钟会被拦腰砍断。
@@ -401,7 +412,7 @@ fn parse_router_mode(raw: Option<&str>) -> RouteMode {
 }
 
 /// 转给上游的头(§4.3,唯一的安全面):
-/// - 白名单只有 content-type 与 accept,其余客户端头一律丢弃,所以客户端来的
+/// - 白名单为 content-type、accept、anthropic-version，其余客户端头一律丢弃,所以客户端来的
 ///   authorization / cookie / x-api-key / openai-organization 绝不会漏给上游;
 /// - UpstreamAuth 注入的凭据头原样附加。
 fn build_upstream_headers(
@@ -409,7 +420,11 @@ fn build_upstream_headers(
     auth_headers: &[(String, String)],
 ) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
-    for name in [header::CONTENT_TYPE, header::ACCEPT] {
+    for name in [
+        header::CONTENT_TYPE,
+        header::ACCEPT,
+        header::HeaderName::from_static("anthropic-version"),
+    ] {
         if let Some(value) = client_headers.get(&name) {
             if let Ok(value) = value.to_str() {
                 out.push((name.to_string(), value.to_string()));
@@ -638,10 +653,13 @@ async fn handle_proxy_inner(
         upstream_suffix
     );
     if classified.passthrough && !SUBSCRIPTION_SEEN.swap(true, Ordering::Relaxed) {
-        log::info!(
-            "request_id={request_id} detected subscription traffic on the local proxy; forwarding the original credential"
-        );
+        log::info!("request_id={request_id} detected subscription traffic on the local proxy");
     }
+    let via_subscription_optin = classified.passthrough
+        && subscription_terms_acknowledged(
+            state.db.get_setting(SUBSCRIPTION_TERMS_KEY)?.as_deref(),
+            now_millis() / 1000,
+        );
     let decision = AllowAllGate.admit(&ReqMeta {
         req_id: request_id.clone(),
         app_type: app_type.to_string(),
@@ -651,7 +669,7 @@ async fn handle_proxy_inner(
         key_fp: classified.key_fp.clone(),
         session_id: classified.session_id.clone(),
         est_cost_micro_usd: 0,
-        via_subscription_optin: classified.passthrough,
+        via_subscription_optin,
     });
     if !matches!(decision, crate::policy::Decision::Allow) {
         log::error!("request_id={request_id} community gate returned a non-allow decision");
@@ -660,6 +678,55 @@ async fn handle_proxy_inner(
     let inbound = read_request_body(body).await?;
     // 2. 逻辑模型
     let logical_model = extract_logical_model(&inbound)?;
+    if classified.passthrough {
+        let unsupported = codex_path || !is_anthropic_subscription(&client_headers);
+        if unsupported || !via_subscription_optin {
+            let status = if unsupported {
+                StatusCode::NOT_IMPLEMENTED
+            } else {
+                StatusCode::FORBIDDEN
+            };
+            insert_proxy_settlement(
+                &mut *crate::store::lock_conn!(state.db.conn),
+                &ProxySettlement {
+                    request_id,
+                    provider_id: String::new(),
+                    app_type: app_type.to_string(),
+                    model: logical_model,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    status_code: i64::from(status.as_u16()),
+                    created_at: now_millis() / 1000,
+                    billing_identity: identity_label(classified.identity).to_string(),
+                    key_fingerprint: classified.key_fp,
+                    session_id: classified.session_id,
+                    end_reason: "blocked".to_string(),
+                },
+            )?;
+            return Ok(plain_response(
+                status,
+                if unsupported {
+                    "Codex subscription is classify/meter-only; use the official client directly"
+                        .to_string()
+                } else {
+                    "Subscription forwarding requires persisted C22 terms acknowledgement"
+                        .to_string()
+                },
+            ));
+        }
+        return forward_subscription(
+            state,
+            client_headers,
+            inbound,
+            logical_model,
+            SettlementSeed {
+                request_id,
+                app_type: app_type.to_string(),
+                classified,
+            },
+        )
+        .await;
+    }
     // 3. 该模型的路由 + provider 元数据(拿 base_url 与 wire_api)
     let routes = state.db.list_model_routes(&logical_model)?;
     let providers: HashMap<String, RouterProvider> = state
@@ -717,6 +784,49 @@ async fn handle_proxy_inner(
         request_start_ms: now_ms,
     };
     forward_through_candidates(ctx).await
+}
+
+/// Subscription transport is deliberately outside the model candidate loop.
+/// One fixed official endpoint, original model/body, no retry or redirect.
+async fn forward_subscription(
+    state: Arc<RouterState>,
+    headers: HeaderMap,
+    inbound: InboundBody,
+    model: String,
+    seed: SettlementSeed,
+) -> Result<Response, AppError> {
+    let body = match inbound {
+        InboundBody::Buffered(bytes) => OutboundBody::Buffered(bytes),
+        InboundBody::Oversize { head, tail } => OutboundBody::Stream { head, tail },
+    };
+    let candidate = Candidate {
+        provider_id: "anthropic-subscription".to_string(),
+        upstream_model: model.clone(),
+        blacklisted: false,
+    };
+    let started = now_millis();
+    let result = state
+        .sender
+        .send(OutboundRequest {
+            url: "https://api.anthropic.com/v1/messages".to_string(),
+            headers: passthrough_headers(&headers),
+            body,
+            subscription: true,
+        })
+        .await;
+    match result {
+        Ok(response) if response.status().is_success() => {
+            stream_upstream_success(&state, response, &candidate, &model, started, seed)
+        }
+        Ok(response) => forward_upstream_error(read_error_parts(response).await),
+        Err(failure) => Ok(gateway_error_response(
+            &match failure {
+                SendFailure::Connect => AttemptResult::ConnectFailed,
+                SendFailure::FirstByteTimeout => AttemptResult::FirstByteTimeout,
+            },
+            &candidate.provider_id,
+        )),
+    }
 }
 
 async fn forward_through_candidates(mut ctx: RequestContext) -> Result<Response, AppError> {
@@ -785,33 +895,24 @@ async fn try_one_candidate(
         );
         return Ok(Step::Skipped);
     }
-    // 订阅请求不换凭据。其余类别仍在发送前取存储的上游认证头。
-    let passthrough_headers = if ctx.classified.passthrough {
-        Some(passthrough_headers(&ctx.client_headers))
-    } else {
-        None
-    };
-    let auth_headers = if passthrough_headers.is_some() {
-        Vec::new()
-    } else {
-        match state.auth.headers_for(&candidate.provider_id).await {
-            Ok(headers) => headers,
-            Err(error) => {
-                log::warn!("取 {} 的上游认证头失败: {error}", candidate.provider_id);
-                record_attempt(
-                    &state.db,
-                    AttemptRecord {
-                        started_at: ctx.request_start_ms,
-                        logical_model: &ctx.logical_model,
-                        provider_id: &candidate.provider_id,
-                        outcome: AttemptOutcome::Failed,
-                        failure_kind: Some("auth_unavailable"),
-                        http_status: None,
-                        duration_ms: None,
-                    },
-                );
-                return Ok(Step::Skipped);
-            }
+    // Subscription requests never enter the candidate loop.
+    let auth_headers = match state.auth.headers_for(&candidate.provider_id).await {
+        Ok(headers) => headers,
+        Err(error) => {
+            log::warn!("取 {} 的上游认证头失败: {error}", candidate.provider_id);
+            record_attempt(
+                &state.db,
+                AttemptRecord {
+                    started_at: ctx.request_start_ms,
+                    logical_model: &ctx.logical_model,
+                    provider_id: &candidate.provider_id,
+                    outcome: AttemptOutcome::Failed,
+                    failure_kind: Some("auth_unavailable"),
+                    http_status: None,
+                    duration_ms: None,
+                },
+            );
+            return Ok(Step::Skipped);
         }
     };
     // 改写 model,组装出站体。
@@ -840,10 +941,7 @@ async fn try_one_candidate(
         provider.base_url.trim_end_matches('/'),
         ctx.upstream_suffix
     );
-    let outbound_headers = match passthrough_headers {
-        Some(headers) => headers,
-        None => build_upstream_headers(&ctx.client_headers, &auth_headers),
-    };
+    let outbound_headers = build_upstream_headers(&ctx.client_headers, &auth_headers);
     let attempt_start = now_millis();
     let send_result = state
         .sender
@@ -851,6 +949,7 @@ async fn try_one_candidate(
             url,
             headers: outbound_headers,
             body: outbound_body,
+            subscription: false,
         })
         .await;
     let (result, parts) = match send_result {
@@ -1097,7 +1196,7 @@ fn stream_upstream_success(
                     key_fingerprint: settlement_fp,
                     session_id: settlement_session,
                     end_reason: if broken {
-                        "client_abort".to_string()
+                        "upstream_error".to_string()
                     } else {
                         "completed".to_string()
                     },
@@ -2547,6 +2646,201 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn subscription_http_client_returns_redirect_without_following_it() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = Router::new()
+            .route(
+                "/start",
+                axum::routing::get(|| async {
+                    (StatusCode::TEMPORARY_REDIRECT, [("location", "/target")])
+                }),
+            )
+            .route(
+                "/target",
+                axum::routing::get(|| async { "must not follow" }),
+            );
+        let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let response = crate::http_client::get_without_redirects()
+            .unwrap()
+            .get(format!("http://{address}/start"))
+            .send()
+            .await
+            .unwrap();
+        task.abort();
+        assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
+    }
+
+    #[tokio::test]
+    async fn broken_upstream_stream_settles_as_upstream_error() {
+        let db = memory_db();
+        let state = test_state(db.clone(), ok_auth(), fake_sender(vec![]));
+        let body = reqwest::Body::wrap_stream(futures::stream::iter([
+            Ok(Bytes::from_static(b"data: partial\n\n")),
+            Err(std::io::Error::other("synthetic upstream disconnect")),
+        ]));
+        let upstream = reqwest::Response::from(
+            axum::http::Response::builder()
+                .status(200)
+                .header("content-type", "text/event-stream")
+                .body(body)
+                .unwrap(),
+        );
+        let response = stream_upstream_success(
+            &state,
+            upstream,
+            &Candidate {
+                provider_id: "test-upstream".into(),
+                upstream_model: MODEL.into(),
+                blacklisted: false,
+            },
+            MODEL,
+            now_millis(),
+            SettlementSeed {
+                request_id: "broken-stream".into(),
+                app_type: "claude".into(),
+                classified: classify_headers(&HeaderMap::new(), false),
+            },
+        )
+        .unwrap();
+        to_bytes(response.into_body(), 1024).await.unwrap();
+        let reason: String = db
+            .conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT end_reason FROM proxy_request_logs WHERE request_id = 'broken-stream'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(reason, "upstream_error");
+    }
+
+    #[tokio::test]
+    async fn subscriptions_do_not_route_or_fail_over_but_relay_keys_do() {
+        for subscription in [false, true] {
+            for failure in [0, 302, 429, 500] {
+                let db = memory_db();
+                db.set_setting(
+                    SUBSCRIPTION_TERMS_KEY,
+                    r#"{"version":1,"accepted":true,"acceptedAt":1}"#,
+                )
+                .unwrap();
+                seed_route(&db, "relay-one", WireApi::Messages, 1, "rewritten-one");
+                seed_route(&db, "relay-two", WireApi::Messages, 2, "rewritten-two");
+                let first = if failure == 0 {
+                    ScriptedOutcome::Fail(SendFailure::Connect)
+                } else {
+                    ScriptedOutcome::Respond {
+                        status: failure,
+                        headers: vec![(
+                            "location".into(),
+                            "https://relay-two.example/messages".into(),
+                        )],
+                        body: b"error".to_vec(),
+                    }
+                };
+                let sender = fake_sender(vec![
+                    first,
+                    ScriptedOutcome::Respond {
+                        status: 200,
+                        headers: vec![],
+                        body: b"{}".to_vec(),
+                    },
+                ]);
+                let auth = Arc::new(FakeAuth {
+                    headers: vec![("authorization".into(), "Bearer relay-issued-key".into())],
+                    fail_for: None,
+                });
+                let router = test_router(test_state(db, auth, sender.clone()));
+                let token = if subscription {
+                    "Bearer sk-ant-oat01-test-only"
+                } else {
+                    "Bearer relay-issued-client-key"
+                };
+                let (status, _, _) = post_path(
+                    router,
+                    "/v1/messages",
+                    json_body(json!({"model": MODEL})),
+                    &[("authorization", token)],
+                )
+                .await;
+                let requests = sender.requests.lock().unwrap();
+                if subscription {
+                    assert_eq!(status, StatusCode::FORBIDDEN);
+                    assert!(requests.is_empty());
+                } else if failure != 302 {
+                    assert_eq!(status, StatusCode::OK);
+                    assert_eq!(requests.len(), 2);
+                    assert!(requests[0].url.contains("relay-one"));
+                    assert!(requests[1].url.contains("relay-two"));
+                    assert!(requests.iter().all(|request| !request.subscription));
+                    let OutboundBody::Buffered(bytes) = &requests[1].body else {
+                        panic!("buffered")
+                    };
+                    assert_eq!(
+                        serde_json::from_slice::<serde_json::Value>(bytes).unwrap()["model"],
+                        "rewritten-two"
+                    );
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_consent_and_codex_subscription_never_send_credentials() {
+        for (path, token, ack, expected) in [
+            (
+                "/v1/messages",
+                "Bearer sk-ant-oat01-test-only",
+                None,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "/v1/messages",
+                "Bearer sk-ant-oat01-test-only",
+                Some("true"),
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "/v1/responses",
+                "Bearer aaa.bbb.ccc",
+                Some(r#"{"version":1,"accepted":true,"acceptedAt":1}"#),
+                StatusCode::NOT_IMPLEMENTED,
+            ),
+        ] {
+            let db = memory_db();
+            if let Some(ack) = ack {
+                db.set_setting(SUBSCRIPTION_TERMS_KEY, ack).unwrap();
+            }
+            seed_route(&db, "relay", WireApi::Responses, 1, MODEL);
+            let sender = fake_sender(vec![]);
+            let router = test_router(test_state(db.clone(), ok_auth(), sender.clone()));
+            let (status, _, _) = post_path(
+                router,
+                path,
+                json_body(json!({"model": MODEL})),
+                &[("authorization", token)],
+            )
+            .await;
+            assert_eq!(status, expected);
+            assert!(sender.requests.lock().unwrap().is_empty());
+            let conn = db.conn.lock().unwrap();
+            let (identity, reason, input): (String, String, i64) = conn
+                .query_row(
+                    "SELECT billing_identity, end_reason, input_tokens FROM proxy_request_logs",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .unwrap();
+            assert_eq!(identity, "subscription_oauth");
+            assert_eq!(reason, "blocked");
+            assert_eq!(input, 0);
+        }
+    }
+
+    #[tokio::test]
     async fn messages_route_classifies_passthrough_and_settles_without_storing_the_key() {
         let secret = "sk-ant-api03-example-not-a-real-key";
         let oat = "sk-ant-oat01-example-not-a-real-token";
@@ -2556,6 +2850,7 @@ mod tests {
                 &[
                     ("x-api-key", secret),
                     ("x-claude-code-session-id", "sess-9"),
+                    ("anthropic-version", "2023-06-01"),
                 ],
                 "api_key",
                 false,
@@ -2564,6 +2859,7 @@ mod tests {
                 &[
                     ("authorization", bearer.as_str()),
                     ("anthropic-beta", "oauth-2025-04-20"),
+                    ("anthropic-version", "2023-06-01"),
                 ],
                 "subscription_oauth",
                 true,
@@ -2572,6 +2868,11 @@ mod tests {
         ];
         for (headers, identity, passthrough) in cases {
             let db = memory_db();
+            db.set_setting(
+                SUBSCRIPTION_TERMS_KEY,
+                r#"{"version":1,"accepted":true,"acceptedAt":1}"#,
+            )
+            .unwrap();
             seed_route(&db, "anthropic", WireApi::Messages, 1, MODEL);
             let sender = fake_sender(vec![ScriptedOutcome::Respond {
                 status: 200,
@@ -2586,6 +2887,11 @@ mod tests {
                 headers,
             )
             .await;
+            if passthrough {
+                assert_eq!(status, StatusCode::FORBIDDEN);
+                assert!(sender.requests.lock().unwrap().is_empty());
+                continue;
+            }
             assert_eq!(status, StatusCode::OK, "{identity}");
             let outbound = sender.requests.lock().unwrap();
             let auth = outbound[0]
@@ -2593,18 +2899,17 @@ mod tests {
                 .iter()
                 .find(|(name, _)| name.eq_ignore_ascii_case("authorization"))
                 .map(|(_, value)| value.clone());
-            if passthrough {
-                assert_eq!(auth.as_deref(), Some(bearer.as_str()));
-                assert!(outbound[0].headers.iter().any(|(name, value)| {
-                    name == "anthropic-beta" && value == "oauth-2025-04-20"
-                }));
-            } else {
-                assert_eq!(auth.as_deref(), Some("Bearer upstream"));
+            assert_eq!(auth.as_deref(), Some("Bearer upstream"));
+            if identity == "api_key" {
                 assert!(outbound[0]
                     .headers
                     .iter()
-                    .all(|(_, value)| !value.contains(secret)));
+                    .any(|(name, value)| { name == "anthropic-version" && value == "2023-06-01" }));
             }
+            assert!(outbound[0]
+                .headers
+                .iter()
+                .all(|(_, value)| !value.contains(secret)));
             drop(outbound);
             let conn = db.conn.lock().unwrap();
             let (

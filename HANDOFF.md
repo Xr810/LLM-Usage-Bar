@@ -1487,3 +1487,28 @@ git diff --check
 ```
 
 新增测试须纳入相应验证命令。完成某项后直接更新本节的状态与证据，并写明下一未完成项；不要另建一份竞争的交接清单。受限环境中只能完成部分验证时，明确报告未完成，不勾选验收门。
+
+### 2026-10-25 BE-2 subscription transport / C22 incomplete
+
+Approved C22 key: `subscription_terms_ack`, intended shape `{version, ackedAt}`.
+The authoritative current version/type and `apply_takeover` writer remain unresolved:
+neither exists on current main. PR #90 uses sidecar version `"1"`; #95's mock uses
+`"r16-2026-10-25"`. The superseded invented parser was removed. **All subscription
+opt-in is refused** behind TODO(C22), including plausible stored records, until
+the authoritative contract and writer are integrated. No consent is synthesized.
+
+Anthropic subscription requests bypass model routing and use only
+`https://api.anthropic.com/v1/messages`, preserving the original body/model.
+The HTTPS/443 exact-host allowlist has an explicit trusted-host extension argument,
+empty in production; no setting/UI is exposed yet. Redirects and failover are
+disabled. Codex subscription requests are classified and recorded as blocked with
+zero observed tokens, return 501, and send no upstream request; actual Codex usage
+metering remains the existing session-ingestion path. API-key relay routing,
+model rewriting, stored API-key injection, and failover remain unchanged. Stored
+Codex OAuth injection is disabled as another prohibited passthrough path.
+Broken upstream streams settle as `upstream_error`, not `client_abort`.
+
+Validation is in progress in the Linux orb. The initial Rust build with concurrent
+frontend tests was killed for memory (exit 137); frontend typecheck and format passed,
+but unit tests had 3 failures (two timeout-related files). No Windows/macOS native
+interaction verification has been performed; §20's existing acceptance gaps remain.

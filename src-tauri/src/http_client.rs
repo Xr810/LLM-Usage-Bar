@@ -195,6 +195,16 @@ pub fn get() -> Client {
     }
 }
 
+/// Subscription credentials must never follow redirects, including same-host ones.
+pub(crate) fn get_without_redirects() -> Result<Client, String> {
+    let _ = get();
+    GLOBAL_NO_REDIRECT_CLIENT
+        .read()
+        .ok()
+        .and_then(|client| client.clone())
+        .ok_or_else(|| "No redirect-disabled HTTP client available".to_string())
+}
+
 /// 获取当前代理 URL
 ///
 /// 返回当前配置的代理 URL，None 表示直连。

@@ -13,6 +13,35 @@ const FINGERPRINT_SALT: &[u8] = b"llm-usage-bar-billing-fp-v1";
 const SESSION_HEADER: &str = "x-claude-code-session-id";
 const ACCOUNT_HEADER: &str = "chatgpt-account-id";
 
+/// Approved C22 key; credential detection never creates consent.
+pub const SUBSCRIPTION_TERMS_KEY: &str = "subscription_terms_ack";
+
+pub fn subscription_terms_acknowledged(_record: Option<&str>, _now: i64) -> bool {
+    // TODO(C22): validate {version, ackedAt} against the authoritative current
+    // terms version once its type/value and apply_takeover writer are resolved.
+    // No locally invented version or legacy acknowledgement grants consent.
+    false
+}
+
+/// Exact HTTPS host allowlist. Extension is empty in production until an
+/// explicit trusted-subscription-relay setting is approved; never use model routes.
+pub fn subscription_url_allowed(url: &str, trusted_hosts: &[String]) -> bool {
+    let Ok(url) = url::Url::parse(url) else {
+        return false;
+    };
+    url.scheme() == "https"
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.port_or_known_default() == Some(443)
+        && url.host_str().is_some_and(|host| {
+            host == "api.anthropic.com" || trusted_hosts.iter().any(|trusted| trusted == host)
+        })
+}
+
+pub fn is_anthropic_subscription(headers: &HeaderMap) -> bool {
+    bearer_token(headers).is_some_and(|token| token.starts_with("sk-ant-oat"))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClassifiedRequest {
     pub identity: BillingIdentity,
@@ -82,6 +111,7 @@ pub fn passthrough_headers(headers: &HeaderMap) -> Vec<(String, String)> {
         "accept",
         "authorization",
         "anthropic-beta",
+        "anthropic-version",
         ACCOUNT_HEADER,
     ] {
         if let Some(value) = header_str(headers, name) {
@@ -152,6 +182,49 @@ fn fingerprint(secret: &str) -> String {
 mod tests {
     use super::*;
     use axum::http::{HeaderName, HeaderValue};
+
+    #[test]
+    fn subscription_host_and_terms_are_explicit_and_fail_closed() {
+        assert!(subscription_url_allowed(
+            "https://api.anthropic.com/v1/messages",
+            &[]
+        ));
+        for url in [
+            "http://api.anthropic.com/v1/messages",
+            "https://api.anthropic.com.evil.test/v1/messages",
+            "https://api.anthropic.com@evil.test/v1/messages",
+            "https://user@api.anthropic.com/v1/messages",
+            "https://api.anthropic.com:444/v1/messages",
+            "https://relay.test/v1/messages",
+            "https://chatgpt.com/backend-api/codex/responses",
+        ] {
+            assert!(!subscription_url_allowed(url, &[]), "{url}");
+        }
+        assert!(subscription_url_allowed(
+            "https://relay.test/v1/messages",
+            &["relay.test".to_string()]
+        ));
+        assert!(!subscription_terms_acknowledged(None, 100));
+        for record in [
+            "true",
+            "{}",
+            "invalid",
+            r#"{"version":2,"accepted":true,"acceptedAt":1}"#,
+            r#"{"version":1,"accepted":false,"acceptedAt":1}"#,
+            r#"{"version":1,"accepted":true,"acceptedAt":0}"#,
+            r#"{"version":1,"accepted":true,"acceptedAt":101}"#,
+        ] {
+            assert!(!subscription_terms_acknowledged(Some(record), 100));
+        }
+        assert!(!subscription_terms_acknowledged(
+            Some(r#"{"version":1,"accepted":true,"acceptedAt":100}"#),
+            100
+        ));
+        assert!(!subscription_terms_acknowledged(
+            Some(r#"{"version":1,"ackedAt":100}"#),
+            100
+        ));
+    }
 
     fn headers(pairs: &[(&str, &str)]) -> HeaderMap {
         let mut map = HeaderMap::new();
@@ -269,6 +342,7 @@ mod tests {
         let map = headers(&[
             ("authorization", "Bearer sk-ant-oat01-example"),
             ("anthropic-beta", "oauth-2025-04-20"),
+            ("anthropic-version", "2023-06-01"),
             ("chatgpt-account-id", "acct_example"),
             ("content-type", "application/json"),
             ("cookie", "session=secret"),
@@ -282,6 +356,7 @@ mod tests {
                 "content-type",
                 "authorization",
                 "anthropic-beta",
+                "anthropic-version",
                 "chatgpt-account-id"
             ]
         );
