@@ -611,5 +611,14 @@
     "failures": "失敗回数",
     "input": "入力トークン",
     "output": "出力トークン"
+  },
+  "native": {
+    "tray": {
+      "showMain": "メインウィンドウを開く",
+      "openWebsite": "公式サイトを開く",
+      "noProviders": "(プロバイダーなし)",
+      "lightweightMode": "軽量モード",
+      "quit": "終了"
+    }
   }
 }

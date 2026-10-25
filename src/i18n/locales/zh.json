@@ -611,5 +611,14 @@
     "failures": "失败",
     "input": "输入 token",
     "output": "输出 token"
+  },
+  "native": {
+    "tray": {
+      "showMain": "打开主界面",
+      "openWebsite": "打开官方网站",
+      "noProviders": "(无供应商)",
+      "lightweightMode": "轻量模式",
+      "quit": "退出"
+    }
   }
 }
