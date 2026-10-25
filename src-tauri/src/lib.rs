@@ -1612,6 +1612,8 @@ pub fn run() {
             commands::get_quota_status,
             // BE-21: tray guard snapshot (C12 read)
             commands::get_guard_state,
+            // BE-22: read-only session list (C14)
+            commands::list_sessions,
         ]);
 
     let app = builder
