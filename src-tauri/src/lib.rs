@@ -8,6 +8,7 @@ mod cli;
 mod config;
 mod error;
 pub mod http_client;
+mod i18n;
 mod ingest;
 mod init_status;
 mod lightweight;
@@ -1579,6 +1580,9 @@ pub fn run() {
             // BE-23: UI prefs (C18). Language uses settings-changed too (C8).
             commands::get_ui_prefs,
             commands::set_ui_prefs,
+            // BE-12: Rust i18n (C8). No language-changed event.
+            commands::get_language,
+            commands::set_language,
         ]);
 
     let app = builder

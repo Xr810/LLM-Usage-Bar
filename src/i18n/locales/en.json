@@ -611,5 +611,14 @@
     "failures": "Failures",
     "input": "Input tokens",
     "output": "Output tokens"
+  },
+  "native": {
+    "tray": {
+      "showMain": "Open main window",
+      "openWebsite": "Open Official Website",
+      "noProviders": "(no providers)",
+      "lightweightMode": "Lightweight Mode",
+      "quit": "Quit"
+    }
   }
 }

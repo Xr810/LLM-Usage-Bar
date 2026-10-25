@@ -611,5 +611,14 @@
     "failures": "失敗",
     "input": "輸入 token",
     "output": "輸出 token"
+  },
+  "native": {
+    "tray": {
+      "showMain": "開啟主介面",
+      "openWebsite": "開啟官方網站",
+      "noProviders": "(無供應商)",
+      "lightweightMode": "輕量模式",
+      "quit": "退出"
+    }
   }
 }

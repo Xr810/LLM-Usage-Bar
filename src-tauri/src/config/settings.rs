@@ -512,6 +512,9 @@ pub struct AppSettings {
     /// User has confirmed the common config first-run notice
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub common_config_confirmed: Option<bool>,
+    /// UI language and the only source for tray copy (BE-12 / C8).
+    /// Supported values are `en`, `zh`, `zh-TW`, and `ja`. `get_language`
+    /// does not fill this in. `set_language` and `save_settings` are the writers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
     /// Consumed-percent warning for metered spend (C18). Default 80.
