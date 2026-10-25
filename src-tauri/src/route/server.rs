@@ -658,7 +658,7 @@ async fn handle_proxy_inner(
     let via_subscription_optin = classified.passthrough
         && subscription_terms_acknowledged(
             state.db.get_setting(SUBSCRIPTION_TERMS_KEY)?.as_deref(),
-            now_millis() / 1000,
+            now_millis(),
         );
     let decision = AllowAllGate.admit(&ReqMeta {
         req_id: request_id.clone(),
@@ -2718,8 +2718,11 @@ mod tests {
     }
 
     fn acknowledge_subscription_terms(db: &Database) {
-        db.set_setting(SUBSCRIPTION_TERMS_KEY, r#"{"version":"1","ackedAt":1}"#)
-            .unwrap();
+        db.set_setting(
+            SUBSCRIPTION_TERMS_KEY,
+            &serde_json::json!({"version":"1","ackedAt":now_millis()}).to_string(),
+        )
+        .unwrap();
     }
 
     #[tokio::test]

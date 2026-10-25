@@ -27,15 +27,14 @@ use crate::agent_paths::{
     is_custom_codex_model_provider_id,
 };
 use crate::error::AppError;
+use crate::route::identity::{CURRENT_SUBSCRIPTION_TERMS_VERSION, SUBSCRIPTION_TERMS_KEY};
 use crate::route::pointer::{
     disconnect_codex_inner, point_codex_at_router_inner, ROUTER_PROVIDER_ID,
 };
+use crate::store::Database;
 
 const BACKUP_SUFFIX: &str = ".lub-takeover-backup";
 const ABSENT_SUFFIX: &str = ".lub-takeover-absent";
-const TERMS_SUFFIX: &str = ".lub-subscription-terms";
-/// Batch-1 Claude subscription proxy terms. Bump when the accepted text changes.
-pub const CLAUDE_SUBSCRIPTION_PROXY_TERMS_VERSION: &str = "1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -212,20 +211,28 @@ pub fn apply_takeover_at(
 
 pub fn set_claude_subscription_proxy_at(
     layout: &TakeoverLayout,
+    db: &Database,
     enabled: bool,
     terms_ack_at: Option<i64>,
-    now: i64,
+    now_ms: i64,
 ) -> Result<(), AppError> {
     if enabled {
         let Some(ack) = terms_ack_at else {
             return Err(terms_required());
         };
-        validate_terms_ack(ack, now)?;
+        validate_terms_ack(ack, now_ms)?;
         write_claude_base_url(layout, true)?;
-        persist_claude_terms(layout, ack)?;
+        db.set_setting(
+            SUBSCRIPTION_TERMS_KEY,
+            &json!({
+                "version": CURRENT_SUBSCRIPTION_TERMS_VERSION.to_string(),
+                "ackedAt": ack,
+            })
+            .to_string(),
+        )?;
         log::info!(
             "claude subscription proxy acknowledged; termsVersion={}",
-            CLAUDE_SUBSCRIPTION_PROXY_TERMS_VERSION
+            CURRENT_SUBSCRIPTION_TERMS_VERSION
         );
         Ok(())
     } else {
@@ -691,16 +698,6 @@ fn validate_terms_ack(ack: i64, now: i64) -> Result<(), AppError> {
     Ok(())
 }
 
-fn persist_claude_terms(layout: &TakeoverLayout, ack: i64) -> Result<(), AppError> {
-    let path = sibling(&layout.claude_settings(), TERMS_SUFFIX);
-    let payload = json!({
-        "termsAckAt": ack,
-        "termsVersion": CLAUDE_SUBSCRIPTION_PROXY_TERMS_VERSION,
-    });
-    let text = serde_json::to_string_pretty(&payload).map_err(|_| config_write_failed())?;
-    atomic_write(&path, text.as_bytes())
-}
-
 fn terms_required() -> AppError {
     AppError::coded("TERMS_ACK_REQUIRED", "Terms acknowledgement is required.")
 }
@@ -852,13 +849,14 @@ mod tests {
         fs::create_dir_all(home.join(".claude")).unwrap();
         fs::write(home.join(".claude/settings.json"), original).unwrap();
         let layout = layout(home);
-        let now = 1_700_000_100;
-        let rejected = set_claude_subscription_proxy_at(&layout, true, None, now).unwrap_err();
+        let db = Database::memory().unwrap();
+        let now = 1_700_000_100_000;
+        let rejected = set_claude_subscription_proxy_at(&layout, &db, true, None, now).unwrap_err();
         assert_eq!(rejected.code(), Some("TERMS_ACK_REQUIRED"));
-        let zero = set_claude_subscription_proxy_at(&layout, true, Some(0), now).unwrap_err();
+        let zero = set_claude_subscription_proxy_at(&layout, &db, true, Some(0), now).unwrap_err();
         assert_eq!(zero.code(), Some("TERMS_ACK_REQUIRED"));
-        let future =
-            set_claude_subscription_proxy_at(&layout, true, Some(now + 1), now).unwrap_err();
+        let future = set_claude_subscription_proxy_at(&layout, &db, true, Some(now + 60_000), now)
+            .unwrap_err();
         assert_eq!(future.code(), Some("INVALID_ARGUMENT"));
         assert_eq!(
             serde_json::to_value(&future).unwrap()["details"]["field"],
@@ -869,27 +867,30 @@ mod tests {
             original
         );
 
-        set_claude_subscription_proxy_at(&layout, true, Some(1_700_000_000), now).unwrap();
+        assert!(db.get_setting(SUBSCRIPTION_TERMS_KEY).unwrap().is_none());
+        set_claude_subscription_proxy_at(&layout, &db, true, Some(now - 1_000), now).unwrap();
         let written = fs::read_to_string(home.join(".claude/settings.json")).unwrap();
         assert!(written.contains("http://127.0.0.1:8788"));
         assert!(written.contains("dark"));
         let backup =
             fs::read_to_string(home.join(".claude/settings.json.lub-takeover-backup")).unwrap();
         assert_eq!(backup, original);
-        set_claude_subscription_proxy_at(&layout, true, Some(1_700_000_001), now).unwrap();
+        set_claude_subscription_proxy_at(&layout, &db, true, Some(now), now).unwrap();
         assert_eq!(
             fs::read_to_string(home.join(".claude/settings.json.lub-takeover-backup")).unwrap(),
             original
         );
-        let terms: serde_json::Value = serde_json::from_str(
-            &fs::read_to_string(home.join(".claude/settings.json.lub-subscription-terms")).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(terms["termsAckAt"], 1_700_000_001);
-        assert_eq!(
-            terms["termsVersion"],
-            CLAUDE_SUBSCRIPTION_PROXY_TERMS_VERSION
-        );
+        let record = db.get_setting(SUBSCRIPTION_TERMS_KEY).unwrap().unwrap();
+        let terms: serde_json::Value = serde_json::from_str(&record).unwrap();
+        assert_eq!(terms, json!({"version": "1", "ackedAt": now}));
+        assert!(crate::route::identity::subscription_terms_acknowledged(
+            Some(&record),
+            now
+        ));
+        assert!(!crate::route::identity::subscription_terms_acknowledged(
+            Some(&record),
+            now - 60_000
+        ));
 
         let mut current: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(home.join(".claude/settings.json")).unwrap())
@@ -901,7 +902,7 @@ mod tests {
         )
         .unwrap();
 
-        set_claude_subscription_proxy_at(&layout, false, None, now).unwrap();
+        set_claude_subscription_proxy_at(&layout, &db, false, None, now).unwrap();
         let restored: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(home.join(".claude/settings.json")).unwrap())
                 .unwrap();
@@ -911,9 +912,10 @@ mod tests {
         assert!(!home
             .join(".claude/settings.json.lub-takeover-backup")
             .exists());
-        assert!(home
-            .join(".claude/settings.json.lub-subscription-terms")
-            .exists());
+        assert_eq!(
+            db.get_setting(SUBSCRIPTION_TERMS_KEY).unwrap(),
+            Some(record)
+        );
     }
 
     #[test]

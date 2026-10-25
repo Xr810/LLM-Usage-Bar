@@ -26,7 +26,9 @@ struct SubscriptionTermsAck {
     acked_at: i64,
 }
 
-pub fn subscription_terms_acknowledged(record: Option<&str>, now: i64) -> bool {
+/// `ackedAt` and `now_ms` are epoch milliseconds; missing, invalid, stale-version,
+/// nonpositive and future acknowledgements fail closed.
+pub fn subscription_terms_acknowledged(record: Option<&str>, now_ms: i64) -> bool {
     record
         .and_then(|value| serde_json::from_str::<SubscriptionTermsAck>(value).ok())
         .is_some_and(|ack| {
@@ -37,7 +39,7 @@ pub fn subscription_terms_acknowledged(record: Option<&str>, now: i64) -> bool {
                     .parse::<u32>()
                     .is_ok_and(|version| version >= CURRENT_SUBSCRIPTION_TERMS_VERSION)
                 && ack.acked_at > 0
-                && ack.acked_at <= now
+                && ack.acked_at <= now_ms
         })
 }
 
@@ -222,7 +224,8 @@ mod tests {
             "https://relay.test/v1/messages",
             &["relay.test".to_string()]
         ));
-        assert!(!subscription_terms_acknowledged(None, 100));
+        let now_ms = 1_700_000_100_000;
+        assert!(!subscription_terms_acknowledged(None, now_ms));
         for record in [
             "true",
             "{}",
@@ -232,30 +235,31 @@ mod tests {
             r#"{"version":1,"accepted":true,"acceptedAt":0}"#,
             r#"{"version":1,"accepted":true,"acceptedAt":101}"#,
         ] {
-            assert!(!subscription_terms_acknowledged(Some(record), 100));
+            assert!(!subscription_terms_acknowledged(Some(record), now_ms));
         }
         assert!(!subscription_terms_acknowledged(
             Some(r#"{"version":1,"accepted":true,"acceptedAt":100}"#),
-            100
+            now_ms
         ));
         assert!(!subscription_terms_acknowledged(
             Some(r#"{"version":1,"ackedAt":100}"#),
-            100
+            now_ms
         ));
         for record in [
-            r#"{"version":"0","ackedAt":100}"#,
-            r#"{"version":"r16-2026-10-25","ackedAt":100}"#,
+            r#"{"version":"0","ackedAt":1700000100000}"#,
+            r#"{"version":"r16-2026-10-25","ackedAt":1700000100000}"#,
             r#"{"version":"1","ackedAt":0}"#,
-            r#"{"version":"1","ackedAt":101}"#,
-            r#"{"version":"1","ackedAt":"100"}"#,
+            r#"{"version":"1","ackedAt":-1}"#,
+            r#"{"version":"1","ackedAt":1700000160000}"#,
+            r#"{"version":"1","ackedAt":"1700000100000"}"#,
         ] {
-            assert!(!subscription_terms_acknowledged(Some(record), 100));
+            assert!(!subscription_terms_acknowledged(Some(record), now_ms));
         }
         for record in [
-            r#"{"version":"1","ackedAt":100}"#,
-            r#"{"version":"2","ackedAt":1}"#,
+            r#"{"version":"1","ackedAt":1700000100000}"#,
+            r#"{"version":"2","ackedAt":1700000099000}"#,
         ] {
-            assert!(subscription_terms_acknowledged(Some(record), 100));
+            assert!(subscription_terms_acknowledged(Some(record), now_ms));
         }
     }
 

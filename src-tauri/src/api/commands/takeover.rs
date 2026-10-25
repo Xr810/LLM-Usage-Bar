@@ -78,9 +78,15 @@ pub fn set_claude_subscription_proxy(
     {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_secs() as i64)
+            .map(|duration| duration.as_millis() as i64)
             .map_err(|_| AppError::internal("Could not read the clock."))?;
-        set_claude_subscription_proxy_at(&host_layout(&state), enabled, terms_ack_at, now)
+        set_claude_subscription_proxy_at(
+            &host_layout(&state),
+            &state.db,
+            enabled,
+            terms_ack_at,
+            now,
+        )
     }
 }
 
