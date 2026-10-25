@@ -5,7 +5,8 @@ use crate::usage::metering::calculator::{CostBreakdown, CostCalculator, ModelPri
 use crate::usage::metering::cost_parser::UpstreamCost;
 use crate::usage::metering::parser::TokenUsage;
 use crate::usage::usage_stats::{
-    find_model_pricing_row, find_provider_model_pricing_row, ProviderModelPricingRow,
+    bill_cache_rate, find_model_pricing_row, find_provider_model_pricing_row, OfficialPriceRow,
+    ProviderModelPricingRow,
 };
 use rusqlite::{params, OptionalExtension, Transaction};
 use rust_decimal::Decimal;
@@ -446,10 +447,10 @@ fn decide_cost(
     ))
 }
 
-fn parse_pricing_row(
-    row: Option<(String, String, String, String)>,
-) -> Result<Option<ModelPricing>, AppError> {
+fn parse_pricing_row(row: Option<OfficialPriceRow>) -> Result<Option<ModelPricing>, AppError> {
     row.map(|(input, output, cache_read, cache_creation)| {
+        let (cache_read, _) = bill_cache_rate(cache_read.as_deref(), &input);
+        let (cache_creation, _) = bill_cache_rate(cache_creation.as_deref(), &input);
         ModelPricing::from_strings(&input, &output, &cache_read, &cache_creation)
             .map_err(|error| AppError::Database(format!("invalid model pricing: {error}")))
     })
@@ -458,7 +459,7 @@ fn parse_pricing_row(
 
 fn merge_pricing_rows(
     user: ProviderModelPricingRow,
-    official: Option<(String, String, String, String)>,
+    official: Option<OfficialPriceRow>,
 ) -> Result<Option<ModelPricing>, AppError> {
     // A row with no user-entered rate is not user pricing. Let the normal
     // upstream -> official fallback decide the cost instead of relabelling an
@@ -469,22 +470,21 @@ fn merge_pricing_rows(
 
     let (official_input, official_output, official_cache_read, official_cache_creation) = official
         .map(|(input, output, cache_read, cache_creation)| {
-            (
-                Some(input),
-                Some(output),
-                Some(cache_read),
-                Some(cache_creation),
-            )
+            (Some(input), Some(output), cache_read, cache_creation)
         })
         .unwrap_or((None, None, None, None));
     let input = user.input.or(official_input);
     let output = user.output.or(official_output);
-    let cache_read = user.cache_read.or(official_cache_read);
-    let cache_creation = user.cache_creation.or(official_cache_creation);
-    let (Some(input), Some(output), Some(cache_read), Some(cache_creation)) =
-        (input, output, cache_read, cache_creation)
-    else {
+    let (Some(input), Some(output)) = (input, output) else {
         return Ok(None);
+    };
+    let (cache_read, _) = match user.cache_read.or(official_cache_read) {
+        Some(rate) => (rate, false),
+        None => bill_cache_rate(None, &input),
+    };
+    let (cache_creation, _) = match user.cache_creation.or(official_cache_creation) {
+        Some(rate) => (rate, false),
+        None => bill_cache_rate(None, &input),
     };
 
     ModelPricing::from_strings(&input, &output, &cache_read, &cache_creation)
@@ -664,10 +664,10 @@ fn insert_legacy_log(
             input_cost_usd, output_cost_usd, cache_read_cost_usd,
             cache_creation_cost_usd, total_cost_usd, latency_ms, first_token_ms,
             status_code, error_message, session_id, provider_type, is_streaming,
-            cost_multiplier, created_at, data_source
+            cost_multiplier, created_at, data_source, cost_source
          ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-            ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25
+            ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26
          ) ON CONFLICT(request_id) DO NOTHING",
         params![
             legacy.request_id,
@@ -699,6 +699,7 @@ fn insert_legacy_log(
             legacy.cost_multiplier.to_string(),
             created_at,
             data_source,
+            cost_source_value(cost.source),
         ],
     )?;
     if inserted == 1 {
@@ -1054,6 +1055,49 @@ mod tests {
             db.get_usage_sync_cursor("claude", "session.jsonl").unwrap(),
             Some(next_cursor)
         );
+    }
+
+    #[test]
+    fn live_cache_fallback_persists_estimated_cost_in_both_usage_tables() {
+        for cache_rate in [None, Some("0")] {
+            let db = Database::memory().unwrap();
+            save_provider(&db, "global-provider", Some("legacy-provider"));
+            seed_pricing(&db, "priced-model");
+            db.conn
+                .lock()
+                .unwrap()
+                .execute(
+                    "UPDATE model_pricing SET input_cost_per_million = '3',
+                 cache_read_cost_per_million = ?1, cache_creation_cost_per_million = ?1
+                 WHERE model_id = 'priced-model'",
+                    [cache_rate],
+                )
+                .unwrap();
+            let mut value = input("cache-fallback", TokenSource::Proxy);
+            value.usage.input_tokens = 0;
+            value.usage.output_tokens = 0;
+            value.usage.cache_read_tokens = 2_000_000;
+            value.usage.cache_creation_tokens = 1_000_000;
+            value.legacy = Some(legacy("legacy-cache"));
+            UsageIngestionService::new(&db).ingest(&value).unwrap();
+            let events = db
+                .list_usage_events("global-provider", 0, 200, 1, 10)
+                .unwrap();
+            assert_eq!(events.items[0].cost_source, CostSource::Estimated);
+            let expected = if cache_rate.is_none() { "9" } else { "0" };
+            assert_eq!(
+                Decimal::from_str(events.items[0].total_cost_usd.as_deref().unwrap()).unwrap(),
+                Decimal::from_str(expected).unwrap()
+            );
+            let (source, total): (String, String) = db.conn.lock().unwrap().query_row(
+                "SELECT cost_source, total_cost_usd FROM proxy_request_logs WHERE request_id = 'legacy-cache'", [],
+                |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+            assert_eq!(source, "estimated");
+            assert_eq!(
+                Decimal::from_str(&total).unwrap(),
+                Decimal::from_str(expected).unwrap()
+            );
+        }
     }
 
     #[test]

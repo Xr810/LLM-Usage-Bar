@@ -166,10 +166,10 @@ pub fn get_model_pricing(state: State<'_, AppState>) -> Result<Vec<ModelPricingI
         return Ok(Vec::new());
     }
 
+    // Preserve NULL: missing cache rates are estimated at input price, not free.
     let mut stmt = conn.prepare(
         "SELECT model_id, display_name, input_cost_per_million, output_cost_per_million,
-                COALESCE(cache_read_cost_per_million, '0'),
-                COALESCE(cache_creation_cost_per_million, '0')
+                cache_read_cost_per_million, cache_creation_cost_per_million
          FROM model_pricing
          ORDER BY display_name",
     )?;
@@ -403,6 +403,6 @@ pub struct ModelPricingInfo {
     pub display_name: String,
     pub input_cost_per_million: String,
     pub output_cost_per_million: String,
-    pub cache_read_cost_per_million: String,
-    pub cache_creation_cost_per_million: String,
+    pub cache_read_cost_per_million: Option<String>,
+    pub cache_creation_cost_per_million: Option<String>,
 }

@@ -375,12 +375,14 @@ export function useRefreshOfficialPricing() {
     onSuccess: (outcome) => {
       queryClient.setQueryData(
         usageKeys.officialPricingFreshness(),
-        outcome.fetchedAt,
+        outcome.lastSuccessAt,
       );
-      queryClient.setQueryData(
-        usageKeys.officialPricingImportedCount(),
-        outcome.modelsImported,
-      );
+      if (!outcome.batchRejected) {
+        queryClient.setQueryData(
+          usageKeys.officialPricingImportedCount(),
+          outcome.modelsImported,
+        );
+      }
       queryClient.invalidateQueries({ queryKey: usageKeys.pricing() });
     },
   });

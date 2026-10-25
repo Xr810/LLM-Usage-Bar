@@ -130,6 +130,23 @@ export function ProviderModelPricingSection({
   }, [draft.modelId, officialPricing.data]);
   const officialRate = (key: keyof Omit<DraftPrice, "modelId">) =>
     officialForDraft?.[key] ?? null;
+  const estimatedCacheRate = (input: string) =>
+    t("usageDashboard.cacheEstimatedAtInputPrice", {
+      input,
+      defaultValue: "estimated at input price (${{input}})",
+    });
+  const cacheRateText = (
+    row: ProviderModelPricingView,
+    key: "cacheReadCostPerMillion" | "cacheCreationCostPerMillion",
+  ) => {
+    if (row[key] !== null) return `$${row[key]}`;
+    const official = officialPricing.data?.find(
+      (entry) => entry.modelId.toLowerCase() === row.modelId.toLowerCase(),
+    );
+    if (official?.[key] != null) return rateText(null);
+    const input = row.inputCostPerMillion ?? official?.inputCostPerMillion;
+    return input != null ? estimatedCacheRate(input) : rateText(null);
+  };
   // A stored rate is nullable now, and a null one is inherited rather than
   // absent — rendering it as an empty amount would read as free.
   const rateText = (value: string | null) =>
@@ -271,13 +288,16 @@ export function ProviderModelPricingSection({
                   <div className="truncate text-sm font-medium">
                     {row.modelId}
                   </div>
-                  <div className="truncate text-xs text-muted-foreground">
+                  <div className="text-xs text-muted-foreground">
                     {t("usageDashboard.customPricingRowSummary", {
                       input: rateText(row.inputCostPerMillion),
                       output: rateText(row.outputCostPerMillion),
-                      cacheRead: rateText(row.cacheReadCostPerMillion),
-                      cacheWrite: rateText(row.cacheCreationCostPerMillion),
-                      defaultValue: `in ${rateText(row.inputCostPerMillion)} · out ${rateText(row.outputCostPerMillion)} · cache read ${rateText(row.cacheReadCostPerMillion)} · cache write ${rateText(row.cacheCreationCostPerMillion)} per 1M`,
+                      cacheRead: cacheRateText(row, "cacheReadCostPerMillion"),
+                      cacheWrite: cacheRateText(
+                        row,
+                        "cacheCreationCostPerMillion",
+                      ),
+                      defaultValue: `in ${rateText(row.inputCostPerMillion)} · out ${rateText(row.outputCostPerMillion)} · cache read ${cacheRateText(row, "cacheReadCostPerMillion")} · cache write ${cacheRateText(row, "cacheCreationCostPerMillion")} per 1M`,
                     })}
                   </div>
                 </div>
@@ -377,9 +397,17 @@ export function ProviderModelPricingSection({
                   // than looking unset.
                   placeholder={
                     officialRate(key) ??
-                    t("usageDashboard.customPricingNoOfficialRate", {
-                      defaultValue: "No official rate",
-                    })
+                    ((key === "cacheReadCostPerMillion" ||
+                      key === "cacheCreationCostPerMillion") &&
+                    (draft.inputCostPerMillion ||
+                      officialForDraft?.inputCostPerMillion)
+                      ? estimatedCacheRate(
+                          draft.inputCostPerMillion ||
+                            officialForDraft!.inputCostPerMillion,
+                        )
+                      : t("usageDashboard.customPricingNoOfficialRate", {
+                          defaultValue: "No official rate",
+                        }))
                   }
                   onChange={(event) =>
                     setDraft((current) => ({
