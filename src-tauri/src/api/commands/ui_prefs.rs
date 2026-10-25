@@ -7,6 +7,9 @@
 //! `settings-changed` is emitted once per successful change, with every key
 //! that actually changed. `language` uses the same event. There is no
 //! `language-changed` event.
+//!
+//! Budget state stays on C10 `TrayApiBudgetView`. This module does not add
+//! C12 `get_guard_state`; that command is not on main.
 
 use tauri::{AppHandle, Emitter};
 
