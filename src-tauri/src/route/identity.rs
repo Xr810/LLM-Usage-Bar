@@ -52,6 +52,7 @@ pub fn classify_headers(headers: &HeaderMap, codex_path: bool) -> ClassifiedRequ
     let api_key = header_str(headers, "x-api-key");
     let bearer = bearer_token(headers);
 
+    // No credential is unknown, including an oauth-like beta header with nothing to classify.
     let (identity, secret) = if let Some(api_key) = api_key {
         (BillingIdentity::ApiKey, Some(api_key))
     } else if let Some(token) = bearer {
@@ -59,8 +60,6 @@ pub fn classify_headers(headers: &HeaderMap, codex_path: bool) -> ClassifiedRequ
             classify_bearer(token, beta, account, codex_path),
             Some(token),
         )
-    } else if beta_looks_like_oauth(beta) {
-        (BillingIdentity::Unknown, None)
     } else {
         (BillingIdentity::Unknown, None)
     };
