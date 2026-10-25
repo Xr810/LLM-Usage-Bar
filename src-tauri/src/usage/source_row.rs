@@ -125,7 +125,7 @@ pub fn source_row_for_provider(
         let (used_pct, windows, source_state) = match quota {
             Some(row) => (
                 Some(row.used_pct),
-                nonempty_windows(row.windows.clone()),
+                nonempty_windows(publishable_windows(row.windows.clone())),
                 row.state,
             ),
             None => (Some(0.0), None, QuotaReadState::Stale),
@@ -167,6 +167,31 @@ pub fn source_row_for_provider(
 
 fn nonempty_windows(windows: Vec<QuotaWindowStatus>) -> Option<Vec<QuotaWindowStatus>> {
     (!windows.is_empty()).then_some(windows)
+}
+
+/// The tray snapshot must not echo an unparsed reset string. A quota payload
+/// can store a sentinel there; only an ISO-8601 timestamp is published.
+fn publishable_windows(windows: Vec<QuotaWindowStatus>) -> Vec<QuotaWindowStatus> {
+    windows
+        .into_iter()
+        .map(|mut window| {
+            if window
+                .resets_at
+                .as_deref()
+                .is_some_and(|value| !is_iso_timestamp(value))
+            {
+                window.resets_at = None;
+            }
+            window
+        })
+        .collect()
+}
+
+fn is_iso_timestamp(value: &str) -> bool {
+    let value = value.trim();
+    chrono::DateTime::parse_from_rfc3339(value).is_ok()
+        || chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S").is_ok()
+        || chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%SZ").is_ok()
 }
 
 fn progress_from_used_pct(used_pct: Option<f64>) -> f64 {
