@@ -16,11 +16,29 @@ const ACCOUNT_HEADER: &str = "chatgpt-account-id";
 /// Approved C22 key; credential detection never creates consent.
 pub const SUBSCRIPTION_TERMS_KEY: &str = "subscription_terms_ack";
 
-pub fn subscription_terms_acknowledged(_record: Option<&str>, _now: i64) -> bool {
-    // TODO(C22): validate {version, ackedAt} against the authoritative current
-    // terms version once its type/value and apply_takeover writer are resolved.
-    // No locally invented version or legacy acknowledgement grants consent.
-    false
+/// Numeric ordering of BE-17's current terms version string "1".
+pub const CURRENT_SUBSCRIPTION_TERMS_VERSION: u32 = 1;
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SubscriptionTermsAck {
+    version: String,
+    acked_at: i64,
+}
+
+pub fn subscription_terms_acknowledged(record: Option<&str>, now: i64) -> bool {
+    record
+        .and_then(|value| serde_json::from_str::<SubscriptionTermsAck>(value).ok())
+        .is_some_and(|ack| {
+            !ack.version.is_empty()
+                && ack.version.bytes().all(|byte| byte.is_ascii_digit())
+                && ack
+                    .version
+                    .parse::<u32>()
+                    .is_ok_and(|version| version >= CURRENT_SUBSCRIPTION_TERMS_VERSION)
+                && ack.acked_at > 0
+                && ack.acked_at <= now
+        })
 }
 
 /// Exact HTTPS host allowlist. Extension is empty in production until an
@@ -224,6 +242,21 @@ mod tests {
             Some(r#"{"version":1,"ackedAt":100}"#),
             100
         ));
+        for record in [
+            r#"{"version":"0","ackedAt":100}"#,
+            r#"{"version":"r16-2026-10-25","ackedAt":100}"#,
+            r#"{"version":"1","ackedAt":0}"#,
+            r#"{"version":"1","ackedAt":101}"#,
+            r#"{"version":"1","ackedAt":"100"}"#,
+        ] {
+            assert!(!subscription_terms_acknowledged(Some(record), 100));
+        }
+        for record in [
+            r#"{"version":"1","ackedAt":100}"#,
+            r#"{"version":"2","ackedAt":1}"#,
+        ] {
+            assert!(subscription_terms_acknowledged(Some(record), 100));
+        }
     }
 
     fn headers(pairs: &[(&str, &str)]) -> HeaderMap {

@@ -2717,16 +2717,17 @@ mod tests {
         assert_eq!(reason, "upstream_error");
     }
 
+    fn acknowledge_subscription_terms(db: &Database) {
+        db.set_setting(SUBSCRIPTION_TERMS_KEY, r#"{"version":"1","ackedAt":1}"#)
+            .unwrap();
+    }
+
     #[tokio::test]
     async fn subscriptions_do_not_route_or_fail_over_but_relay_keys_do() {
         for subscription in [false, true] {
             for failure in [0, 302, 429, 500] {
                 let db = memory_db();
-                db.set_setting(
-                    SUBSCRIPTION_TERMS_KEY,
-                    r#"{"version":1,"accepted":true,"acceptedAt":1}"#,
-                )
-                .unwrap();
+                acknowledge_subscription_terms(&db);
                 seed_route(&db, "relay-one", WireApi::Messages, 1, "rewritten-one");
                 seed_route(&db, "relay-two", WireApi::Messages, 2, "rewritten-two");
                 let first = if failure == 0 {
@@ -2768,8 +2769,17 @@ mod tests {
                 .await;
                 let requests = sender.requests.lock().unwrap();
                 if subscription {
-                    assert_eq!(status, StatusCode::FORBIDDEN);
-                    assert!(requests.is_empty());
+                    assert_ne!(status, StatusCode::OK);
+                    assert_eq!(requests.len(), 1);
+                    assert_eq!(requests[0].url, "https://api.anthropic.com/v1/messages");
+                    assert!(requests[0].subscription);
+                    let OutboundBody::Buffered(bytes) = &requests[0].body else {
+                        panic!("buffered")
+                    };
+                    assert_eq!(
+                        serde_json::from_slice::<serde_json::Value>(bytes).unwrap()["model"],
+                        MODEL
+                    );
                 } else if failure != 302 {
                     assert_eq!(status, StatusCode::OK);
                     assert_eq!(requests.len(), 2);
@@ -2806,8 +2816,14 @@ mod tests {
             (
                 "/v1/responses",
                 "Bearer aaa.bbb.ccc",
-                Some(r#"{"version":1,"accepted":true,"acceptedAt":1}"#),
+                Some(r#"{"version":"1","ackedAt":1}"#),
                 StatusCode::NOT_IMPLEMENTED,
+            ),
+            (
+                "/v1/messages",
+                "Bearer sk-ant-oat01-test-only",
+                Some(r#"{"version":"0","ackedAt":1}"#),
+                StatusCode::FORBIDDEN,
             ),
         ] {
             let db = memory_db();
@@ -2868,11 +2884,7 @@ mod tests {
         ];
         for (headers, identity, passthrough) in cases {
             let db = memory_db();
-            db.set_setting(
-                SUBSCRIPTION_TERMS_KEY,
-                r#"{"version":1,"accepted":true,"acceptedAt":1}"#,
-            )
-            .unwrap();
+            acknowledge_subscription_terms(&db);
             seed_route(&db, "anthropic", WireApi::Messages, 1, MODEL);
             let sender = fake_sender(vec![ScriptedOutcome::Respond {
                 status: 200,
@@ -2887,11 +2899,6 @@ mod tests {
                 headers,
             )
             .await;
-            if passthrough {
-                assert_eq!(status, StatusCode::FORBIDDEN);
-                assert!(sender.requests.lock().unwrap().is_empty());
-                continue;
-            }
             assert_eq!(status, StatusCode::OK, "{identity}");
             let outbound = sender.requests.lock().unwrap();
             let auth = outbound[0]
@@ -2899,8 +2906,15 @@ mod tests {
                 .iter()
                 .find(|(name, _)| name.eq_ignore_ascii_case("authorization"))
                 .map(|(_, value)| value.clone());
-            assert_eq!(auth.as_deref(), Some("Bearer upstream"));
-            if identity == "api_key" {
+            if passthrough {
+                assert_eq!(outbound.len(), 1);
+                assert_eq!(outbound[0].url, "https://api.anthropic.com/v1/messages");
+                assert!(outbound[0].subscription);
+                assert_eq!(auth.as_deref(), Some(bearer.as_str()));
+            } else {
+                assert_eq!(auth.as_deref(), Some("Bearer upstream"));
+            }
+            if identity != "unknown" {
                 assert!(outbound[0]
                     .headers
                     .iter()

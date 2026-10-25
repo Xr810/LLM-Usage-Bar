@@ -1488,14 +1488,20 @@ git diff --check
 
 新增测试须纳入相应验证命令。完成某项后直接更新本节的状态与证据，并写明下一未完成项；不要另建一份竞争的交接清单。受限环境中只能完成部分验证时，明确报告未完成，不勾选验收门。
 
-### 2026-10-25 BE-2 subscription transport / C22 incomplete
+### 2026-10-25 BE-2 subscription transport / C22 reader
 
 Approved C22 key: `subscription_terms_ack`, intended shape `{version, ackedAt}`.
-The authoritative current version/type and `apply_takeover` writer remain unresolved:
-neither exists on current main. PR #90 uses sidecar version `"1"`; #95's mock uses
-`"r16-2026-10-25"`. The superseded invented parser was removed. **All subscription
-opt-in is refused** behind TODO(C22), including plausible stored records, until
-the authoritative contract and writer are integrated. No consent is synthesized.
+This reader introduces the typed database shape `{"version":"1","ackedAt":<Unix seconds>}`:
+version is a decimal string compared numerically against
+`CURRENT_SUBSCRIPTION_TERMS_VERSION = 1`, matching BE-17's current
+`CLAUDE_SUBSCRIPTION_PROXY_TERMS_VERSION = "1"`. Timestamp is an i64, positive and
+not future, matching BE-17's existing acknowledgement timestamp validation.
+Missing/malformed/stale records fail closed; current and newer numeric versions
+pass. No consent is synthesized or migrated. The database representation is newly
+introduced here: ADR v7.15.2 was referenced but its full text was not available.
+BE-17 owns the `apply_takeover` writer and must use this shape; #93 adds only a test
+writer. Its existing sidecar is not read or silently converted. The frontend mock's
+`"r16-2026-10-25"` is not a valid numeric terms version.
 
 Anthropic subscription requests bypass model routing and use only
 `https://api.anthropic.com/v1/messages`, preserving the original body/model.
