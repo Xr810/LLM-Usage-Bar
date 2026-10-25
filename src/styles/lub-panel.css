@@ -589,6 +589,125 @@ html[data-window-surface="tray-popover"] .lub-scroll {
   flex: 1;
 }
 
+.lub-stage-window {
+  justify-content: center;
+  align-items: flex-start;
+  padding: 28px var(--lub-sp-4) var(--lub-sp-6);
+}
+
+.lub-modal {
+  display: flex;
+  width: min(500px, 100%);
+  flex-direction: column;
+  gap: 10px;
+  padding: 18px;
+  border-radius: var(--lub-radius);
+  background: var(--lub-panel);
+  color: var(--lub-ink);
+  font-family: var(--lub-font);
+  font-size: var(--lub-fs-body);
+  box-shadow: var(--lub-shadow-panel);
+}
+
+.lub-steps {
+  display: flex;
+  gap: 6px;
+}
+
+.lub-steps i {
+  height: 3px;
+  flex: 1;
+  border-radius: 2px;
+  background: var(--lub-track);
+}
+
+.lub-steps i.on {
+  background: var(--lub-accent);
+}
+
+.lub-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.3px;
+}
+
+.lub-pad {
+  padding: 4px 12px;
+}
+
+.lub-tool-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 0;
+  border-top: 1px solid var(--lub-hairline);
+}
+
+.lub-card .lub-tool-row:first-child {
+  border-top: 0;
+}
+
+.lub-tag {
+  flex: none;
+  border-radius: 999px;
+  background: var(--lub-track);
+  color: var(--lub-ink-2);
+  padding: 2px 8px;
+  font-size: var(--lub-fs-cap);
+}
+
+.lub-banner-warn {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 12px;
+  border-radius: var(--lub-radius-2);
+  background: color-mix(in srgb, var(--lub-warn) 13%, var(--lub-group));
+}
+
+.lub-banner-warn b,
+.lub-banner-warn .lub-icon {
+  color: var(--lub-warn);
+}
+
+.lub-btn {
+  min-height: 32px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--lub-track);
+  color: var(--lub-ink);
+  padding: 4px 14px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.lub-btn-primary {
+  background: var(--lub-accent);
+  color: var(--lub-on-accent);
+}
+
+.lub-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.lub-switch {
+  width: 38px;
+  height: 22px;
+  flex: none;
+  border: 0;
+  border-radius: 999px;
+  background: var(--lub-track);
+  cursor: pointer;
+}
+
+.lub-switch[aria-checked="true"] {
+  background: var(--lub-accent);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .lub-meter-fill,
   .lub-meter-overflow {
