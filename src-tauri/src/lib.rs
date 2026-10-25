@@ -1610,6 +1610,8 @@ pub fn run() {
             commands::set_language,
             // BE-5b: quota source status (C4)
             commands::get_quota_status,
+            // BE-21: tray guard snapshot (C12 read)
+            commands::get_guard_state,
         ]);
 
     let app = builder
