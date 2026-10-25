@@ -11,6 +11,7 @@ pub mod dashboard;
 pub mod ingestion;
 pub(crate) mod rhythm;
 pub mod session;
+pub mod session_list;
 pub mod source_row;
 pub mod status;
 pub(crate) mod subscription_pace;
