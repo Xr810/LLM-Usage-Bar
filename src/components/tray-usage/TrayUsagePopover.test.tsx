@@ -8,7 +8,10 @@ import {
   waitFor,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
+import i18n from "i18next";
+import en from "@/i18n/locales/en.json";
+import zh from "@/i18n/locales/zh.json";
 import type { TrayUsageSnapshot } from "@/types/trayUsage";
 import { commandCalls, emitTauriEvent } from "../../../tests/msw/tauriMocks";
 import { TrayUsagePopover } from "./TrayUsagePopover";
@@ -165,65 +168,41 @@ function wrapper() {
 }
 
 describe("TrayUsagePopover Provider-only UI", () => {
+  beforeAll(async () => {
+    i18n.addResourceBundle("en", "translation", { lub: en.lub }, true, true);
+    i18n.addResourceBundle("zh", "translation", { lub: zh.lub }, true, true);
+    await i18n.changeLanguage("en");
+  });
+
   it("renders Provider accounts directly without Agent tabs or labels", () => {
     render(<TrayUsagePopoverView {...props()} />);
 
-    expect(
-      screen.getByRole("heading", { name: "Provider monitoring" }),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/Today.s API spend/)).toBeInTheDocument();
     expect(screen.getByText("ChatGPT Plus")).toBeInTheDocument();
     expect(screen.getByText("OpenAI API")).toBeInTheDocument();
-    // Spend stays on the collapsed summary row; the chart and model line are
-    // behind the per-account disclosure so the popover stays glanceable.
-    expect(screen.getAllByText("$1.25")).not.toHaveLength(0);
+    expect(screen.queryByText("$1.25")).toBeNull();
     expect(screen.queryByText("Most used model: gpt-5.6-sol")).toBeNull();
     expect(
       screen.queryAllByRole("img", {
         name: "Token usage for the last 30 days",
       }),
     ).toHaveLength(0);
-    expect(
-      screen.queryByText(/Estimated from this Provider/),
-    ).not.toBeInTheDocument();
-    expect(screen.getByText("$8.00 of $10.00")).toBeInTheDocument();
+    expect(screen.getByText("60%")).toBeInTheDocument();
+    expect(screen.getByText("$8.00")).toBeInTheDocument();
     expect(screen.queryByRole("tablist")).toBeNull();
     expect(screen.queryByText("Providers")).toBeNull();
-    expect(
-      screen.getByRole("progressbar", {
-        name: "Daily budget for OpenAI API",
-      }),
-    ).toHaveAttribute("aria-valuenow", "80");
+    expect(screen.queryByText("Cap-enforced")).toBeNull();
+    expect(screen.queryByText("Monitor only")).toBeNull();
+    expect(document.querySelectorAll("[data-lub-marker]")).toHaveLength(0);
   });
 
-  it("reveals the chart and most-used model once an account is expanded", async () => {
-    const user = userEvent.setup();
+  it("does not expand a per-account chart in the v5 tray", () => {
     render(<TrayUsagePopoverView {...props()} />);
-
-    const [firstDisclosure] = screen.getAllByRole("button", {
-      name: "Usage details",
-    });
-    await user.click(firstDisclosure);
-
-    expect(
-      screen.getByText("Most used model: gpt-5.6-sol"),
-    ).toBeInTheDocument();
-    expect(
-      screen.getAllByRole("img", {
-        name: "Token usage for the last 30 days",
-      }),
-    ).toHaveLength(1);
-    // Today first, then 30 days — the same order as the spend row, and a fixed
-    // window rather than "whichever day this account was last used".
-    const labels = screen.getAllByRole("term").map((node) => node.textContent);
-    expect(labels.slice(0, 2)).toEqual([
-      "Today's tokens",
-      "Last 30 days tokens",
-    ]);
-    expect(screen.getByText("4.2M")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Usage details" })).toBeNull();
+    expect(screen.queryByText("4.2M")).toBeNull();
   });
 
-  it("uses the weekly label and expands GPT manual reset credits", async () => {
-    const user = userEvent.setup();
+  it("keeps weekly windows and manual resets off the tray row", () => {
     const withExtraResets = structuredClone(snapshot);
     const subscription = withExtraResets.agents[0].providers[0].subscription!;
     subscription.windows.push({
@@ -241,36 +220,16 @@ describe("TrayUsagePopover Provider-only UI", () => {
         title: "Full reset",
         expiresAt: "2026-07-27T00:00:00Z",
       },
-      {
-        id: "reset-2",
-        title: "Full reset",
-        expiresAt: "2026-08-01T00:00:00Z",
-      },
-      {
-        id: "reset-3",
-        title: "Full reset",
-        expiresAt: "2026-08-13T00:00:00Z",
-      },
     ];
 
     render(<TrayUsagePopoverView {...props({ snapshot: withExtraResets })} />);
 
-    expect(screen.getByText("Weekly allowance")).toBeInTheDocument();
-    expect(screen.queryByText("7-day allowance")).toBeNull();
-    expect(screen.getByText("3 available")).toBeInTheDocument();
+    expect(screen.queryByText("Weekly allowance")).toBeNull();
     expect(screen.queryByText("Full reset")).toBeNull();
-
-    await user.click(
-      screen.getByRole("button", {
-        name: "Toggle 3 usage limit resets",
-      }),
-    );
-
-    expect(screen.getAllByText("Full reset")).toHaveLength(3);
-    expect(screen.getAllByText(/^Expires /)).toHaveLength(3);
+    expect(screen.getByText("60%")).toBeInTheDocument();
   });
 
-  it("fills subscription progress from remaining quota", () => {
+  it("shows subscription progress as used percent", () => {
     const mostlyAvailable = structuredClone(snapshot);
     const window =
       mostlyAvailable.agents[0].providers[0].subscription!.windows[0];
@@ -280,11 +239,10 @@ describe("TrayUsagePopover Provider-only UI", () => {
 
     render(<TrayUsagePopoverView {...props({ snapshot: mostlyAvailable })} />);
 
+    expect(screen.getByText("5%")).toBeInTheDocument();
     expect(
-      screen.getByRole("progressbar", {
-        name: "5-hour allowance for ChatGPT",
-      }),
-    ).toHaveAttribute("aria-valuenow", "95");
+      screen.getByRole("meter", { name: /ChatGPT Plus, monitor only/ }),
+    ).toHaveAttribute("aria-valuenow", "5");
   });
 
   it("shows one combined API limit while keeping Provider cost breakdowns", () => {
@@ -305,14 +263,11 @@ describe("TrayUsagePopover Provider-only UI", () => {
 
     render(<TrayUsagePopoverView {...props({ snapshot: shared })} />);
 
-    expect(screen.getByText("Combined API spending")).toBeInTheDocument();
-    expect(screen.getByText("$8.00 of $20.00")).toBeInTheDocument();
+    expect(screen.getByText("/ $20")).toBeInTheDocument();
     expect(screen.getByText("OpenAI API")).toBeInTheDocument();
-    expect(
-      screen.getByRole("progressbar", {
-        name: "Combined daily limit across 1 API Providers",
-      }),
-    ).toHaveAttribute("aria-valuenow", "40");
+    expect(document.querySelectorAll("[data-lub-marker='day']")).toHaveLength(
+      1,
+    );
     expect(
       screen.queryByRole("progressbar", {
         name: "Daily budget for OpenAI API",
@@ -362,7 +317,7 @@ describe("TrayUsagePopover Provider-only UI", () => {
     );
     expect(onOpenSettings).toHaveBeenCalledWith("system-openai-api");
 
-    await user.click(screen.getByRole("button", { name: "Open details" }));
+    await user.click(screen.getByRole("button", { name: /Trends/ }));
     expect(onOpenDetails).toHaveBeenCalledOnce();
 
     await user.click(screen.getByRole("button", { name: "Settings" }));
@@ -389,7 +344,7 @@ describe("TrayUsagePopover Provider-only UI", () => {
     render(<TrayUsagePopover />, { wrapper: wrapper() });
     expect(await screen.findByText("ChatGPT Plus")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Open details" }));
+    fireEvent.click(screen.getByRole("button", { name: /Trends/ }));
     await waitFor(() =>
       expect(commandCalls("open_main_from_tray").length).toBe(1),
     );

@@ -14,7 +14,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { message } from "@tauri-apps/plugin-dialog";
 import { exit } from "@tauri-apps/plugin-process";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { isTauriRuntime } from "@/lib/platform";
+import { isTauriRuntime, isWindows } from "@/lib/platform";
+import { renderLubGallery } from "@/preview/LubGallery";
 import { resolveWindowSurface, WindowSurface } from "./windowSurface";
 
 // 根据平台添加 body class，便于平台特定样式
@@ -25,6 +26,10 @@ try {
   if (isMac) {
     document.documentElement.classList.add("is-mac");
     document.body.classList.add("is-mac");
+  }
+  if (isWindows()) {
+    document.documentElement.classList.add("is-windows");
+    document.body.classList.add("is-windows");
   }
 } catch {
   // 忽略平台检测失败
@@ -86,6 +91,11 @@ function renderPreviewNotice() {
 
 async function bootstrap() {
   if (!isTauriRuntime()) {
+    const params = new URLSearchParams(window.location.search);
+    if (params.has("lub")) {
+      renderLubGallery(params);
+      return;
+    }
     renderPreviewNotice();
     return;
   }

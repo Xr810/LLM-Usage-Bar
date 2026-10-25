@@ -611,5 +611,52 @@
     "failures": "失败",
     "input": "输入 token",
     "output": "输出 token"
+  },
+  "lub": {
+    "common": {
+      "sun": "周日 {{time}}"
+    },
+    "panel": {
+      "today_s_api_spend": "今日 API 花费",
+      "protected": "保护中",
+      "stops_at_amt": "到 {{amount}} 自动停",
+      "daily_cap_amt": "日上限 {{amount}}",
+      "this_month": "本月",
+      "stops_at_amt_this_month": "本月到 {{amount}} 自动停",
+      "monthly_cap_amt": "月上限 {{amount}}",
+      "last_days": "近 14 天",
+      "trends": "趋势",
+      "traffic_sources": "流量来源",
+      "api_key": "API Key",
+      "counts_toward_cap": "计入日上限",
+      "plan_hour_window": "订阅，5 小时窗口",
+      "monitor_only": "仅监控",
+      "stops_at_beta": "到 {{percent}} 自动停（Beta）",
+      "beta_stops_at": "Beta：{{percent}} 停",
+      "plan_codex": "订阅，Codex",
+      "not_proxied": "不经代理",
+      "active_sessions": "运行中的会话",
+      "client_acme": "客户 Acme",
+      "no_client": "未分配客户",
+      "session_near_limit": "· 接近上限",
+      "aria_session_near_limit": "{{name}} 会话 {{used}} / {{cap}}，已用 {{percent}}，接近上限",
+      "tooltip_session_near_limit": "已用 {{percent}}，接近上限",
+      "stop_all_api_spend": "停止全部 API 花费",
+      "stop_all_spend_incl_plans": "停止全部花费（含订阅）",
+      "line_spending_stops_there_lighter": "竖线 | 是自动停止的位置，浅色为月上限",
+      "plan_cut_off_beta_is": "订阅截断（Beta）已开启，订阅到 {{percent}} 也会停",
+      "settings": "设置",
+      "client_receipts": "客户收据",
+      "sample_data": "示例数据",
+      "tip_cap_enforced": "受上限管控：到竖线处超额自动停",
+      "tip_monitor_only": "仅监控：只提醒，不会停",
+      "aria_row_cap_enforced": "{{name}}，受上限管控",
+      "aria_row_monitor_only": "{{name}}，仅监控，只提醒不会停",
+      "aria_cap_line_day": "日上限 {{amount}}，花到这里超额自动停",
+      "aria_cap_line_month": "月上限 {{amount}}",
+      "aria_cap_line_beta": "订阅截断 Beta：到 {{percent}} 自动停",
+      "more_rows": "还有 {{count}} 行，滚动查看",
+      "aria_scroll_region": "流量来源与会话"
+    }
   }
 }

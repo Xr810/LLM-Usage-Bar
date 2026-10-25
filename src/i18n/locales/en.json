@@ -611,5 +611,52 @@
     "failures": "Failures",
     "input": "Input tokens",
     "output": "Output tokens"
+  },
+  "lub": {
+    "common": {
+      "sun": "Sun {{time}}"
+    },
+    "panel": {
+      "today_s_api_spend": "Today’s API spend",
+      "protected": "Protected",
+      "stops_at_amt": "Stops at {{amount}}",
+      "daily_cap_amt": "Daily cap {{amount}}",
+      "this_month": "This month",
+      "stops_at_amt_this_month": "Stops at {{amount}} this month",
+      "monthly_cap_amt": "Monthly cap {{amount}}",
+      "last_days": "Last 14 days",
+      "trends": "Trends",
+      "traffic_sources": "Traffic sources",
+      "api_key": "API key",
+      "counts_toward_cap": "Counts toward cap",
+      "plan_hour_window": "Plan, 5-hour window",
+      "monitor_only": "Monitor only",
+      "stops_at_beta": "Stops at {{percent}} (Beta)",
+      "beta_stops_at": "Beta: stops at {{percent}}",
+      "plan_codex": "Plan, Codex",
+      "not_proxied": "Not proxied",
+      "active_sessions": "Active sessions",
+      "client_acme": "Client: Acme",
+      "no_client": "No client",
+      "session_near_limit": "· Near limit",
+      "aria_session_near_limit": "{{name}} session {{used}} of {{cap}}, {{percent}} used, near limit",
+      "tooltip_session_near_limit": "{{percent}} used — near limit",
+      "stop_all_api_spend": "Stop all API spend",
+      "stop_all_spend_incl_plans": "Stop all spend, incl. plans",
+      "line_spending_stops_there_lighter": "Line | = spending stops there. Lighter = monthly cap",
+      "plan_cut_off_beta_is": "Plan cut-off (Beta) is on. Plans stop at {{percent}}",
+      "settings": "Settings",
+      "client_receipts": "Client receipts",
+      "sample_data": "Sample data",
+      "tip_cap_enforced": "Cap-enforced: auto-stops at the line",
+      "tip_monitor_only": "Monitor only: alerts, never stops",
+      "aria_row_cap_enforced": "{{name}}, cap-enforced",
+      "aria_row_monitor_only": "{{name}}, monitor only, alerts but never stops",
+      "aria_cap_line_day": "Daily cap {{amount}}, spending auto-stops here",
+      "aria_cap_line_month": "Monthly cap {{amount}}",
+      "aria_cap_line_beta": "Plan cut-off (Beta): stops at {{percent}}",
+      "more_rows": "{{count}} more rows. Scroll to see",
+      "aria_scroll_region": "Traffic sources and sessions"
+    }
   }
 }

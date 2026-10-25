@@ -1,0 +1,92 @@
+{
+  "lub": {
+    "killed": {
+      "all_api_spend_stopped": "已停止全部 API 花费",
+      "all_spend_stopped_incl_plans": "已停止全部花费（含订阅）",
+      "stopped_by_you_at_requests": "{{time}} 由你手动停止，已拦截 4 个请求",
+      "resume_api_traffic": "恢复 API 流量",
+      "resume_all_traffic": "恢复全部流量",
+      "stopped": "已停止",
+      "stopped_by_you_tap_resume": "已手动停止，点「恢复」继续",
+      "running": "仍在运行，{{percent}}",
+      "stopped_by_you_beta": "已手动停止（Beta）",
+      "stays_stopped_after_restart_until": "重启电脑后仍保持停止，直到你点「恢复」。"
+    },
+    "killconfirm": {
+      "stop_all_api_key_spend": "停止全部 API Key 花费？",
+      "stop_all_spend_including_plans": "停止全部花费（含订阅）？",
+      "new_api_requests_from_claude": "立刻拒绝 Claude Code、Codex 的新 API 请求，进行中的会完成。<br><span class=nb><b>已经走本地代理的订阅流量也会一起截断</b>；不经代理的订阅照常运行。</span><span class=yb><b>订阅截断（Beta）已开启：订阅也会一起停止。</b></span>",
+      "don_t_ask_again": "下次不再询问",
+      "cancel": "取消",
+      "stop_api_spend": "停止 API 花费",
+      "stop_all": "全部停止"
+    },
+    "hardstop": {
+      "daily_cap_of_amt_reached": "已达今日上限 {{amount}}，新 API 请求已暂停",
+      "rule": "触发规则",
+      "daily_cap": "日上限",
+      "waiting_request": "等待中的请求",
+      "acme_web_claude_code": "acme-web，Claude Code",
+      "allowed_manually": "已手动放行",
+      "today_amt_total": "今日 2 笔，共 {{amount}}",
+      "auto_resumes": "自动恢复",
+      "tomorrow": "明天 {{time}}",
+      "allow_this_one": "放行这 1 笔",
+      "keep_paused": "保持暂停",
+      "no_limit_on_allowing_each": "60 秒内不选，这笔会被拒绝（HTTP 429）。「今日再放行」只在今天有效，不改上限。放行不限次数；不经代理的订阅不受影响。",
+      "change_cap": "修改上限",
+      "auto_denies_in_s": "{{seconds}} 秒后自动拒绝",
+      "allow_more_today": "今日再放行 {{amount}}"
+    },
+    "capped": {
+      "daily_cap_amt_reached_api": "已达今日上限 {{amount}}，API 已暂停",
+      "request_waiting_allowed_manually": "1 个请求等待中，已手动放行 2 笔",
+      "allow": "放行 1 笔",
+      "paused": "已暂停",
+      "hit_amt_extra_was_allowed": "已到 $10，超出部分为手动放行",
+      "red_amt_you_allowed_manually": "红色部分是你手动放行的 {{amount}}",
+      "running": "运行中，{{percent}}",
+      "below": "{{percent}}，未到 {{percent2}}",
+      "auto_resumes_tomorrow": "明天 {{time}} 自动恢复",
+      "allow_more_today": "今日再放行 {{amount}}"
+    },
+    "identity": {
+      "acme_web_is_switching_from": "acme-web 正在从订阅切换到 API Key 计费",
+      "likely_from_the_project_s": "来源可能是项目里的 <code>.env</code>（ANTHROPIC_API_KEY ···a3f9）。这个请求已暂停，等你决定。",
+      "deny_recommended": "拒绝（推荐）",
+      "allow_once": "仅允许这一次",
+      "always_allow_for_this_project": "此项目永久允许",
+      "auto_allow_from_now_on": "以后自动放行（所有项目）",
+      "auto_denies_after_s_undo": "60 秒内不选将自动拒绝。自动放行可在 设置 › 限额与停止 中撤销。"
+    },
+    "export": {
+      "project": "项目",
+      "client": "客户",
+      "spend": "花费",
+      "preview_of_first_rows_no": "预览前 3 行（不含 Key 指纹、完整路径和 prompt）",
+      "date": "日期",
+      "model": "模型",
+      "source": "来源",
+      "basis": "依据",
+      "metered": "计量",
+      "total_amt_matches_attribution_api": "合计 $86.10，与归因视图一致，仅含 API 花费",
+      "export_csv": "导出 CSV"
+    },
+    "betaconfirm": {
+      "turn_on_plan_cut_off": "开启订阅截断（Beta）？",
+      "plan_traffic_claude_max_chatgpt": "开启后，Claude Max、ChatGPT 等订阅流量到你设的阈值也会被拦截，Kill 也会停止它们。",
+      "before_you_turn_this_on": "请先了解：",
+      "it_may_conflict_with_provider": "① 可能违反服务商条款，账号风险由你自行承担",
+      "plan_usage_is_estimated_it": "② 订阅用量是估算值，可能早停或晚停",
+      "blocked_sessions_break_replies_in": "③ 被拦截的会话会中断，正在进行的回复会被截断",
+      "plan_limit": "订阅拦截阈值",
+      "i_understand_these_risks": "我已了解以上风险",
+      "turn_on_beta": "开启 Beta",
+      "turn_off_anytime_in_settings": "随时可在 设置 › 限额与停止 关闭。"
+    },
+    "allowmore": {
+      "amount_label": "「今日再放行」额度",
+      "amount_hint": "硬停弹窗一键用这个数"
+    }
+  }
+}
