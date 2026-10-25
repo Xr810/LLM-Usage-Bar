@@ -105,6 +105,24 @@ describe("SubscriptionProviderCard localized reset countdown", () => {
     expect(screen.queryByText(/2d/)).toBeNull();
   });
 
+  it("shows the window as a percent and never a dollar amount", () => {
+    const usage = subscriptionUsage();
+    usage.totalCostUsd = "12.50";
+    render(
+      <SubscriptionProviderCard
+        usage={usage}
+        onRefreshQuota={vi.fn()}
+        onSyncSessions={vi.fn()}
+      />,
+    );
+    const card = screen.getByTestId(
+      "subscription-provider-system-chatgpt-subscription",
+    );
+    expect(card.textContent).toMatch(/%/);
+    expect(card.textContent).not.toMatch(/\$/);
+    expect(card.textContent).not.toContain("12.5");
+  });
+
   it("ignores stale quota payloads when quota collection is unavailable", () => {
     const usage = subscriptionUsage();
     usage.provider.id = "system-claude-subscription";

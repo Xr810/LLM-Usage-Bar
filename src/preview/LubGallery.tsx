@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import { I18nextProvider, useTranslation } from "react-i18next";
 import i18n from "@/i18n";
 import { ensureProCopy } from "@/i18n/proCopy";
+import { CapsLegendWindow } from "@/components/lub/LegendCard";
 import { TrayPanelV5 } from "@/components/lub/TrayPanelV5";
 import { splitUsd } from "@/components/lub/money";
 import {
@@ -48,21 +49,29 @@ function Gallery({ screen, lang }: { screen: string; lang: "zh" | "en" }) {
       ? killedPanelFixture()
       : screen === "panelbeta"
         ? betaPanelFixture()
-        : designPanelFixture();
+        : screen === "panelstale"
+          ? designPanelFixture({ stale: true })
+          : designPanelFixture();
   return (
     <GalleryReady>
       <div className="lub-gallery">
         <MenuBar model={model} locale={locale} />
-        <div className="lub-stage">
-          <TrayPanelV5
-            model={model}
-            locale={locale}
-            openDayTip={screen === "tooltip"}
-            scrollMaxPx={screen === "panelscroll" ? 214 : undefined}
-            onOpenTrends={() => undefined}
-            onOpenSettings={() => undefined}
-          />
-        </div>
+        {screen === "settings" ? (
+          <div className="lub-stage lub-stage-window">
+            <CapsLegendWindow />
+          </div>
+        ) : (
+          <div className="lub-stage">
+            <TrayPanelV5
+              model={model}
+              locale={locale}
+              openDayTip={screen === "tooltip"}
+              scrollMaxPx={screen === "panelscroll" ? 214 : undefined}
+              onOpenTrends={() => undefined}
+              onOpenSettings={() => undefined}
+            />
+          </div>
+        )}
         {/* Canonical key lub.trends.all_data_is_sample_data lands with FE-12. */}
         <p className="lub-sample-mark">
           {lang === "en" ? "All data is sample data" : "全部为示例数据"}

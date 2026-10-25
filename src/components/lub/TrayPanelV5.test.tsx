@@ -127,6 +127,33 @@ describe("TrayPanelV5 design fixture", () => {
     expect(screen.queryByText("β")).toBeNull();
     expect(screen.queryByText("Beta")).toBeNull();
   });
+
+  it("reads a beta subscription row as cap-enforced at the threshold", async () => {
+    const user = userEvent.setup();
+    renderPanel(betaPanelFixture());
+    const meter = screen.getByRole("meter", {
+      name: /Claude Max，受上限管控/,
+    });
+    expect(meter).toHaveAccessibleName(/订阅截断 Beta：到 90%/);
+    expect(meter.querySelectorAll("[data-lub-marker]")).toHaveLength(1);
+    const cursor = screen.getByRole("meter", { name: /Cursor，仅监控/ });
+    expect(cursor.querySelector("[data-lub-marker]")).toBeNull();
+    await user.click(
+      meter.querySelector("[data-lub-marker='beta']") as HTMLElement,
+    );
+    expect(
+      await screen.findByText("到 90% 自动停（Beta）"),
+    ).toBeInTheDocument();
+  });
+});
+
+describe("TrayPanelV5 stale badge", () => {
+  it("shows the existing stale label without a new key", () => {
+    renderPanel(designPanelFixture({ stale: true }));
+    const badge = screen.getByRole("status");
+    expect(badge).toHaveTextContent("数据已过期");
+    expect(badge).toHaveClass("lub-stale");
+  });
 });
 
 describe("TrayPanelV5 stopped fixture", () => {

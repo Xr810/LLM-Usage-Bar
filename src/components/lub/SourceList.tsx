@@ -34,10 +34,15 @@ function SourceRow({
   // Beta off: only API rows stop. Beta on: proxied plans stop too.
   const rowStopped = killed && (source.enforceable || betaOn);
   const stoppedLabel = t("lub.killed.stopped", { ns: "pro" });
-  const rowLabel =
+  const baseLabel =
     showBeta || source.enforceable
       ? t("lub.panel.aria_row_cap_enforced", { name: source.name })
       : t("lub.panel.aria_row_monitor_only", { name: source.name });
+  const rowLabel = showBeta
+    ? `${baseLabel} ${t("lub.panel.aria_cap_line_beta", {
+        percent: `${source.betaCapPercent}%`,
+      })}`
+    : baseLabel;
   const quotaGapLabel =
     source.quotaGap === "error"
       ? t("lub.panel.quota_read_failed")

@@ -146,7 +146,7 @@ export function TrayPanelV5({
   proCompareEnabled = proCompareDefault,
 }: TrayPanelV5Props) {
   ensureProCopy();
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
   const [hiddenRows, setHiddenRows] = useState(0);
 
@@ -293,6 +293,15 @@ export function TrayPanelV5({
             {t("lub.panel.client_receipts")}
           </button>
         </span>
+        {model.stale ? (
+          <span className="lub-stale" role="status">
+            {t("trayUsage.stale", {
+              defaultValue: i18n.language.startsWith("zh")
+                ? "数据已过期"
+                : "Stale",
+            })}
+          </span>
+        ) : null}
         {model.sample ? (
           <span className="lub-muted">{t("lub.panel.sample_data")}</span>
         ) : null}
