@@ -38,7 +38,15 @@ function SourceRow({
     showBeta || source.enforceable
       ? t("lub.panel.aria_row_cap_enforced", { name: source.name })
       : t("lub.panel.aria_row_monitor_only", { name: source.name });
-  const valueNode = rowStopped ? (
+  const quotaGapLabel =
+    source.quotaGap === "error"
+      ? t("lub.panel.quota_read_failed")
+      : source.quotaGap === "stale"
+        ? t("lub.panel.quota_stale")
+        : null;
+  const valueNode = quotaGapLabel ? (
+    <span className="lub-muted">{quotaGapLabel}</span>
+  ) : rowStopped ? (
     <span className="lub-chip">{stoppedLabel}</span>
   ) : killed && percent ? (
     <span className="lub-muted">
@@ -62,7 +70,7 @@ function SourceRow({
         </span>
         {valueNode}
       </div>
-      {source.onSetBudget ? (
+      {quotaGapLabel ? null : source.onSetBudget ? (
         <button type="button" className="lub-link" onClick={source.onSetBudget}>
           {t("trayUsage.setProviderBudget", {
             provider: source.name,

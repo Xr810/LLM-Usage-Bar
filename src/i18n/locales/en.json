@@ -656,7 +656,11 @@
       "aria_cap_line_month": "Monthly cap {{amount}}",
       "aria_cap_line_beta": "Plan cut-off (Beta): stops at {{percent}}",
       "more_rows": "{{count}} more rows. Scroll to see",
-      "aria_scroll_region": "Traffic sources and sessions"
+      "aria_scroll_region": "Traffic sources and sessions",
+      "group_unattributed": "Unattributed",
+      "invalid_cost_rows": "{{count}} records have an amount that could not be parsed",
+      "quota_stale": "Stale data",
+      "quota_read_failed": "Couldn't read usage"
     }
   }
 }

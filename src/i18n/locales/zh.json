@@ -656,7 +656,11 @@
       "aria_cap_line_month": "月上限 {{amount}}",
       "aria_cap_line_beta": "订阅截断 Beta：到 {{percent}} 自动停",
       "more_rows": "还有 {{count}} 行，滚动查看",
-      "aria_scroll_region": "流量来源与会话"
+      "aria_scroll_region": "流量来源与会话",
+      "group_unattributed": "未归属",
+      "invalid_cost_rows": "有 {{count}} 条记录金额无法解析",
+      "quota_stale": "数据过期",
+      "quota_read_failed": "读取失败"
     }
   }
 }

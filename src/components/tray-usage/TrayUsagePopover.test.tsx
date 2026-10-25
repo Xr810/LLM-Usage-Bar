@@ -353,6 +353,67 @@ describe("TrayUsagePopover Provider-only UI", () => {
     });
   });
 
+  it("does not draw 0% when a subscription has no quota window", () => {
+    const empty = structuredClone(snapshot);
+    empty.agents[0].providers[0].subscription!.windows = [];
+    render(<TrayUsagePopoverView {...props({ snapshot: empty })} />);
+    expect(screen.queryByText("0%")).toBeNull();
+    expect(screen.getByText("Stale data")).toBeInTheDocument();
+    expect(screen.queryByRole("meter", { name: /ChatGPT/ })).toBeNull();
+  });
+
+  it("says the read failed when the refresh failed and the window is empty", () => {
+    const failed = structuredClone(snapshot);
+    failed.refreshError = "timeout";
+    failed.agents[0].providers[0].subscription!.windows = [];
+    render(<TrayUsagePopoverView {...props({ snapshot: failed })} />);
+    expect(screen.getByText("Couldn't read usage")).toBeInTheDocument();
+    expect(screen.queryByText("0%")).toBeNull();
+  });
+
+  it("still shows a real zero percent window", () => {
+    const zero = structuredClone(snapshot);
+    zero.agents[0].providers[0].subscription!.windows[0].usedPercent = "0";
+    render(<TrayUsagePopoverView {...props({ snapshot: zero })} />);
+    expect(screen.getByText("0%")).toBeInTheDocument();
+    expect(screen.queryByText("Stale data")).toBeNull();
+  });
+
+  it("takes warn from budget level and ignores pace status", () => {
+    const quiet = structuredClone(snapshot);
+    quiet.apiBudget.level = "ok";
+    quiet.apiBudget.status = "red";
+    quiet.apiBudget.budgetConsumedPercent = "100";
+    const { rerender } = render(
+      <TrayUsagePopoverView {...props({ snapshot: quiet })} />,
+    );
+    expect(screen.getByTestId("lub-tray-panel")).toHaveAttribute(
+      "data-state",
+      "ok",
+    );
+
+    const near = structuredClone(snapshot);
+    near.apiBudget.level = "near";
+    near.apiBudget.status = "green";
+    near.apiBudget.budgetConsumedPercent = "10";
+    rerender(<TrayUsagePopoverView {...props({ snapshot: near })} />);
+    expect(screen.getByTestId("lub-tray-panel")).toHaveAttribute(
+      "data-state",
+      "warn",
+    );
+  });
+
+  it("does not refresh when quota or guard events arrive without a snapshot change", async () => {
+    render(<TrayUsagePopover />, { wrapper: wrapper() });
+    await screen.findByText("ChatGPT Plus");
+    const before = commandCalls("refresh_tray_usage").length;
+    act(() => {
+      emitTauriEvent("quota-updated");
+      emitTauriEvent("guard-state-changed");
+    });
+    expect(commandCalls("refresh_tray_usage").length).toBe(before);
+  });
+
   it("refreshes on show and hides on Escape", async () => {
     render(<TrayUsagePopover />, { wrapper: wrapper() });
     await screen.findByText("ChatGPT Plus");

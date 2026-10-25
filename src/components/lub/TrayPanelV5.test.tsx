@@ -167,3 +167,27 @@ describe("TrayPanelV5 stopped fixture", () => {
     expect(screen.queryByText("停止全部 API 花费")).toBeNull();
   });
 });
+
+describe("TrayPanelV5 session groups", () => {
+  it("labels an unattributed row and the unparsed-amount hint", () => {
+    const model = designPanelFixture();
+    model.sessions = [
+      {
+        id: "loose",
+        alias: "",
+        group: "unattributed",
+        clientKey: null,
+        clientLabel: null,
+        spentUsd: "1.00",
+        capUsd: "5",
+      },
+    ];
+    model.invalidCostRows = 2;
+    renderPanel(model);
+    expect(screen.getByText("未归属")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "有 2 条记录金额无法解析",
+    );
+    expect(screen.queryByText("0%")).toBeNull();
+  });
+});

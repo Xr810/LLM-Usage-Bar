@@ -33,6 +33,11 @@ export interface TrayApiBudgetView {
   budgetConsumedPercent: string | null;
   costQuality: TrayCostQuality;
   status: TrayUsageStatus;
+  /**
+   * C10 budget level. Pace `status` is display-only and must not set warn.
+   * Absent until BE-20; the panel then keeps the old status fallback.
+   */
+  level?: "ok" | "near" | "over";
   warningReason: string | null;
   burnRateUsdPerHour?: string | null;
   projectedExhaustAt?: string | null;

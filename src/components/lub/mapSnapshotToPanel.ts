@@ -30,21 +30,44 @@ function subtitleKey(provider: TrayProviderUsageView): LubSubtitleKey {
 
 function primaryUsedPercent(provider: TrayProviderUsageView): number | null {
   const windows = provider.subscription?.windows ?? [];
+  // C4: an empty window list publishes usedPct=0 only as a compatibility
+  // value. That 0 is not a measurement and must not be drawn.
+  if (windows.length === 0) return null;
   const fiveHour = windows.find((window) => window.kind === "five_hour");
   const chosen = fiveHour ?? windows[0];
-  return parseNonNegative(chosen?.usedPercent ?? null);
+  if (chosen.usedPercent == null || chosen.usedPercent.trim() === "") {
+    return null;
+  }
+  return parseNonNegative(chosen.usedPercent);
+}
+
+function panelState(
+  budget: TrayUsageSnapshot["apiBudget"],
+  alertThresholdPct: number,
+): LubPanelModel["state"] {
+  const consumed = parseNonNegative(budget.budgetConsumedPercent);
+  if (budget.level != null) {
+    // C10 / C12: warn follows level. Pace status stays on the dot only.
+    return budget.level === "ok" ? "ok" : "warn";
+  }
+  // TODO(BE-20): drop this once `level` is always on the snapshot.
+  const capped = budget.status === "red" && consumed != null && consumed >= 100;
+  const warn = !capped && consumed != null && consumed >= alertThresholdPct;
+  return capped ? "capped" : warn ? "warn" : "ok";
 }
 
 function sourceFromProvider(
   provider: TrayProviderUsageView,
   sharedCapUsd: string | null,
   onOpenSettings: (providerId: string | null) => void,
+  readFailed: boolean,
 ): LubSourceModel {
   const name = providerDisplayName(
     provider.providerName,
     provider.subscription?.planLabel,
   );
   if (provider.billingKind === "subscription") {
+    const usedPercent = primaryUsedPercent(provider);
     return {
       id: provider.providerId,
       name,
@@ -52,9 +75,11 @@ function sourceFromProvider(
       subtitleKey: subtitleKey(provider),
       enforceable: false,
       amountUsd: null,
-      usedPercent: primaryUsedPercent(provider),
+      usedPercent,
       scaleCapUsd: null,
       costQuality: provider.recentUsage.costQuality,
+      // C13 omits usedPct when the provider has no quota window.
+      quotaGap: usedPercent == null ? (readFailed ? "error" : "stale") : null,
     };
   }
 
@@ -85,6 +110,10 @@ function sourceFromProvider(
  * Maps the existing tray snapshot into the v5 panel.
  * Month spend, sessions, and the 14-day spark are not on this command.
  * Those stay null instead of being invented. No new Tauri command is called.
+ *
+ * `quota-updated` and `guard-state-changed` are emitted only after a real
+ * change. Calling get_quota_status or get_guard_state does not emit them,
+ * so this mapping never waits on those getters for a refresh.
  */
 export function mapSnapshotToPanel(
   snapshot: TrayUsageSnapshot,
@@ -92,11 +121,9 @@ export function mapSnapshotToPanel(
   alertThresholdPct: number = DEFAULT_ALERT_THRESHOLD_PCT,
 ): LubPanelModel {
   const budget = snapshot.apiBudget;
-  const consumed = parseNonNegative(budget.budgetConsumedPercent);
   const sharedCap = budget.mode === "shared" ? budget.dailyBudgetUsd : null;
   const showDayLine = parseNonNegative(sharedCap) != null;
-  const capped = budget.status === "red" && consumed != null && consumed >= 100;
-  const warn = !capped && consumed != null && consumed >= alertThresholdPct;
+  const readFailed = snapshot.refreshError != null;
 
   const sources = snapshot.agents.flatMap((agent) =>
     agent.providers
@@ -107,12 +134,12 @@ export function mapSnapshotToPanel(
           (provider.billingKind === "metered" && provider.metered != null),
       )
       .map((provider) =>
-        sourceFromProvider(provider, sharedCap, onOpenSettings),
+        sourceFromProvider(provider, sharedCap, onOpenSettings, readFailed),
       ),
   );
 
   return {
-    state: capped ? "capped" : warn ? "warn" : "ok",
+    state: panelState(budget, alertThresholdPct),
     todayUsd: budget.todayCostUsd,
     todayQuality: budget.costQuality,
     dailyCapUsd: budget.dailyBudgetUsd,
@@ -124,6 +151,7 @@ export function mapSnapshotToPanel(
     spark: null,
     sources,
     sessions: null,
+    invalidCostRows: 0,
     sample: false,
     stale: snapshot.stale,
     betaOn: false,

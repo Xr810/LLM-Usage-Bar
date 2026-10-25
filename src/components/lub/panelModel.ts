@@ -18,15 +18,24 @@ export interface LubSourceModel {
   usedPercent: number | null;
   scaleCapUsd: string | null;
   costQuality: TrayCostQuality;
+  /**
+   * Subscription row with no usable window. Never painted as 0%.
+   * `stale` is 「数据过期」; `error` is 「读取失败」.
+   */
+  quotaGap?: "stale" | "error" | null;
   /** Percent of the row track. Only set when a beta cut-off line is shown. */
   betaCapPercent?: number | null;
   /** Existing affordance when a metered row has no daily budget yet. */
   onSetBudget?: () => void;
 }
 
+export type LubSessionGroup = "session" | "proxy_traffic" | "unattributed";
+
 export interface LubSessionModel {
   id: string;
   alias: string;
+  /** C14. Omitted on the design fixture, which is a plain session row. */
+  group?: LubSessionGroup;
   /** Sample fixture uses an i18n key. Real client names are data, not copy. */
   clientKey: "client_acme" | "no_client" | null;
   clientLabel: string | null;
@@ -47,6 +56,8 @@ export interface LubPanelModel {
   spark: number[] | null;
   sources: LubSourceModel[];
   sessions: LubSessionModel[] | null;
+  /** C14. Rows whose amount could not be parsed. 0 hides the hint. */
+  invalidCostRows?: number;
   sample: boolean;
   stale: boolean;
   betaOn: boolean;
