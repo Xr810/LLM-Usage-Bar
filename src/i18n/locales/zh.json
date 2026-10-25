@@ -661,6 +661,21 @@
       "invalid_cost_rows": "有 {{count}} 条记录金额无法解析",
       "quota_stale": "数据过期",
       "quota_read_failed": "读取失败"
+    },
+    "overcap": {
+      "over_cap": "超出上限",
+      "caption_resets": "到竖线只提醒，次日恢复。",
+      "notify_title": "已超出今日上限",
+      "notify_body": "今日花费已到上限。只会提醒，不会停止。"
+    },
+    "log": {
+      "title": "熔断日志",
+      "empty": "还没有记录",
+      "retention_free": "保留 7 天",
+      "retention_pro": "保留 24 个月"
+    },
+    "settings": {
+      "breaker_log": "熔断日志"
     }
   }
 }

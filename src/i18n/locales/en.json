@@ -661,6 +661,21 @@
       "invalid_cost_rows": "{{count}} records have an amount that could not be parsed",
       "quota_stale": "Stale data",
       "quota_read_failed": "Couldn't read usage"
+    },
+    "overcap": {
+      "over_cap": "Over the cap",
+      "caption_resets": "At the line it only alerts. It resets the next day.",
+      "notify_title": "Over today's cap",
+      "notify_body": "Today's spend reached the cap. This only alerts and does not stop."
+    },
+    "log": {
+      "title": "Breaker log",
+      "empty": "No events yet",
+      "retention_free": "Kept for 7 days",
+      "retention_pro": "Kept for 24 months"
+    },
+    "settings": {
+      "breaker_log": "Breaker log"
     }
   }
 }

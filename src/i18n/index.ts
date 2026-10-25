@@ -10,27 +10,22 @@ import {
   LOCAL_STORAGE_KEYS,
   readMigratedLocalStorage,
 } from "@/lib/localStorageMigration";
+import {
+  parseAppLanguage,
+  readBackendLanguage,
+  resolveInitialLanguage,
+} from "./languageSource";
 
-type Language = "zh" | "zh-TW" | "en" | "ja";
-
-const DEFAULT_LANGUAGE: Language = "zh";
-
-const getInitialLanguage = (): Language => {
+const getInitialLanguage = () => {
+  let stored = null;
   if (typeof window !== "undefined") {
     try {
-      const stored = readMigratedLocalStorage<Language | null>({
+      stored = readMigratedLocalStorage({
         currentKey: LOCAL_STORAGE_KEYS.language,
         legacyKeys: LEGACY_LOCAL_STORAGE_KEYS.language,
         defaultValue: null,
-        parse: (value) =>
-          value === "zh" ||
-          value === "zh-TW" ||
-          value === "en" ||
-          value === "ja"
-            ? value
-            : null,
+        parse: parseAppLanguage,
       });
-      if (stored) return stored;
     } catch (error) {
       console.warn("[i18n] Failed to read stored language preference", error);
     }
@@ -38,36 +33,14 @@ const getInitialLanguage = (): Language => {
 
   const navigatorLang =
     typeof navigator !== "undefined"
-      ? (navigator.language?.toLowerCase() ??
-        navigator.languages?.[0]?.toLowerCase())
+      ? (navigator.language ?? navigator.languages?.[0])
       : undefined;
 
-  if (navigatorLang === "zh") {
-    return "zh";
-  }
-
-  if (
-    navigatorLang?.startsWith("zh-tw") ||
-    navigatorLang?.startsWith("zh-hk") ||
-    navigatorLang?.startsWith("zh-mo") ||
-    navigatorLang?.startsWith("zh-hant")
-  ) {
-    return "zh-TW";
-  }
-
-  if (navigatorLang?.startsWith("zh")) {
-    return "zh";
-  }
-
-  if (navigatorLang?.startsWith("ja")) {
-    return "ja";
-  }
-
-  if (navigatorLang?.startsWith("en")) {
-    return "en";
-  }
-
-  return DEFAULT_LANGUAGE;
+  return resolveInitialLanguage({
+    backend: readBackendLanguage(),
+    stored,
+    navigatorLang,
+  });
 };
 
 const resources = {
