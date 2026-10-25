@@ -1,0 +1,329 @@
+{
+  "adversarial": [
+    {
+      "expected": "api_key",
+      "got": "api_key",
+      "name": "claude_bearer_gateway_key",
+      "ok": true
+    },
+    {
+      "expected": "api_key",
+      "got": "api_key",
+      "name": "claude_auth_token_is_api_prefix",
+      "ok": true
+    },
+    {
+      "expected": "subscription_oauth",
+      "got": "subscription_oauth",
+      "name": "claude_oat_without_beta",
+      "ok": true
+    },
+    {
+      "expected": "unknown",
+      "got": "unknown",
+      "name": "claude_beta_without_oat_prefix",
+      "ok": true
+    },
+    {
+      "expected": "api_key",
+      "got": "api_key",
+      "name": "claude_both_key_and_oat",
+      "ok": true
+    },
+    {
+      "expected": "unknown",
+      "got": "unknown",
+      "name": "claude_empty",
+      "ok": true
+    },
+    {
+      "expected": "unknown",
+      "got": "unknown",
+      "name": "codex_jwt_without_account_or_backend_path",
+      "ok": true
+    },
+    {
+      "expected": "subscription_oauth",
+      "got": "subscription_oauth",
+      "name": "codex_jwt_on_backend_path",
+      "ok": true
+    },
+    {
+      "expected": "unknown",
+      "got": "unknown",
+      "name": "gemini_empty",
+      "ok": true
+    },
+    {
+      "expected": "unknown",
+      "got": "unknown",
+      "name": "plan_empty",
+      "ok": true
+    }
+  ],
+  "codex_resolution_matrix": {
+    "current_pointer_with_api_key_login": {
+      "base_url": "http://127.0.0.1:43123/v1",
+      "hits_local_http_proxy": true,
+      "http_url": "http://127.0.0.1:43123/v1/responses",
+      "preferred_transport": "http",
+      "provider_base_url_field": "http://127.0.0.1:43123/v1",
+      "selected_existed_after_merge": true,
+      "supports_websockets": false,
+      "websocket_url": null
+    },
+    "current_pointer_with_chatgpt_login": {
+      "base_url": "http://127.0.0.1:43123/v1",
+      "hits_local_http_proxy": true,
+      "http_url": "http://127.0.0.1:43123/v1/responses",
+      "preferred_transport": "http",
+      "provider_base_url_field": "http://127.0.0.1:43123/v1",
+      "selected_existed_after_merge": true,
+      "supports_websockets": false,
+      "websocket_url": null
+    },
+    "custom_https_provider_chatgpt_login": {
+      "base_url": "http://127.0.0.1:43123/v1",
+      "hits_local_http_proxy": true,
+      "http_url": "http://127.0.0.1:43123/v1/responses",
+      "preferred_transport": "http",
+      "provider_base_url_field": "http://127.0.0.1:43123/v1",
+      "selected_existed_after_merge": true,
+      "supports_websockets": false,
+      "websocket_url": null
+    },
+    "custom_provider_api_key": {
+      "base_url": "http://127.0.0.1:43123/v1",
+      "hits_local_http_proxy": true,
+      "http_url": "http://127.0.0.1:43123/v1/responses",
+      "preferred_transport": "http",
+      "provider_base_url_field": "http://127.0.0.1:43123/v1",
+      "selected_existed_after_merge": true,
+      "supports_websockets": false,
+      "websocket_url": null
+    },
+    "default_chatgpt_no_config": {
+      "base_url": "https://chatgpt.com/backend-api/codex",
+      "hits_local_http_proxy": false,
+      "http_url": "https://chatgpt.com/backend-api/codex/responses",
+      "preferred_transport": "websocket",
+      "provider_base_url_field": null,
+      "selected_existed_after_merge": true,
+      "supports_websockets": true,
+      "websocket_url": "wss://chatgpt.com/backend-api/codex/responses"
+    },
+    "reserved_openai_id_override_ignored": {
+      "base_url": "https://chatgpt.com/backend-api/codex",
+      "hits_local_http_proxy": false,
+      "http_url": "https://chatgpt.com/backend-api/codex/responses",
+      "preferred_transport": "websocket",
+      "provider_base_url_field": null,
+      "selected_existed_after_merge": true,
+      "supports_websockets": true,
+      "websocket_url": "wss://chatgpt.com/backend-api/codex/responses"
+    }
+  },
+  "current_router_whitelist": {
+    "become_unknown_after_strip": 96,
+    "identifiable_before_strip": 96,
+    "requests": 96
+  },
+  "live_mock_proxy": {
+    "class_counts": {
+      "api_key": 48,
+      "subscription_oauth": 48
+    },
+    "forwarded_kept_authorization": 0,
+    "port": 39921,
+    "posts": 96,
+    "websocket_upgrade_status": 404
+  },
+  "naive_bearer_means_oauth_misses_on_claude_api_fixtures": {
+    "examples": [
+      {
+        "headers": [
+          "authorization",
+          "content-type"
+        ],
+        "index": 3,
+        "naive": "subscription_oauth"
+      },
+      {
+        "headers": [
+          "Authorization",
+          "content-type"
+        ],
+        "index": 4,
+        "naive": "subscription_oauth"
+      },
+      {
+        "headers": [
+          "authorization",
+          "content-type"
+        ],
+        "index": 9,
+        "naive": "subscription_oauth"
+      },
+      {
+        "headers": [
+          "Authorization",
+          "content-type"
+        ],
+        "index": 10,
+        "naive": "subscription_oauth"
+      },
+      {
+        "headers": [
+          "authorization",
+          "content-type"
+        ],
+        "index": 15,
+        "naive": "subscription_oauth"
+      },
+      {
+        "headers": [
+          "Authorization",
+          "content-type"
+        ],
+        "index": 16,
+        "naive": "subscription_oauth"
+      }
+    ],
+    "misses": 8,
+    "n": 24
+  },
+  "notes": [],
+  "stream_abort": {
+    "abort_after_content_deltas": 5,
+    "client_view_anthropic_abort": {
+      "anthropic_message_delta_output": null,
+      "anthropic_message_start_input": 1000,
+      "content_deltas_seen": 5,
+      "events_seen": 6,
+      "router_response_completed_usage": null
+    },
+    "client_view_anthropic_full": {
+      "anthropic_message_delta_output": 20,
+      "anthropic_message_start_input": 1000,
+      "content_deltas_seen": 20,
+      "events_seen": 23,
+      "router_response_completed_usage": null
+    },
+    "client_view_openai_abort": {
+      "anthropic_message_delta_output": null,
+      "anthropic_message_start_input": null,
+      "content_deltas_seen": 5,
+      "events_seen": 6,
+      "router_response_completed_usage": null
+    },
+    "client_view_openai_full": {
+      "anthropic_message_delta_output": null,
+      "anthropic_message_start_input": null,
+      "content_deltas_seen": 20,
+      "events_seen": 22,
+      "router_response_completed_usage": [
+        1000,
+        20
+      ]
+    },
+    "gap_definition": "provider_generated_output_tokens_minus_usage_field_the_client_parsed; real invoices were not read",
+    "input_tokens": 1000,
+    "planned_output_tokens": 20,
+    "upstream_generation_log": [
+      {
+        "final_usage_emitted": false,
+        "generated_before_close_or_end": 7,
+        "planned_output_tokens": 20,
+        "stream_mode": "anthropic"
+      },
+      {
+        "final_usage_emitted": true,
+        "generated_before_close_or_end": 20,
+        "planned_output_tokens": 20,
+        "stream_mode": "anthropic"
+      },
+      {
+        "final_usage_emitted": false,
+        "generated_before_close_or_end": 7,
+        "planned_output_tokens": 20,
+        "stream_mode": "openai"
+      },
+      {
+        "final_usage_emitted": true,
+        "generated_before_close_or_end": 20,
+        "planned_output_tokens": 20,
+        "stream_mode": "openai"
+      }
+    ]
+  },
+  "stream_gaps": {
+    "anthropic_abort_input_known": 1000,
+    "anthropic_abort_vs_message_delta": {
+      "delta_generated_minus_parsed": 5,
+      "mock_generated_output_tokens": 5,
+      "parsed_output_tokens": null
+    },
+    "anthropic_full_message_delta_output": 20,
+    "openai_abort_vs_response_completed": {
+      "delta_generated_minus_parsed": 5,
+      "mock_generated_output_tokens": 5,
+      "parsed_output_tokens": null
+    },
+    "openai_full_response_completed": [
+      1000,
+      20
+    ]
+  },
+  "suites": {
+    "claude_api_key": {
+      "bad": [],
+      "n": 24,
+      "ok": 24
+    },
+    "claude_oauth": {
+      "bad": [],
+      "n": 24,
+      "ok": 24
+    },
+    "codex_api_key": {
+      "bad": [],
+      "n": 24,
+      "ok": 24
+    },
+    "codex_oauth": {
+      "bad": [],
+      "n": 24,
+      "ok": 24
+    },
+    "coding_plan_kimi": {
+      "bad": [],
+      "n": 24,
+      "ok": 24
+    },
+    "coding_plan_minimax": {
+      "bad": [],
+      "n": 24,
+      "ok": 24
+    },
+    "coding_plan_volcengine": {
+      "bad": [],
+      "n": 24,
+      "ok": 24
+    },
+    "coding_plan_zhipu": {
+      "bad": [],
+      "n": 24,
+      "ok": 24
+    },
+    "gemini_api_key": {
+      "bad": [],
+      "n": 24,
+      "ok": 24
+    },
+    "gemini_oauth": {
+      "bad": [],
+      "n": 24,
+      "ok": 24
+    }
+  }
+}
