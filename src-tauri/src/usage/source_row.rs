@@ -124,11 +124,12 @@ pub fn source_row_for_provider(
     if provider.billing_kind == BillingKind::Subscription {
         let (used_pct, windows, source_state) = match quota {
             Some(row) => (
-                Some(row.used_pct),
+                row.used_pct,
                 nonempty_windows(publishable_windows(row.windows.clone())),
                 row.state,
             ),
-            None => (Some(0.0), None, QuotaReadState::Stale),
+            // No stored quota: omit usedPct. Do not publish 0%.
+            None => (None, None, QuotaReadState::Stale),
         };
         return SourceRowView {
             provider_id: provider.id.clone(),
@@ -305,6 +306,20 @@ mod tests {
             "license_required"
         );
         assert_eq!(json["windows"][0]["kind"], "5h");
+    }
+
+    #[test]
+    fn subscription_without_quota_data_omits_used_pct() {
+        let db = Database::memory().unwrap();
+        db.save_usage_provider(&provider("sub", "Claude", BillingKind::Subscription))
+            .unwrap();
+        let rows = source_rows_at(&db, 10, &HashMap::new()).unwrap();
+        let row = rows.iter().find(|row| row.provider_id == "sub").unwrap();
+        assert_eq!(row.billing_kind, SourceBillingKind::Subscription);
+        assert_eq!(row.used_pct, None);
+        assert!(row.windows.is_none());
+        assert_eq!(row.progress, 0.0);
+        assert!(serde_json::to_value(row).unwrap().get("usedPct").is_none());
     }
 
     #[test]

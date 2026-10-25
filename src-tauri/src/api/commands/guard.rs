@@ -1,15 +1,19 @@
 //! BE-21: read-only `get_guard_state` (contract C12).
 //!
 //! Community builds never return `capped` or `killed`. Counters stay at 0
-//! until BE-15 adds guard storage. "Today" for those counters is the user
-//! local midnight, the same boundary `TrayUsageWindows` already uses. This
-//! command does not suspend, kill, or grant an allowance.
+//! until BE-15 adds guard storage. This batch does not split "today" at local
+//! midnight. This command does not suspend, kill, or grant an allowance.
+//!
+//! `guard-state-changed` is not emitted from the getter. It is emitted from
+//! tray publication only when the projected view changes.
 
 use crate::app_state::AppState;
 use crate::error::AppError;
 use crate::model::UsageStatus;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::sync::Mutex;
+
 use tauri::{AppHandle, Emitter, State};
 
 pub const GUARD_STATE_CHANGED_EVENT: &str = "guard-state-changed";
@@ -36,8 +40,13 @@ pub struct GuardStateView {
     pub allowed_today: AllowedToday,
 }
 
-/// Yellow or red API-budget status is `warn`. Green and unknown are `ok`.
-/// `capped` and `killed` are not representable here.
+static LAST_PUBLISHED_GUARD: Mutex<Option<GuardStateView>> = Mutex::new(None);
+
+/// Interim community warn source: yellow or red API-budget status is `warn`.
+/// Green and unknown are `ok`. `capped` and `killed` are not representable here.
+///
+/// TODO(BE-20): after BE-20 merges, derive C12 budget warn from C10 `level`
+/// (`level != ok` => warn). Pacing colour is display-only.
 pub fn guard_state_for_budget(status: UsageStatus) -> GuardStateView {
     let state = match status {
         UsageStatus::Yellow | UsageStatus::Red => GuardLevel::Warn,
@@ -57,18 +66,34 @@ pub fn guard_state_changed_payload(view: &GuardStateView) -> Value {
     serde_json::to_value(view).unwrap_or_else(|_| Value::Null)
 }
 
-#[tauri::command]
-pub async fn get_guard_state(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<GuardStateView, AppError> {
-    let snapshot = state.tray_usage_service.cached_snapshot().await;
-    let view = guard_state_for_budget(snapshot.api_budget.status);
+/// `Some` when `status` projects a view different from the last publication.
+fn next_guard_publication(
+    previous: Option<&GuardStateView>,
+    status: UsageStatus,
+) -> Option<GuardStateView> {
+    let next = guard_state_for_budget(status);
+    (previous != Some(&next)).then_some(next)
+}
+
+/// Emit `guard-state-changed` only when the projected view changes.
+pub fn publish_guard_state_if_changed(app: &AppHandle, status: UsageStatus) {
+    let mut last = LAST_PUBLISHED_GUARD
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let Some(view) = next_guard_publication(last.as_ref(), status) else {
+        return;
+    };
     let _ = app.emit(
         GUARD_STATE_CHANGED_EVENT,
         guard_state_changed_payload(&view),
     );
-    Ok(view)
+    *last = Some(view);
+}
+
+#[tauri::command]
+pub async fn get_guard_state(state: State<'_, AppState>) -> Result<GuardStateView, AppError> {
+    let snapshot = state.tray_usage_service.cached_snapshot().await;
+    Ok(guard_state_for_budget(snapshot.api_budget.status))
 }
 
 #[cfg(test)]
@@ -105,5 +130,15 @@ mod tests {
             let state = payload["state"].as_str().unwrap();
             assert!(state == "ok" || state == "warn", "{state}");
         }
+    }
+
+    #[test]
+    fn guard_event_is_emitted_only_when_the_projected_view_changes() {
+        let ok = guard_state_for_budget(UsageStatus::Green);
+        assert!(next_guard_publication(None, UsageStatus::Green).is_some());
+        assert!(next_guard_publication(Some(&ok), UsageStatus::Unknown).is_none());
+        assert!(next_guard_publication(Some(&ok), UsageStatus::Yellow).is_some());
+        let warn = guard_state_for_budget(UsageStatus::Yellow);
+        assert!(next_guard_publication(Some(&warn), UsageStatus::Red).is_none());
     }
 }
