@@ -1614,6 +1614,11 @@ pub fn run() {
             commands::get_guard_state,
             // BE-22: read-only session list (C14)
             commands::list_sessions,
+            // BE-17: takeover wizard and detect_tools (C3 / C22)
+            commands::detect_claude_auth_mode,
+            commands::set_claude_subscription_proxy,
+            commands::detect_tools,
+            commands::apply_takeover,
         ]);
 
     let app = builder
