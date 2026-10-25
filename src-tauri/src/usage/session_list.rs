@@ -2,8 +2,12 @@
 //!
 //! Proxy rows, including ones that already have a `session_id`, collapse into
 //! one `proxy_traffic` item. JSONL rows with a session id stay `session`.
+//! Non-proxy rows with no session id are `unattributed`, not a fake session.
 //! `projectAlias` is always null: that column does not exist until BE-15.
 //! Amounts are summed with `rust_decimal`, not SQL REAL.
+//!
+//! TODO(BE-22): aggregate and paginate in SQL. This batch scans every row
+//! and pages in memory.
 
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -24,6 +28,7 @@ pub const MAX_SESSION_LIMIT: u32 = 200;
 pub enum SessionGroup {
     Session,
     ProxyTraffic,
+    Unattributed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,6 +60,9 @@ pub struct SessionListPage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
     pub oldest_available_at: Option<i64>,
+    /// Rows whose `total_cost_usd` did not parse. Those rows still count as
+    /// zero spend. The raw value is not returned.
+    pub invalid_cost_rows: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -88,14 +96,20 @@ pub fn list_sessions_at(
         .filter(|value| !value.is_empty())
         .map(decode_cursor)
         .transpose()?;
+    // TODO(BE-22): replace this full scan with SQL aggregation.
     let rows = load_rows(db)?;
     let oldest_available_at = rows.iter().map(|row| row.created_at).min();
     let mut groups = HashMap::<GroupKey, GroupAccum>::new();
+    let mut invalid_cost_rows = 0_u32;
     for row in rows {
+        let (spent, invalid) = parse_cost(&row.request_id, &row.total_cost_usd);
+        if invalid {
+            invalid_cost_rows = invalid_cost_rows.saturating_add(1);
+        }
         let key = group_key(&row);
         let entry = groups.entry(key).or_default();
         entry.last_seen_at = entry.last_seen_at.max(row.created_at);
-        entry.spent += parse_cost(&row.total_cost_usd);
+        entry.spent += spent;
     }
     let mut items = groups
         .into_iter()
@@ -121,6 +135,7 @@ pub fn list_sessions_at(
         items,
         next_cursor,
         oldest_available_at,
+        invalid_cost_rows,
     })
 }
 
@@ -134,9 +149,11 @@ struct GroupKey {
 enum GroupKind {
     Proxy,
     Session,
+    Unattributed,
 }
 
 struct RawRow {
+    request_id: String,
     data_source: String,
     session_id: Option<String>,
     total_cost_usd: String,
@@ -156,7 +173,7 @@ fn load_rows(db: &Database) -> Result<Vec<RawRow>, AppError> {
         .map_err(|_| AppError::internal("Could not list sessions."))?;
     let mut statement = conn
         .prepare(
-            "SELECT COALESCE(data_source, 'proxy'), session_id, total_cost_usd, created_at
+            "SELECT request_id, COALESCE(data_source, 'proxy'), session_id, total_cost_usd, created_at
              FROM proxy_request_logs",
         )
         .map_err(|_| AppError::internal("Could not list sessions."))?;
@@ -169,17 +186,20 @@ fn load_rows(db: &Database) -> Result<Vec<RawRow>, AppError> {
         .map_err(|_| AppError::internal("Could not list sessions."))?
     {
         loaded.push(RawRow {
-            data_source: row
+            request_id: row
                 .get(0)
                 .map_err(|_| AppError::internal("Could not list sessions."))?,
-            session_id: row
+            data_source: row
                 .get(1)
                 .map_err(|_| AppError::internal("Could not list sessions."))?,
-            total_cost_usd: row
+            session_id: row
                 .get(2)
                 .map_err(|_| AppError::internal("Could not list sessions."))?,
-            created_at: row
+            total_cost_usd: row
                 .get(3)
+                .map_err(|_| AppError::internal("Could not list sessions."))?,
+            created_at: row
+                .get(4)
                 .map_err(|_| AppError::internal("Could not list sessions."))?,
         });
     }
@@ -193,26 +213,28 @@ fn group_key(row: &RawRow) -> GroupKey {
             session_key: String::new(),
         };
     }
-    let session_key = row
+    let Some(session_key) = row
         .session_id
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .unwrap_or("")
-        .to_string();
+    else {
+        return GroupKey {
+            kind: GroupKind::Unattributed,
+            session_key: String::new(),
+        };
+    };
     GroupKey {
         kind: GroupKind::Session,
-        session_key,
+        session_key: session_key.to_string(),
     }
 }
 
 fn item_from_group(key: GroupKey, accum: GroupAccum) -> SessionListItem {
     let (group, session_id) = match key.kind {
         GroupKind::Proxy => (SessionGroup::ProxyTraffic, None),
-        GroupKind::Session => (
-            SessionGroup::Session,
-            (!key.session_key.is_empty()).then(|| key.session_key.clone()),
-        ),
+        GroupKind::Unattributed => (SessionGroup::Unattributed, None),
+        GroupKind::Session => (SessionGroup::Session, Some(key.session_key.clone())),
     };
     SessionListItem {
         session_id,
@@ -230,6 +252,7 @@ fn sort_key(item: &SessionListItem) -> String {
     let group = match item.group {
         SessionGroup::ProxyTraffic => "proxy",
         SessionGroup::Session => "session",
+        SessionGroup::Unattributed => "unattributed",
     };
     format!(
         "{group}\u{0}{}",
@@ -249,6 +272,7 @@ fn encode_cursor(item: &SessionListItem) -> Result<String, AppError> {
         group: match item.group {
             SessionGroup::Session => "session".to_string(),
             SessionGroup::ProxyTraffic => "proxy_traffic".to_string(),
+            SessionGroup::Unattributed => "unattributed".to_string(),
         },
     };
     let bytes =
@@ -265,8 +289,14 @@ fn invalid_cursor() -> AppError {
     AppError::invalid_argument("cursor is invalid.", "cursor")
 }
 
-fn parse_cost(raw: &str) -> Decimal {
-    Decimal::from_str(raw.trim()).unwrap_or(Decimal::ZERO)
+fn parse_cost(request_id: &str, raw: &str) -> (Decimal, bool) {
+    match Decimal::from_str(raw.trim()) {
+        Ok(value) => (value, false),
+        Err(_) => {
+            log::warn!("invalid session cost; request_id={request_id}");
+            (Decimal::ZERO, true)
+        }
+    }
 }
 
 fn format_cost(value: Decimal) -> String {
@@ -309,6 +339,7 @@ mod tests {
         let json = serde_json::to_value(&page).unwrap();
         assert!(json["oldestAvailableAt"].is_null());
         assert!(json.get("nextCursor").is_none());
+        assert_eq!(page.invalid_cost_rows, 0);
     }
 
     #[test]
@@ -326,6 +357,7 @@ mod tests {
         let page = list_sessions_at(&db, now, false, Some(2), None).unwrap();
         assert_eq!(page.oldest_available_at, Some(300));
         assert_eq!(page.items.len(), 2);
+        assert_eq!(page.invalid_cost_rows, 1);
         assert_eq!(page.items[0].session_id.as_deref(), Some("alpha"));
         assert_eq!(page.items[0].group, SessionGroup::Session);
         assert_eq!(page.items[0].spent_usd, "1.5");
@@ -373,6 +405,18 @@ mod tests {
             .find(|item| item.session_id.as_deref() == Some("gamma"))
             .unwrap();
         assert_eq!(gamma.spent_usd, "0");
+        let unattributed = all
+            .iter()
+            .find(|item| item.group == SessionGroup::Unattributed)
+            .unwrap();
+        assert!(unattributed.session_id.is_none());
+        assert_eq!(unattributed.spent_usd, "0.05");
+        let serialized = serde_json::to_value(unattributed).unwrap();
+        assert_eq!(serialized["group"], "unattributed");
+        assert!(!serde_json::to_value(gamma)
+            .unwrap()
+            .to_string()
+            .contains("not-a-number"));
 
         let active_now = 300 + ACTIVE_WINDOW_SECS + 1;
         let active = list_sessions_at(&db, active_now, true, None, None).unwrap();
