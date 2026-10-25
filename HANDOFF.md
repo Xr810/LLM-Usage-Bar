@@ -1497,10 +1497,11 @@ version is a decimal string compared numerically against
 `CLAUDE_SUBSCRIPTION_PROXY_TERMS_VERSION = "1"`. Timestamp is an i64, positive and
 not future, matching BE-17's existing acknowledgement timestamp validation.
 Missing/malformed/stale records fail closed; current and newer numeric versions
-pass. No consent is synthesized or migrated. The database representation is newly
-introduced here: ADR v7.15.2 was referenced but its full text was not available.
-BE-17 owns the `apply_takeover` writer and must use this shape; #93 adds only a test
-writer. Its existing sidecar is not read or silently converted. The frontend mock's
+pass. No consent is synthesized or migrated. Per the backend owner's ADR v7.16
+clarification, BE-17's `set_claude_subscription_proxy` writes this record, not
+`apply_takeover`. The JSON `version` is a STRING, for example `"1"`, not a number.
+#93 adds only a test writer. The existing sidecar is not read or silently converted.
+The frontend mock's
 `"r16-2026-10-25"` is not a valid numeric terms version.
 
 Anthropic subscription requests bypass model routing and use only
@@ -1514,7 +1515,53 @@ model rewriting, stored API-key injection, and failover remain unchanged. Stored
 Codex OAuth injection is disabled as another prohibited passthrough path.
 Broken upstream streams settle as `upstream_error`, not `client_abort`.
 
-Validation is in progress in the Linux orb. The initial Rust build with concurrent
-frontend tests was killed for memory (exit 137); frontend typecheck and format passed,
-but unit tests had 3 failures (two timeout-related files). No Windows/macOS native
-interaction verification has been performed; §20's existing acceptance gaps remain.
+The post-rebase Linux verification below supersedes the earlier resource-limited
+runs. No Windows/macOS native interaction verification has been performed;
+§20's existing acceptance gaps remain.
+
+### 2026-10-25 stacked architect-fix validation (Linux orb)
+
+The invented C22 contract was removed. The approved key is `subscription_terms_ack`,
+shape `{version, ackedAt}`. The reader now validates the typed representation
+documented above; missing/malformed/stale records fail closed. BE-17 owns the
+`set_claude_subscription_proxy` production writer, explicitly excluded from #93.
+The end-to-end router regression
+uses a test-only persisted acknowledgement to verify official-host forwarding.
+No consent is synthesized from credential detection.
+
+BE-5 now separates attempt/success timestamps, preserves estimated costs in both
+usage tables, distinguishes NULL cache rates from explicit zero in Settings, and
+warns on first import of a zero input/output price. The old refresh timestamp key
+remains compatible but advances only on accepted batches.
+
+Re-run after rebasing only #97's two pricing commits onto squash-merged main
+`3bad6ea1` (#93 merged), with #97 now based directly on main. The rebase applied
+cleanly and preserved the code tree; this batch also corrects the BE-17 writer
+name and confirms the JSON-string version contract above:
+
+- `pnpm rust -- test --manifest-path src-tauri/Cargo.toml`, both default and
+  `--no-default-features`: each 1338 library + 15 integration tests passed; three
+  existing ignored tests remain. Retention startup/periodic injection, subscription
+  isolation versus relay failover, disabled stored Codex OAuth injection, broken
+  upstream streams, ingestion, and pricing regressions passed in both runs.
+- `pnpm rust -- clippy --manifest-path src-tauri/Cargo.toml -- -D warnings`, also
+  with `--no-default-features` before `--`: both passed.
+- `pnpm rust -- fmt --manifest-path src-tauri/Cargo.toml --check`: passed.
+- Rust environment: `CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0
+  CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0`, with temporary 2 GiB swap after
+  earlier memory exhaustion. Test compilation retains three existing warnings.
+- `pnpm typecheck`, `pnpm format:check`: passed.
+- `pnpm test:unit --maxWorkers=1`: 55 files / 370 tests passed standalone. The
+  unchanged UsageDashboardPage suite also passed 4/4 in isolation. Earlier
+  timeouts coincided with Rust compilation; no timeout increase or test skip was
+  needed. This supports resource contention, not a reproduced minute-tick bug.
+- Durable `first_zero_price_warns_once` regression passes in both Rust matrices:
+  zero input/output each warn once; repeat import and paid model do not warn.
+  Its logger runs in an isolated test subprocess to avoid conflicting with the
+  credential-redaction tests' process-global logger.
+- Actual pricing component rendered and inspected at desktop and narrow widths:
+  missing cache rates show estimated input pricing, explicit zero stays free.
+  Native Windows/macOS interaction acceptance remains unexecuted.
+- PR #89 exact head `29d2fa2fd7ad9154baf0c1c69635c9f79af123cc`: all six checks
+  passed, including both backend modes and macOS/Windows desktop builds:
+  https://github.com/Xr810/LLM-Usage-Bar/actions/runs/40202713551.

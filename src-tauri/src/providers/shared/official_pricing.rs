@@ -17,6 +17,8 @@ use tauri::async_runtime::JoinHandle;
 use tokio::sync::watch;
 
 pub const SOURCE_URL: &str = "https://models.dev/api.json";
+pub const LAST_ATTEMPT_SETTING_KEY: &str = "official_pricing_last_attempt_at";
+/// Compatibility key: this timestamp now advances only on accepted batches.
 pub const LAST_REFRESH_SETTING_KEY: &str = "official_pricing_last_refresh_at";
 pub const LAST_IMPORTED_COUNT_SETTING_KEY: &str = "official_pricing_last_imported_count";
 
@@ -34,6 +36,8 @@ const FAILURE_RETRY_DELAYS: [Duration; 5] = [
 #[serde(rename_all = "camelCase")]
 pub struct RefreshOutcome {
     pub fetched_at: i64,
+    pub last_attempt_at: i64,
+    pub last_success_at: Option<i64>,
     pub models_imported: u64,
     pub models_skipped: u64,
     pub source_url: String,
@@ -89,6 +93,7 @@ struct PendingBody {
 }
 
 pub async fn refresh_official_pricing(db: &Database) -> Result<RefreshOutcome, AppError> {
+    db.set_setting(LAST_ATTEMPT_SETTING_KEY, &unix_timestamp()?.to_string())?;
     let response = crate::http_client::get()
         .get(SOURCE_URL)
         .header("Accept", "application/json")
@@ -143,6 +148,7 @@ fn import_document(
     document: HashMap<String, ProviderDocument>,
     fetched_at: i64,
 ) -> Result<RefreshOutcome, AppError> {
+    db.set_setting(LAST_ATTEMPT_SETTING_KEY, &fetched_at.to_string())?;
     let (models, mut rejected, models_skipped) = filtered_models(document);
     let (models, collisions) = resolve_collisions(models, PRICING_MODEL_ID_OVERRIDES);
     for collision in &collisions {
@@ -160,9 +166,9 @@ fn import_document(
             "official pricing batch discarded: {catalog_count} models is below half of the last imported count {}",
             previous_count.unwrap_or(0)
         );
-        db.set_setting(LAST_REFRESH_SETTING_KEY, &fetched_at.to_string())?;
         return Ok(empty_outcome(
             fetched_at,
+            last_refresh_at(db)?,
             models_skipped,
             rejected,
             collisions,
@@ -199,6 +205,8 @@ fn import_document(
 
     Ok(RefreshOutcome {
         fetched_at,
+        last_attempt_at: fetched_at,
+        last_success_at: Some(fetched_at),
         models_imported: catalog_count,
         models_skipped,
         source_url: SOURCE_URL.to_string(),
@@ -212,6 +220,7 @@ fn import_document(
 
 fn empty_outcome(
     fetched_at: i64,
+    last_success_at: Option<i64>,
     models_skipped: u64,
     mut rejected: Vec<RejectedPrice>,
     collisions: Vec<Collision>,
@@ -220,6 +229,8 @@ fn empty_outcome(
     rejected.sort_by(|left, right| left.model_id.cmp(&right.model_id));
     RefreshOutcome {
         fetched_at,
+        last_attempt_at: fetched_at,
+        last_success_at,
         models_imported: 0,
         models_skipped,
         source_url: SOURCE_URL.to_string(),
@@ -291,6 +302,12 @@ fn apply_model(
     match decision {
         PriceDecision::Accept { confirmed } => {
             write_accepted(transaction, model)?;
+            if stored.is_none() && (model.input.is_zero() || model.output.is_zero()) {
+                log::warn!(
+                    "official pricing first import has a zero price: model={}",
+                    model.model_id
+                );
+            }
             if confirmed {
                 accepted_after_confirm.push(model.model_id.clone());
             }
@@ -656,6 +673,65 @@ mod tests {
     }
 
     #[test]
+    fn first_zero_price_warns_once() {
+        // Isolate the process-global logger from the credential-redaction tests.
+        const CHILD: &str = "LUB_ZERO_PRICE_LOG_TEST";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "providers::shared::official_pricing::tests::first_zero_price_warns_once",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+            return;
+        }
+        struct Logger(std::sync::Mutex<Vec<String>>);
+        impl log::Log for Logger {
+            fn enabled(&self, _: &log::Metadata<'_>) -> bool {
+                true
+            }
+            fn log(&self, record: &log::Record<'_>) {
+                if record.level() == log::Level::Warn {
+                    self.0.lock().unwrap().push(record.args().to_string());
+                }
+            }
+            fn flush(&self) {}
+        }
+        static LOGGER: Logger = Logger(std::sync::Mutex::new(Vec::new()));
+        log::set_logger(&LOGGER).unwrap();
+        log::set_max_level(log::LevelFilter::Warn);
+        let db = Database::memory().unwrap();
+        let fixture = json!({"anthropic": {"models": {
+            "claude-free-input": {"cost": {"input": 0, "output": 2}},
+            "claude-free-output": {"cost": {"input": 3, "output": 0}},
+            "claude-paid": {"cost": {"input": 3, "output": 4}}
+        }}});
+        import_fixture(&db, fixture.clone(), 100);
+        import_fixture(&db, fixture, 200);
+        let logs = LOGGER.0.lock().unwrap();
+        let warnings: Vec<_> = logs
+            .iter()
+            .filter(|line| line.contains("first import has a zero price"))
+            .collect();
+        assert_eq!(warnings.len(), 2);
+        assert!(warnings
+            .iter()
+            .any(|line| line.contains("claude-free-input")));
+        assert!(warnings
+            .iter()
+            .any(|line| line.contains("claude-free-output")));
+        assert!(warnings.iter().all(|line| !line.contains("claude-paid")));
+    }
+
+    #[test]
     fn first_party_vendor_imports_while_reseller_is_skipped() {
         let db = Database::memory().unwrap();
         let outcome = import_fixture(
@@ -925,7 +1001,13 @@ mod tests {
         assert_eq!(rejected.models_imported, 0);
         assert_eq!(price_of(&db, "gpt-a").0, "1");
         assert_eq!(last_imported_count(&db).unwrap(), Some(4));
-        assert_eq!(last_refresh_at(&db).unwrap(), Some(3_100));
+        assert_eq!(last_refresh_at(&db).unwrap(), Some(3_000));
+        assert_eq!(
+            db.get_setting(LAST_ATTEMPT_SETTING_KEY).unwrap().as_deref(),
+            Some("3100")
+        );
+        assert_eq!(rejected.last_attempt_at, 3_100);
+        assert_eq!(rejected.last_success_at, Some(3_000));
 
         let exact_half = import_fixture(
             &db,
@@ -937,6 +1019,8 @@ mod tests {
         );
         assert!(!exact_half.batch_rejected);
         assert_eq!(price_of(&db, "gpt-a").0, "2");
+        assert_eq!(last_refresh_at(&db).unwrap(), Some(3_200));
+        assert_eq!(exact_half.last_success_at, Some(3_200));
     }
 
     #[test]

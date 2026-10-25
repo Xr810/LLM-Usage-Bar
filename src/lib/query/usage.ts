@@ -375,7 +375,7 @@ export function useRefreshOfficialPricing() {
     onSuccess: (outcome) => {
       queryClient.setQueryData(
         usageKeys.officialPricingFreshness(),
-        outcome.fetchedAt,
+        outcome.lastSuccessAt,
       );
       if (!outcome.batchRejected) {
         queryClient.setQueryData(

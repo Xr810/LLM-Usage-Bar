@@ -61,8 +61,8 @@ export interface ModelPricing {
   displayName: string;
   inputCostPerMillion: string;
   outputCostPerMillion: string;
-  cacheReadCostPerMillion: string;
-  cacheCreationCostPerMillion: string;
+  cacheReadCostPerMillion: string | null;
+  cacheCreationCostPerMillion: string | null;
 }
 
 export interface OfficialPricingRejection {
@@ -83,6 +83,8 @@ export interface OfficialPricingCollision {
 
 export interface OfficialPricingRefreshOutcome {
   fetchedAt: number;
+  lastAttemptAt: number;
+  lastSuccessAt: number | null;
   modelsImported: number;
   modelsSkipped: number;
   sourceUrl: string;

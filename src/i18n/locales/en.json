@@ -82,6 +82,7 @@
     "customPricingRowSummary": "in {{input}} · out {{output}} · cache read {{cacheRead}} · cache write {{cacheWrite}} per 1M",
     "customPricingNoOfficialRate": "No official rate",
     "customPricingInheritedRate": "official",
+    "cacheEstimatedAtInputPrice": "estimated at input price (${{input}})",
     "customPricingModelId": "Model ID",
     "customPricingModelIdHint": "A family ID such as claude-sonnet-5 also covers its dated variants.",
     "customPricingInputLabel": "Input (USD / 1M tokens)",

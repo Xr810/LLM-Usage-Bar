@@ -82,6 +82,7 @@
     "customPricingRowSummary": "入力 {{input}} · 出力 {{output}} · キャッシュ読取 {{cacheRead}} · キャッシュ書込 {{cacheWrite}}（100万トークンあたり）",
     "customPricingNoOfficialRate": "公式料金なし",
     "customPricingInheritedRate": "公式料金",
+    "cacheEstimatedAtInputPrice": "入力料金で推定（${{input}}）",
     "customPricingModelId": "モデル ID",
     "customPricingModelIdHint": "claude-sonnet-5 のようなファミリー ID を入力すると、日付付きのバリアントも対象になります。",
     "customPricingInputLabel": "入力（USD / 100万トークン）",

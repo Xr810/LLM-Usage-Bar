@@ -82,6 +82,7 @@
     "customPricingRowSummary": "输入 {{input}} · 输出 {{output}} · 缓存读 {{cacheRead}} · 缓存写 {{cacheWrite}}（每百万 Token）",
     "customPricingNoOfficialRate": "无官方价",
     "customPricingInheritedRate": "官方价",
+    "cacheEstimatedAtInputPrice": "按输入价估算（${{input}}）",
     "customPricingModelId": "模型 ID",
     "customPricingModelIdHint": "填写系列 ID（如 claude-sonnet-5）即可覆盖其带日期的具体版本。",
     "customPricingInputLabel": "输入（USD / 百万 Token）",
