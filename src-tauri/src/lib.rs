@@ -1574,6 +1574,8 @@ pub fn run() {
             commands::get_license_status,
             commands::activate_license,
             commands::deactivate_license,
+            // BE-20: monthly budget (C10 / C15). Does not change set_api_budget_config.
+            commands::set_monthly_budget,
         ]);
 
     let app = builder
