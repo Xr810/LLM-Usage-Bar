@@ -4,14 +4,16 @@
 //! (base_url 含 `/v1` 是跨任务硬契约),这里按 T4 的候选队列依次转发,失败用
 //! T5 的 `classify` 判定换不换家,每次尝试记进 T3 的 `router_attempts`。
 //!
-//! 安全面(§4.3,本任务唯一的网络出口):转给上游的头只有白名单
+//! 安全面(§4.3,本任务唯一的网络出口):API Key 和 unknown 转给上游的头只有白名单
 //! `content-type`、`accept`,加上 `UpstreamAuth` 注入的凭据头。客户端来的
-//! `authorization` / `cookie` / `x-api-key` / `openai-organization` 一律丢弃。
+//! `authorization` / `cookie` / `x-api-key` / `openai-organization` 在这两类上丢弃。
+//! 订阅请求是例外:原样转发 `authorization`、`anthropic-beta`、`chatgpt-account-id`,
+//! 不换存储凭据。分类发生在丢头之前。
 
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -25,9 +27,16 @@ use futures::future::BoxFuture;
 use futures::stream::StreamExt;
 
 use crate::error::AppError;
+use crate::policy::{AllowAllGate, PolicyGate, ReqMeta};
 use crate::route::decision::{candidates_for, Blacklisted, Candidate, RouteMode};
 use crate::route::failure::{classify, AttemptResult, BlacklistScope, FailureKind};
-use crate::store::{AttemptOutcome, Database, RouterAttempt, RouterProvider, WireApi};
+use crate::route::identity::{
+    classify_headers, identity_label, passthrough_headers, ClassifiedRequest,
+};
+use crate::store::{
+    insert_proxy_settlement, AttemptOutcome, Database, ProxySettlement, RouterAttempt,
+    RouterProvider, WireApi,
+};
 
 /// 请求体缓存上限(§4.2)。超过之后不缓存、退化成纯流式,不再有故障转移能力。
 const MAX_BUFFERED_BODY: usize = 4 * 1024 * 1024;
@@ -41,6 +50,8 @@ const ERROR_SNIPPET_MAX: usize = 8 * 1024;
 /// 排干(丢弃)一个不会再转发的错误体时最多读多少字节:恶意上游可以无限发
 /// 错误体,不能陪它读完,读一点让连接有机会回池即可。
 const ERROR_DRAIN_MAX: usize = 1024 * 1024;
+/// 进程内只记一次。订阅流量照常透传;提醒不是拒绝。
+static SUBSCRIPTION_SEEN: AtomicBool = AtomicBool::new(false);
 
 /// 上游认证头的提供方。**router 自己不持有任何凭据**——它只在要发请求的那一刻
 /// 问一次「这家的认证头是什么」，拿到就用，用完不留。
@@ -124,12 +135,15 @@ async fn bind_loopback(port: u16) -> Result<tokio::net::TcpListener, AppError> {
         .map_err(|error| AppError::Config(format!("绑定 127.0.0.1:{port} 失败: {error}")))
 }
 
-/// 路由表:只注册 `POST /v1/responses` 一条(§3.1),其余路径一律 404。
+/// 路由表:`POST /v1/responses` 与 `POST /v1/messages`。其余路径一律 404。
 /// `/v1` 前缀不是可选的——T7 把 Codex 的 base_url 写成
 /// `http://127.0.0.1:<port>/v1`,Codex 再往后面接 `/responses`。
+/// Claude Code 接 `/messages`。上游地址仍用该 provider 配置的 base_url,
+/// 不在这里写死官方主机。
 fn build_router(state: Arc<RouterState>) -> Router {
     Router::new()
         .route("/v1/responses", post(handle_responses))
+        .route("/v1/messages", post(handle_messages))
         .fallback(not_found)
         .with_state(state)
 }
@@ -502,6 +516,11 @@ fn record_attempt(db: &Database, record: AttemptRecord<'_>) -> Option<i64> {
 struct RequestContext {
     state: Arc<RouterState>,
     client_headers: HeaderMap,
+    classified: ClassifiedRequest,
+    request_id: String,
+    app_type: String,
+    expected_wire: WireApi,
+    upstream_suffix: &'static str,
     logical_model: String,
     providers: HashMap<String, RouterProvider>,
     candidates: Vec<Candidate>,
@@ -542,7 +561,55 @@ async fn handle_responses(
     client_headers: HeaderMap,
     body: Body,
 ) -> Response {
-    match handle_responses_inner(state, client_headers, body).await {
+    dispatch_proxy(
+        state,
+        client_headers,
+        body,
+        WireApi::Responses,
+        "responses",
+        "codex",
+        true,
+    )
+    .await
+}
+
+async fn handle_messages(
+    State(state): State<Arc<RouterState>>,
+    client_headers: HeaderMap,
+    body: Body,
+) -> Response {
+    dispatch_proxy(
+        state,
+        client_headers,
+        body,
+        WireApi::Messages,
+        "messages",
+        "claude",
+        false,
+    )
+    .await
+}
+
+async fn dispatch_proxy(
+    state: Arc<RouterState>,
+    client_headers: HeaderMap,
+    body: Body,
+    expected_wire: WireApi,
+    upstream_suffix: &'static str,
+    app_type: &'static str,
+    codex_path: bool,
+) -> Response {
+    match handle_proxy_inner(
+        state,
+        client_headers,
+        body,
+        expected_wire,
+        upstream_suffix,
+        app_type,
+        codex_path,
+    )
+    .await
+    {
         Ok(response) => response,
         // 请求本身有问题(不是合法 JSON、缺 model、超限且扫不到 model)是 400,
         // 其余一律 500。
@@ -554,11 +621,41 @@ async fn handle_responses(
     }
 }
 
-async fn handle_responses_inner(
+async fn handle_proxy_inner(
     state: Arc<RouterState>,
     client_headers: HeaderMap,
     body: Body,
+    expected_wire: WireApi,
+    upstream_suffix: &'static str,
+    app_type: &str,
+    codex_path: bool,
 ) -> Result<Response, AppError> {
+    let classified = classify_headers(&client_headers, codex_path);
+    let request_id = format!("proxy-{}", uuid::Uuid::new_v4());
+    log::info!(
+        "router {} request_id={request_id} {}",
+        classified.log_label(),
+        upstream_suffix
+    );
+    if classified.passthrough && !SUBSCRIPTION_SEEN.swap(true, Ordering::Relaxed) {
+        log::info!(
+            "request_id={request_id} detected subscription traffic on the local proxy; forwarding the original credential"
+        );
+    }
+    let decision = AllowAllGate.admit(&ReqMeta {
+        req_id: request_id.clone(),
+        app_type: app_type.to_string(),
+        provider_id: String::new(),
+        model: String::new(),
+        billing_identity: classified.identity,
+        key_fp: classified.key_fp.clone(),
+        session_id: classified.session_id.clone(),
+        est_cost_micro_usd: 0,
+        via_subscription_optin: classified.passthrough,
+    });
+    if !matches!(decision, crate::policy::Decision::Allow) {
+        log::error!("request_id={request_id} community gate returned a non-allow decision");
+    }
     // 1. 读 body(带缓存上限)
     let inbound = read_request_body(body).await?;
     // 2. 逻辑模型
@@ -605,6 +702,11 @@ async fn handle_responses_inner(
     let ctx = RequestContext {
         state,
         client_headers,
+        classified,
+        request_id,
+        app_type: app_type.to_string(),
+        expected_wire,
+        upstream_suffix,
         logical_model,
         providers,
         candidates,
@@ -663,7 +765,7 @@ async fn try_one_candidate(
         return Ok(Step::Skipped);
     };
     // 协议一致性:v1 不做协议转换(§6),wire_api 不匹配的直接跳过并记 skipped。
-    if provider.wire_api != WireApi::Responses {
+    if provider.wire_api != ctx.expected_wire {
         log::info!(
             "跳过 wire_api 不匹配的候选 {} ({:?})",
             provider.id,
@@ -683,24 +785,33 @@ async fn try_one_candidate(
         );
         return Ok(Step::Skipped);
     }
-    // 认证头:要发的那一刻才问,拿到就用,用完不留(§4.3)。
-    let auth_headers = match state.auth.headers_for(&candidate.provider_id).await {
-        Ok(headers) => headers,
-        Err(error) => {
-            log::warn!("取 {} 的上游认证头失败: {error}", candidate.provider_id);
-            record_attempt(
-                &state.db,
-                AttemptRecord {
-                    started_at: ctx.request_start_ms,
-                    logical_model: &ctx.logical_model,
-                    provider_id: &candidate.provider_id,
-                    outcome: AttemptOutcome::Failed,
-                    failure_kind: Some("auth_unavailable"),
-                    http_status: None,
-                    duration_ms: None,
-                },
-            );
-            return Ok(Step::Skipped);
+    // 订阅请求不换凭据。其余类别仍在发送前取存储的上游认证头。
+    let passthrough_headers = if ctx.classified.passthrough {
+        Some(passthrough_headers(&ctx.client_headers))
+    } else {
+        None
+    };
+    let auth_headers = if passthrough_headers.is_some() {
+        Vec::new()
+    } else {
+        match state.auth.headers_for(&candidate.provider_id).await {
+            Ok(headers) => headers,
+            Err(error) => {
+                log::warn!("取 {} 的上游认证头失败: {error}", candidate.provider_id);
+                record_attempt(
+                    &state.db,
+                    AttemptRecord {
+                        started_at: ctx.request_start_ms,
+                        logical_model: &ctx.logical_model,
+                        provider_id: &candidate.provider_id,
+                        outcome: AttemptOutcome::Failed,
+                        failure_kind: Some("auth_unavailable"),
+                        http_status: None,
+                        duration_ms: None,
+                    },
+                );
+                return Ok(Step::Skipped);
+            }
         }
     };
     // 改写 model,组装出站体。
@@ -724,8 +835,15 @@ async fn try_one_candidate(
             return Err(AppError::InvalidInput("请求体状态不一致".to_string()));
         }
     };
-    let url = format!("{}/responses", provider.base_url.trim_end_matches('/'));
-    let outbound_headers = build_upstream_headers(&ctx.client_headers, &auth_headers);
+    let url = format!(
+        "{}/{}",
+        provider.base_url.trim_end_matches('/'),
+        ctx.upstream_suffix
+    );
+    let outbound_headers = match passthrough_headers {
+        Some(headers) => headers,
+        None => build_upstream_headers(&ctx.client_headers, &auth_headers),
+    };
     let attempt_start = now_millis();
     let send_result = state
         .sender
@@ -743,6 +861,11 @@ async fn try_one_candidate(
                 candidate,
                 &ctx.logical_model,
                 attempt_start,
+                SettlementSeed {
+                    request_id: ctx.request_id.clone(),
+                    app_type: ctx.app_type.clone(),
+                    classified: ctx.classified.clone(),
+                },
             )
             .map(Step::Success);
         }
@@ -824,6 +947,12 @@ async fn try_one_candidate(
     }
 }
 
+struct SettlementSeed {
+    request_id: String,
+    app_type: String,
+    classified: ClassifiedRequest,
+}
+
 /// 2xx:记 attempt(success) 后把响应流式透传给客户端,绝不整体读进内存(§4.1)。
 /// 若流在吐字之后中断,再补记一条 failed/stream_broken(不换家、不拉黑,错误
 /// 只能以「流到此结束」的形式透传)。
@@ -837,6 +966,7 @@ fn stream_upstream_success(
     candidate: &Candidate,
     logical_model: &str,
     attempt_start: i64,
+    seed: SettlementSeed,
 ) -> Result<Response, AppError> {
     let status = response.status();
     let content_type = response.headers().get(header::CONTENT_TYPE).cloned();
@@ -862,6 +992,11 @@ fn stream_upstream_success(
     let provider_id = candidate.provider_id.clone();
     let logical_model = logical_model.to_string();
     let status_code = status.as_u16();
+    let settlement_request_id = seed.request_id;
+    let settlement_app_type = seed.app_type;
+    let settlement_identity = identity_label(seed.classified.identity).to_string();
+    let settlement_fp = seed.classified.key_fp;
+    let settlement_session = seed.classified.session_id;
     let stream = async_stream::stream! {
         let mut inner = response.bytes_stream();
         let mut broken = false;
@@ -876,6 +1011,8 @@ fn stream_upstream_success(
         let mut buffered: Vec<u8> = Vec::new();
         let mut buffered_overflow = false;
         let mut captured = false;
+        let mut settled_input = 0i64;
+        let mut settled_output = 0i64;
         while let Some(chunk) = inner.next().await {
             match chunk {
                 Ok(bytes) => {
@@ -886,6 +1023,8 @@ fn stream_upstream_success(
                                 usage_from_completed_event(&event)
                             {
                                 captured = true;
+                                settled_input = input_tokens;
+                                settled_output = output_tokens;
                                 backfill_attempt_tokens(&db, attempt_id, input_tokens, output_tokens);
                                 break;
                             }
@@ -927,7 +1066,44 @@ fn stream_upstream_success(
             // SSE 响应走不到这里(§1 的门)——它的 buffered 全程为空,兜底没有
             // 可解析的东西,usage 只可能来自上面的 response.completed。
             if let Some((input_tokens, output_tokens)) = usage_from_body_json(&buffered) {
+                settled_input = input_tokens;
+                settled_output = output_tokens;
                 backfill_attempt_tokens(&db, attempt_id, input_tokens, output_tokens);
+            }
+        }
+        AllowAllGate.settle(
+            &settlement_request_id,
+            &crate::policy::Usage {
+                input_tokens: u64::try_from(settled_input).unwrap_or(0),
+                output_tokens: u64::try_from(settled_output).unwrap_or(0),
+                cache_read_tokens: 0,
+                cache_creation_tokens: 0,
+                cost_micro_usd: 0,
+            },
+        );
+        if let Ok(mut conn) = db.conn.lock() {
+            if let Err(error) = insert_proxy_settlement(
+                &mut conn,
+                &ProxySettlement {
+                    request_id: settlement_request_id,
+                    provider_id: provider_id.clone(),
+                    app_type: settlement_app_type,
+                    model: logical_model.clone(),
+                    input_tokens: settled_input,
+                    output_tokens: settled_output,
+                    status_code: i64::from(status_code),
+                    created_at: now_millis() / 1000,
+                    billing_identity: settlement_identity,
+                    key_fingerprint: settlement_fp,
+                    session_id: settlement_session,
+                    end_reason: if broken {
+                        "client_abort".to_string()
+                    } else {
+                        "completed".to_string()
+                    },
+                },
+            ) {
+                log::warn!("request settlement failed: {error}");
             }
         }
     };
@@ -1855,7 +2031,7 @@ mod tests {
         );
     }
 
-    /// 只注册 POST /v1/responses:其余路径一律 404,少了 /v1 前缀也不行。
+    /// 未注册的路径一律 404,少了 /v1 前缀也不行。`/v1/messages` 另有用例。
     #[tokio::test]
     async fn unknown_paths_return_404() {
         let db = memory_db();
@@ -2344,5 +2520,130 @@ mod tests {
             vec![(None, None)],
             "误标成 SSE 的 JSON 体不会被兜底解析——这正是 buffered 全程为空的证据(§4 接受的取舍)"
         );
+    }
+
+    async fn post_path(
+        router: Router,
+        path: &str,
+        body_bytes: Vec<u8>,
+        extra_headers: &[(&str, &str)],
+    ) -> (StatusCode, HeaderMap, Bytes) {
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri(path)
+            .header("content-type", "application/json")
+            .header("accept", "application/json");
+        for (name, value) in extra_headers {
+            builder = builder.header(*name, *value);
+        }
+        let request = builder.body(Body::from(body_bytes)).unwrap();
+        let response = router.oneshot(request).await.unwrap();
+        let status = response.status();
+        let headers = response.headers().clone();
+        let body = to_bytes(response.into_body(), 64 * 1024 * 1024)
+            .await
+            .unwrap();
+        (status, headers, body)
+    }
+
+    #[tokio::test]
+    async fn messages_route_classifies_passthrough_and_settles_without_storing_the_key() {
+        let secret = "sk-ant-api03-example-not-a-real-key";
+        let oat = "sk-ant-oat01-example-not-a-real-token";
+        let bearer = format!("Bearer {oat}");
+        let cases: [(&[_], &str, bool); 3] = [
+            (
+                &[
+                    ("x-api-key", secret),
+                    ("x-claude-code-session-id", "sess-9"),
+                ],
+                "api_key",
+                false,
+            ),
+            (
+                &[
+                    ("authorization", bearer.as_str()),
+                    ("anthropic-beta", "oauth-2025-04-20"),
+                ],
+                "subscription_oauth",
+                true,
+            ),
+            (&[], "unknown", false),
+        ];
+        for (headers, identity, passthrough) in cases {
+            let db = memory_db();
+            seed_route(&db, "anthropic", WireApi::Messages, 1, MODEL);
+            let sender = fake_sender(vec![ScriptedOutcome::Respond {
+                status: 200,
+                headers: vec![("content-type".to_string(), "application/json".to_string())],
+                body: br#"{"usage":{"input_tokens":3,"output_tokens":4}}"#.to_vec(),
+            }]);
+            let router = test_router(test_state(db.clone(), ok_auth(), sender.clone()));
+            let (status, _, _) = post_path(
+                router,
+                "/v1/messages",
+                json_body(json!({"model": MODEL})),
+                headers,
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{identity}");
+            let outbound = sender.requests.lock().unwrap();
+            let auth = outbound[0]
+                .headers
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+                .map(|(_, value)| value.clone());
+            if passthrough {
+                assert_eq!(auth.as_deref(), Some(bearer.as_str()));
+                assert!(outbound[0].headers.iter().any(|(name, value)| {
+                    name == "anthropic-beta" && value == "oauth-2025-04-20"
+                }));
+            } else {
+                assert_eq!(auth.as_deref(), Some("Bearer upstream"));
+                assert!(outbound[0]
+                    .headers
+                    .iter()
+                    .all(|(_, value)| !value.contains(secret)));
+            }
+            drop(outbound);
+            let conn = db.conn.lock().unwrap();
+            let (
+                stored_identity,
+                fingerprint,
+                input_tokens,
+                end_reason,
+                cost_source,
+                session_id,
+            ): (String, Option<String>, i64, String, String, Option<String>) = conn
+                .query_row(
+                    "SELECT billing_identity, key_fingerprint, input_tokens,
+                            end_reason, cost_source, session_id
+                     FROM proxy_request_logs",
+                    [],
+                    |row| {
+                        Ok((
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                            row.get(5)?,
+                        ))
+                    },
+                )
+                .unwrap();
+            assert_eq!(stored_identity, identity);
+            assert_eq!(input_tokens, 3);
+            assert_eq!(end_reason, "completed");
+            assert_eq!(cost_source, "metered");
+            if identity == "api_key" {
+                assert_eq!(session_id.as_deref(), Some("sess-9"));
+            }
+            if let Some(fingerprint) = fingerprint {
+                assert!(!fingerprint.contains(secret));
+                assert!(!fingerprint.contains(oat));
+                assert!(!fingerprint.contains("sk-"));
+            }
+        }
     }
 }

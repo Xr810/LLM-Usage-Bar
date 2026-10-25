@@ -5,5 +5,6 @@
 pub mod auth;
 pub mod decision;
 pub mod failure;
+pub mod identity;
 pub mod pointer;
 pub mod server;

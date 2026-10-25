@@ -278,6 +278,84 @@ pub(crate) fn increment_guard_counter(
     Ok(())
 }
 
+/// One settled proxy request. The credential itself is never a field here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProxySettlement {
+    pub request_id: String,
+    pub provider_id: String,
+    pub app_type: String,
+    pub model: String,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub status_code: i64,
+    pub created_at: i64,
+    pub billing_identity: String,
+    pub key_fingerprint: Option<String>,
+    pub session_id: Option<String>,
+    pub end_reason: String,
+}
+
+pub(crate) fn insert_proxy_settlement(
+    conn: &mut Connection,
+    row: &ProxySettlement,
+) -> Result<(), AppError> {
+    let transaction = conn
+        .unchecked_transaction()
+        .map_err(|error| AppError::Database(format!("结算代理请求失败: {error}")))?;
+    let inserted = transaction
+        .execute(
+            "INSERT INTO proxy_request_logs (
+                 request_id, provider_id, app_type, model,
+                 input_tokens, output_tokens, total_cost_usd, latency_ms, status_code,
+                 session_id, is_streaming, created_at, data_source,
+                 billing_identity, key_fingerprint, end_reason, cost_source
+             ) VALUES (
+                 ?1, ?2, ?3, ?4, ?5, ?6, '0', 0, ?7, ?8, 1, ?9, 'proxy',
+                 ?10, ?11, ?12, 'metered'
+             ) ON CONFLICT(request_id) DO NOTHING",
+            params![
+                row.request_id,
+                row.provider_id,
+                row.app_type,
+                row.model,
+                row.input_tokens,
+                row.output_tokens,
+                row.status_code,
+                row.session_id,
+                row.created_at,
+                row.billing_identity,
+                row.key_fingerprint,
+                row.end_reason,
+            ],
+        )
+        .map_err(|error| AppError::Database(format!("结算代理请求失败: {error}")))?;
+    if inserted == 1 {
+        upsert_hourly_delta(
+            &transaction,
+            &HourlyLogDelta {
+                created_at: row.created_at,
+                app_type: row.app_type.clone(),
+                provider_id: row.provider_id.clone(),
+                model: row.model.clone(),
+                billing_identity: row.billing_identity.clone(),
+                data_source: "proxy".to_string(),
+                status_code: row.status_code,
+                end_reason: Some(row.end_reason.clone()),
+                input_tokens: row.input_tokens,
+                output_tokens: row.output_tokens,
+                cache_read_tokens: 0,
+                cache_creation_tokens: 0,
+                total_cost_usd: "0".to_string(),
+                latency_ms: 0,
+            },
+        )?;
+    }
+    transaction
+        .commit()
+        .map_err(|error| AppError::Database(format!("结算代理请求失败: {error}")))?;
+    Ok(())
+}
+
 impl Database {
     pub fn detail_retention_days(&self) -> Result<i64, AppError> {
         match self.get_setting(DETAIL_RETENTION_SETTING_KEY)? {
