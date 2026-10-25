@@ -4,8 +4,17 @@
 //! `apply_takeover` does not write. Codex subscription traffic must not go
 //! through `pointer.rs`; that writer is the API-key path only.
 //!
-//! Windows Credential Manager is intentionally not read. The command layer
-//! returns a stub on Windows.
+//! `set_claude_subscription_proxy(false)` is the only path that disables the
+//! Claude subscription proxy. `apply_takeover("claude", false)` does not.
+//! Disable restores only `env.ANTHROPIC_BASE_URL` and leaves every other
+//! settings key as the user left it.
+//!
+//! Codex subscription is detect-only in this batch: no enable and no disable.
+//! The frontend has no toggle. A subscription that is not on the explicit HTTP
+//! triple carries `noteCode` `codex_websocket`.
+//!
+//! Windows Credential Manager is intentionally not read. Windows writes return
+//! `FEATURE_UNAVAILABLE`. `UNSUPPORTED_TOOL` stays for tools such as Cursor.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -24,6 +33,9 @@ use crate::route::pointer::{
 
 const BACKUP_SUFFIX: &str = ".lub-takeover-backup";
 const ABSENT_SUFFIX: &str = ".lub-takeover-absent";
+const TERMS_SUFFIX: &str = ".lub-subscription-terms";
+/// Batch-1 Claude subscription proxy terms. Bump when the accepted text changes.
+pub const CLAUDE_SUBSCRIPTION_PROXY_TERMS_VERSION: &str = "1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -202,22 +214,30 @@ pub fn set_claude_subscription_proxy_at(
     layout: &TakeoverLayout,
     enabled: bool,
     terms_ack_at: Option<i64>,
+    now: i64,
 ) -> Result<(), AppError> {
     if enabled {
         let Some(ack) = terms_ack_at else {
             return Err(terms_required());
         };
+        validate_terms_ack(ack, now)?;
         write_claude_base_url(layout, true)?;
-        log::info!("claude subscription proxy acknowledged; termsAckAt={ack}");
+        persist_claude_terms(layout, ack)?;
+        log::info!(
+            "claude subscription proxy acknowledged; termsVersion={}",
+            CLAUDE_SUBSCRIPTION_PROXY_TERMS_VERSION
+        );
         Ok(())
     } else {
-        restore_claude_settings(&layout.claude_settings())?;
+        // Only this function disables the Claude subscription proxy.
+        restore_claude_base_url(&layout.claude_settings())?;
         Ok(())
     }
 }
 
 fn apply_claude(layout: &TakeoverLayout, enable: bool) -> Result<ApplyTakeoverResult, AppError> {
     match detect_claude_auth_at(layout).mode {
+        // Subscription proxy is not toggled here, including disable.
         AuthMode::Subscription => Err(terms_required()),
         AuthMode::Unknown if enable => Ok(ApplyTakeoverResult {
             note_codes: vec!["auth_unknown_skipped".to_string()],
@@ -226,7 +246,7 @@ fn apply_claude(layout: &TakeoverLayout, enable: bool) -> Result<ApplyTakeoverRe
             if enable {
                 write_claude_base_url(layout, false)?;
             } else {
-                restore_claude_settings(&layout.claude_settings())?;
+                restore_claude_base_url(&layout.claude_settings())?;
             }
             Ok(ApplyTakeoverResult {
                 note_codes: Vec::new(),
@@ -237,7 +257,8 @@ fn apply_claude(layout: &TakeoverLayout, enable: bool) -> Result<ApplyTakeoverRe
 
 fn apply_codex(layout: &TakeoverLayout, enable: bool) -> Result<ApplyTakeoverResult, AppError> {
     match codex_auth(layout).0 {
-        AuthMode::Subscription => Err(terms_required()),
+        // Batch 1: detect only. No enable, no disable, no terms toggle.
+        AuthMode::Subscription => Err(codex_subscription_detect_only()),
         AuthMode::Unknown if enable => Ok(ApplyTakeoverResult {
             note_codes: vec!["auth_unknown_skipped".to_string()],
         }),
@@ -266,12 +287,16 @@ fn claude_row(layout: &TakeoverLayout) -> ToolDetectRow {
 
 fn codex_row(layout: &TakeoverLayout) -> ToolDetectRow {
     let (mode, _) = codex_auth(layout);
-    tool_row(
+    let mut row = tool_row(
         "codex",
         dir_or_binary(&layout.codex_dir(), "codex", &layout.bin_dirs),
         mode,
         codex_proxied(layout, mode),
-    )
+    );
+    if row.auth_mode == AuthMode::Subscription && !row.proxied {
+        row.note_codes.push("codex_websocket".to_string());
+    }
+    row
 }
 
 fn cursor_row(layout: &TakeoverLayout) -> ToolDetectRow {
@@ -472,22 +497,95 @@ fn ensure_claude_backup(settings: &Path) -> Result<(), AppError> {
     Ok(())
 }
 
-fn restore_claude_settings(settings: &Path) -> Result<(), AppError> {
+fn restore_claude_base_url(settings: &Path) -> Result<(), AppError> {
     let backup = sibling(settings, BACKUP_SUFFIX);
     let absent = sibling(settings, ABSENT_SUFFIX);
+    if !backup.exists() && !absent.exists() {
+        return Ok(());
+    }
+    let original_url = if absent.exists() {
+        None
+    } else {
+        match read_json_optional(&backup) {
+            JsonRead::Value(value) => value
+                .pointer("/env/ANTHROPIC_BASE_URL")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            JsonRead::Missing => None,
+            JsonRead::Unreadable => return Err(config_write_failed()),
+        }
+    };
+    apply_claude_base_url(settings, original_url.as_deref(), absent.exists())?;
+    if backup.exists() {
+        fs::remove_file(&backup).map_err(|_| config_write_failed())?;
+    }
     if absent.exists() {
+        fs::remove_file(&absent).map_err(|_| config_write_failed())?;
+    }
+    Ok(())
+}
+
+fn apply_claude_base_url(
+    settings: &Path,
+    url: Option<&str>,
+    created_file: bool,
+) -> Result<(), AppError> {
+    let mut root = match read_json_optional(settings) {
+        JsonRead::Value(value) => value,
+        JsonRead::Missing if url.is_none() => return Ok(()),
+        JsonRead::Missing => json!({}),
+        JsonRead::Unreadable => return Err(config_write_failed()),
+    };
+    set_env_base_url(&mut root, url)?;
+    let empty = root.as_object().is_some_and(|map| map.is_empty());
+    if created_file && empty {
         if settings.exists() {
             fs::remove_file(settings).map_err(|_| config_write_failed())?;
         }
-        fs::remove_file(&absent).map_err(|_| config_write_failed())?;
         return Ok(());
     }
-    if backup.exists() {
-        atomic_write(
-            settings,
-            &fs::read(&backup).map_err(|_| config_write_failed())?,
-        )?;
-        fs::remove_file(&backup).map_err(|_| config_write_failed())?;
+    if !settings.exists() && url.is_none() {
+        return Ok(());
+    }
+    let text = serde_json::to_string_pretty(&root).map_err(|_| config_write_failed())?;
+    atomic_write(settings, text.as_bytes())
+}
+
+fn set_env_base_url(root: &mut Value, url: Option<&str>) -> Result<(), AppError> {
+    if !root.is_object() {
+        return Err(config_write_failed());
+    }
+    match url {
+        Some(url) => {
+            let env = root
+                .as_object_mut()
+                .ok_or_else(config_write_failed)?
+                .entry("env")
+                .or_insert_with(|| json!({}));
+            if !env.is_object() {
+                return Err(config_write_failed());
+            }
+            env.as_object_mut().ok_or_else(config_write_failed)?.insert(
+                "ANTHROPIC_BASE_URL".to_string(),
+                Value::String(url.to_string()),
+            );
+        }
+        None => {
+            let Some(env) = root.get_mut("env") else {
+                return Ok(());
+            };
+            if !env.is_object() {
+                return Err(config_write_failed());
+            }
+            env.as_object_mut()
+                .ok_or_else(config_write_failed)?
+                .remove("ANTHROPIC_BASE_URL");
+            if env.as_object().is_some_and(|env| env.is_empty()) {
+                root.as_object_mut()
+                    .ok_or_else(config_write_failed)?
+                    .remove("env");
+            }
+        }
     }
     Ok(())
 }
@@ -580,8 +678,64 @@ fn read_json_optional(path: &Path) -> JsonRead {
     }
 }
 
+fn validate_terms_ack(ack: i64, now: i64) -> Result<(), AppError> {
+    if ack <= 0 {
+        return Err(terms_required());
+    }
+    if ack > now {
+        return Err(AppError::invalid_argument(
+            "termsAckAt is in the future.",
+            "termsAckAt",
+        ));
+    }
+    Ok(())
+}
+
+fn persist_claude_terms(layout: &TakeoverLayout, ack: i64) -> Result<(), AppError> {
+    let path = sibling(&layout.claude_settings(), TERMS_SUFFIX);
+    let payload = json!({
+        "termsAckAt": ack,
+        "termsVersion": CLAUDE_SUBSCRIPTION_PROXY_TERMS_VERSION,
+    });
+    let text = serde_json::to_string_pretty(&payload).map_err(|_| config_write_failed())?;
+    atomic_write(&path, text.as_bytes())
+}
+
 fn terms_required() -> AppError {
     AppError::coded("TERMS_ACK_REQUIRED", "Terms acknowledgement is required.")
+}
+
+fn codex_subscription_detect_only() -> AppError {
+    AppError::coded_with_details(
+        "FEATURE_UNAVAILABLE",
+        "Codex subscription takeover is detect-only.",
+        json!({
+            "feature": "codex_subscription_takeover",
+            "reason": "detect_only"
+        }),
+    )
+}
+
+/// Windows cannot write takeover config in this batch. Cursor and unknown
+/// tools stay `UNSUPPORTED_TOOL`.
+pub fn windows_takeover_write_error(tool: &str) -> AppError {
+    if tool == "claude" || tool == "codex" {
+        AppError::coded_with_details(
+            "FEATURE_UNAVAILABLE",
+            "This feature is not available on this platform.",
+            json!({"feature": "takeover_write", "reason": "platform"}),
+        )
+    } else {
+        unsupported_tool()
+    }
+}
+
+pub fn windows_subscription_proxy_unavailable() -> AppError {
+    AppError::coded_with_details(
+        "FEATURE_UNAVAILABLE",
+        "This feature is not available on this platform.",
+        json!({"feature": "takeover_write", "reason": "platform"}),
+    )
 }
 
 fn unsupported_tool() -> AppError {
@@ -698,33 +852,67 @@ mod tests {
         fs::create_dir_all(home.join(".claude")).unwrap();
         fs::write(home.join(".claude/settings.json"), original).unwrap();
         let layout = layout(home);
-        let rejected = set_claude_subscription_proxy_at(&layout, true, None).unwrap_err();
+        let now = 1_700_000_100;
+        let rejected = set_claude_subscription_proxy_at(&layout, true, None, now).unwrap_err();
         assert_eq!(rejected.code(), Some("TERMS_ACK_REQUIRED"));
+        let zero = set_claude_subscription_proxy_at(&layout, true, Some(0), now).unwrap_err();
+        assert_eq!(zero.code(), Some("TERMS_ACK_REQUIRED"));
+        let future =
+            set_claude_subscription_proxy_at(&layout, true, Some(now + 1), now).unwrap_err();
+        assert_eq!(future.code(), Some("INVALID_ARGUMENT"));
+        assert_eq!(
+            serde_json::to_value(&future).unwrap()["details"]["field"],
+            "termsAckAt"
+        );
         assert_eq!(
             fs::read_to_string(home.join(".claude/settings.json")).unwrap(),
             original
         );
 
-        set_claude_subscription_proxy_at(&layout, true, Some(1_700_000_000)).unwrap();
+        set_claude_subscription_proxy_at(&layout, true, Some(1_700_000_000), now).unwrap();
         let written = fs::read_to_string(home.join(".claude/settings.json")).unwrap();
         assert!(written.contains("http://127.0.0.1:8788"));
         assert!(written.contains("dark"));
         let backup =
             fs::read_to_string(home.join(".claude/settings.json.lub-takeover-backup")).unwrap();
         assert_eq!(backup, original);
-        set_claude_subscription_proxy_at(&layout, true, Some(1_700_000_001)).unwrap();
+        set_claude_subscription_proxy_at(&layout, true, Some(1_700_000_001), now).unwrap();
         assert_eq!(
             fs::read_to_string(home.join(".claude/settings.json.lub-takeover-backup")).unwrap(),
             original
         );
-
-        set_claude_subscription_proxy_at(&layout, false, None).unwrap();
+        let terms: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(home.join(".claude/settings.json.lub-subscription-terms")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(terms["termsAckAt"], 1_700_000_001);
         assert_eq!(
-            fs::read_to_string(home.join(".claude/settings.json")).unwrap(),
-            original
+            terms["termsVersion"],
+            CLAUDE_SUBSCRIPTION_PROXY_TERMS_VERSION
         );
+
+        let mut current: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(home.join(".claude/settings.json")).unwrap())
+                .unwrap();
+        current["editor"] = serde_json::json!("vim");
+        fs::write(
+            home.join(".claude/settings.json"),
+            serde_json::to_string_pretty(&current).unwrap(),
+        )
+        .unwrap();
+
+        set_claude_subscription_proxy_at(&layout, false, None, now).unwrap();
+        let restored: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(home.join(".claude/settings.json")).unwrap())
+                .unwrap();
+        assert_eq!(restored["theme"], "dark");
+        assert_eq!(restored["editor"], "vim");
+        assert!(restored.pointer("/env/ANTHROPIC_BASE_URL").is_none());
         assert!(!home
             .join(".claude/settings.json.lub-takeover-backup")
+            .exists());
+        assert!(home
+            .join(".claude/settings.json.lub-subscription-terms")
             .exists());
     }
 
@@ -804,7 +992,12 @@ base_url = \"https://chatgpt.com/backend-api/codex\"\n";
         .unwrap();
         let layout = layout(home);
         let error = apply_takeover_at(&layout, "codex", true).unwrap_err();
-        assert_eq!(error.code(), Some("TERMS_ACK_REQUIRED"));
+        assert_eq!(error.code(), Some("FEATURE_UNAVAILABLE"));
+        let details = serde_json::to_value(&error).unwrap();
+        assert_eq!(details["details"]["feature"], "codex_subscription_takeover");
+        assert_eq!(details["details"]["reason"], "detect_only");
+        let disable = apply_takeover_at(&layout, "codex", false).unwrap_err();
+        assert_eq!(disable.code(), Some("FEATURE_UNAVAILABLE"));
         assert_eq!(
             fs::read_to_string(home.join(".codex/config.toml")).unwrap(),
             original
@@ -816,6 +1009,7 @@ base_url = \"https://chatgpt.com/backend-api/codex\"\n";
         assert_eq!(row.auth_mode, AuthMode::Subscription);
         assert!(!row.proxied);
         assert!(!row.enforceable);
+        assert!(row.note_codes.iter().any(|code| code == "codex_websocket"));
         assert!(!serde_json::to_string(&row)
             .unwrap()
             .contains("secret-token"));
@@ -848,6 +1042,7 @@ base_url = \"http://127.0.0.1:8788/v1\"\n",
             .find(|row| row.tool == "codex")
             .unwrap();
         assert!(row.proxied, "{row:?}");
+        assert!(!row.note_codes.iter().any(|code| code == "codex_websocket"));
 
         fs::write(
             home.join(".codex/config.toml"),
@@ -862,9 +1057,12 @@ base_url = \"http://127.0.0.1:8788/v1\"\n",
         let missing_flag = detect_tools_at(&layout)
             .into_iter()
             .find(|row| row.tool == "codex")
-            .unwrap()
-            .proxied;
-        assert!(!missing_flag);
+            .unwrap();
+        assert!(!missing_flag.proxied);
+        assert!(missing_flag
+            .note_codes
+            .iter()
+            .any(|code| code == "codex_websocket"));
     }
 
     #[test]
@@ -912,6 +1110,26 @@ base_url = \"http://127.0.0.1:8788/v1\"\n",
             .unwrap_or("");
         assert!(selection.contains("openai"), "{restored}");
         assert!(!selection.contains(ROUTER_PROVIDER_ID), "{restored}");
+    }
+
+    #[test]
+    fn windows_writes_are_platform_unavailable_and_cursor_stays_unsupported() {
+        let cursor = windows_takeover_write_error("cursor");
+        assert_eq!(cursor.code(), Some("UNSUPPORTED_TOOL"));
+        assert!(serde_json::to_value(&cursor)
+            .unwrap()
+            .get("details")
+            .is_none());
+        let claude = windows_takeover_write_error("claude");
+        let payload = serde_json::to_value(&claude).unwrap();
+        assert_eq!(payload["code"], "FEATURE_UNAVAILABLE");
+        assert_eq!(payload["details"]["feature"], "takeover_write");
+        assert_eq!(payload["details"]["reason"], "platform");
+        let proxy = windows_subscription_proxy_unavailable();
+        assert_eq!(
+            serde_json::to_value(&proxy).unwrap()["details"],
+            payload["details"]
+        );
     }
 
     #[test]
