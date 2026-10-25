@@ -4,8 +4,9 @@ use super::aggregation::{
 };
 use super::rhythm::{cached_metered_profile, RhythmProfile, DAILY_BUDGET_WINDOW_KIND};
 use super::status::{
-    classify_metered, worst_status, CostQuality, PaceBasis, PaceInput, PaceMeasurement,
-    SourceClassification, SubscriptionThresholds, UsageStatus, MIN_RATE_SPAN_SECONDS,
+    classify_metered, worst_status, BudgetLevel, CostQuality, PaceBasis, PaceInput,
+    PaceMeasurement, SourceClassification, SubscriptionThresholds, UsageStatus,
+    MIN_RATE_SPAN_SECONDS,
 };
 #[cfg(test)]
 use super::subscription_pace::quota_rate_from_snapshots;
@@ -77,6 +78,12 @@ pub struct TrayApiBudgetView {
     pub budget_consumed_percent: Option<String>,
     pub cost_quality: CostQuality,
     pub status: UsageStatus,
+    /// Daily budget level from `classify_metered` (C10 `TrayApiBudgetView`).
+    /// `reached` means today's known cost is at or over the daily budget.
+    /// `warn` is deprecated and is never emitted. This is not `monthReached`
+    /// and not a C12 guard state — main has no `get_guard_state`.
+    #[serde(default)]
+    pub level: BudgetLevel,
     pub warning_reason: Option<String>,
     #[serde(default)]
     pub burn_rate_usd_per_hour: Option<String>,
@@ -128,6 +135,7 @@ impl Default for TrayApiBudgetView {
             budget_consumed_percent: None,
             cost_quality: CostQuality::Complete,
             status: UsageStatus::Unknown,
+            level: BudgetLevel::Ok,
             warning_reason: Some("daily_budget_missing".to_string()),
             burn_rate_usd_per_hour: None,
             projected_exhaust_at: None,
@@ -232,6 +240,10 @@ pub struct TrayMeteredUsageView {
     pub rolling_30_day_cost_usd: Option<String>,
     pub daily_budget_usd: Option<String>,
     pub budget_consumed_percent: Option<String>,
+    /// Same daily level as `TrayApiBudgetView.level` (C10). Per-provider
+    /// alerts read this field. `warn` is deprecated and is never emitted.
+    #[serde(default)]
+    pub level: BudgetLevel,
     pub total_tokens: u64,
     pub cost_quality: CostQuality,
     /// Weighted remaining time divided by raw remaining seconds.
@@ -720,6 +732,7 @@ impl TrayUsageProjector {
                 rolling_30_day_cost_usd,
                 daily_budget_usd: daily_budget_usd.map(str::to_string),
                 budget_consumed_percent: classification.consumed_percent.clone(),
+                level: classification.level,
                 total_tokens,
                 cost_quality: quality,
                 rhythm_adjustment: classification.rhythm_adjustment_string(),
@@ -938,8 +951,11 @@ fn project_api_budget(
             thresholds,
         )
     } else {
+        // Per-provider mode has no shared daily cap. Each provider's level
+        // lives on its metered view (C10). This rollup stays `ok`.
         SourceClassification {
             status: worst_status(metered.iter().map(|(provider, _)| provider.status)),
+            level: BudgetLevel::Ok,
             used_percent: None,
             remaining_percent: None,
             consumed_percent: None,
@@ -968,6 +984,7 @@ fn project_api_budget(
         budget_consumed_percent: classification.consumed_percent.clone(),
         cost_quality,
         status: classification.status,
+        level: classification.level,
         warning_reason: classification.reason.map(str::to_string),
         burn_rate_usd_per_hour,
         projected_exhaust_at,
@@ -1672,6 +1689,7 @@ mod tests {
         assert_eq!(metered.rolling_30_day_cost_usd.as_deref(), Some("18.75"),);
         assert_eq!(metered.total_tokens, 110);
         assert_eq!(metered.cost_quality, CostQuality::Complete);
+        assert_eq!(metered.level, BudgetLevel::Ok);
         let recent = &find_provider(&snapshot, "codex", "b-metered").recent_usage;
         assert_eq!(recent.today_cost_usd.as_deref(), Some("8.75"));
         assert_eq!(recent.total_cost_usd.as_deref(), Some("18.75"));
@@ -1725,7 +1743,7 @@ mod tests {
         assert!(!serialized.contains("ignored-reset-secret"));
         assert!(!serialized.contains("ignored-payload-secret"));
 
-        let shared = TrayUsageProjector::new(db)
+        let shared = TrayUsageProjector::new(db.clone())
             .project_at_with_budget_config(
                 now,
                 Some(ApiBudgetConfig {
@@ -1742,12 +1760,48 @@ mod tests {
             Some("87.5")
         );
         assert_eq!(shared.api_budget.status, UsageStatus::Red);
+        assert_eq!(shared.api_budget.level, BudgetLevel::Ok);
         assert!(find_provider(&shared, "codex", "b-metered")
             .metered
             .as_ref()
             .unwrap()
             .daily_budget_usd
             .is_none());
+
+        db.set_provider_daily_budget("b-metered", Some("8"))
+            .unwrap();
+        let reached_provider = TrayUsageProjector::new(db.clone())
+            .project_at_with_budget_config(
+                now,
+                Some(ApiBudgetConfig {
+                    mode: ApiBudgetMode::PerProvider,
+                    shared_daily_budget_usd: None,
+                    monthly_budget_usd: None,
+                }),
+            )
+            .unwrap();
+        assert_eq!(
+            find_provider(&reached_provider, "codex", "b-metered")
+                .metered
+                .as_ref()
+                .unwrap()
+                .level,
+            BudgetLevel::Reached
+        );
+        assert_eq!(reached_provider.api_budget.level, BudgetLevel::Ok);
+
+        let reached = TrayUsageProjector::new(db)
+            .project_at_with_budget_config(
+                now,
+                Some(ApiBudgetConfig {
+                    mode: ApiBudgetMode::Shared,
+                    shared_daily_budget_usd: Some("8".to_string()),
+                    monthly_budget_usd: None,
+                }),
+            )
+            .unwrap();
+        assert_eq!(reached.api_budget.level, BudgetLevel::Reached);
+        assert_eq!(reached.api_budget.status, UsageStatus::Red);
     }
 
     #[test]
@@ -2368,6 +2422,7 @@ mod tests {
                         rolling_30_day_cost_usd: Some("80".to_string()),
                         daily_budget_usd: Some("10".to_string()),
                         budget_consumed_percent: Some("50".to_string()),
+                        level: BudgetLevel::Ok,
                         total_tokens: 42,
                         cost_quality: CostQuality::Partial,
                         rhythm_adjustment: None,
@@ -2421,6 +2476,7 @@ mod tests {
                     "budgetConsumedPercent": null,
                     "costQuality": "complete",
                     "status": "unknown",
+                    "level": "ok",
                     "warningReason": "daily_budget_missing",
                     "burnRateUsdPerHour": null,
                     "projectedExhaustAt": null,
@@ -2470,6 +2526,7 @@ mod tests {
                             "rolling30DayCostUsd": "80",
                             "dailyBudgetUsd": "10",
                             "budgetConsumedPercent": "50",
+                            "level": "ok",
                             "totalTokens": 42,
                             "costQuality": "partial",
                             "flatStatus": null,
@@ -2635,6 +2692,7 @@ mod tests {
         );
         assert!(snapshot.api_budget.month_reached);
         assert!(!snapshot.api_budget.capped);
+        assert_eq!(snapshot.api_budget.level, BudgetLevel::Ok);
         let serialized = serde_json::to_value(&snapshot.api_budget).unwrap();
         assert_eq!(serialized["monthCostUsd"], "3");
         assert_eq!(serialized["capped"], false);
@@ -2663,6 +2721,7 @@ mod tests {
         assert_eq!(legacy.month_consumed_percent, None);
         assert!(!legacy.month_reached);
         assert!(!legacy.capped);
+        assert_eq!(legacy.level, BudgetLevel::Ok);
     }
 
     #[test]
