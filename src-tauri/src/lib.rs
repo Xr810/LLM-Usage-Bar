@@ -20,6 +20,7 @@ mod macos_material;
 pub mod metering;
 mod model;
 mod panic_hook;
+pub mod policy;
 pub mod product_identity;
 mod prompt;
 mod provider;
@@ -1569,6 +1570,10 @@ pub fn run() {
             // Workspace files (OpenClaw)
             // Daily memory files (OpenClaw workspace)
             // lightweight mode (for testing or low-resource environments)
+            // BE-1: license shell (community build; C2 / C20)
+            commands::get_license_status,
+            commands::activate_license,
+            commands::deactivate_license,
         ]);
 
     let app = builder
