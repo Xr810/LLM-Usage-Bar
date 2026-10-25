@@ -1576,6 +1576,9 @@ pub fn run() {
             commands::deactivate_license,
             // BE-20: monthly budget (C10 / C15). Does not change set_api_budget_config.
             commands::set_monthly_budget,
+            // BE-23: UI prefs (C18). Language uses settings-changed too (C8).
+            commands::get_ui_prefs,
+            commands::set_ui_prefs,
         ]);
 
     let app = builder
