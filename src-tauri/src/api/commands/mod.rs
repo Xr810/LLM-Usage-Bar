@@ -17,6 +17,7 @@ pub mod subscription;
 pub(crate) mod sync_support;
 mod tools;
 mod tray_usage;
+mod ui_prefs;
 
 mod s3_sync;
 mod usage;
@@ -39,6 +40,7 @@ pub use settings::*;
 pub use subscription::*;
 pub use tools::*;
 pub use tray_usage::*;
+pub use ui_prefs::*;
 
 pub use s3_sync::*;
 pub use usage::*;

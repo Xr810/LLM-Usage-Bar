@@ -330,6 +330,54 @@ pub struct ApiBudgetConfig {
     pub monthly_budget_usd: Option<String>,
 }
 
+/// What to do when a confirmed identity switches onto an API key (C18).
+///
+/// File loads coerce an unknown value to [`IdentitySwitchPolicy::Ask`].
+/// `set_ui_prefs` rejects unknown values instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum IdentitySwitchPolicy {
+    #[default]
+    Ask,
+    AutoAllow,
+}
+
+/// Local safety policy for the proxy or a license check (ADR-012 / ADR-013).
+///
+/// `open` is the less safe choice. File loads coerce an unknown value to
+/// [`FailureMode::Closed`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum FailureMode {
+    #[default]
+    Closed,
+    Open,
+}
+
+/// Device-local failure policy. Not a sqlite `settings` row and not part of
+/// a WebDAV or S3 snapshot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct FailureModes {
+    #[serde(default)]
+    pub proxy: FailureMode,
+    #[serde(default)]
+    pub license: FailureMode,
+}
+
+/// C18 preferences returned by `get_ui_prefs` / `set_ui_prefs`.
+///
+/// These are consumed-percent alert settings. They are not
+/// `usage_warning_remaining_percent` or `usage_critical_remaining_percent`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiPrefs {
+    pub alert_threshold_pct: u8,
+    pub subscription_warn_pct: u8,
+    pub on_identity_switch: IdentitySwitchPolicy,
+    pub failure_modes: FailureModes,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CodexThirdPartyHistoryProviderBucketMigration {
@@ -466,6 +514,28 @@ pub struct AppSettings {
     pub common_config_confirmed: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
+    /// Consumed-percent warning for metered spend (C18). Default 80.
+    /// Distinct from `usage_warning_remaining_percent`, which is a remaining
+    /// percent. Device-local; `save_settings` cannot overwrite it.
+    #[serde(
+        default = "default_alert_threshold_pct",
+        deserialize_with = "deserialize_alert_threshold_pct"
+    )]
+    pub alert_threshold_pct: u8,
+    /// Consumed-percent warning for subscription usage (C18). Default 70.
+    /// Independent of the C17 truncation threshold.
+    #[serde(
+        default = "default_subscription_warn_pct",
+        deserialize_with = "deserialize_subscription_warn_pct"
+    )]
+    pub subscription_warn_pct: u8,
+    /// Confirmed API-key identity switch. Default `ask`.
+    #[serde(default, deserialize_with = "deserialize_on_identity_switch")]
+    pub on_identity_switch: IdentitySwitchPolicy,
+    /// Proxy and license failure policy. Default closed/closed.
+    /// Must not be copied into the synced sqlite `settings` table.
+    #[serde(default, deserialize_with = "deserialize_failure_modes")]
+    pub failure_modes: FailureModes,
 
     // ===== 主页面显示的应用 =====
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -569,6 +639,84 @@ fn default_usage_critical_remaining_percent() -> u8 {
     20
 }
 
+fn default_alert_threshold_pct() -> u8 {
+    80
+}
+
+fn default_subscription_warn_pct() -> u8 {
+    70
+}
+
+fn normalize_percent(value: u8, default: u8) -> u8 {
+    if (1..=100).contains(&value) {
+        value
+    } else {
+        default
+    }
+}
+
+fn coerce_stored_percent(value: &serde_json::Value, default: u8) -> u8 {
+    match value.as_u64() {
+        Some(number) if (1..=100).contains(&number) => number as u8,
+        _ => default,
+    }
+}
+
+fn deserialize_alert_threshold_pct<'de, D>(deserializer: D) -> Result<u8, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(coerce_stored_percent(&value, default_alert_threshold_pct()))
+}
+
+fn deserialize_subscription_warn_pct<'de, D>(deserializer: D) -> Result<u8, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(coerce_stored_percent(
+        &value,
+        default_subscription_warn_pct(),
+    ))
+}
+
+fn coerce_identity_switch(value: &serde_json::Value) -> IdentitySwitchPolicy {
+    match value.as_str() {
+        Some("auto_allow") => IdentitySwitchPolicy::AutoAllow,
+        _ => IdentitySwitchPolicy::Ask,
+    }
+}
+
+fn deserialize_on_identity_switch<'de, D>(deserializer: D) -> Result<IdentitySwitchPolicy, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(coerce_identity_switch(&value))
+}
+
+fn coerce_failure_mode(value: Option<&serde_json::Value>) -> FailureMode {
+    match value.and_then(serde_json::Value::as_str) {
+        Some("open") => FailureMode::Open,
+        _ => FailureMode::Closed,
+    }
+}
+
+fn deserialize_failure_modes<'de, D>(deserializer: D) -> Result<FailureModes, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    let Some(object) = value.as_object() else {
+        return Ok(FailureModes::default());
+    };
+    Ok(FailureModes {
+        proxy: coerce_failure_mode(object.get("proxy")),
+        license: coerce_failure_mode(object.get("license")),
+    })
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
@@ -600,6 +748,10 @@ impl Default for AppSettings {
             first_run_notice_confirmed: None,
             common_config_confirmed: None,
             language: None,
+            alert_threshold_pct: default_alert_threshold_pct(),
+            subscription_warn_pct: default_subscription_warn_pct(),
+            on_identity_switch: IdentitySwitchPolicy::Ask,
+            failure_modes: FailureModes::default(),
             visible_apps: None,
             claude_config_dir: None,
             codex_config_dir: None,
@@ -701,6 +853,10 @@ impl AppSettings {
             .map(|s| s.trim())
             .filter(|s| matches!(*s, "en" | "zh" | "zh-TW" | "ja"))
             .map(|s| s.to_string());
+        self.alert_threshold_pct =
+            normalize_percent(self.alert_threshold_pct, default_alert_threshold_pct());
+        self.subscription_warn_pct =
+            normalize_percent(self.subscription_warn_pct, default_subscription_warn_pct());
 
         if let Some(sync) = &mut self.webdav_sync {
             sync.normalize();
@@ -714,6 +870,15 @@ impl AppSettings {
             if s3.is_empty() {
                 self.s3_sync = None;
             }
+        }
+    }
+
+    pub fn ui_prefs(&self) -> UiPrefs {
+        UiPrefs {
+            alert_threshold_pct: self.alert_threshold_pct,
+            subscription_warn_pct: self.subscription_warn_pct,
+            on_identity_switch: self.on_identity_switch,
+            failure_modes: self.failure_modes,
         }
     }
 
@@ -1228,6 +1393,45 @@ mod tests {
             settings.api_budget_config().monthly_budget_usd.as_deref(),
             Some("20.5")
         );
+    }
+
+    #[test]
+    fn old_settings_json_uses_ui_pref_defaults() {
+        let (settings, _) = AppSettings::decode_settings_json("{}").expect("defaults");
+        assert_eq!(settings.ui_prefs(), default_ui_prefs());
+        assert_eq!(settings.usage_warning_remaining_percent, 50);
+        assert_eq!(settings.usage_critical_remaining_percent, 20);
+    }
+
+    #[test]
+    fn stored_ui_prefs_coerce_unknown_values_instead_of_failing_the_file() {
+        let (settings, _) = AppSettings::decode_settings_json(
+            r#"{
+                "alertThresholdPct": 0,
+                "subscriptionWarnPct": 70.5,
+                "onIdentitySwitch": "later",
+                "failureModes": {"proxy": "wide", "license": "open", "extra": true}
+            }"#,
+        )
+        .expect("lenient load");
+
+        assert_eq!(settings.alert_threshold_pct, default_alert_threshold_pct());
+        assert_eq!(
+            settings.subscription_warn_pct,
+            default_subscription_warn_pct()
+        );
+        assert_eq!(settings.on_identity_switch, IdentitySwitchPolicy::Ask);
+        assert_eq!(settings.failure_modes.proxy, FailureMode::Closed);
+        assert_eq!(settings.failure_modes.license, FailureMode::Open);
+    }
+
+    fn default_ui_prefs() -> UiPrefs {
+        UiPrefs {
+            alert_threshold_pct: default_alert_threshold_pct(),
+            subscription_warn_pct: default_subscription_warn_pct(),
+            on_identity_switch: IdentitySwitchPolicy::Ask,
+            failure_modes: FailureModes::default(),
+        }
     }
 
     #[test]
