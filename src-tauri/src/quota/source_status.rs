@@ -51,6 +51,7 @@ pub enum QuotaWindowKind {
 pub struct QuotaWindowStatus {
     pub kind: QuotaWindowKind,
     pub used_pct: f64,
+    /// Canonical UTC RFC3339 (`...Z`). Absent when the stored value is not ISO.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resets_at: Option<String>,
 }
@@ -60,8 +61,9 @@ pub struct QuotaWindowStatus {
 pub struct ProviderQuotaStatus {
     pub provider_id: String,
     pub windows: Vec<QuotaWindowStatus>,
-    /// Tightest window: the maximum `usedPct`. `0` when there is no window.
-    pub used_pct: f64,
+    /// Tightest window: the maximum `usedPct`. `null` when there is no window,
+    /// so a client never renders an empty read as 0%.
+    pub used_pct: Option<f64>,
     pub source: QuotaOrigin,
     pub state: QuotaReadState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -146,9 +148,7 @@ fn windows_from_tiers(tiers: Option<&Value>) -> Vec<QuotaWindowStatus> {
         let resets_at = tier
             .get("resetsAt")
             .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string);
+            .and_then(normalize_resets_at);
         windows.push(QuotaWindowStatus {
             kind,
             used_pct,
@@ -180,14 +180,24 @@ fn window_from_percent(
         .parse::<f64>()
         .ok()
         .filter(|value| value.is_finite())?;
-    let resets_at = resets_at
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
+    let resets_at = resets_at.as_deref().and_then(normalize_resets_at);
     Some(QuotaWindowStatus {
         kind,
         used_pct,
         resets_at,
     })
+}
+
+/// C4 publishes one UTC RFC3339 form. Offsets collapse to `Z`. Non-ISO
+/// values are dropped instead of being copied through.
+fn normalize_resets_at(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    chrono::DateTime::parse_from_rfc3339(trimmed)
+        .ok()
+        .map(|parsed| parsed.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
 }
 
 fn finite_f64(value: &Value) -> Option<f64> {
@@ -219,7 +229,7 @@ pub fn project_provider_quota_status(
     let used_pct = windows
         .iter()
         .map(|window| window.used_pct)
-        .fold(0.0_f64, f64::max);
+        .max_by(f64::total_cmp);
     ProviderQuotaStatus {
         provider_id: provider_id.to_string(),
         windows,
@@ -372,7 +382,11 @@ mod tests {
             10 + QUOTA_READ_FRESH_SECS + 5,
         );
         assert_eq!(row.state, QuotaReadState::Stale);
-        assert_eq!(row.used_pct, 80.0);
+        assert_eq!(row.used_pct, Some(80.0));
+        assert_eq!(
+            row.windows[0].resets_at.as_deref(),
+            Some("2026-07-11T05:00:00Z")
+        );
         assert_eq!(row.windows.len(), 3);
         assert_eq!(row.source, QuotaOrigin::BestEffort);
         let json = serde_json::to_value(&row).unwrap();
@@ -389,7 +403,8 @@ mod tests {
             project_provider_quota_status("codex", Some("codex"), None, None, Some("boom"), 50);
         assert_eq!(row.state, QuotaReadState::Error);
         assert!(row.windows.is_empty());
-        assert_eq!(row.used_pct, 0.0);
+        assert_eq!(row.used_pct, None);
+        assert!(serde_json::to_value(&row).unwrap()["usedPct"].is_null());
         assert!(row.last_success_at.is_none());
         assert_no_money(&serde_json::to_value(&row).unwrap());
     }
@@ -442,7 +457,7 @@ mod tests {
         let rows = quota_status_at(&db, 100 + QUOTA_READ_FRESH_SECS + 30).unwrap();
         let row = rows.iter().find(|row| row.provider_id == "sub").unwrap();
         assert_eq!(row.state, QuotaReadState::Stale);
-        assert_eq!(row.used_pct, 40.0);
+        assert_eq!(row.used_pct, Some(40.0));
         let payload = quota_updated_payload(&rows);
         assert_no_money(&payload);
         let serialized = payload
@@ -465,5 +480,50 @@ mod tests {
                 stale: false,
             }
         );
+    }
+
+    #[test]
+    fn resets_at_is_canonical_utc_and_non_iso_values_are_dropped() {
+        let snapshot = QuotaSnapshot {
+            snapshot_id: "snap".to_string(),
+            provider_id: "claude".to_string(),
+            fetched_at: 10,
+            five_hour_utilization_percent: Some("1".to_string()),
+            five_hour_resets_at: Some("2026-07-11T05:00:00+00:00".to_string()),
+            seven_day_utilization_percent: Some("2".to_string()),
+            seven_day_resets_at: Some("not-a-timestamp".to_string()),
+            manual_resets_remaining: None,
+            raw_payload: json!({
+                "tiers": [
+                    {
+                        "name": TIER_FIVE_HOUR,
+                        "utilization": 1.0,
+                        "resetsAt": "2026-07-11T05:00:00+00:00"
+                    },
+                    {
+                        "name": TIER_SEVEN_DAY,
+                        "utilization": 2.0,
+                        "resetsAt": "reset-secret-sentinel"
+                    }
+                ]
+            }),
+            created_at: 10,
+        };
+        let row = project_provider_quota_status(
+            "claude",
+            Some("claude"),
+            Some(&snapshot),
+            Some(10),
+            None,
+            10,
+        );
+        assert_eq!(
+            row.windows[0].resets_at.as_deref(),
+            Some("2026-07-11T05:00:00Z")
+        );
+        assert!(row.windows[1].resets_at.is_none());
+        let json = serde_json::to_value(&row).unwrap();
+        assert!(json["windows"][1].get("resetsAt").is_none());
+        assert!(!json.to_string().contains("reset-secret-sentinel"));
     }
 }

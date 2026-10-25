@@ -78,6 +78,10 @@ pub enum QuotaSchedulerOutcome {
 pub type QuotaCycleCallback =
     Arc<dyn Fn(QuotaSchedulerOutcome) -> BoxFuture<'static, ()> + Send + Sync + 'static>;
 
+/// Fired after `append_quota_success` writes a new snapshot. The getter must
+/// not emit `quota-updated`; this hook is the production emit point.
+pub type QuotaSnapshotWrittenHook = Arc<dyn Fn() + Send + Sync>;
+
 /// Object-safe boundary around existing quota HTTP/parsing implementations.
 /// The adapter returns their common `SubscriptionQuota` representation so this
 /// module only owns normalization and persistence semantics.
@@ -499,6 +503,7 @@ pub struct QuotaService {
     last_manual: Arc<RwLock<ManualRefreshCache>>,
     /// 手动刷新冷却(秒),测试可调 0 禁用。
     manual_refresh_cooldown_secs: i64,
+    on_snapshot_written: Arc<std::sync::RwLock<Option<QuotaSnapshotWrittenHook>>>,
 }
 
 type SharedQuotaRefreshResult = Result<QuotaRefreshResult, String>;
@@ -546,6 +551,26 @@ impl QuotaService {
             in_flight: Arc::new(AsyncMutex::new(HashMap::new())),
             last_manual: Arc::new(RwLock::new(HashMap::new())),
             manual_refresh_cooldown_secs: MANUAL_REFRESH_MIN_INTERVAL_SECS,
+            on_snapshot_written: Arc::new(std::sync::RwLock::new(None)),
+        }
+    }
+
+    /// Register the `quota-updated` emit. Called once from setup, after the
+    /// collector persists a new snapshot and never from `get_quota_status`.
+    pub fn set_on_snapshot_written(&self, hook: QuotaSnapshotWrittenHook) {
+        if let Ok(mut slot) = self.on_snapshot_written.write() {
+            *slot = Some(hook);
+        }
+    }
+
+    fn notify_snapshot_written(&self) {
+        let hook = self
+            .on_snapshot_written
+            .read()
+            .ok()
+            .and_then(|slot| slot.clone());
+        if let Some(hook) = hook {
+            hook();
         }
     }
 
@@ -679,6 +704,7 @@ impl QuotaService {
             created_at: attempted_at,
         };
         let fetch_state = self.db.append_quota_success(&snapshot)?;
+        self.notify_snapshot_written();
         Ok(QuotaRefreshResult {
             snapshot: quota_status_view(&snapshot),
             fetch_state,

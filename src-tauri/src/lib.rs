@@ -71,6 +71,7 @@ use std::sync::Arc;
 #[cfg(target_os = "macos")]
 use tauri::image::Image;
 use tauri::tray::{TrayIconBuilder, TrayIconEvent};
+use tauri::Emitter;
 use tauri::Manager;
 use tauri::RunEvent;
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
@@ -831,6 +832,27 @@ pub fn run() {
                 db.clone(),
                 codex_oauth_manager.clone(),
             ));
+            let quota_emit_app = app.handle().clone();
+            quota_service.set_on_snapshot_written(Arc::new(move || {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|duration| duration.as_secs() as i64)
+                    .unwrap_or(0);
+                let Some(state) = quota_emit_app.try_state::<AppState>() else {
+                    return;
+                };
+                match quota::source_status::quota_status_at(&state.db, now) {
+                    Ok(rows) => {
+                        let _ = quota_emit_app.emit(
+                            quota::source_status::QUOTA_UPDATED_EVENT,
+                            quota::source_status::quota_updated_payload(&rows),
+                        );
+                    }
+                    Err(_) => {
+                        log::warn!("quota-updated payload unavailable");
+                    }
+                }
+            }));
             let credential_store = crate::secrets::production_credential_store();
             let app_state = AppState::new_with_credential_store_and_quota_service(
                 db,
