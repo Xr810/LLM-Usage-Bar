@@ -166,6 +166,8 @@ pub fn get_model_pricing(state: State<'_, AppState>) -> Result<Vec<ModelPricingI
         return Ok(Vec::new());
     }
 
+    // The settings list still returns a string for a missing cache rate. Billing
+    // does not: NULL cache uses the input price and is marked estimated.
     let mut stmt = conn.prepare(
         "SELECT model_id, display_name, input_cost_per_million, output_cost_per_million,
                 COALESCE(cache_read_cost_per_million, '0'),

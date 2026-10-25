@@ -1732,6 +1732,8 @@ struct PricingInfo {
     output: rust_decimal::Decimal,
     cache_read: rust_decimal::Decimal,
     cache_creation: rust_decimal::Decimal,
+    cache_read_estimated: bool,
+    cache_creation_estimated: bool,
 }
 
 impl Database {
@@ -1871,15 +1873,29 @@ impl Database {
         log.cache_read_cost_usd = format!("{cache_read_cost:.6}");
         log.cache_creation_cost_usd = format!("{cache_creation_cost:.6}");
         log.total_cost_usd = format!("{total_cost:.6}");
+        let cache_estimated = (pricing.cache_read_estimated && log.cache_read_tokens > 0)
+            || (pricing.cache_creation_estimated && log.cache_creation_tokens > 0);
 
-        conn.execute(
+        let sql = if cache_estimated {
+            "UPDATE proxy_request_logs
+             SET input_cost_usd = ?1,
+                 output_cost_usd = ?2,
+                 cache_read_cost_usd = ?3,
+                 cache_creation_cost_usd = ?4,
+                 total_cost_usd = ?5,
+                 cost_source = 'estimated'
+             WHERE request_id = ?6"
+        } else {
             "UPDATE proxy_request_logs
              SET input_cost_usd = ?1,
                  output_cost_usd = ?2,
                  cache_read_cost_usd = ?3,
                  cache_creation_cost_usd = ?4,
                  total_cost_usd = ?5
-             WHERE request_id = ?6",
+             WHERE request_id = ?6"
+        };
+        conn.execute(
+            sql,
             params![
                 log.input_cost_usd,
                 log.output_cost_usd,
@@ -1909,15 +1925,21 @@ impl Database {
             return Ok(None);
         };
 
+        let (cache_read_text, cache_read_estimated) =
+            bill_cache_rate(cache_read.as_deref(), &input);
+        let (cache_creation_text, cache_creation_estimated) =
+            bill_cache_rate(cache_creation.as_deref(), &input);
         let pricing = PricingInfo {
             input: rust_decimal::Decimal::from_str(&input)
                 .map_err(|e| AppError::Database(format!("解析输入价格失败: {e}")))?,
             output: rust_decimal::Decimal::from_str(&output)
                 .map_err(|e| AppError::Database(format!("解析输出价格失败: {e}")))?,
-            cache_read: rust_decimal::Decimal::from_str(&cache_read)
+            cache_read: rust_decimal::Decimal::from_str(&cache_read_text)
                 .map_err(|e| AppError::Database(format!("解析缓存读取价格失败: {e}")))?,
-            cache_creation: rust_decimal::Decimal::from_str(&cache_creation)
+            cache_creation: rust_decimal::Decimal::from_str(&cache_creation_text)
                 .map_err(|e| AppError::Database(format!("解析缓存写入价格失败: {e}")))?,
+            cache_read_estimated,
+            cache_creation_estimated,
         };
 
         cache.insert(model.to_string(), pricing.clone());
@@ -1971,14 +1993,26 @@ pub(crate) fn find_model_pricing(conn: &Connection, model_id: &str) -> Option<Mo
         .ok()
         .flatten()
         .and_then(|(input, output, cache_read, cache_creation)| {
+            let (cache_read, _) = bill_cache_rate(cache_read.as_deref(), &input);
+            let (cache_creation, _) = bill_cache_rate(cache_creation.as_deref(), &input);
             ModelPricing::from_strings(&input, &output, &cache_read, &cache_creation).ok()
         })
+}
+
+pub(crate) type OfficialPriceRow = (String, String, Option<String>, Option<String>);
+
+/// A missing cache rate bills at the input rate. An explicit `0` stays free.
+pub(crate) fn bill_cache_rate(cache: Option<&str>, input: &str) -> (String, bool) {
+    match cache {
+        Some(rate) => (rate.to_string(), false),
+        None => (input.to_string(), true),
+    }
 }
 
 pub(crate) fn find_model_pricing_row(
     conn: &Connection,
     model_id: &str,
-) -> Result<Option<(String, String, String, String)>, AppError> {
+) -> Result<Option<OfficialPriceRow>, AppError> {
     let candidates = model_pricing_candidates(model_id);
     if candidates.is_empty() {
         return Ok(None);
@@ -2030,16 +2064,16 @@ pub(crate) fn is_placeholder_pricing_model(model_id: &str) -> bool {
     normalized.is_empty() || matches!(normalized.as_str(), "unknown" | "null" | "none")
 }
 
-/// Cache rates became nullable in schema v29. A missing rate bills as zero,
-/// which is what the old `DEFAULT '0'` did for rows that never set one.
+/// Cache rates became nullable in schema v29. NULL is not the same as `0`:
+/// billing substitutes the input rate and marks the row estimated. The settings
+/// list still coalesces NULL to `0` so the existing string payload stays valid.
 fn query_model_pricing_exact(
     conn: &Connection,
     model_id: &str,
-) -> Result<Option<(String, String, String, String)>, AppError> {
+) -> Result<Option<OfficialPriceRow>, AppError> {
     conn.query_row(
         "SELECT input_cost_per_million, output_cost_per_million,
-                COALESCE(cache_read_cost_per_million, '0'),
-                COALESCE(cache_creation_cost_per_million, '0')
+                cache_read_cost_per_million, cache_creation_cost_per_million
          FROM model_pricing
          WHERE model_id = ?1",
         [model_id],
@@ -2047,8 +2081,8 @@ fn query_model_pricing_exact(
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<String>>(3)?,
             ))
         },
     )
@@ -2059,12 +2093,11 @@ fn query_model_pricing_exact(
 fn query_model_pricing_prefix(
     conn: &Connection,
     model_id: &str,
-) -> Result<Option<(String, String, String, String)>, AppError> {
+) -> Result<Option<OfficialPriceRow>, AppError> {
     let pattern = format!("{model_id}-%");
     conn.query_row(
         "SELECT input_cost_per_million, output_cost_per_million,
-                COALESCE(cache_read_cost_per_million, '0'),
-                COALESCE(cache_creation_cost_per_million, '0')
+                cache_read_cost_per_million, cache_creation_cost_per_million
          FROM model_pricing
          WHERE model_id LIKE ?1
          ORDER BY LENGTH(model_id) ASC
@@ -2074,8 +2107,8 @@ fn query_model_pricing_prefix(
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<String>>(3)?,
             ))
         },
     )
@@ -2895,6 +2928,59 @@ mod tests {
         assert_eq!(cache_read_cost, "0.000020");
         assert_eq!(total_cost, "0.000120");
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_null_cache_rate_bills_at_the_input_price_and_is_estimated() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        {
+            let conn = lock_conn!(db.conn);
+            conn.execute(
+                "INSERT INTO model_pricing (
+                    model_id, display_name, input_cost_per_million, output_cost_per_million
+                 ) VALUES ('claude-null-cache', 'Null Cache', '3', '15')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO model_pricing (
+                    model_id, display_name, input_cost_per_million, output_cost_per_million,
+                    cache_read_cost_per_million, cache_creation_cost_per_million
+                 ) VALUES ('claude-free-cache', 'Free Cache', '3', '15', '0', '0')",
+                [],
+            )?;
+            for (request_id, model) in [
+                ("null-cache", "claude-null-cache"),
+                ("free-cache", "claude-free-cache"),
+            ] {
+                conn.execute(
+                    "INSERT INTO proxy_request_logs (
+                        request_id, provider_id, app_type, model,
+                        input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
+                        total_cost_usd, latency_ms, status_code, created_at
+                     ) VALUES (?1, 'anthropic', 'claude', ?2, 0, 0, 1000000, 0, '0', 1, 200, 1000)",
+                    params![request_id, model],
+                )?;
+            }
+        }
+
+        assert_eq!(db.backfill_missing_usage_costs()?, 2);
+
+        let conn = lock_conn!(db.conn);
+        let (null_cost, null_source): (String, Option<String>) = conn.query_row(
+            "SELECT cache_read_cost_usd, cost_source FROM proxy_request_logs WHERE request_id = 'null-cache'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert_eq!(null_cost, "3.000000");
+        assert_eq!(null_source.as_deref(), Some("estimated"));
+        let (free_cost, free_source): (String, Option<String>) = conn.query_row(
+            "SELECT cache_read_cost_usd, cost_source FROM proxy_request_logs WHERE request_id = 'free-cache'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert_eq!(free_cost, "0.000000");
+        assert_eq!(free_source, None);
         Ok(())
     }
 

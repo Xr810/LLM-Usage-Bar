@@ -5,7 +5,8 @@ use crate::usage::metering::calculator::{CostBreakdown, CostCalculator, ModelPri
 use crate::usage::metering::cost_parser::UpstreamCost;
 use crate::usage::metering::parser::TokenUsage;
 use crate::usage::usage_stats::{
-    find_model_pricing_row, find_provider_model_pricing_row, ProviderModelPricingRow,
+    bill_cache_rate, find_model_pricing_row, find_provider_model_pricing_row, OfficialPriceRow,
+    ProviderModelPricingRow,
 };
 use rusqlite::{params, OptionalExtension, Transaction};
 use rust_decimal::Decimal;
@@ -446,10 +447,10 @@ fn decide_cost(
     ))
 }
 
-fn parse_pricing_row(
-    row: Option<(String, String, String, String)>,
-) -> Result<Option<ModelPricing>, AppError> {
+fn parse_pricing_row(row: Option<OfficialPriceRow>) -> Result<Option<ModelPricing>, AppError> {
     row.map(|(input, output, cache_read, cache_creation)| {
+        let (cache_read, _) = bill_cache_rate(cache_read.as_deref(), &input);
+        let (cache_creation, _) = bill_cache_rate(cache_creation.as_deref(), &input);
         ModelPricing::from_strings(&input, &output, &cache_read, &cache_creation)
             .map_err(|error| AppError::Database(format!("invalid model pricing: {error}")))
     })
@@ -458,7 +459,7 @@ fn parse_pricing_row(
 
 fn merge_pricing_rows(
     user: ProviderModelPricingRow,
-    official: Option<(String, String, String, String)>,
+    official: Option<OfficialPriceRow>,
 ) -> Result<Option<ModelPricing>, AppError> {
     // A row with no user-entered rate is not user pricing. Let the normal
     // upstream -> official fallback decide the cost instead of relabelling an
@@ -469,22 +470,21 @@ fn merge_pricing_rows(
 
     let (official_input, official_output, official_cache_read, official_cache_creation) = official
         .map(|(input, output, cache_read, cache_creation)| {
-            (
-                Some(input),
-                Some(output),
-                Some(cache_read),
-                Some(cache_creation),
-            )
+            (Some(input), Some(output), cache_read, cache_creation)
         })
         .unwrap_or((None, None, None, None));
     let input = user.input.or(official_input);
     let output = user.output.or(official_output);
-    let cache_read = user.cache_read.or(official_cache_read);
-    let cache_creation = user.cache_creation.or(official_cache_creation);
-    let (Some(input), Some(output), Some(cache_read), Some(cache_creation)) =
-        (input, output, cache_read, cache_creation)
-    else {
+    let (Some(input), Some(output)) = (input, output) else {
         return Ok(None);
+    };
+    let (cache_read, _) = match user.cache_read.or(official_cache_read) {
+        Some(rate) => (rate, false),
+        None => bill_cache_rate(None, &input),
+    };
+    let (cache_creation, _) = match user.cache_creation.or(official_cache_creation) {
+        Some(rate) => (rate, false),
+        None => bill_cache_rate(None, &input),
     };
 
     ModelPricing::from_strings(&input, &output, &cache_read, &cache_creation)

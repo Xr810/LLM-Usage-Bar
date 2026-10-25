@@ -377,10 +377,12 @@ export function useRefreshOfficialPricing() {
         usageKeys.officialPricingFreshness(),
         outcome.fetchedAt,
       );
-      queryClient.setQueryData(
-        usageKeys.officialPricingImportedCount(),
-        outcome.modelsImported,
-      );
+      if (!outcome.batchRejected) {
+        queryClient.setQueryData(
+          usageKeys.officialPricingImportedCount(),
+          outcome.modelsImported,
+        );
+      }
       queryClient.invalidateQueries({ queryKey: usageKeys.pricing() });
     },
   });
