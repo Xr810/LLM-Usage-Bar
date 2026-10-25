@@ -305,3 +305,16 @@ describe("lub warn color", () => {
     }
   });
 });
+
+describe("TrayPanelV5 license lapse", () => {
+  it("keeps Lift all blocks enabled on the gray bar", () => {
+    renderPanel(designPanelFixture({ licenseLapsed: true }));
+    const bar = screen.getByRole("status");
+    expect(bar).toHaveClass("lub-license-bar");
+    expect(bar.className).not.toMatch(/warn|stop/);
+    const lift = screen.getByRole("button", { name: "解除全部阻断" });
+    expect(lift).toBeEnabled();
+    expect(lift).not.toHaveAttribute("aria-disabled");
+  });
+});
+

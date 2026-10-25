@@ -3,11 +3,13 @@ import { useTranslation } from "react-i18next";
 import {
   Activity,
   Blocks,
+  KeyRound,
   Route,
   Settings2,
   X,
   type LucideIcon,
 } from "lucide-react";
+import { LicenseSettings } from "@/components/lub/LicenseSettings";
 import {
   Dialog,
   DialogClose,
@@ -32,7 +34,8 @@ interface SettingsDialogProps {
   onProviderTargetHandled?: () => void;
 }
 
-type SettingsTab = "general" | "providers" | "router" | "diagnostics";
+type SettingsTab =
+  "general" | "providers" | "router" | "diagnostics" | "license";
 
 interface SettingsTabMeta {
   value: SettingsTab;
@@ -66,12 +69,23 @@ const SETTINGS_TABS: SettingsTabMeta[] = [
     labelDefault: "Diagnostics",
     icon: Activity,
   },
+  {
+    value: "license",
+    labelKey: "settings.license",
+    labelDefault: "License",
+    icon: KeyRound,
+  },
 ];
 
 const NO_DRAG_STYLE = { WebkitAppRegion: "no-drag" } as CSSProperties;
 
 function resolveSettingsTab(tab?: string): SettingsTab {
-  if (tab === "providers" || tab === "diagnostics" || tab === "router") {
+  if (
+    tab === "providers" ||
+    tab === "diagnostics" ||
+    tab === "router" ||
+    tab === "license"
+  ) {
     return tab;
   }
   return "general";
@@ -208,6 +222,9 @@ export function SettingsPage({
                 </TabsContent>
                 <TabsContent value="diagnostics" className="mt-0">
                   <UsageDiagnosticsPanel />
+                </TabsContent>
+                <TabsContent value="license" className="mt-0">
+                  <LicenseSettings variant="embedded" />
                 </TabsContent>
               </div>
             </div>

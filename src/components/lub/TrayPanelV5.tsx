@@ -58,6 +58,31 @@ function KilledBanner({ model }: { model: LubPanelModel }) {
   );
 }
 
+function LicenseLapseBar() {
+  const { t, i18n } = useTranslation();
+  const zh = i18n.language.startsWith("zh");
+  return (
+    <div className="lub-license-bar" role="status">
+      <span>
+        {t("lub.settings.if_proxy_crashes_or_license", {
+          defaultValue: zh
+            ? "代理崩溃或 License 失效时"
+            : "If proxy crashes or license lapses",
+        })}
+      </span>
+      <button
+        type="button"
+        className="lub-license-lift"
+        onClick={(event) => event.preventDefault()}
+      >
+        {t("lub.settings.lift_all_blocks", {
+          defaultValue: zh ? "解除全部阻断" : "Lift all blocks",
+        })}
+      </button>
+    </div>
+  );
+}
+
 function LegendCaption({
   model,
   locale,
@@ -187,6 +212,7 @@ export function TrayPanelV5({
         data-testid="lub-tray-panel"
         data-state={model.state}
       >
+        {model.licenseLapsed ? <LicenseLapseBar /> : null}
         <KilledBanner model={model} />
         <button
           type="button"
@@ -211,6 +237,7 @@ export function TrayPanelV5({
       data-testid="lub-tray-panel"
       data-state={model.state}
     >
+      {model.licenseLapsed ? <LicenseLapseBar /> : null}
       {refreshError ? (
         <p className="lub-alert" role="alert">
           {refreshError}
