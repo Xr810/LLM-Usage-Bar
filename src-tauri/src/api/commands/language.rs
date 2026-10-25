@@ -9,6 +9,10 @@
 //! Rebuilding the live tray menu needs a Tauri app handle, so that step is
 //! not covered by the unit tests here. The catalog lookup and the change
 //! decision are.
+//!
+//! Budget alerts read C10 `TrayApiBudgetView.level`. This module does not
+//! add C12 `get_guard_state`; that command is not on main. Notification
+//! copy in `budget_alert.rs` stays hardcoded.
 
 use tauri::{AppHandle, State};
 
