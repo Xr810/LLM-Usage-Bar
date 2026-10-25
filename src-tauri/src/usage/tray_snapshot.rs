@@ -2427,7 +2427,12 @@ mod tests {
                     "headroomRatio": null,
                     "paceBasis": "static",
                     "flatStatus": null,
-                    "rhythmAdjustment": null
+                    "rhythmAdjustment": null,
+                    "monthCostUsd": "0",
+                    "monthlyBudgetUsd": null,
+                    "monthConsumedPercent": null,
+                    "monthReached": false,
+                    "capped": false
                 },
                 "agents": [{
                     "agentModuleId": "codex",
