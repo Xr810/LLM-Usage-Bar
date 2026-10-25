@@ -661,6 +661,44 @@
       "invalid_cost_rows": "{{count}} records have an amount that could not be parsed",
       "quota_stale": "Stale data",
       "quota_read_failed": "Couldn't read usage"
+    },
+    "procompare": {
+      "title": "Free vs Pro",
+      "subtitle": "Free is free forever. Pro can stop spend before you go over.",
+      "price_later": "Pricing during beta will be announced later",
+      "free_forever": "Free forever",
+      "start_trial": "Start a 7-day free trial",
+      "group_see": "See it",
+      "group_stop": "Stop it",
+      "group_bill": "Bill it",
+      "group_p3": "P3 add-on",
+      "row_live": "Live spend and plan usage % in the tray",
+      "row_trends": "Trends",
+      "weeks_52": "52 weeks",
+      "row_weekday_hour": "Weekday × hour heatmap",
+      "row_split": "Split by project / client",
+      "row_history": "24-month history",
+      "row_log": "Breaker log",
+      "retention_free": "7 days",
+      "retention_pro": "24 months",
+      "row_caps": "Daily / monthly caps",
+      "caps_alert_only": "Can be set. At the cap it only alerts",
+      "row_allow": "Allow",
+      "row_session_kill": "Session cap and Kill",
+      "row_identity": "Billing identity switch",
+      "row_plan_cutoff": "Plan cut-off",
+      "beta": "Beta",
+      "row_receipts": "Client tags and CSV receipts",
+      "row_p3": "P3",
+      "coming_soon": "Coming soon",
+      "included": "Included",
+      "not_included": "Not included",
+      "offline_note": "Licenses are verified offline. No usage is uploaded."
+    },
+    "community": {
+      "allow_once": "Allow this 1",
+      "allow_more_today": "Allow $5 more today",
+      "placeholder_note": "This community build has no allow action. The buttons stay as placeholders and send nothing."
     }
   }
 }

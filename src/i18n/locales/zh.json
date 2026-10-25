@@ -661,6 +661,44 @@
       "invalid_cost_rows": "有 {{count}} 条记录金额无法解析",
       "quota_stale": "数据过期",
       "quota_read_failed": "读取失败"
+    },
+    "procompare": {
+      "title": "Free 与 Pro",
+      "subtitle": "Free 永久免费。Pro 能在超额前停下。",
+      "price_later": "Beta 期间定价稍后公布",
+      "free_forever": "永久免费",
+      "start_trial": "开始 7 天免费试用",
+      "group_see": "看得见",
+      "group_stop": "停得住",
+      "group_bill": "交给客户",
+      "group_p3": "P3 加购",
+      "row_live": "托盘实时花费与订阅用量 %",
+      "row_trends": "趋势",
+      "weeks_52": "52 周",
+      "row_weekday_hour": "星期 × 小时热力图",
+      "row_split": "按项目 / 客户拆分",
+      "row_history": "24 个月历史",
+      "row_log": "熔断日志",
+      "retention_free": "7 天",
+      "retention_pro": "24 个月",
+      "row_caps": "日 / 月上限",
+      "caps_alert_only": "可设，到了只提醒",
+      "row_allow": "放行",
+      "row_session_kill": "会话上限与 Kill",
+      "row_identity": "切换计费身份",
+      "row_plan_cutoff": "订阅截断",
+      "beta": "Beta",
+      "row_receipts": "客户标签与 CSV 收据",
+      "row_p3": "P3",
+      "coming_soon": "即将推出",
+      "included": "包含",
+      "not_included": "不包含",
+      "offline_note": "License 完全离线验证，不上传用量。"
+    },
+    "community": {
+      "allow_once": "放行这 1 笔",
+      "allow_more_today": "今日再放行 $5",
+      "placeholder_note": "社区构建不含放行。按钮保留为占位，不会发送请求。"
     }
   }
 }

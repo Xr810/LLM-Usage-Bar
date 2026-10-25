@@ -572,6 +572,125 @@ html[data-window-surface="tray-popover"] .lub-scroll {
   flex: 1;
 }
 
+.lub-stage:has(.lub-compare),
+.lub-stage:has(.lub-community-frame) {
+  justify-content: center;
+  padding-top: 28px;
+}
+
+.lub-compare {
+  display: flex;
+  width: min(640px, 100%);
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px;
+  border-radius: var(--lub-radius);
+  background: var(--lub-panel);
+  color: var(--lub-ink);
+  font-family: var(--lub-font);
+  box-shadow: var(--lub-shadow-panel);
+}
+
+.lub-price-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.lub-price-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px;
+}
+
+.lub-compare table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--lub-fs-cap);
+}
+
+.lub-compare th,
+.lub-compare td {
+  padding: 6px 8px;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.lub-compare-group th {
+  padding-top: 12px;
+  color: var(--lub-ink-2);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: none;
+}
+
+.lub-tag {
+  margin-left: 6px;
+  border-radius: 999px;
+  background: var(--lub-track);
+  color: var(--lub-ink-2);
+  padding: 1px 6px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.lub-check {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: var(--lub-accent);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.lub-btn {
+  min-height: 32px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--lub-track);
+  color: var(--lub-ink);
+  padding: 4px 14px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.lub-btn-primary {
+  background: var(--lub-accent);
+  color: var(--lub-on-accent);
+}
+
+.lub-btn[aria-disabled="true"] {
+  opacity: 0.45;
+  color: var(--lub-ink-2);
+  cursor: default;
+}
+
+.lub-community-frame {
+  width: 380px;
+}
+
+.lub-chip-warn {
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--lub-warn) 16%, transparent);
+  color: var(--lub-warn);
+  font-size: var(--lub-fs-cap);
+  font-weight: 600;
+}
+
+.lub-community {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lub-community-actions {
+  display: flex;
+  gap: 8px;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .lub-meter-fill,
   .lub-meter-overflow {
