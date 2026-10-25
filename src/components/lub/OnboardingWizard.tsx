@@ -1,11 +1,18 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { isWindows } from "@/lib/platform";
 import {
+  CLAUDE_PROXY_TERMS_VERSION,
   detectTools,
   noteCopyKey,
   setClaudeSubscriptionProxy,
   type DetectedTool,
+  type ProxyPlatform,
 } from "./takeoverMock";
+
+function proxyPlatform(): ProxyPlatform {
+  return isWindows() ? "windows" : "mac";
+}
 
 function LineCopy({ value }: { value: string }) {
   const [before, rest = ""] = value.split("|");
@@ -25,6 +32,17 @@ function ToolRow({ tool }: { tool: DetectedTool }) {
   const { t, i18n } = useTranslation();
   const [checked, setChecked] = useState(true);
   const name = i18n.language.startsWith("zh") ? tool.name : tool.nameEn;
+  const tag = tool.enforceable
+    ? t("lub.onboard.cap_enforced")
+    : t("lub.panel.monitor_only");
+  if (tool.control === "none") {
+    return (
+      <div className="lub-tool-row" data-tool={tool.tool}>
+        <span>{name}</span>
+        <span className="lub-tag">{tag}</span>
+      </div>
+    );
+  }
   return (
     <label className="lub-tool-row" data-tool={tool.tool}>
       <span>
@@ -38,11 +56,7 @@ function ToolRow({ tool }: { tool: DetectedTool }) {
           <span className="lub-muted"> {t(`lub.panel.${tool.detailKey}`)}</span>
         ) : null}
       </span>
-      <span className="lub-tag">
-        {tool.enforceable
-          ? t("lub.onboard.cap_enforced")
-          : t("lub.panel.monitor_only")}
-      </span>
+      <span className="lub-tag">{tag}</span>
     </label>
   );
 }
@@ -113,7 +127,17 @@ export function OnboardingWizard() {
           onChange={(event) => {
             const next = event.target.checked;
             setAcked(next);
-            if (!next) setEnabled(false);
+            if (next || !enabled) return;
+            const result = setClaudeSubscriptionProxy({
+              enabled: false,
+              platform: proxyPlatform(),
+            });
+            if (!result.ok) {
+              setError(result.error.code);
+              return;
+            }
+            setError(null);
+            setEnabled(false);
           }}
         />{" "}
         {terms}
@@ -128,10 +152,17 @@ export function OnboardingWizard() {
           aria-label={proxyLabel}
           onClick={() => {
             const next = !enabled;
-            const result = setClaudeSubscriptionProxy({
-              enabled: next,
-              termsAckAt: acked ? Date.now() : null,
-            });
+            const result = next
+              ? setClaudeSubscriptionProxy({
+                  enabled: true,
+                  termsAckAt: acked ? Date.now() : null,
+                  termsVersion: acked ? CLAUDE_PROXY_TERMS_VERSION : null,
+                  platform: proxyPlatform(),
+                })
+              : setClaudeSubscriptionProxy({
+                  enabled: false,
+                  platform: proxyPlatform(),
+                });
             if (!result.ok) {
               setEnabled(false);
               setError(result.error.code);
