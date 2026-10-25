@@ -650,7 +650,14 @@ fn insert_legacy_log(
     cost: &TrustedCost,
     created_at: i64,
 ) -> Result<(), AppError> {
-    transaction.execute(
+    let latency_ms = i64::try_from(legacy.latency_ms)
+        .map_err(|_| AppError::Message("latency is too large".to_string()))?;
+    let data_source = match input.source {
+        TokenSource::Proxy => "proxy",
+        TokenSource::SessionLog => "session",
+    };
+    let total_cost = cost.total.as_deref().unwrap_or("0");
+    let inserted = transaction.execute(
         "INSERT INTO proxy_request_logs (
             request_id, provider_id, app_type, model, request_model, pricing_model,
             input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
@@ -677,9 +684,8 @@ fn insert_legacy_log(
             cost.output.as_deref().unwrap_or("0"),
             cost.cache_read.as_deref().unwrap_or("0"),
             cost.cache_creation.as_deref().unwrap_or("0"),
-            cost.total.as_deref().unwrap_or("0"),
-            i64::try_from(legacy.latency_ms)
-                .map_err(|_| AppError::Message("latency is too large".to_string()))?,
+            total_cost,
+            latency_ms,
             legacy
                 .first_token_ms
                 .map(i64::try_from)
@@ -692,12 +698,30 @@ fn insert_legacy_log(
             i64::from(legacy.is_streaming),
             legacy.cost_multiplier.to_string(),
             created_at,
-            match input.source {
-                TokenSource::Proxy => "proxy",
-                TokenSource::SessionLog => "session",
-            },
+            data_source,
         ],
     )?;
+    if inserted == 1 {
+        crate::store::upsert_hourly_delta(
+            transaction,
+            &crate::store::HourlyLogDelta {
+                created_at,
+                app_type: legacy.app_type.clone(),
+                provider_id: legacy.provider_id.clone(),
+                model: input.model.clone(),
+                billing_identity: String::new(),
+                data_source: data_source.to_string(),
+                status_code: i64::from(legacy.status_code),
+                end_reason: None,
+                input_tokens: i64::from(input.usage.input_tokens),
+                output_tokens: i64::from(input.usage.output_tokens),
+                cache_read_tokens: i64::from(input.usage.cache_read_tokens),
+                cache_creation_tokens: i64::from(input.usage.cache_creation_tokens),
+                total_cost_usd: total_cost.to_string(),
+                latency_ms,
+            },
+        )?;
+    }
     Ok(())
 }
 

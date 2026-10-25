@@ -29,6 +29,8 @@ pub(crate) mod usage_light_prediction;
 pub mod usage_stats;
 
 #[cfg(test)]
+mod qa12_fixtures;
+#[cfg(test)]
 mod tests;
 
 // DAO 类型导出供外部使用
@@ -38,6 +40,7 @@ pub(crate) use dao::binding_credentials::{
     CredentialBindingSnapshot, CredentialJournalEntry, CredentialMutationKind,
     CredentialOperationReservation,
 };
+pub(crate) use dao::hourly_rollup::{upsert_hourly_delta, HourlyLogDelta};
 pub(crate) use dao::provider_credentials::{
     ProviderCredentialJournalEntry, ProviderCredentialOperationReservation,
     ProviderCredentialSnapshot,
@@ -62,7 +65,7 @@ use std::sync::Mutex;
 
 /// 当前 Schema 版本号
 /// 每次修改表结构时递增，并在 schema.rs 中添加相应的迁移逻辑
-pub(crate) const SCHEMA_VERSION: i32 = 28;
+pub(crate) const SCHEMA_VERSION: i32 = 29;
 
 /// 安全地序列化 JSON，避免 unwrap panic
 pub(crate) fn to_json_string<T: Serialize>(value: &T) -> Result<String, AppError> {
@@ -178,7 +181,7 @@ impl Database {
         db.ensure_model_pricing_seeded()?;
 
         // Startup cleanup: prune old logs and reclaim space
-        if let Err(e) = db.rollup_and_prune(30) {
+        if let Err(e) = db.rollup_and_prune_configured() {
             log::warn!("Startup rollup_and_prune failed: {e}");
         }
         // Reclaim disk space after cleanup

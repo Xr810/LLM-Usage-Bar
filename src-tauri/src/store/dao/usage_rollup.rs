@@ -2,10 +2,14 @@
 //!
 //! Aggregates proxy_request_logs into daily rollups and prunes old detail rows.
 
+use super::hourly_rollup::{
+    backfill_dirty_hours, prune_hourly_rollups, RetentionPolicy, PRUNE_BATCH_LIMIT,
+};
 use crate::error::AppError;
 use crate::store::usage_stats::effective_usage_log_filter;
 use crate::store::{lock_conn, Database};
 use chrono::{Duration, Local, TimeZone};
+use rusqlite::params;
 
 /// Compute the rollup/prune cutoff aligned to a local-day boundary.
 ///
@@ -55,12 +59,33 @@ fn compute_local_midnight_cutoff(
 }
 
 impl Database {
+    /// Aggregate and prune using the saved detail window and the community
+    /// hourly default (400 days). A private build calls
+    /// [`Self::rollup_and_prune_with_policy`] with its own hourly window.
+    pub fn rollup_and_prune_configured(&self) -> Result<u64, AppError> {
+        let detail_days = self.detail_retention_days()?;
+        self.rollup_and_prune_with_policy(RetentionPolicy::community(detail_days))
+    }
+
     /// Aggregate proxy_request_logs older than `retain_days` into usage_daily_rollups,
-    /// then delete the aggregated detail rows.
+    /// then delete the aggregated detail rows. Hourly rows use the community default.
     /// Returns the number of deleted detail rows.
     pub fn rollup_and_prune(&self, retain_days: i64) -> Result<u64, AppError> {
-        let cutoff = compute_local_midnight_cutoff(Local::now(), retain_days)?;
+        self.rollup_and_prune_with_policy(RetentionPolicy::community(retain_days))
+    }
+
+    /// Same as [`Self::rollup_and_prune`], but the hourly cutoff comes from
+    /// `policy.hourly_days` instead of a hard-coded retention.
+    pub fn rollup_and_prune_with_policy(&self, policy: RetentionPolicy) -> Result<u64, AppError> {
+        if policy.hourly_days < 0 {
+            return Err(AppError::invalid_argument(
+                "Hourly retention days must be zero or greater.".to_string(),
+                "hourlyRetentionDays",
+            ));
+        }
+        let cutoff = compute_local_midnight_cutoff(Local::now(), policy.detail_days)?;
         let conn = lock_conn!(self.conn);
+        backfill_dirty_hours(&conn)?;
 
         let prediction_cutoff = Local::now()
             .timestamp()
@@ -87,16 +112,28 @@ impl Database {
             )
             .map_err(|e| AppError::Database(e.to_string()))?;
 
-        if count == 0 {
-            return Ok(0);
-        }
+        let deleted = if count == 0 {
+            0
+        } else {
+            self.prune_detail_rows(&conn, cutoff, policy.detail_days, policy.hourly_days)?
+        };
+        prune_hourly_rollups(&conn, Local::now().timestamp(), policy.hourly_days)?;
+        Ok(deleted)
+    }
 
+    fn prune_detail_rows(
+        &self,
+        conn: &rusqlite::Connection,
+        cutoff: i64,
+        retain_days: i64,
+        hourly_days: i64,
+    ) -> Result<u64, AppError> {
         // 剪枝是不可逆的：明细一旦汇总删除，0 成本行就永远失去按 pricing_model
         // 补价重算的机会（启动序列里 seed 定价先于 rollup、但启动回填在 rollup
         // 之后；周期任务同理）。所以剪枝前先尽力回填一次。失败仅告警不阻断——
         // 否则一行损坏的定价数据会永久卡死日志清理。
         // 注意必须在 SAVEPOINT 之外调用：回填内部自己开顶层事务。
-        if let Err(e) = Self::backfill_missing_usage_costs_on_conn(&conn, None) {
+        if let Err(e) = Self::backfill_missing_usage_costs_on_conn(conn, None) {
             log::warn!("Pre-prune cost backfill failed, pruning anyway: {e}");
         }
 
@@ -104,7 +141,7 @@ impl Database {
         conn.execute("SAVEPOINT rollup_prune;", [])
             .map_err(|e| AppError::Database(e.to_string()))?;
 
-        let result = Self::do_rollup_and_prune(&conn, cutoff);
+        let result = Self::do_rollup_and_prune(conn, cutoff);
 
         match result {
             Ok(deleted) => {
@@ -112,7 +149,7 @@ impl Database {
                     .map_err(|e| AppError::Database(e.to_string()))?;
                 if deleted > 0 {
                     log::info!(
-                        "Rolled up and pruned {deleted} proxy_request_logs (retain={retain_days}d)"
+                        "Rolled up and pruned {deleted} proxy_request_logs (retain={retain_days}d, hourly={hourly_days}d)"
                     );
                     // 归档触发了表结构变化，前端 30 天前的统计可能跟着变，
                     // 通知一次让 UsageDashboard 重拉数据
@@ -184,14 +221,24 @@ impl Database {
 
         // INSERT uses the effective-log filter to exclude duplicate session rows.
         // DELETE intentionally prunes all old details so those duplicates are discarded.
-        let deleted = conn
-            .execute(
-                "DELETE FROM proxy_request_logs WHERE created_at < ?1",
-                [cutoff],
-            )
-            .map_err(|e| AppError::Database(format!("Pruning old logs failed: {e}")))?;
+        // Batches stay inside this savepoint: a failure rolls the daily rollup back too.
+        let mut deleted = 0u64;
+        loop {
+            let batch = conn
+                .execute(
+                    "DELETE FROM proxy_request_logs WHERE rowid IN (
+                         SELECT rowid FROM proxy_request_logs WHERE created_at < ?1 LIMIT ?2
+                     )",
+                    params![cutoff, PRUNE_BATCH_LIMIT],
+                )
+                .map_err(|e| AppError::Database(format!("Pruning old logs failed: {e}")))?;
+            deleted += batch as u64;
+            if batch == 0 {
+                break;
+            }
+        }
 
-        Ok(deleted as u64)
+        Ok(deleted)
     }
 }
 

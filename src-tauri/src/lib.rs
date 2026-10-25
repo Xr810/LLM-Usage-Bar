@@ -225,7 +225,10 @@ pub fn create_schema_v13_fixture_test_hook(path: &Path) -> Result<(), AppError> 
     // v13, so the baseline below is untouched.
     // Reviewed for schema v27: v26 -> v27 只新增三张 router_* 表，与 v13 基线无关。
     // Reviewed for schema v28: v27 -> v28 只给 router_providers 加两个可空/带默认的列，与 v13 基线无关。
-    if store::SCHEMA_VERSION != 28
+    // Reviewed for schema v29: v28 -> v29 给 proxy_request_logs 加 ADR-021 列，新建
+    // usage_hourly_rollups / rollup_dirty_hours / guard_counters，并把 model_pricing
+    // 的 cache 价改成可空、补上 pending 列。这些都在 v13 之后，不改下面的 v13 基线。
+    if store::SCHEMA_VERSION != 29
         || product_identity::DATABASE_IDENTITY_SOURCE_SCHEMA_VERSION != 13
     {
         return Err(AppError::Database(
