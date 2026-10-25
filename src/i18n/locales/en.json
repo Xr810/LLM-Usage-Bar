@@ -661,6 +661,20 @@
       "invalid_cost_rows": "{{count}} records have an amount that could not be parsed",
       "quota_stale": "Stale data",
       "quota_read_failed": "Couldn't read usage"
+    },
+    "trends": {
+      "day": "Day",
+      "week": "Week",
+      "month": "Month",
+      "daily_avg": "Daily avg",
+      "peak_day": "Peak day",
+      "api_spend_usd_plans_excluded": "API spend (USD), plans excluded",
+      "daily_spend_last_weeks": "Daily spend, last 52 weeks",
+      "less": "Less",
+      "more": "More",
+      "weekday_by_hour": "Weekday by hour",
+      "peak_tue_h": "Peak: Tue 22–24h",
+      "all_data_is_sample_data": "All data is sample data"
     }
   }
 }

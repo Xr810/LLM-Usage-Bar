@@ -19,6 +19,7 @@ describe("lub panel copy", () => {
   it("keeps zh and en panel keys identical", () => {
     expect(flat(zh.lub)).toEqual(flat(en.lub));
     expect(flat(zh.lub.panel)).toHaveLength(44);
+    expect(flat(zh.lub.trends)).toHaveLength(12);
   });
 
   it("leaves zh-TW and ja on the English fallback for lub keys", () => {

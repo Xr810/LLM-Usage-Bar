@@ -661,6 +661,20 @@
       "invalid_cost_rows": "有 {{count}} 条记录金额无法解析",
       "quota_stale": "数据过期",
       "quota_read_failed": "读取失败"
+    },
+    "trends": {
+      "day": "日",
+      "week": "周",
+      "month": "月",
+      "daily_avg": "日均",
+      "peak_day": "峰值日",
+      "api_spend_usd_plans_excluded": "API 花费（美元），不含订阅",
+      "daily_spend_last_weeks": "近 52 周每日花费",
+      "less": "少",
+      "more": "多",
+      "weekday_by_hour": "星期与时段",
+      "peak_tue_h": "高峰：周二 22–24 点",
+      "all_data_is_sample_data": "全部为示例数据"
     }
   }
 }
