@@ -512,8 +512,9 @@ pub struct AppSettings {
     /// User has confirmed the common config first-run notice
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub common_config_confirmed: Option<bool>,
-    /// UI language and the source for native copy. First load fills an absent
-    /// value from the OS; existing values are preserved, including unknown codes.
+    /// UI language and the source for native copy. An existing install without
+    /// a value retains `zh`; only a fresh install consults the OS locale.
+    /// Existing values are preserved, including unknown codes.
     /// Supported values are `en`, `zh`, `zh-TW`, and `ja`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
@@ -928,6 +929,11 @@ impl AppSettings {
     where
         F: FnOnce(&Path, &serde_json::Value) -> Result<(), AppError>,
     {
+        let existing_install = path.exists()
+            || path.parent().is_some_and(|app_dir| {
+                crate::product_identity::current_database_path(app_dir).exists()
+                    || crate::product_identity::prior_current_app_database_path(app_dir).exists()
+            });
         let content = match fs::read_to_string(path) {
             Ok(content) => Ok(content),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok("{}".to_string()),
@@ -937,7 +943,11 @@ impl AppSettings {
             match Self::decode_settings_json(&content) {
                 Ok((mut settings, mut canonical_value)) => {
                     if settings.language.is_none() {
-                        let language = crate::i18n::initial_language(read_locale);
+                        let language = if existing_install {
+                            "zh"
+                        } else {
+                            crate::i18n::initial_language(read_locale)
+                        };
                         settings.language = Some(language.to_string());
                         let value = canonical_value.get_or_insert_with(|| {
                             serde_json::from_str(&content).expect("decoded settings JSON")
@@ -1499,29 +1509,21 @@ mod tests {
         ] {
             let temp = tempdir().unwrap();
             let path = temp.path().join("settings.json");
-            for existing in [None, Some(r#"{"futureSetting":42}"#)] {
-                if let Some(json) = existing {
-                    fs::write(&path, json).unwrap();
-                }
-                let settings = AppSettings::load_from_path_with_writer(
-                    &path,
-                    write_canonical_settings_value,
-                    || locale.map(str::to_string),
-                );
-                assert_eq!(settings.language.as_deref(), Some(expected));
-                let saved: serde_json::Value =
-                    serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-                assert_eq!(saved["language"], expected);
-                if existing.is_some() {
-                    assert_eq!(saved["futureSetting"], 42);
-                }
-                let reloaded = AppSettings::load_from_path_with_writer(
-                    &path,
-                    |_, _| panic!("must not rewrite stored language"),
-                    || panic!("must not read host locale on subsequent launches"),
-                );
-                assert_eq!(reloaded.language, settings.language);
-            }
+            let settings = AppSettings::load_from_path_with_writer(
+                &path,
+                write_canonical_settings_value,
+                || locale.map(str::to_string),
+            );
+            assert_eq!(settings.language.as_deref(), Some(expected));
+            let saved: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            assert_eq!(saved["language"], expected);
+            let reloaded = AppSettings::load_from_path_with_writer(
+                &path,
+                |_, _| panic!("must not rewrite stored language"),
+                || panic!("must not read host locale on subsequent launches"),
+            );
+            assert_eq!(reloaded.language, settings.language);
         }
         for stored in ["en", "zh", "zh-TW", "ja", "fr-FR", "", " zh "] {
             let temp = tempdir().unwrap();
@@ -1535,6 +1537,47 @@ mod tests {
             );
             assert_eq!(settings.language.as_deref(), Some(stored));
             assert_eq!(fs::read_to_string(path).unwrap(), original);
+        }
+    }
+
+    #[test]
+    fn existing_install_without_language_retains_chinese_without_reading_locale() {
+        for (settings_exist, database_file) in [
+            (true, None),
+            (false, Some(crate::product_identity::DATABASE_FILE)),
+            (true, Some(crate::product_identity::DATABASE_FILE)),
+            (false, Some(crate::product_identity::LEGACY_DATABASE_FILE)),
+        ] {
+            let temp = tempdir().unwrap();
+            let path = temp.path().join("settings.json");
+            if settings_exist {
+                fs::write(&path, r#"{"futureSetting":42}"#).unwrap();
+            }
+            if let Some(database_file) = database_file {
+                let connection =
+                    rusqlite::Connection::open(temp.path().join(database_file)).unwrap();
+                connection
+                    .execute_batch("CREATE TABLE existing_data (id INTEGER)")
+                    .unwrap();
+            }
+            let settings = AppSettings::load_from_path_with_writer(
+                &path,
+                write_canonical_settings_value,
+                || panic!("existing installs must never read the OS locale"),
+            );
+            assert_eq!(settings.language.as_deref(), Some("zh"));
+            let saved: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            assert_eq!(saved["language"], "zh");
+            if settings_exist {
+                assert_eq!(saved["futureSetting"], 42);
+            }
+            let reloaded = AppSettings::load_from_path_with_writer(
+                &path,
+                |_, _| panic!("persisted language must not be rewritten"),
+                || panic!("persisted language must not read the OS locale"),
+            );
+            assert_eq!(reloaded.language, settings.language);
         }
     }
 
@@ -1585,7 +1628,7 @@ mod tests {
 
         let settings =
             AppSettings::load_from_path_with_writer(&path, write_canonical_settings_value, || {
-                Some("en-US".to_string())
+                panic!("legacy settings must not consult OS locale")
             });
         assert_eq!(
             settings.skill_storage_location,

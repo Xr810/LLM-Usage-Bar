@@ -1,7 +1,8 @@
 //! BE-12 language commands (C8).
 //!
 //! `settings.language` is the only stored language. `get_language` returns
-//! the effective language after settings initialize an absent value from the OS. `set_language`
+//! the effective language after settings initialize an absent value: `zh` for
+//! existing installs, OS locale only for fresh installs. `set_language`
 //! persists a supported language and emits one `settings-changed` event with
 //! `keys: ["language"]` when the stored value changes. There is no
 //! `language-changed` event.
