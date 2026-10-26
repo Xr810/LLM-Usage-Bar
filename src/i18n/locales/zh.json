@@ -737,7 +737,9 @@
       "day_grace": "（另有 14 天宽限）",
       "email": "绑定邮箱",
       "no_license": "还没有？",
-      "compare_free_vs_pro": "比较 Free 与 Pro"
+      "compare_free_vs_pro": "比较 Free 与 Pro",
+      "community_build": "社区构建",
+      "official_build_required": "需官方构建"
     },
     "trends": {
       "day": "日",
