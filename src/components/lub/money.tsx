@@ -8,21 +8,46 @@ export function displayUsd(text: string): string {
   return text.replace(/\.00$/, "");
 }
 
-/** Daily caps reset at local midnight. The snapshot has no reset timestamp. */
-export function formatLocalMidnight(locale: string, now = new Date()): string {
-  const midnight = new Date(
-    now.getFullYear(),
-    now.getMonth(),
-    now.getDate(),
-    0,
-    0,
-    0,
-    0,
-  );
+/**
+ * Clock time for a known reset instant. Null when the timestamp is missing
+ * or not a real date. Never substitutes local midnight.
+ */
+export function formatResetInstant(
+  nextResetAt: string | null | undefined,
+  locale: string,
+): string | null {
+  if (nextResetAt == null || nextResetAt.trim() === "") return null;
+  const parsed = new Date(nextResetAt);
+  if (Number.isNaN(parsed.getTime())) return null;
   return new Intl.DateTimeFormat(locale, {
     hour: "numeric",
     minute: "2-digit",
-  }).format(midnight);
+  }).format(parsed);
+}
+
+/**
+ * One caption instant when every known row agrees. Rows with a null or
+ * invalid `nextResetAt` are skipped. No known time, or two different
+ * instants, returns null.
+ */
+export function sharedNextResetAt(
+  rows: readonly { nextResetAt?: string | null }[],
+): string | null {
+  let chosen: string | null = null;
+  let chosenMs: number | null = null;
+  for (const row of rows) {
+    const raw = row.nextResetAt;
+    if (raw == null || raw.trim() === "") continue;
+    const ms = Date.parse(raw);
+    if (!Number.isFinite(ms)) continue;
+    if (chosenMs == null) {
+      chosen = raw;
+      chosenMs = ms;
+      continue;
+    }
+    if (ms !== chosenMs) return null;
+  }
+  return chosen;
 }
 
 export interface MoneyParts {
