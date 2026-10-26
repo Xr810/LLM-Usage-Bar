@@ -16,5 +16,37 @@
       "resetsAt": [null, "unknown", "2026-10-27T01:00:00"],
       "nextResetAt": null
     }
-  ]
+  ],
+  "codexWebSocket": {
+    "detection": [
+      {
+        "tool": "codex",
+        "installed": true,
+        "authMode": "subscription",
+        "proxied": false,
+        "enforceable": false,
+        "noteCodes": [
+          "subscription_not_proxied",
+          "codex_websocket",
+          "not_installed"
+        ]
+      }
+    ],
+    "source": {
+      "providerId": "codex",
+      "displayName": "Fixture subscription",
+      "billingKind": "subscription",
+      "enforceable": false,
+      "progress": 0,
+      "stopped": false,
+      "sourceState": "stale",
+      "noteCodes": ["stale", "codex_websocket"],
+      "nextResetAt": null,
+      "betaTruncate": {
+        "enabled": false,
+        "available": false,
+        "unavailableReason": "license_required"
+      }
+    }
+  }
 }

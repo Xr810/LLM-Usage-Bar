@@ -58,7 +58,15 @@ describe("tray usage wire contract", () => {
       "community" | "official"
     >();
     expectTypeOf<SourceRowView["nextResetAt"]>().toEqualTypeOf<string | null>();
-    expectTypeOf<SourceRowView["noteCodes"]>().toEqualTypeOf<string[]>();
+    expectTypeOf<SourceRowView["noteCodes"]>().toEqualTypeOf<
+      (
+        | "stale"
+        | "error"
+        | "not_proxied"
+        | "codex_websocket"
+        | "license_required"
+      )[]
+    >();
     const sources: SourceRowView[] = sourceContract.cases.map((fixture) => ({
       providerId: fixture.id,
       displayName: fixture.id,
@@ -87,6 +95,22 @@ describe("tray usage wire contract", () => {
       null,
       null,
     ]);
+  });
+
+  it("preserves the shared Codex WebSocket source fixture without adding license notes", async () => {
+    server.use(
+      http.post("http://tauri.local/get_tray_usage_snapshot", () =>
+        HttpResponse.json({
+          ...trayUsageSnapshotFixture,
+          sources: [sourceContract.codexWebSocket.source],
+        }),
+      ),
+    );
+    const snapshot = await getTrayUsageSnapshot();
+    expect(snapshot.sources[0]).toEqual(sourceContract.codexWebSocket.source);
+    expect(snapshot.sources[0].noteCodes).toContain("codex_websocket");
+    expect(snapshot.sources[0].noteCodes).not.toContain("license_required");
+    expect(snapshot.sources[0].nextResetAt).toBeNull();
   });
 
   it("mirrors decimal fields as strings and excludes protected quota configuration", () => {

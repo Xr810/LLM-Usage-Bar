@@ -20,6 +20,9 @@ export interface TrayUsageSnapshot {
   sources: SourceRowView[];
 }
 
+export type SourceNoteCode =
+  "stale" | "error" | "not_proxied" | "codex_websocket" | "license_required";
+
 export interface SourceRowView {
   providerId: string;
   displayName: string;
@@ -35,7 +38,7 @@ export interface SourceRowView {
   progress: number;
   stopped: boolean;
   sourceState: "ok" | "stale" | "error";
-  noteCodes: string[];
+  noteCodes: SourceNoteCode[];
   nextResetAt: string | null;
   betaTruncate?: {
     enabled: boolean;

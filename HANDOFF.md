@@ -1566,7 +1566,7 @@ name and confirms the JSON-string version contract above:
   passed, including both backend modes and macOS/Windows desktop builds:
   https://github.com/Xr810/LLM-Usage-Bar/actions/runs/40202713551.
 
-### 2026-10-26 BE-21b tray contract (partial; C17 mapping blocked)
+### 2026-10-26 BE-21b initial tray contract (superseded by v7.19 follow-up below)
 
 Based on `a7954917`, `TrayUsageSnapshot.buildType` reuses `LicenseBuild` and
 `community_license_status().build`, the same source as the license command.
@@ -1672,3 +1672,60 @@ CARGO_INCREMENTAL=0` and temporary 2 GiB swap.
   `git diff --check`, and §17 conflict-marker scan: passed.
 - Test compilation retains three existing test-only unused-import/dead-code
   warnings. No native Windows/macOS validation was performed in this orb.
+
+### 2026-10-26 BE-21b v7.19 cached source-note follow-up
+
+Merged `origin/main` `e17c6418` normally into PR #105's existing branch,
+preserving BE-1b and both HANDOFF entries. No published history was rewritten.
+The owner relayed the v7.19 note-code rules: closed set `stale`, `error`,
+`not_proxied`, `codex_websocket`, `license_required`, emitted in that order;
+stale/error are mutually exclusive. Community builds never emit the license
+note, and other builds require the row's truncation unavailable reason to be
+`license_required`. Rust and TypeScript now represent the closed set explicitly.
+
+No backend `detect_tools` cache existed. AppState now shares an in-memory cache
+between that command and the tray projector. The command replaces its completed
+result; snapshot projection clones the cached result once, without triggering
+detection, reading credentials, changing takeover settings, or fetching quota.
+An empty cache is unknown, not `proxied=false`. Only exact provider/tool IDs
+bind detection evidence; provider display names/presets never supply it. Only
+`providerId=codex` plus subscription billing and a cached `codex_websocket` note
+produce that note; other detection codes are not copied to source rows.
+
+**Pending architect clarification:** rule 1 restricts `not_proxied` to metered
+rows, but rule 2 says Codex subscription rows usually also carry it. The local
+implementation provisionally uses `billingKind=metered`; this is not accepted
+final behavior. The disputed subscription expectation is isolated in
+`tests/fixtures/tray-source-contract.json` for correction after clarification.
+Do not remove PR #105's blocked status until this is resolved.
+
+The new cache fixture exercises the real AppState/tray service with cached
+Codex evidence, then removes the WebSocket note and finally clears the cache.
+Additional cases cover note order, duplicate/unsupported detection codes,
+stale/error distinction, community/official license-note behavior, known versus
+unknown proxy state, and same-name/different-ID providers. Build/reset behavior
+from the initial delivery is retained.
+
+Current Linux orb validation before push, after the main merge:
+
+- `pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml` with
+  `LLM_USAGE_BAR_UPSELL_ENTRY` unset: **1366 library + 15 integration passed**.
+- `LLM_USAGE_BAR_UPSELL_ENTRY=true pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml --no-default-features`:
+  **1366 library + 15 integration passed**. This preserves BE-1b's display-flag
+  coverage; no `pro` feature is invented. Both runs retain 3 existing ignored
+  tests and 3 existing test-compilation warnings; dependency guards pass.
+- `pnpm rust -- clippy --locked --manifest-path src-tauri/Cargo.toml -- -D warnings`
+  with the display flag unset, and
+  `LLM_USAGE_BAR_UPSELL_ENTRY=true pnpm rust -- clippy --locked --manifest-path src-tauri/Cargo.toml --no-default-features -- -D warnings`:
+  **both passed**.
+- Rust commands used `CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0
+  CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0` and temporary 2 GiB swap.
+- `pnpm typecheck` and `pnpm test:unit --maxWorkers=1`: **passed; 55 files /
+  372 tests**. Rust's first fixture comparison distinguished JSON `0` from
+  `0.0`; the fixture expectation now normalizes that numeric representation,
+  and both complete Rust reruns pass without changing production output.
+- `pnpm format:check`, `pnpm exec prettier --check tests/fixtures/tray-source-contract.json`,
+  `pnpm rust -- fmt --manifest-path src-tauri/Cargo.toml --check`,
+  `git diff --check`, and §17 conflict-marker scan: **passed**.
+- Native Windows/macOS acceptance has not been performed in this orb.
+  Passing tests do not resolve the pending subscription `not_proxied` contract.

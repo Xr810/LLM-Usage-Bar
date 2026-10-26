@@ -381,11 +381,22 @@ where
 
 pub struct TrayUsageProjector {
     db: Arc<Database>,
+    tool_detection_cache: Arc<crate::route::takeover::ToolDetectionCache>,
 }
 
 impl TrayUsageProjector {
     pub fn new(db: Arc<Database>) -> Self {
-        Self { db }
+        Self::with_tool_detection_cache(db, Arc::default())
+    }
+
+    pub fn with_tool_detection_cache(
+        db: Arc<Database>,
+        tool_detection_cache: Arc<crate::route::takeover::ToolDetectionCache>,
+    ) -> Self {
+        Self {
+            db,
+            tool_detection_cache,
+        }
     }
 
     pub fn project_at(&self, now: DateTime<Local>) -> Result<TrayUsageSnapshot, AppError> {
@@ -490,10 +501,14 @@ impl TrayUsageProjector {
                 }
             }
         }
+        let build_type = crate::policy::community_license_status().build;
+        let detected_tools = self.tool_detection_cache.snapshot();
         let sources = crate::usage::source_row::source_rows_at(
             self.db.as_ref(),
             generated_at,
             &metered_value_usd,
+            build_type,
+            &detected_tools,
         )?;
         let projected_agents = vec![TrayAgentUsageView {
             agent_module_id: "providers".to_string(),
@@ -504,7 +519,7 @@ impl TrayUsageProjector {
         }];
 
         Ok(TrayUsageSnapshot {
-            build_type: crate::policy::community_license_status().build,
+            build_type,
             status,
             generated_at,
             last_success_at: Some(generated_at),

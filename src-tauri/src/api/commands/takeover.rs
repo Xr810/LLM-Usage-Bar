@@ -93,14 +93,11 @@ pub fn set_claude_subscription_proxy(
 #[tauri::command]
 pub fn detect_tools(state: State<'_, AppState>) -> Result<Vec<ToolDetectRow>, AppError> {
     #[cfg(target_os = "windows")]
-    {
-        let _ = state;
-        return Ok(windows_tool_stub());
-    }
+    let rows = windows_tool_stub();
     #[cfg(not(target_os = "windows"))]
-    {
-        Ok(detect_tools_at(&host_layout(&state)))
-    }
+    let rows = detect_tools_at(&host_layout(&state));
+    state.tool_detection_cache.replace(rows.clone());
+    Ok(rows)
 }
 
 #[tauri::command]
