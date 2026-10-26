@@ -42,8 +42,13 @@ const LICENSE_KEYS = [
   "settings.license.communityNote",
 ];
 
+const supplementalOnboard = [
+  "onboard.terms_risk",
+  "onboard.claude_subscription_via_proxy",
+] as const;
+
 function withoutLicense(keys: string[]): string[] {
-  const extra = new Set<string>(LICENSE_KEYS);
+  const extra = new Set<string>([...LICENSE_KEYS, ...supplementalOnboard]);
   return keys.filter((key) => !extra.has(key));
 }
 
@@ -62,8 +67,12 @@ describe("lub panel copy", () => {
     // The uploaded pack is 203 public keys: the v5.8 set of 199 plus
     // community badge/aria keys and errors.feature_unavailable.
     // FE-1a adds the seven license settings keys on top of that pack.
-    expect(flat(zh.lub)).toHaveLength(203 + LICENSE_KEYS.length);
-    expect(flat(en.lub)).toHaveLength(203 + LICENSE_KEYS.length);
+    expect(flat(zh.lub)).toHaveLength(
+      203 + LICENSE_KEYS.length + supplementalOnboard.length,
+    );
+    expect(flat(en.lub)).toHaveLength(
+      203 + LICENSE_KEYS.length + supplementalOnboard.length,
+    );
     expect(flat(proZh.lub)).toHaveLength(85);
     expect(flat(proEn.lub)).toHaveLength(85);
   });
@@ -145,8 +154,12 @@ describe("lub panel copy", () => {
   });
 
   it("covers the license keys in all four locales and keeps the other lub fallback", async () => {
-    expect(flat(zhTW.lub).sort()).toEqual([...LICENSE_KEYS].sort());
-    expect(flat(ja.lub).sort()).toEqual([...LICENSE_KEYS].sort());
+    expect(flat(zhTW.lub).sort()).toEqual(
+      [...LICENSE_KEYS, ...supplementalOnboard].sort(),
+    );
+    expect(flat(ja.lub).sort()).toEqual(
+      [...LICENSE_KEYS, ...supplementalOnboard].sort(),
+    );
     for (const key of LICENSE_KEYS) {
       expect(flat(zh.lub)).toContain(key);
       expect(flat(en.lub)).toContain(key);
@@ -190,6 +203,31 @@ describe("lub panel copy", () => {
     expect(local.t("lub.settings.license.communityNote")).toBe(
       ja.lub.settings.license.communityNote,
     );
+  });
+
+  it("keeps the onboard strings in zh, en, zh-TW, and ja", () => {
+    const terms = {
+      zh: "可能违反服务商条款，账号可能被限制，由你自行判断。",
+      en: "This may conflict with provider terms. Your account may be restricted. You decide.",
+      "zh-TW": "可能違反服務商條款，帳號可能被限制，由你自行判斷。",
+      ja: "プロバイダの利用規約に抵触する可能性があり、アカウントが制限されることがあります。判断はご自身で行ってください。",
+    };
+    const proxy = {
+      zh: "Claude 订阅经代理",
+      en: "Claude subscription via proxy",
+      "zh-TW": "Claude 訂閱經代理",
+      ja: "プロキシ経由の Claude サブスクリプション",
+    };
+    expect(zh.lub.onboard.terms_risk).toBe(terms.zh);
+    expect(en.lub.onboard.terms_risk).toBe(terms.en);
+    expect(zhTW.lub.onboard.terms_risk).toBe(terms["zh-TW"]);
+    expect(ja.lub.onboard.terms_risk).toBe(terms.ja);
+    expect(zh.lub.onboard.claude_subscription_via_proxy).toBe(proxy.zh);
+    expect(en.lub.onboard.claude_subscription_via_proxy).toBe(proxy.en);
+    expect(zhTW.lub.onboard.claude_subscription_via_proxy).toBe(proxy["zh-TW"]);
+    expect(ja.lub.onboard.claude_subscription_via_proxy).toBe(proxy.ja);
+    expect(terms["zh-TW"]).not.toBe(terms.en);
+    expect(terms.ja).not.toBe(terms.en);
   });
 
   it("keeps Pro keys in separate files and out of the public bundle", () => {

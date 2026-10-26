@@ -29,6 +29,12 @@ const LICENSE_KEYS = [
   "lub.settings.license.communityNote",
 ];
 
+const supplementalLub = [
+  "lub.onboard.terms_risk",
+  "lub.onboard.claude_subscription_via_proxy",
+];
+const allowedExtra = new Set([...LICENSE_KEYS, ...supplementalLub]);
+
 const errs = [];
 const out = [];
 for (const [za, eb, tag] of [
@@ -77,7 +83,7 @@ for (const [localeFile, packFile] of [
   }
   for (const key of Object.keys(locale)) {
     if (!(key in pack)) {
-      if (!LICENSE_KEYS.includes(key)) {
+      if (!allowedExtra.has(key)) {
         errs.push(`[locale ${localeFile}] extra ${key}`);
       }
     } else if (/\$[0-9]/.test(String(locale[key]))) {
@@ -99,7 +105,7 @@ for (const [file, locale] of licenseLocales) {
   }
   if (file === "zh-TW.json" || file === "ja.json") {
     for (const key of Object.keys(locale)) {
-      if (!LICENSE_KEYS.includes(key)) {
+      if (!allowedExtra.has(key)) {
         errs.push(
           `[license ${file}] unexpected ${key}; other lub keys stay on the English fallback`,
         );
@@ -120,6 +126,33 @@ for (const [file, locale] of licenseLocales.slice(1)) {
   }
 }
 
+for (const key of supplementalLub) {
+  if (key in freePack) errs.push(`[supplemental] already in v5.8 pack: ${key}`);
+  const values = licenseLocales.map(([, locale]) => locale[key]);
+  licenseLocales.forEach(([file], index) => {
+    if (values[index] == null || String(values[index]).trim() === "") {
+      errs.push(`[supplemental ${file}] missing ${key}`);
+    }
+  });
+  const placeholders = new Set(
+    values.filter((value) => value != null).map((value) => ph(value)),
+  );
+  if (placeholders.size > 1) errs.push(`[supplemental] placeholder: ${key}`);
+  const byFile = Object.fromEntries(licenseLocales);
+  if (
+    byFile["zh-TW.json"]?.[key] != null &&
+    byFile["zh-TW.json"][key] === byFile["en.json"]?.[key]
+  ) {
+    errs.push(`[supplemental zh-TW] english fallback: ${key}`);
+  }
+  if (
+    byFile["ja.json"]?.[key] != null &&
+    byFile["ja.json"][key] === byFile["en.json"]?.[key]
+  ) {
+    errs.push(`[supplemental ja] english fallback: ${key}`);
+  }
+}
+
 for (const [tag, leftFile, rightFile] of [
   ["free", "zh.json", "en.json"],
   ["pro", "pro.zh-CN.json", "pro.en.json"],
@@ -136,6 +169,6 @@ for (const [tag, leftFile, rightFile] of [
 console.log(
   errs.length
     ? errs.join("\n")
-    : `OK ${out.join(" + ")} keys; license ${LICENSE_KEYS.length}`,
+    : `OK ${out.join(" + ")} keys; license ${LICENSE_KEYS.length}; supplemental ${supplementalLub.length}`,
 );
 process.exit(errs.length ? 1 : 0);

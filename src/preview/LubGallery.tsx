@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { I18nextProvider, useTranslation } from "react-i18next";
 import i18n from "@/i18n";
 import { ensureProCopy } from "@/i18n/proCopy";
+import { OnboardingWizard } from "@/components/lub/OnboardingWizard";
 import { TrayPanelV5 } from "@/components/lub/TrayPanelV5";
 import { TrendsPage } from "@/components/lub/TrendsPage";
 import { splitUsd } from "@/components/lub/money";
@@ -105,7 +106,11 @@ function Gallery({
     <GalleryReady>
       <div className="lub-gallery">
         <MenuBar model={model} locale={locale} />
-        {screen === "trends" ? (
+        {screen === "onboard" ? (
+          <div className="lub-stage lub-stage-window">
+            <OnboardingWizard />
+          </div>
+        ) : screen === "trends" ? (
           <div className="lub-stage">
             <QueryClientProvider client={galleryQueryClient}>
               <TrendsPage tier={tier} features={features} />
