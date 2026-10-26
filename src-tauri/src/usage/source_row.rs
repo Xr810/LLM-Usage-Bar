@@ -7,9 +7,11 @@
 use std::collections::HashMap;
 
 use crate::model::{BillingKind, UsageProviderView};
+use crate::policy::LicenseBuild;
 use crate::quota::source_status::{
     quota_status_at, ProviderQuotaStatus, QuotaReadState, QuotaWindowStatus,
 };
+use crate::route::takeover::ToolDetectRow;
 use crate::store::Database;
 use serde::{Deserialize, Serialize};
 
@@ -19,6 +21,17 @@ pub enum SourceBillingKind {
     Metered,
     Subscription,
     Untracked,
+}
+
+/// Closed C17 reason-code set (ADR v7.19).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceNoteCode {
+    Stale,
+    Error,
+    NotProxied,
+    CodexWebsocket,
+    LicenseRequired,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -68,14 +81,57 @@ pub struct SourceRowView {
     /// Community build never stops traffic.
     pub stopped: bool,
     pub source_state: QuotaReadState,
+    /// Ordered C17 reason codes, using only known source/detection evidence.
+    #[serde(default)]
+    pub note_codes: Vec<SourceNoteCode>,
+    /// Earliest known window reset; never a synthetic local-day boundary.
+    pub next_reset_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub beta_truncate: Option<BetaTruncateView>,
+}
+
+impl SourceRowView {
+    fn update_note_codes(&mut self, build: LicenseBuild, tools: &[ToolDetectRow]) {
+        self.note_codes.clear();
+        match self.source_state {
+            QuotaReadState::Stale => self.note_codes.push(SourceNoteCode::Stale),
+            QuotaReadState::Error => self.note_codes.push(SourceNoteCode::Error),
+            QuotaReadState::Ok => {}
+        }
+        // No name/preset inference and no assumption that an absent cache means false.
+        let detected = tools.iter().find(|tool| tool.tool == self.provider_id);
+        if self.billing_kind == SourceBillingKind::Metered
+            && detected.is_some_and(|tool| !tool.proxied)
+        {
+            self.note_codes.push(SourceNoteCode::NotProxied);
+        }
+        if self.provider_id == "codex" && self.billing_kind == SourceBillingKind::Subscription {
+            if detected
+                .is_some_and(|tool| tool.note_codes.iter().any(|code| code == "codex_websocket"))
+            {
+                self.note_codes.push(SourceNoteCode::CodexWebsocket);
+            }
+            // The final Codex contract places WebSocket before not_proxied.
+            if detected.is_some_and(|tool| !tool.proxied) {
+                self.note_codes.push(SourceNoteCode::NotProxied);
+            }
+        }
+        if build != LicenseBuild::Community
+            && self.beta_truncate.is_some_and(|view| {
+                view.unavailable_reason == Some(BetaTruncateUnavailable::LicenseRequired)
+            })
+        {
+            self.note_codes.push(SourceNoteCode::LicenseRequired);
+        }
+    }
 }
 
 pub fn source_rows_at(
     db: &Database,
     now: i64,
     metered_value_usd: &HashMap<String, String>,
+    build: LicenseBuild,
+    detected_tools: &[ToolDetectRow],
 ) -> Result<Vec<SourceRowView>, crate::error::AppError> {
     let quota = quota_status_at(db, now)?;
     let quota_by_id = quota
@@ -95,12 +151,26 @@ pub fn source_rows_at(
                 provider,
                 quota_by_id.get(&provider.id),
                 metered_value_usd.get(&provider.id).map(String::as_str),
+                build,
+                detected_tools,
             )
         })
         .collect())
 }
 
 pub fn source_row_for_provider(
+    provider: &UsageProviderView,
+    quota: Option<&ProviderQuotaStatus>,
+    metered_value_usd: Option<&str>,
+    build: LicenseBuild,
+    detected_tools: &[ToolDetectRow],
+) -> SourceRowView {
+    let mut row = source_values_for_provider(provider, quota, metered_value_usd);
+    row.update_note_codes(build, detected_tools);
+    row
+}
+
+fn source_values_for_provider(
     provider: &UsageProviderView,
     quota: Option<&ProviderQuotaStatus>,
     metered_value_usd: Option<&str>,
@@ -117,6 +187,8 @@ pub fn source_row_for_provider(
             progress: 0.0,
             stopped: false,
             source_state: QuotaReadState::Ok,
+            note_codes: Vec::new(),
+            next_reset_at: None,
             beta_truncate: None,
         };
     }
@@ -138,10 +210,22 @@ pub fn source_row_for_provider(
             enforceable: false,
             value_usd: None,
             used_pct,
+            next_reset_at: windows
+                .iter()
+                .flatten()
+                .filter_map(|window| window.resets_at.as_deref())
+                .filter_map(|value| chrono::DateTime::parse_from_rfc3339(value.trim()).ok())
+                .min()
+                .map(|value| {
+                    value
+                        .with_timezone(&chrono::Utc)
+                        .to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
+                }),
             windows,
             progress: progress_from_used_pct(used_pct),
             stopped: false,
             source_state,
+            note_codes: Vec::new(),
             beta_truncate: Some(BetaTruncateView::community_unavailable()),
         };
     }
@@ -162,6 +246,8 @@ pub fn source_row_for_provider(
         progress: 0.0,
         stopped: false,
         source_state: QuotaReadState::Ok,
+        note_codes: Vec::new(),
+        next_reset_at: None,
         beta_truncate: None,
     }
 }
@@ -248,6 +334,284 @@ mod tests {
         assert!(!text.contains("valueusd"), "{text}");
     }
 
+    #[tokio::test]
+    async fn codex_websocket_fixture_reads_only_the_shared_detection_cache() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/tray-source-contract.json"
+        ))
+        .unwrap();
+        let db = std::sync::Arc::new(Database::memory().unwrap());
+        db.save_usage_provider(&provider(
+            "codex",
+            "Fixture subscription",
+            BillingKind::Subscription,
+        ))
+        .unwrap();
+        let now = chrono::Utc::now().timestamp();
+        db.append_quota_success(&QuotaSnapshot {
+            snapshot_id: "codex-fixture".to_string(),
+            provider_id: "codex".to_string(),
+            fetched_at: now,
+            five_hour_utilization_percent: None,
+            five_hour_resets_at: None,
+            seven_day_utilization_percent: None,
+            seven_day_resets_at: None,
+            manual_resets_remaining: None,
+            raw_payload: serde_json::json!({}),
+            created_at: now,
+        })
+        .unwrap();
+        let state = crate::app_state::AppState::new(db);
+        let tools: Vec<ToolDetectRow> =
+            serde_json::from_value(fixture["codexWebSocket"]["detection"].clone()).unwrap();
+
+        // No host detection or quota collection: the production service reads this cache.
+        state.tool_detection_cache.replace(tools.clone());
+        let snapshot = state
+            .tray_usage_service
+            .rebuild_from_persisted(|_| {})
+            .await;
+        let row = snapshot
+            .sources
+            .iter()
+            .find(|row| row.provider_id == "codex")
+            .unwrap();
+        let mut expected = fixture["codexWebSocket"]["source"].clone();
+        // serde_json distinguishes integer/f64 representations of the same JSON number.
+        expected["progress"] = serde_json::json!(expected["progress"].as_f64().unwrap());
+        assert_eq!(serde_json::to_value(row).unwrap(), expected);
+        assert_eq!(state.tool_detection_cache.snapshot(), tools);
+
+        let mut without_websocket = tools;
+        without_websocket[0].note_codes = vec!["subscription_not_proxied".to_string()];
+        state.tool_detection_cache.replace(without_websocket);
+        let snapshot = state
+            .tray_usage_service
+            .rebuild_from_persisted(|_| {})
+            .await;
+        let row = snapshot
+            .sources
+            .iter()
+            .find(|row| row.provider_id == "codex")
+            .unwrap();
+        assert_eq!(
+            row.note_codes,
+            vec![SourceNoteCode::NotProxied],
+            "unproxied subscription alone is not WebSocket evidence"
+        );
+
+        // Replacing (not appending to) cached detection removes obsolete transport notes.
+        state.tool_detection_cache.replace(Vec::new());
+        let snapshot = state
+            .tray_usage_service
+            .rebuild_from_persisted(|_| {})
+            .await;
+        let row = snapshot
+            .sources
+            .iter()
+            .find(|row| row.provider_id == "codex")
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&row.note_codes).unwrap(),
+            serde_json::json!([])
+        );
+    }
+
+    #[test]
+    fn source_notes_are_ordered_closed_and_require_matching_evidence() {
+        use crate::quota::source_status::QuotaOrigin;
+        use crate::route::takeover::AuthMode;
+        let db = Database::memory().unwrap();
+        db.save_usage_provider(&provider("codex", "Fixture", BillingKind::Subscription))
+            .unwrap();
+        let mut provider = db
+            .list_usage_providers()
+            .unwrap()
+            .into_iter()
+            .find(|row| row.id == "codex")
+            .unwrap();
+        let mut tool = ToolDetectRow {
+            tool: "codex".to_string(),
+            installed: true,
+            version: None,
+            auth_mode: AuthMode::Subscription,
+            proxied: true,
+            enforceable: false,
+            note_codes: vec![
+                "codex_websocket".to_string(),
+                "codex_websocket".to_string(),
+                "license_required".to_string(),
+                "not_installed".to_string(),
+            ],
+        };
+        for (billing, state, build, proxied, expected) in [
+            (
+                BillingKind::Subscription,
+                QuotaReadState::Stale,
+                LicenseBuild::Official,
+                false,
+                vec![
+                    "stale",
+                    "codex_websocket",
+                    "not_proxied",
+                    "license_required",
+                ],
+            ),
+            (
+                BillingKind::Subscription,
+                QuotaReadState::Stale,
+                LicenseBuild::Community,
+                true,
+                vec!["stale", "codex_websocket"],
+            ),
+            (
+                BillingKind::Subscription,
+                QuotaReadState::Error,
+                LicenseBuild::Community,
+                true,
+                vec!["error", "codex_websocket"],
+            ),
+            (
+                BillingKind::Subscription,
+                QuotaReadState::Stale,
+                LicenseBuild::Official,
+                true,
+                vec!["stale", "codex_websocket", "license_required"],
+            ),
+            (
+                BillingKind::Subscription,
+                QuotaReadState::Ok,
+                LicenseBuild::Official,
+                true,
+                vec!["codex_websocket", "license_required"],
+            ),
+            (
+                BillingKind::Metered,
+                QuotaReadState::Ok,
+                LicenseBuild::Official,
+                false,
+                vec!["not_proxied"],
+            ),
+            (
+                BillingKind::Metered,
+                QuotaReadState::Ok,
+                LicenseBuild::Community,
+                true,
+                vec![],
+            ),
+        ] {
+            provider.billing_kind = billing;
+            tool.proxied = proxied;
+            let quota = ProviderQuotaStatus {
+                provider_id: provider.id.clone(),
+                windows: Vec::new(),
+                used_pct: None,
+                source: QuotaOrigin::BestEffort,
+                state,
+                last_success_at: None,
+            };
+            let row = source_row_for_provider(
+                &provider,
+                Some(&quota),
+                None,
+                build,
+                std::slice::from_ref(&tool),
+            );
+            assert_eq!(
+                serde_json::to_value(&row.note_codes).unwrap(),
+                serde_json::json!(expected)
+            );
+        }
+
+        provider.billing_kind = BillingKind::Metered;
+        tool.proxied = false;
+        let row = source_row_for_provider(&provider, None, None, LicenseBuild::Community, &[]);
+        assert!(
+            row.note_codes.is_empty(),
+            "unknown proxy state is not false"
+        );
+        provider.id = "another-provider".to_string();
+        provider.name = "Codex".to_string();
+        let row = source_row_for_provider(
+            &provider,
+            None,
+            None,
+            LicenseBuild::Community,
+            std::slice::from_ref(&tool),
+        );
+        assert!(
+            row.note_codes.is_empty(),
+            "display name must not bind cached detection"
+        );
+        provider.billing_kind = BillingKind::Subscription;
+        tool.tool = provider.id.clone();
+        let row = source_row_for_provider(&provider, None, None, LicenseBuild::Community, &[tool]);
+        assert_eq!(row.note_codes, vec![SourceNoteCode::Stale]);
+        assert!(serde_json::from_str::<SourceNoteCode>("\"not_installed\"").is_err());
+    }
+
+    #[test]
+    fn source_reset_contract_uses_earliest_instant_or_explicit_null() {
+        use crate::quota::source_status::{QuotaOrigin, QuotaWindowKind};
+        use crate::usage::tray_snapshot::{TrayUsageProjector, TrayUsageSnapshot};
+        use chrono::TimeZone;
+        use std::sync::Arc;
+
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/tray-source-contract.json"
+        ))
+        .unwrap();
+        let db = Arc::new(Database::memory().unwrap());
+        db.save_usage_provider(&provider("sub", "Claude", BillingKind::Subscription))
+            .unwrap();
+        let provider = db
+            .list_usage_providers()
+            .unwrap()
+            .into_iter()
+            .find(|provider| provider.id == "sub")
+            .unwrap();
+        for case in fixture["cases"].as_array().unwrap() {
+            let quota = ProviderQuotaStatus {
+                provider_id: provider.id.clone(),
+                windows: case["resetsAt"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|reset| QuotaWindowStatus {
+                        kind: QuotaWindowKind::FiveHour,
+                        used_pct: 40.0,
+                        resets_at: reset.as_str().map(str::to_owned),
+                    })
+                    .collect(),
+                used_pct: Some(40.0),
+                source: QuotaOrigin::BestEffort,
+                state: QuotaReadState::Ok,
+                last_success_at: Some(100),
+            };
+            let row = source_row_for_provider(
+                &provider,
+                Some(&quota),
+                None,
+                LicenseBuild::Community,
+                &[],
+            );
+            let json = serde_json::to_value(row).unwrap();
+            assert!(json.get("nextResetAt").is_some(), "{}", case["id"]);
+            assert_eq!(json["nextResetAt"], case["nextResetAt"], "{}", case["id"]);
+            assert!(json["noteCodes"].is_array());
+        }
+        let now = chrono::Local.timestamp_opt(100, 0).single().unwrap();
+        for snapshot in [
+            TrayUsageSnapshot::unknown(100),
+            TrayUsageProjector::new(db).project_at(now).unwrap(),
+        ] {
+            assert_eq!(
+                serde_json::to_value(snapshot).unwrap()["buildType"],
+                fixture["buildType"]
+            );
+        }
+    }
+
     #[test]
     fn cursor_is_untracked_and_a_stale_subscription_stays_subscription() {
         let db = Database::memory().unwrap();
@@ -281,7 +645,7 @@ mod tests {
         let now = 100 + QUOTA_READ_FRESH_SECS + 1;
         let mut costs = HashMap::new();
         costs.insert("cursor".to_string(), "12.5".to_string());
-        let rows = source_rows_at(&db, now, &costs).unwrap();
+        let rows = source_rows_at(&db, now, &costs, LicenseBuild::Community, &[]).unwrap();
         let cursor = rows.iter().find(|row| row.provider_id == "cursor").unwrap();
         assert_eq!(cursor.billing_kind, SourceBillingKind::Untracked);
         assert!(!cursor.enforceable);
@@ -313,13 +677,17 @@ mod tests {
         let db = Database::memory().unwrap();
         db.save_usage_provider(&provider("sub", "Claude", BillingKind::Subscription))
             .unwrap();
-        let rows = source_rows_at(&db, 10, &HashMap::new()).unwrap();
+        let rows = source_rows_at(&db, 10, &HashMap::new(), LicenseBuild::Community, &[]).unwrap();
         let row = rows.iter().find(|row| row.provider_id == "sub").unwrap();
         assert_eq!(row.billing_kind, SourceBillingKind::Subscription);
         assert_eq!(row.used_pct, None);
         assert!(row.windows.is_none());
         assert_eq!(row.progress, 0.0);
         assert!(serde_json::to_value(row).unwrap().get("usedPct").is_none());
+        assert_eq!(
+            serde_json::to_value(row).unwrap().get("nextResetAt"),
+            Some(&serde_json::Value::Null)
+        );
     }
 
     #[test]
@@ -353,6 +721,8 @@ mod tests {
             },
             None,
             Some("1.50"),
+            LicenseBuild::Community,
+            &[],
         );
         assert_eq!(row.billing_kind, SourceBillingKind::Metered);
         assert!(row.enforceable);

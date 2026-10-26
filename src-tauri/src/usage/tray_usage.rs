@@ -1,6 +1,7 @@
 use crate::error::AppError;
 use crate::model::{BillingKind, UsageProviderView};
 use crate::quota::QuotaService;
+use crate::route::takeover::ToolDetectionCache;
 use crate::store::Database;
 use crate::usage::session::{ProviderSessionSyncResult, SessionUsageService};
 use crate::usage::status::UsageStatus;
@@ -163,12 +164,16 @@ impl TrayUsageService {
         db: Arc<Database>,
         quota_service: Arc<QuotaService>,
         session_usage_service: Arc<SessionUsageService>,
+        tool_detection_cache: Arc<ToolDetectionCache>,
     ) -> Self {
         #[cfg(test)]
         let production_quota_service = quota_service.clone();
         #[cfg(test)]
         let production_session_usage_service = session_usage_service.clone();
-        let projector = Arc::new(TrayUsageProjector::new(db.clone()));
+        let projector = Arc::new(TrayUsageProjector::with_tool_detection_cache(
+            db.clone(),
+            tool_detection_cache,
+        ));
         let project_snapshot: ProjectSnapshotFn = Arc::new(move |now| projector.project_at(now));
         let refresh_sources: RefreshSourcesFn = Arc::new(move || {
             let db = db.clone();
@@ -442,6 +447,7 @@ mod tests {
 
     fn snapshot(status: UsageStatus, generated_at: i64, row: &str) -> TrayUsageSnapshot {
         TrayUsageSnapshot {
+            build_type: crate::policy::LicenseBuild::Community,
             status,
             generated_at,
             last_success_at: Some(generated_at),

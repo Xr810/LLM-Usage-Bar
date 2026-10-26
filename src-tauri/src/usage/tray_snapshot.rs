@@ -34,6 +34,7 @@ const RESET_PENDING_REFRESH: &str = "reset_pending_refresh";
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TrayUsageSnapshot {
+    pub build_type: crate::policy::LicenseBuild,
     pub status: UsageStatus,
     pub generated_at: i64,
     pub last_success_at: Option<i64>,
@@ -60,6 +61,7 @@ fn display_plan_label(plan_type: &str) -> String {
 impl TrayUsageSnapshot {
     pub fn unknown(generated_at: i64) -> Self {
         Self {
+            build_type: crate::policy::community_license_status().build,
             status: UsageStatus::Unknown,
             generated_at,
             last_success_at: None,
@@ -379,11 +381,22 @@ where
 
 pub struct TrayUsageProjector {
     db: Arc<Database>,
+    tool_detection_cache: Arc<crate::route::takeover::ToolDetectionCache>,
 }
 
 impl TrayUsageProjector {
     pub fn new(db: Arc<Database>) -> Self {
-        Self { db }
+        Self::with_tool_detection_cache(db, Arc::default())
+    }
+
+    pub fn with_tool_detection_cache(
+        db: Arc<Database>,
+        tool_detection_cache: Arc<crate::route::takeover::ToolDetectionCache>,
+    ) -> Self {
+        Self {
+            db,
+            tool_detection_cache,
+        }
     }
 
     pub fn project_at(&self, now: DateTime<Local>) -> Result<TrayUsageSnapshot, AppError> {
@@ -488,10 +501,14 @@ impl TrayUsageProjector {
                 }
             }
         }
+        let build_type = crate::policy::community_license_status().build;
+        let detected_tools = self.tool_detection_cache.snapshot();
         let sources = crate::usage::source_row::source_rows_at(
             self.db.as_ref(),
             generated_at,
             &metered_value_usd,
+            build_type,
+            &detected_tools,
         )?;
         let projected_agents = vec![TrayAgentUsageView {
             agent_module_id: "providers".to_string(),
@@ -502,6 +519,7 @@ impl TrayUsageProjector {
         }];
 
         Ok(TrayUsageSnapshot {
+            build_type,
             status,
             generated_at,
             last_success_at: Some(generated_at),
@@ -2354,6 +2372,7 @@ mod tests {
     #[test]
     fn stale_snapshot_can_retain_a_known_alert() {
         let snapshot = TrayUsageSnapshot {
+            build_type: crate::policy::LicenseBuild::Community,
             status: UsageStatus::Red,
             generated_at: 200,
             last_success_at: Some(100),
@@ -2373,6 +2392,7 @@ mod tests {
     #[test]
     fn tray_snapshot_serializes_only_presentation_safe_fields() {
         let snapshot = TrayUsageSnapshot {
+            build_type: crate::policy::LicenseBuild::Community,
             status: UsageStatus::Yellow,
             generated_at: 200,
             last_success_at: Some(190),
@@ -2480,84 +2500,84 @@ mod tests {
                 }
             }]
         });
-        assert_eq!(
-            value,
-            json!({
+        let mut expected = json!({
+            "status": "yellow",
+            "generatedAt": 200,
+            "lastSuccessAt": 190,
+            "stale": false,
+            "refreshError": null,
+            "refreshInProgress": true,
+            "apiBudget": {
+                "mode": "shared",
+                "providerCount": 0,
+                "todayCostUsd": "0",
+                "dailyBudgetUsd": null,
+                "budgetConsumedPercent": null,
+                "costQuality": "complete",
+                "status": "unknown",
+                "level": "ok",
+                "warningReason": "daily_budget_missing",
+                "burnRateUsdPerHour": null,
+                "projectedExhaustAt": null,
+                "headroomRatio": null,
+                "paceBasis": "static",
+                "flatStatus": null,
+                "rhythmAdjustment": null,
+                "monthCostUsd": "0",
+                "monthlyBudgetUsd": null,
+                "monthConsumedPercent": null,
+                "monthReached": false,
+                "capped": false
+            },
+            "agents": [{
+                "agentModuleId": "codex",
+                "name": "Codex",
+                "sortOrder": 1,
                 "status": "yellow",
-                "generatedAt": 200,
-                "lastSuccessAt": 190,
-                "stale": false,
-                "refreshError": null,
-                "refreshInProgress": true,
-                "apiBudget": {
-                    "mode": "shared",
-                    "providerCount": 0,
-                    "todayCostUsd": "0",
-                    "dailyBudgetUsd": null,
-                    "budgetConsumedPercent": null,
-                    "costQuality": "complete",
-                    "status": "unknown",
-                    "level": "ok",
-                    "warningReason": "daily_budget_missing",
-                    "burnRateUsdPerHour": null,
-                    "projectedExhaustAt": null,
-                    "headroomRatio": null,
-                    "paceBasis": "static",
-                    "flatStatus": null,
-                    "rhythmAdjustment": null,
-                    "monthCostUsd": "0",
-                    "monthlyBudgetUsd": null,
-                    "monthConsumedPercent": null,
-                    "monthReached": false,
-                    "capped": false
-                },
-                "agents": [{
-                    "agentModuleId": "codex",
-                    "name": "Codex",
-                    "sortOrder": 1,
+                "providers": [{
+                    "providerId": "openai",
+                    "providerName": "OpenAI",
+                    "systemPresetKey": "openai",
+                    "billingKind": "metered",
                     "status": "yellow",
-                    "providers": [{
-                        "providerId": "openai",
-                        "providerName": "OpenAI",
-                        "systemPresetKey": "openai",
-                        "billingKind": "metered",
-                        "status": "yellow",
-                        "warningReason": "partial_cost",
-                        "recentUsage": recent_usage_json,
-                        "subscription": {
-                            "planLabel": "Plus",
-                            "windows": [{
-                                "kind": "five_hour",
-                                "usedPercent": "50",
-                                "remainingPercent": "50",
-                                "resetsAt": "2026-07-16T13:00:00Z",
-                                "status": "yellow",
-                                "unavailableReason": null,
-                                "burnRatePercentPerHour": null,
-                                "projectedExhaustAt": null,
-                                "headroomRatio": null,
-                                "paceBasis": "static",
-                                "flatStatus": null,
-                                "rhythmAdjustment": null
-                            }],
-                            "manualResetsRemaining": null
-                        },
-                        "metered": {
-                            "todayCostUsd": "5",
-                            "rolling30DayCostUsd": "80",
-                            "dailyBudgetUsd": "10",
-                            "budgetConsumedPercent": "50",
-                            "level": "ok",
-                            "totalTokens": 42,
-                            "costQuality": "partial",
+                    "warningReason": "partial_cost",
+                    "recentUsage": recent_usage_json,
+                    "subscription": {
+                        "planLabel": "Plus",
+                        "windows": [{
+                            "kind": "five_hour",
+                            "usedPercent": "50",
+                            "remainingPercent": "50",
+                            "resetsAt": "2026-07-16T13:00:00Z",
+                            "status": "yellow",
+                            "unavailableReason": null,
+                            "burnRatePercentPerHour": null,
+                            "projectedExhaustAt": null,
+                            "headroomRatio": null,
+                            "paceBasis": "static",
                             "flatStatus": null,
                             "rhythmAdjustment": null
-                        }
-                    }]
-                }],
-                "sources": []
-            }),
-        );
+                        }],
+                        "manualResetsRemaining": null
+                    },
+                    "metered": {
+                        "todayCostUsd": "5",
+                        "rolling30DayCostUsd": "80",
+                        "dailyBudgetUsd": "10",
+                        "budgetConsumedPercent": "50",
+                        "level": "ok",
+                        "totalTokens": 42,
+                        "costQuality": "partial",
+                        "flatStatus": null,
+                        "rhythmAdjustment": null
+                    }
+                }]
+            }],
+            "sources": []
+        });
+        // Keep the large json! fixture below the macro recursion limit.
+        expected["buildType"] = json!("community");
+        assert_eq!(value, expected);
 
         let serialized = serde_json::to_string(&snapshot).unwrap();
         let round_trip: TrayUsageSnapshot = serde_json::from_str(&serialized).unwrap();
