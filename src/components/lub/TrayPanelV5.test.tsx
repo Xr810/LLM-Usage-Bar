@@ -6,7 +6,7 @@ import i18n from "i18next";
 import en from "@/i18n/locales/en.json";
 import zh from "@/i18n/locales/zh.json";
 import { CAP_LINE_RATIO } from "./capMath";
-import { formatLocalMidnight } from "./money";
+import { formatResetInstant } from "./money";
 import {
   betaPanelFixture,
   designPanelFixture,
@@ -250,9 +250,7 @@ describe("TrayPanelV5 free over cap", () => {
     expect(document.querySelector("[data-slot='community-allow']")).toBeNull();
     expect(document.querySelector(".lub-meter-overflow")).toBeNull();
     expect(screen.queryByText(/浅色为月上限/)).toBeNull();
-    expect(screen.getByText(/重新计算/)).toHaveTextContent(
-      formatLocalMidnight("zh-CN"),
-    );
+    expect(screen.queryByText(/重新计算/)).toBeNull();
 
     const day = document.querySelector("[data-lub-marker='day']");
     expect(day).toHaveAttribute("data-cap-ink", "day");
@@ -311,9 +309,64 @@ describe("TrayPanelV5 free over cap", () => {
     expect(container.querySelector("a, [href]")).toBeNull();
   });
 
-  it("shows the codex websocket note only from a note code", () => {
+  it("shows the reset caption only from a row nextResetAt", () => {
+    const instant = "2026-10-27T16:30:00.000Z";
+    const missing = overFixture();
+    missing.sources = missing.sources.map((source) => ({
+      ...source,
+      nextResetAt: null,
+    }));
+    const { unmount } = renderPanel(missing);
+    expect(screen.queryByText(/重新计算/)).toBeNull();
+    unmount();
+
+    const known = overFixture();
+    known.sources = known.sources.map((source, index) =>
+      index === 0 ? { ...source, nextResetAt: instant } : source,
+    );
+    renderPanel(known);
+    expect(screen.getByText(/重新计算/)).toHaveTextContent(
+      formatResetInstant(instant, "zh-CN") ?? "",
+    );
+  });
+
+  it("hides the reset caption when row reset times disagree or are invalid", () => {
+    const model = overFixture();
+    model.sources = model.sources.map((source, index) => ({
+      ...source,
+      nextResetAt:
+        index === 0
+          ? "2026-10-27T16:30:00.000Z"
+          : index === 1
+            ? "not-a-time"
+            : "2026-10-28T01:00:00.000Z",
+    }));
+    renderPanel(model);
+    expect(screen.queryByText(/重新计算/)).toBeNull();
+  });
+
+  it("shows the codex websocket note only from a row note code", () => {
+    const absent = designPanelFixture();
+    absent.sources = absent.sources.map((source) => ({
+      ...source,
+      noteCodes: null,
+    }));
+    const { unmount } = renderPanel(absent);
+    expect(screen.queryByText(/Codex 订阅未走代理/)).toBeNull();
+    unmount();
+
+    const other = designPanelFixture();
+    other.sources = other.sources.map((source, index) =>
+      index === 0 ? { ...source, noteCodes: ["something_else"] } : source,
+    );
+    const rendered = renderPanel(other);
+    expect(screen.queryByText(/Codex 订阅未走代理/)).toBeNull();
+    rendered.unmount();
+
     const model = designPanelFixture();
-    model.noteCodes = ["codex_websocket"];
+    model.sources = model.sources.map((source, index) =>
+      index === 3 ? { ...source, noteCodes: ["codex_websocket"] } : source,
+    );
     renderPanel(model);
     expect(screen.getByText(/Codex 订阅未走代理/)).toBeInTheDocument();
   });

@@ -7,6 +7,9 @@ export type PaceBasis = "measured" | "window_average" | "static" | "idle";
 export type TrayCostQuality =
   "complete" | "estimated" | "partial" | "unavailable";
 
+/** BE-21b. Absent until the snapshot publishes a build. */
+export type TrayBuildType = "community" | "official";
+
 export interface TrayUsageSnapshot {
   status: TrayUsageStatus;
   generatedAt: number;
@@ -16,6 +19,8 @@ export interface TrayUsageSnapshot {
   refreshInProgress: boolean;
   apiBudget: TrayApiBudgetView;
   agents: TrayAgentUsageView[];
+  /** BE-21b. Null or absent when the snapshot has no build yet. */
+  buildType?: TrayBuildType | null;
 }
 
 export type ApiBudgetMode = "shared" | "per_provider";
@@ -65,6 +70,15 @@ export interface TrayProviderUsageView {
   recentUsage: TrayProviderRecentUsageView;
   subscription: TraySubscriptionUsageView | null;
   metered: TrayMeteredUsageView | null;
+  /**
+   * BE-21b. Codes such as `codex_websocket`. Null or absent means no note.
+   */
+  noteCodes?: string[] | null;
+  /**
+   * BE-21b. Next reset instant. Null or absent means unknown — do not
+   * substitute local midnight.
+   */
+  nextResetAt?: string | null;
 }
 
 export interface TrayProviderRecentUsageView {
