@@ -222,7 +222,8 @@
     "sevenDayWindow": "Weekly allowance",
     "addBuiltInProvider": "Add a built-in Provider",
     "noPickedProviders": "No built-in Providers picked yet. Add the ones you use.",
-    "removeProvider": "Remove {{name}}"
+    "removeProvider": "Remove {{name}}",
+    "cacheEstimatedAtInputPrice": "estimated at input price (${{input}})"
   },
   "usageBreakdown": {
     "dimensionNavigation": "Usage breakdown",
@@ -683,6 +684,17 @@
       "failure_policy": "Failure policy",
       "clients_export": "Clients & export",
       "about": "About",
+      "nav": {
+        "license": "License"
+      },
+      "license": {
+        "title": "License",
+        "build": "Build",
+        "tier": "Plan",
+        "activate": "Activate",
+        "deactivate": "Deactivate",
+        "communityNote": "The community build has no purchase entry. Activation and deactivation are only in the official build."
+      },
       "what_does_the_line_on": "What does the line | on a bar mean?",
       "dark_line_spending_stops_here": "<b>Dark line: spending stops here.</b> Drawn on the tray’s total bar for the daily API-key cap.",
       "light_line_monthly_cap_drawn": "<b>Light line: monthly cap.</b> Drawn on the thin monthly bar under the total.",
@@ -841,6 +853,20 @@
     },
     "errors": {
       "feature_unavailable": "Not included in the community build"
+    }
+  },
+  "native": {
+    "notify": {
+      "budgetReachedTitle": "Daily API budget reached",
+      "budgetReachedBody": "Today's API spend is ${{spent}} of your ${{budget}} daily budget ({{percent}}%).",
+      "budgetReachedScopedBody": "{{scope}} has spent ${{spent}} of its ${{budget}} daily budget ({{percent}}%)."
+    },
+    "tray": {
+      "showMain": "Open main window",
+      "openWebsite": "Open Official Website",
+      "noProviders": "(no providers)",
+      "lightweightMode": "Lightweight Mode",
+      "quit": "Quit"
     }
   }
 }

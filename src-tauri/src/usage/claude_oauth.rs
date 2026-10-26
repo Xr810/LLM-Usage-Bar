@@ -32,6 +32,10 @@ use crate::providers::{
 };
 
 pub(crate) const CLAUDE_OAUTH_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
+/// C4 `source` for this endpoint. ADR Q5: `api.anthropic.com/api/oauth/usage`
+/// is not a documented official quota API, so a failed read stays best-effort
+/// and must not become a command error.
+pub(crate) const CLAUDE_OAUTH_QUOTA_SOURCE_KIND: &str = "best_effort";
 pub(crate) const CLAUDE_OAUTH_BETA_HEADER: &str = "oauth-2025-04-20";
 
 /// Claude Code 写入钥匙串的条目服务名。

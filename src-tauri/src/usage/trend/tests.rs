@@ -1,0 +1,425 @@
+use super::*;
+use rusqlite::params;
+use serde_json::json;
+
+fn instant(value: &str) -> DateTime<Utc> {
+    DateTime::parse_from_rfc3339(value)
+        .unwrap()
+        .with_timezone(&Utc)
+}
+
+fn license(build: LicenseBuild, tier: LicenseTier) -> LicenseStatus {
+    let mut license = LicenseStatus::community_free();
+    license.build = build;
+    license.tier = tier;
+    license
+}
+
+fn pro() -> LicenseStatus {
+    license(LicenseBuild::Official, LicenseTier::Pro)
+}
+
+fn request(from: &str, to: &str) -> serde_json::Value {
+    json!({"tz":"UTC", "from":from, "to":to, "granularity":"day"})
+}
+
+fn run(db: &Database, request: serde_json::Value, license: &LicenseStatus) -> UsageTrendResponse {
+    query_usage_trend_at(db, request, license, instant("2026-10-26T16:30:00Z")).unwrap()
+}
+
+fn raw(
+    db: &Database,
+    id: &str,
+    at: &str,
+    provider: &str,
+    project: Option<&str>,
+    client: Option<&str>,
+    cost: &str,
+) {
+    db.conn
+        .lock()
+        .unwrap()
+        .execute(
+            "INSERT INTO proxy_request_logs
+         (request_id, provider_id, app_type, model, created_at, project_alias,
+          client_tag_id, input_tokens, output_tokens, cache_read_tokens,
+          cache_creation_tokens, total_cost_usd, latency_ms, status_code)
+         VALUES (?1, ?2, 'claude', 'model', ?3, ?4, ?5, 2, 3, 5, 1, ?6, 0, 200)",
+            params![id, provider, instant(at).timestamp(), project, client, cost],
+        )
+        .unwrap();
+}
+
+fn hourly(db: &Database, at: i64, provider: &str, requests: i64, cost: Option<i64>) {
+    db.conn
+        .lock()
+        .unwrap()
+        .execute(
+            "INSERT INTO usage_hourly_rollups
+         (hour_utc, app_type, provider_id, model, billing_identity, data_source,
+          request_count, input_tokens, output_tokens, cache_read_tokens,
+          cache_creation_tokens, cost_micro_usd)
+         VALUES (?1, 'claude', ?2, 'model', 'api_key', 'proxy', ?3, 2, 3, 5, 1, ?4)",
+            params![at, provider, requests, cost],
+        )
+        .unwrap();
+}
+
+#[test]
+fn raw_grouping_shared_contract_partial_cost_zero_fill_and_client_fallback() {
+    let db = Database::memory().unwrap();
+    raw(
+        &db,
+        "a",
+        "2026-10-24T01:00:00Z",
+        "p1",
+        Some("project-a"),
+        Some("client-a"),
+        "1.234567",
+    );
+    raw(
+        &db,
+        "b",
+        "2026-10-24T02:00:00Z",
+        "p1",
+        Some("project-a"),
+        Some("client-a"),
+        "invalid",
+    );
+    raw(
+        &db,
+        "c",
+        "2026-10-25T01:00:00Z",
+        "p1",
+        Some("project-a"),
+        Some("client-a"),
+        "unknown",
+    );
+    raw(
+        &db,
+        "d",
+        "2026-10-24T03:00:00Z",
+        "p1",
+        None,
+        Some(""),
+        "0.000007",
+    );
+    raw(
+        &db,
+        "excluded",
+        "2026-10-24T04:00:00Z",
+        "p2",
+        Some("project-a"),
+        Some("client-a"),
+        "999",
+    );
+    // A competing source must not contribute to project/client totals.
+    hourly(
+        &db,
+        instant("2026-10-24T01:00:00Z").timestamp(),
+        "p1",
+        999,
+        Some(999),
+    );
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../tests/fixtures/usage-trend-contract.json"
+    ))
+    .unwrap();
+    let response = run(&db, fixture["request"].clone(), &pro());
+    assert_eq!(serde_json::to_value(response).unwrap(), fixture["response"]);
+    // The same client spans two projects: the two dimensions must disagree.
+    raw(
+        &db,
+        "other-project",
+        "2026-10-24T05:00:00Z",
+        "p1",
+        Some("project-b"),
+        Some("client-a"),
+        "0.000013",
+    );
+    let projects = run(&db, fixture["request"].clone(), &pro());
+    assert_eq!(projects.series.len(), 3);
+    assert_eq!(projects.series[1].group_key, "project-b");
+    assert_eq!(projects.series[1].points[0].cost_micro_usd, Some(13));
+    let mut client = fixture["request"].clone();
+    client["groupBy"] = json!("client");
+    let response = run(&db, client, &pro());
+    assert_eq!(response.series.len(), 2);
+    assert_eq!(response.series[0].group_key, "client-a");
+    assert_eq!(response.series[0].group_label, "client-a");
+    assert_eq!(response.series[0].points[0].requests, 3);
+    assert_eq!(response.series[0].points[0].cost_micro_usd, Some(1_234_580));
+    assert_eq!(response.series[0].points[1].cost_micro_usd, None);
+    assert_eq!(response.series[1].group_label, "");
+    assert_eq!(response.series[1].points[0].requests, 1);
+}
+
+#[test]
+fn hourly_source_provider_names_filters_and_ungrouped_shape() {
+    let db = Database::memory().unwrap();
+    db.conn.lock().unwrap().execute("INSERT INTO providers (id, app_type, name, settings_config) VALUES ('p1', 'claude', 'Display name', '{}')", []).unwrap();
+    let at = instant("2026-10-24T01:00:00Z").timestamp();
+    hourly(&db, at, "p1", 7, Some(101));
+    hourly(&db, at, "deleted-provider", 3, Some(202));
+    hourly(&db, at, "", 2, Some(0));
+    raw(
+        &db,
+        "not-hourly",
+        "2026-10-24T01:00:00Z",
+        "p1",
+        None,
+        None,
+        "999",
+    );
+    let input = request("2026-10-24", "2026-10-25");
+    let response = run(&db, input.clone(), &pro());
+    assert_eq!(response.series.len(), 1);
+    assert_eq!(response.series[0].group_key, "all");
+    assert_eq!(response.series[0].group_label, "");
+    assert_eq!(
+        response.series[0].points[0],
+        UsageTrendPoint {
+            date_local: "2026-10-24".into(),
+            requests: 12,
+            tokens: 33,
+            cost_micro_usd: Some(303)
+        }
+    );
+    let mut grouped = input.clone();
+    grouped["groupBy"] = json!("provider");
+    let response = run(&db, grouped.clone(), &pro());
+    assert_eq!(
+        response
+            .series
+            .iter()
+            .map(|s| (s.group_key.as_str(), s.group_label.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("deleted-provider", "deleted-provider"),
+            ("p1", "Display name"),
+            ("unattributed", "")
+        ]
+    );
+    assert_eq!(response.series[2].points[0].requests, 2);
+    grouped["filters"] = json!({"providerIds":["p1", "p1"]});
+    let response = run(&db, grouped.clone(), &pro());
+    assert_eq!(response.series[0].points[0].requests, 7);
+    assert_eq!(response.series.len(), 2);
+    grouped["filters"] = json!({"providerIds":[]});
+    let response = run(&db, grouped, &pro());
+    assert_eq!(response.series.len(), 1);
+    assert_eq!(response.series[0].points[0].requests, 0);
+    let mut filtered = input;
+    filtered["filters"] = json!({"providerIds":["p1' OR 1=1 --"]});
+    assert_eq!(run(&db, filtered, &pro()).series[0].points[0].requests, 0);
+}
+
+#[test]
+fn nullable_rollup_costs_do_not_turn_unknown_into_zero() {
+    let db = Database::memory().unwrap();
+    // Test-only nullable relation shadows the real NOT NULL schema. No
+    // production migration is permitted or needed for the reader's contract.
+    db.conn.lock().unwrap().execute_batch("CREATE TEMP TABLE usage_hourly_rollups AS SELECT * FROM main.usage_hourly_rollups WHERE 0;").unwrap();
+    let at = instant("2026-10-24T01:00:00Z").timestamp();
+    hourly(&db, at, "p1", 1, None);
+    hourly(&db, at + 3600, "p1", 2, Some(17));
+    hourly(&db, at + 86400, "p1", 3, None);
+    let response = run(&db, request("2026-10-24", "2026-10-26"), &pro());
+    let points = &response.series[0].points;
+    assert_eq!(points[0].cost_micro_usd, Some(17));
+    assert_eq!(points[1].cost_micro_usd, None);
+    assert_eq!(points[2].cost_micro_usd, Some(0));
+    assert!(serde_json::to_value(&points[1])
+        .unwrap()
+        .get("costMicroUsd")
+        .is_none());
+}
+
+#[test]
+fn calendar_days_follow_both_dst_transitions_and_fractional_hour_start() {
+    for (date, start, hours) in [
+        ("2026-03-08", "2026-03-08T05:00:00Z", 23),
+        ("2026-11-01", "2026-11-01T04:00:00Z", 25),
+    ] {
+        let db = Database::memory().unwrap();
+        let start = instant(start).timestamp();
+        for hour in -1..=hours {
+            hourly(&db, start + hour * 3600, "p1", 1, Some(2));
+        }
+        let mut input = request(date, date);
+        input["tz"] = json!("America/New_York");
+        let point = &run(&db, input, &pro()).series[0].points[0];
+        assert_eq!(point.requests, hours);
+        assert_eq!(point.tokens, hours * 11);
+        assert_eq!(point.cost_micro_usd, Some(hours * 2));
+    }
+    let db = Database::memory().unwrap();
+    hourly(
+        &db,
+        instant("2026-10-24T18:00:00Z").timestamp(),
+        "p1",
+        3,
+        Some(7),
+    );
+    hourly(
+        &db,
+        instant("2026-10-24T19:00:00Z").timestamp(),
+        "p1",
+        5,
+        Some(11),
+    );
+    let mut input = request("2026-10-24", "2026-10-25");
+    input["tz"] = json!("Asia/Kolkata");
+    let response = run(&db, input.clone(), &pro());
+    assert_eq!(
+        response.series[0]
+            .points
+            .iter()
+            .map(|p| p.requests)
+            .collect::<Vec<_>>(),
+        [3, 5]
+    );
+    raw(
+        &db,
+        "before-midnight",
+        "2026-10-24T18:29:59Z",
+        "p1",
+        Some("project"),
+        None,
+        "0.000003",
+    );
+    raw(
+        &db,
+        "midnight",
+        "2026-10-24T18:30:00Z",
+        "p1",
+        Some("project"),
+        None,
+        "0.000005",
+    );
+    input["groupBy"] = json!("project");
+    let response = run(&db, input, &pro());
+    assert_eq!(
+        response.series[0]
+            .points
+            .iter()
+            .map(|p| p.cost_micro_usd)
+            .collect::<Vec<_>>(),
+        [Some(3), Some(5)]
+    );
+}
+
+#[test]
+fn free_and_community_clamp_local_calendar_window_and_reject_every_group() {
+    let db = Database::memory().unwrap();
+    for (at, requests) in [
+        ("2026-09-27T15:00:00Z", 100),
+        ("2026-09-27T16:00:00Z", 3),
+        ("2026-10-27T15:00:00Z", 5),
+        ("2026-10-27T16:00:00Z", 200),
+    ] {
+        hourly(&db, instant(at).timestamp(), "p1", requests, Some(requests));
+    }
+    for status in [
+        license(LicenseBuild::Official, LicenseTier::Free),
+        license(LicenseBuild::Community, LicenseTier::Free),
+        license(LicenseBuild::Community, LicenseTier::Pro),
+        license(LicenseBuild::Community, LicenseTier::ProP3),
+    ] {
+        let mut input = request("2026-09-01", "2026-11-01");
+        input["tz"] = json!("Asia/Hong_Kong"); // now is already Oct 27 here
+        let response = run(&db, input.clone(), &status);
+        let points = &response.series[0].points;
+        assert_eq!(response.clamped_from.as_deref(), Some("2026-09-01"));
+        assert_eq!(points.len(), 30);
+        assert_eq!(points.first().unwrap().date_local, "2026-09-28");
+        assert_eq!(points.last().unwrap().date_local, "2026-10-27");
+        assert_eq!(points.first().unwrap().requests, 3);
+        assert_eq!(points.last().unwrap().requests, 5);
+        assert_eq!(points.iter().map(|point| point.requests).sum::<i64>(), 8);
+        for group in ["provider", "project", "client"] {
+            input["groupBy"] = json!(group);
+            assert_eq!(
+                query_usage_trend_at(&db, input.clone(), &status, instant("2026-10-26T16:30:00Z"))
+                    .unwrap_err()
+                    .code(),
+                Some("PRO_REQUIRED")
+            );
+        }
+        input.as_object_mut().unwrap().remove("groupBy");
+        input["from"] = json!("2026-09-28");
+        input["to"] = json!("2026-10-27");
+        assert!(run(&db, input.clone(), &status).clamped_from.is_none());
+        input["from"] = json!("2026-10-26");
+        input["to"] = json!("2026-11-02");
+        let response = run(&db, input.clone(), &status);
+        assert_eq!(response.clamped_from.as_deref(), Some("2026-10-26"));
+        assert_eq!(response.series[0].points.len(), 2);
+        for (from, to) in [("2026-01-01", "2026-01-02"), ("2026-11-01", "2026-11-02")] {
+            input["from"] = json!(from);
+            input["to"] = json!(to);
+            let response = run(&db, input.clone(), &status);
+            assert_eq!(response.clamped_from.as_deref(), Some(from));
+            assert_eq!(response.series.len(), 1);
+            assert_eq!(response.series[0].group_key, "all");
+            assert!(response.series[0].points.is_empty());
+        }
+    }
+    for tier in [LicenseTier::Pro, LicenseTier::ProP3] {
+        let response = run(
+            &db,
+            request("2026-09-01", "2026-11-01"),
+            &license(LicenseBuild::Official, tier),
+        );
+        assert!(response.clamped_from.is_none());
+        assert_eq!(response.series[0].points.len(), 62);
+    }
+}
+
+#[test]
+fn malformed_query_is_coded_and_legacy_trends_stay_unclamped() {
+    let db = Database::memory().unwrap();
+    for (field, value) in [
+        ("tz", json!("Not/A_Zone")),
+        ("granularity", json!("hour")),
+        ("filters", json!({"project": "x"})),
+        ("filters", json!({"providerIds":[42]})),
+        ("groupBy", json!("model")),
+        ("from", json!("2026-2-01")),
+        ("from", json!("-0001-01-01")),
+        ("from", json!("2026-10-27")),
+        ("to", json!("2026-02-30")),
+    ] {
+        let mut input = request("2026-10-24", "2026-10-26");
+        input[field] = value;
+        let error =
+            query_usage_trend_at(&db, input, &pro(), instant("2026-10-26T12:00:00Z")).unwrap_err();
+        assert_eq!(error.code(), Some("INVALID_ARGUMENT"));
+    }
+    raw(
+        &db,
+        "old",
+        "2020-01-02T12:00:00Z",
+        "p1",
+        None,
+        None,
+        "0.123456",
+    );
+    let old = db
+        .get_daily_trends(
+            Some(instant("2020-01-01T00:00:00Z").timestamp()),
+            Some(instant("2020-01-04T00:00:00Z").timestamp()),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+    assert_eq!(old.iter().map(|point| point.request_count).sum::<u64>(), 1);
+    let json = serde_json::to_value(old).unwrap();
+    assert!(json.is_array());
+    assert!(json
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|point| point["totalCost"].is_string()));
+}

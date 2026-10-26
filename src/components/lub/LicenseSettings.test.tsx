@@ -8,7 +8,8 @@ import en from "@/i18n/locales/en.json";
 import zh from "@/i18n/locales/zh.json";
 import { LicenseSettings } from "./LicenseSettings";
 import { activateLicense, communityLicenseStatus } from "./licenseMock";
-import { proCompareEnabled } from "./proCompare";
+/** Matches the shell: batch 1 does not render the compare link. */
+const proCompareEnabled = false;
 
 beforeAll(async () => {
   i18n.addResourceBundle("en", "translation", { lub: en.lub }, true, true);

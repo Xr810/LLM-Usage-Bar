@@ -23,6 +23,7 @@ import { UsageDiagnosticsPanel } from "./UsageDiagnosticsPanel";
 import { UsageProvidersSettings } from "./UsageProvidersSettings";
 import { StartupSettings } from "./StartupSettings";
 import { RouterSettings } from "./RouterSettings";
+import { AboutSection } from "./AboutSection";
 import { UsageLightInfo } from "./UsageLightInfo";
 
 interface SettingsDialogProps {
@@ -210,6 +211,7 @@ export function SettingsPage({
                 <TabsContent value="general" className="mt-0">
                   <StartupSettings />
                   <UsageLightInfo />
+                  <AboutSection />
                 </TabsContent>
                 <TabsContent value="providers" className="mt-0">
                   <UsageProvidersSettings

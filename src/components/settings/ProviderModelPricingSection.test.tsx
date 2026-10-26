@@ -14,8 +14,8 @@ const state = vi.hoisted(() => ({
     displayName: string;
     inputCostPerMillion: string;
     outputCostPerMillion: string;
-    cacheReadCostPerMillion: string;
-    cacheCreationCostPerMillion: string;
+    cacheReadCostPerMillion: string | null;
+    cacheCreationCostPerMillion: string | null;
   }>,
   providerModels: [] as string[],
 }));
@@ -212,6 +212,39 @@ describe("ProviderModelPricingSection", () => {
     // ID is deliberately not a literal model ID.
     await user.type(field, "some-unlisted-model");
     expect(field).toHaveValue("some-unlisted-model");
+  });
+
+  it("distinguishes missing cache rates estimated at input price from explicit free rates", async () => {
+    const user = userEvent.setup();
+    state.officialPricing = [
+      {
+        modelId: "claude-sonnet-5",
+        displayName: "Claude Sonnet",
+        inputCostPerMillion: "3",
+        outputCostPerMillion: "15",
+        cacheReadCostPerMillion: null,
+        cacheCreationCostPerMillion: "0",
+      },
+    ];
+    state.rows = [
+      row({ cacheReadCostPerMillion: null, cacheCreationCostPerMillion: "0" }),
+    ];
+    renderSection();
+    await expand(user);
+    expect(
+      screen.getByText(
+        /cache read estimated at input price \(\$1.5\).*cache write \$0/i,
+      ),
+    ).toBeInTheDocument();
+    await user.type(screen.getByLabelText(/model id/i), "claude-sonnet-5");
+    expect(screen.getByLabelText(/cache read/i)).toHaveAttribute(
+      "placeholder",
+      "estimated at input price ($3)",
+    );
+    expect(screen.getByLabelText(/cache write/i)).toHaveAttribute(
+      "placeholder",
+      "0",
+    );
   });
 
   it("loads an existing row into the form and keeps its model id fixed", async () => {

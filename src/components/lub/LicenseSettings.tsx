@@ -5,7 +5,8 @@ import {
   communityLicenseStatus,
   type LicenseStatus,
 } from "./licenseMock";
-import { proCompareEnabled } from "./proCompare";
+/** Batch 1 hides every path to the Free vs Pro page on this shell. */
+const proCompareEnabled = false;
 
 const SAMPLE_TOKEN = "ULB1.eyJ0aWVyIjoicHJvIi···";
 

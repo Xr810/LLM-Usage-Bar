@@ -34,6 +34,10 @@ const MAX_CACHED_STATUSLINE_SESSIONS: usize = 32;
 const MAX_CLI_ACCOUNT_BYTES: u64 = 4 * 1_048_576;
 const MAX_CLAUDE_VERSION_CHARS: usize = 64;
 const MAX_CACHE_AGE_SECONDS: i64 = 15 * 60;
+/// C4 / BE-5b freshness window. A quota read is `ok` at this age and `stale`
+/// once it is strictly older. This is the same 15 minutes as the status-line
+/// cache above (ADR Q5).
+pub(crate) const QUOTA_READ_FRESH_SECS: i64 = MAX_CACHE_AGE_SECONDS;
 const RESET_LATCH_PERCENTAGE_TOLERANCE: f64 = 1.0;
 const RESET_LATCH_IDENTITY_TOLERANCE: f64 = 2.0;
 const RESET_LATCH_OBSERVATION_TOLERANCE_MS: u64 = 15 * 60 * 1_000;
