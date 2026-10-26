@@ -72,7 +72,7 @@ impl SessionUsageService {
     ) -> Result<ProviderSessionSyncResult, AppError> {
         let mut combined = ProviderSessionSyncResult::default();
         for source in sources {
-            let result = self.sync_bound_source(source, provider_id)?;
+            let result = self.sync_bound_source(source, provider_id, &|| false)?;
             combined.imported = combined.imported.saturating_add(result.imported);
             combined.skipped = combined.skipped.saturating_add(result.skipped);
             combined.files_scanned = combined.files_scanned.saturating_add(result.files_scanned);
@@ -83,6 +83,17 @@ impl SessionUsageService {
     }
 
     pub fn sync_source(&self, source: &str) -> Result<ProviderSessionSyncResult, AppError> {
+        self.sync_source_until(source, &|| false)
+    }
+
+    pub(crate) fn sync_source_until(
+        &self,
+        source: &str,
+        stopped: &dyn Fn() -> bool,
+    ) -> Result<ProviderSessionSyncResult, AppError> {
+        if stopped() {
+            return Ok(ProviderSessionSyncResult::default());
+        }
         let Some(binding) = self.binding_or_warning(source)? else {
             return Ok(ProviderSessionSyncResult {
                 warnings: vec![format!("no usage source binding for {source}")],
@@ -90,19 +101,24 @@ impl SessionUsageService {
             });
         };
 
-        self.sync_bound_source(source, &binding.provider_id)
+        self.sync_bound_source(source, &binding.provider_id, stopped)
     }
 
     fn sync_bound_source(
         &self,
         source: &str,
         provider_id: &str,
+        stopped: &dyn Fn() -> bool,
     ) -> Result<ProviderSessionSyncResult, AppError> {
         match source {
-            "claude" => {
-                crate::ingest::claude::sync_claude_session_logs_bound(&self.db, provider_id)
+            "claude" => crate::ingest::claude::sync_claude_session_logs_bound_until(
+                &self.db,
+                provider_id,
+                stopped,
+            ),
+            "codex" => {
+                crate::ingest::codex::sync_codex_usage_bound_until(&self.db, provider_id, stopped)
             }
-            "codex" => crate::ingest::codex::sync_codex_usage_bound(&self.db, provider_id),
             _ => Err(AppError::Message(format!(
                 "unsupported usage source: {source}"
             ))),

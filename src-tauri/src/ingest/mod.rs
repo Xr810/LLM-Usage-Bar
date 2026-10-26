@@ -260,6 +260,27 @@ pub fn sync_with_parser(
     parser: &dyn SessionLogParser,
     bound_provider_id: Option<&str>,
 ) -> Result<SessionSyncResult, AppError> {
+    sync_with_parser_until(db, parser, bound_provider_id, &|| false)
+}
+
+/// Cooperative shutdown, checked outside transactions. A partially imported
+/// file retains its old cursor and parser state and is replayed idempotently.
+pub(crate) fn sync_with_parser_until(
+    db: &Database,
+    parser: &dyn SessionLogParser,
+    bound_provider_id: Option<&str>,
+    stopped: &dyn Fn() -> bool,
+) -> Result<SessionSyncResult, AppError> {
+    let mut result = SessionSyncResult {
+        imported: 0,
+        skipped: 0,
+        files_scanned: 0,
+        files_pruned: 0,
+        errors: vec![],
+    };
+    if stopped() {
+        return Ok(result);
+    }
     // 先预载游标再收集文件:游标决议只看内存里的两张表。
     let cursor_list = db.list_usage_sync_cursors(parser.source())?;
     let mut sync_cursors: SyncCursorMap = cursor_list
@@ -279,25 +300,26 @@ pub fn sync_with_parser(
     let home = crate::config::get_home_dir();
     let mut files: Vec<PathBuf> = Vec::new();
     for root in parser.log_roots(&home) {
-        collect_log_files(&root, parser, &mut files);
+        collect_log_files_depth(&root, parser, &mut files, 0, 8, stopped);
     }
     let collected = files.len() as u32;
+    if stopped() {
+        return Ok(result);
+    }
     let files = parser.prune(files);
     let files_pruned = collected.saturating_sub(files.len() as u32);
 
-    let mut result = SessionSyncResult {
-        imported: 0,
-        skipped: 0,
-        files_scanned: files.len() as u32,
-        files_pruned,
-        errors: vec![],
-    };
+    result.files_scanned = files.len() as u32;
+    result.files_pruned = files_pruned;
 
     // 写库 profile 在整个循环里只取一次:它由解析器说了算,不随记录变化。
     let profile = parser.write_profile();
 
     for file_path in &files {
-        match sync_file_with_parser(
+        if stopped() {
+            break;
+        }
+        match sync_file_with_parser_until(
             db,
             parser,
             &profile,
@@ -306,6 +328,7 @@ pub fn sync_with_parser(
             &mut sync_cursors,
             &cursor_details,
             &mut result.errors,
+            stopped,
         ) {
             Ok((imported, skipped)) => {
                 result.imported += imported;
@@ -331,6 +354,7 @@ pub fn sync_with_parser(
 ///
 /// `errors` 承接解析器要求进 `SessionSyncResult::errors` 的插入失败消息
 /// (`log_insert_failure` 返回 `Some` 时)。
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn sync_file_with_parser(
     db: &Database,
@@ -342,6 +366,34 @@ pub(crate) fn sync_file_with_parser(
     cursor_details: &HashMap<String, UsageSyncCursor>,
     errors: &mut Vec<String>,
 ) -> Result<(u32, u32), AppError> {
+    sync_file_with_parser_until(
+        db,
+        parser,
+        profile,
+        file_path,
+        bound_provider_id,
+        sync_cursors,
+        cursor_details,
+        errors,
+        &|| false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn sync_file_with_parser_until(
+    db: &Database,
+    parser: &dyn SessionLogParser,
+    profile: &ProviderWriteProfile,
+    file_path: &Path,
+    bound_provider_id: Option<&str>,
+    sync_cursors: &mut SyncCursorMap,
+    cursor_details: &HashMap<String, UsageSyncCursor>,
+    errors: &mut Vec<String>,
+    stopped: &dyn Fn() -> bool,
+) -> Result<(u32, u32), AppError> {
+    if stopped() {
+        return Ok((0, 0));
+    }
     if let Some(provider_id) = bound_provider_id {
         validate_bound_session_agent(db, parser.source(), provider_id)?;
     }
@@ -406,6 +458,9 @@ pub(crate) fn sync_file_with_parser(
         last_line_offset: cursor.last_offset,
         parser_state,
     };
+    if stopped() {
+        return Ok((0, 0));
+    }
     let output = parser.parse(&ctx)?;
     // 水位线 = 全量行数。两家都按「整个文件」计数,而不是按解析出的
     // 记录计数——文件尾部的非事件行也必须越过,否则下次同步会把它们
@@ -416,6 +471,11 @@ pub(crate) fn sync_file_with_parser(
     let mut skipped: u32 = 0;
     let mut had_insert_failure = false;
     for record in &output.records {
+        if stopped() {
+            // Never publish the full-file offset/state for an unprocessed tail.
+            log::info!("{} ingestion stopped between transactions: imported {imported}, skipped {skipped}; unfinished file cursor retained", parser.source());
+            return Ok((imported, skipped));
+        }
         match insert_usage_record(
             db,
             profile,
@@ -465,26 +525,29 @@ pub(crate) fn sync_file_with_parser(
     Ok((imported, skipped))
 }
 
-/// 递归收集 `root` 下解析器认可的文件。带深度上限,防符号链接环。
-fn collect_log_files(root: &Path, parser: &dyn SessionLogParser, files: &mut Vec<PathBuf>) {
-    collect_log_files_depth(root, parser, files, 0, 8);
-}
-
+/// 递归收集解析器认可的文件。带深度上限,防符号链接环。
 fn collect_log_files_depth(
     dir: &Path,
     parser: &dyn SessionLogParser,
     files: &mut Vec<PathBuf>,
     depth: u32,
     max_depth: u32,
+    stopped: &dyn Fn() -> bool,
 ) {
+    if stopped() {
+        return;
+    }
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
     for entry in entries.flatten() {
+        if stopped() {
+            return;
+        }
         let path = entry.path();
         if path.is_dir() {
             if depth < max_depth {
-                collect_log_files_depth(&path, parser, files, depth + 1, max_depth);
+                collect_log_files_depth(&path, parser, files, depth + 1, max_depth, stopped);
             }
         } else if parser.is_log_file(&path) {
             files.push(path);
@@ -1491,6 +1554,57 @@ mod tests {
             "辅助文件更晚时 file_modified 必须取到那个值"
         );
         fs::remove_dir_all(&tmp).ok();
+        Ok(())
+    }
+
+    /// A stopped partial file cannot publish its parser's full-file state.
+    #[test]
+    fn cooperative_stop_retains_parser_state_and_skips_later_work() -> Result<(), AppError> {
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        };
+        let db = Database::memory()?;
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("session.jsonl");
+        fs::write(&file, "one\n").unwrap();
+        set_mtime_seconds(&file, 1_700_000_000);
+        let seed =
+            HookProbeParser::new(tmp.path().into()).with_next_state(Some("old-state".into()));
+        assert_eq!(sync_one_file(&db, &seed, &file, None)?, (1, 0));
+        let old = db.list_usage_sync_cursors(seed.source())?;
+        fs::write(&file, "one\ntwo\nthree\n").unwrap();
+        set_mtime_seconds(&file, 1_700_000_002);
+        let parser =
+            HookProbeParser::new(tmp.path().into()).with_next_state(Some("new-state".into()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let on_insert = stop.clone();
+        db.conn.lock().unwrap().update_hook(Some(
+            move |action, _: &str, table: &str, _: i64| {
+                if action == rusqlite::hooks::Action::SQLITE_INSERT && table == "proxy_request_logs"
+                {
+                    on_insert.store(true, Ordering::Release);
+                }
+            },
+        ))?;
+        let result = sync_with_parser_until(&db, &parser, None, &|| stop.load(Ordering::Acquire))?;
+        assert_eq!((result.imported, result.skipped), (1, 1));
+        assert_eq!(db.list_usage_sync_cursors(seed.source())?, old);
+        assert_eq!(
+            parser.observed_states.borrow().as_slice(),
+            &[Some("old-state".into())]
+        );
+        // Already stopped: neither scan nor parse may run again.
+        let stopped = sync_with_parser_until(&db, &parser, None, &|| true)?;
+        assert_eq!((stopped.imported, stopped.files_scanned), (0, 0));
+        assert_eq!(parser.observed_states.borrow().len(), 1);
+        assert_eq!(sync_one_file(&db, &parser, &file, None)?, (1, 2));
+        assert_eq!(
+            db.list_usage_sync_cursors(seed.source())?[0]
+                .parser_state_json
+                .as_deref(),
+            Some("new-state")
+        );
         Ok(())
     }
 
