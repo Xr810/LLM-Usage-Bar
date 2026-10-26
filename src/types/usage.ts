@@ -138,7 +138,7 @@ export interface UsageTrendResponse {
     groupLabel: string;
     points: UsageTrendPoint[];
   }[];
-  /** Original from date, present only when the Free/community window clamps. */
+  /** clampedFrom = actual start date after clamping */
   clampedFrom?: string;
 }
 

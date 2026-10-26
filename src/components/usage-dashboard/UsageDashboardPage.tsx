@@ -38,10 +38,7 @@ import type { AgentModuleView } from "@/types/usageDashboard";
 import { ProviderUsagePage } from "./ProviderUsagePage";
 import { ModelUsagePage } from "./ModelUsagePage";
 import { AgentBreakdownPage } from "./AgentBreakdownPage";
-import {
-  hasProRequiredWarning,
-  visibleUsageWarnings,
-} from "./proRequiredBreakdown";
+import { visibleUsageWarnings } from "./proRequiredBreakdown";
 import { projectProviderDashboard } from "./usageDashboardProjection";
 import { DEFAULT_REMAINING_THRESHOLDS } from "./usagePresentation";
 
@@ -397,10 +394,7 @@ export function UsageDashboardPage({
               isRefreshingQuota={refreshQuota.isPending}
               isSyncingSessions={syncSession.isPending}
               remainingThresholds={remainingThresholds}
-              accountBreakdownUnavailable={
-                hasProRequiredWarning(dashboard.data?.warnings ?? []) &&
-                (dashboard.data?.providers.length ?? 0) === 0
-              }
+              warnings={dashboard.data?.warnings ?? []}
             />
           ) : null
         ) : activeDimension === "model" ? (

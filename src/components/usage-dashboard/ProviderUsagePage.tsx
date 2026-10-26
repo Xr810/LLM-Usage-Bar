@@ -13,6 +13,7 @@ import { MeteredProviderCard } from "./MeteredProviderCard";
 import { ProviderActivityHeatmap } from "./ProviderActivityHeatmap";
 import { SubscriptionProviderCard } from "./SubscriptionProviderCard";
 import { ProviderUsageTrendChart } from "./ProviderUsageTrendChart";
+import { hasProRequiredWarning } from "./proRequiredBreakdown";
 import { formatTokensCompact } from "./usagePresentation";
 import type { RemainingThresholds } from "./usagePresentation";
 
@@ -32,11 +33,8 @@ interface ProviderUsagePageProps {
   isRefreshingQuota?: boolean;
   isSyncingSessions?: boolean;
   remainingThresholds?: RemainingThresholds;
-  /**
-   * Free/community responses keep trend totals and clear the account list,
-   * marking the withheld split with `PRO_REQUIRED`.
-   */
-  accountBreakdownUnavailable?: boolean;
+  /** Dashboard warnings. `PRO_REQUIRED` withholds the account breakdown only. */
+  warnings?: readonly string[];
 }
 
 export function ProviderUsagePage({
@@ -55,18 +53,19 @@ export function ProviderUsagePage({
   isRefreshingQuota = false,
   isSyncingSessions = false,
   remainingThresholds,
-  accountBreakdownUnavailable = false,
+  warnings = [],
 }: ProviderUsagePageProps) {
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage || i18n.language || "en";
+  const breakdownWithheld = hasProRequiredWarning(warnings);
   const bucketSummary = summarizeTrendBuckets(projection.trendBuckets);
-  const trendTokens = accountBreakdownUnavailable
+  const trendTokens = breakdownWithheld
     ? bucketSummary.totalTokens
     : projection.overallTotalTokens;
-  const trendCost = accountBreakdownUnavailable
+  const trendCost = breakdownWithheld
     ? bucketSummary.totalCostUsd
     : projection.overallTotalCostUsd;
-  const trendCostStatus = accountBreakdownUnavailable
+  const trendCostStatus = breakdownWithheld
     ? bucketSummary.costStatus
     : projection.overallCostStatus;
   const costText =
@@ -93,8 +92,10 @@ export function ProviderUsagePage({
             })
           : null;
 
+  // PRO_REQUIRED empties the account breakdown only. The heatmap and trend
+  // stay. This return is the genuine "nothing configured" page.
   if (
-    !accountBreakdownUnavailable &&
+    !breakdownWithheld &&
     projection.subscriptionProviders.length === 0 &&
     projection.meteredProviders.length === 0
   ) {
@@ -141,7 +142,7 @@ export function ProviderUsagePage({
         />
       </div>
 
-      {accountBreakdownUnavailable ? (
+      {breakdownWithheld ? (
         <section className="space-y-3" data-testid="provider-breakdown-empty">
           <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
             <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
@@ -188,14 +189,12 @@ export function ProviderUsagePage({
               </div>
             </dl>
           </div>
-          {bucketSummary.totalTokens > 0 || bucketSummary.eventCount > 0 ? (
-            <BreakdownEmpty
-              text={t("usageDashboard.accountBreakdownUnavailable", {
-                defaultValue:
-                  "Per-account breakdown isn't available for this range.",
-              })}
-            />
-          ) : null}
+          <BreakdownEmpty
+            text={t("usageDashboard.accountBreakdownUnavailable", {
+              defaultValue:
+                "Per-account breakdown isn't available for this range.",
+            })}
+          />
         </section>
       ) : (
         <ProviderAccountSections

@@ -279,7 +279,7 @@ export interface UsageDashboardView {
   endAt: number;
   productGroups: ProductUsageView[];
   warnings: string[];
-  /** Clamped start date (`YYYY-MM-DD`) when a Free window moves `startAt`. */
+  /** clampedFrom = actual start date after clamping */
   clampedFrom?: string;
 }
 
@@ -290,7 +290,7 @@ export interface ProviderMonitoringDashboardView {
   trendGranularity: UsageTrendGranularity;
   trendBuckets: UsageTrendBucketView[];
   warnings: string[];
-  /** Clamped start date (`YYYY-MM-DD`) when a Free window moves `startAt`. */
+  /** clampedFrom = actual start date after clamping */
   clampedFrom?: string;
 }
 
@@ -355,7 +355,7 @@ export interface ModelUsageDashboardView {
   productGroups: ModelProductGroupView[];
   models: ModelTotalsRow[];
   warnings: string[];
-  /** Clamped start date (`YYYY-MM-DD`) when a Free window moves `startAt`. */
+  /** clampedFrom = actual start date after clamping */
   clampedFrom?: string;
 }
 
@@ -404,7 +404,7 @@ export interface AgentUsageBreakdownView {
   totalCostUsd: string | null;
   agents: AgentUsageRow[];
   warnings: string[];
-  /** Clamped start date (`YYYY-MM-DD`) when a Free window moves `startAt`. */
+  /** clampedFrom = actual start date after clamping */
   clampedFrom?: string;
 }
 

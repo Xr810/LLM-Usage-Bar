@@ -89,13 +89,24 @@ describe("Free provider dashboard with a withheld account split", () => {
       { ...licenseStatus("free"), uiFlags: { upsellEntry: true } },
     ],
   ])(
-    "keeps trend totals and shows an empty account list for %s",
+    "keeps the heatmap and trend, and empties only the account list for %s",
     async (_label, status) => {
       redactProviderDashboard();
       renderDashboard(status);
 
       expect(
-        await screen.findByRole("img", { name: "Token usage by day" }),
+        await screen.findByRole("heading", { name: "Daily activity" }),
+      ).toBeInTheDocument();
+      await waitFor(() =>
+        expect(
+          document.querySelectorAll("[data-activity-date]").length,
+        ).toBeGreaterThan(0),
+      );
+      expect(
+        screen.getByRole("img", { name: "Token usage by day" }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("heading", { name: "Usage trend" }),
       ).toBeInTheDocument();
       expect(screen.getByTestId("provider-total-tokens")).toHaveTextContent(
         "10",
@@ -129,12 +140,23 @@ describe("Free provider dashboard with a withheld account split", () => {
     expectNoPurchase();
   });
 
-  it("shows the chart empty state when the clamped window has no usage", async () => {
+  it("still renders the heatmap and trend when the clamped window has no usage", async () => {
     redactProviderDashboard({ tokens: 0 });
     renderDashboard(licenseStatus("free", "community"));
 
     expect(
-      await screen.findByText("No usage recorded in this range."),
+      await screen.findByRole("heading", { name: "Daily activity" }),
+    ).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        document.querySelectorAll("[data-activity-date]").length,
+      ).toBeGreaterThan(0),
+    );
+    expect(
+      screen.getByRole("heading", { name: "Usage trend" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("No usage recorded in this range."),
     ).toBeInTheDocument();
     expect(screen.getByTestId("provider-total-tokens")).toHaveTextContent("0");
     expect(screen.getByTestId("provider-total-requests")).toHaveTextContent(
@@ -144,10 +166,8 @@ describe("Free provider dashboard with a withheld account split", () => {
       "$0.00",
     );
     expect(
-      screen.queryByText(
-        "Per-account breakdown isn't available for this range.",
-      ),
-    ).toBeNull();
+      screen.getByText("Per-account breakdown isn't available for this range."),
+    ).toBeInTheDocument();
     expect(
       screen.queryByRole("img", { name: "Token usage by day" }),
     ).toBeNull();
