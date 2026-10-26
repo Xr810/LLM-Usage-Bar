@@ -99,6 +99,9 @@ pub async fn recent_router_attempts(
     start_at: i64,
     end_at: i64,
 ) -> Result<Vec<RouterUsageSummaryView>, String> {
+    // This is a provider-grouped aggregate, not an exempt attempt/event list.
+    crate::usage::trend::require_usage_split(&crate::policy::community_license_status())
+        .map_err(|error| error.to_string())?;
     RouterApi::new(state.db.clone())
         .recent_attempts(start_at, end_at)
         .map_err(|e| e.to_string())

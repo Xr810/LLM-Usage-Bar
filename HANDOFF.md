@@ -1913,3 +1913,53 @@ Verification on this implementation before push (Linux orb):
 - Three existing Rust test compilation warnings remain. No local native
   Windows/macOS interaction test or private official-provider integration was
   performed. No UI appearance or interaction was changed.
+
+### 2026-10-26 BE-16b legacy usage panel limits (ADR v7.19.2)
+
+The command adapters now reuse BE-16's `clamp_usage_query` for Free/community
+calendar bounds, without changing storage readers or command signatures.
+`get_usage_summary` and `get_usage_trends` clamp inclusive timestamp ranges;
+the latter keeps its bare array and permits automatic hourly buckets for
+explicit ranges <=24h. `get_usage_dashboard`, `get_provider_usage_dashboard`,
+`get_model_usage_dashboard`, and `get_agent_usage_breakdown` clamp half-open
+ranges and keep totals/ungrouped trends, emptying provider/model/agent detail
+with `PRO_REQUIRED` in the existing warnings array. The required dashboard
+agent argument remains a filter, not a split. Pure split commands
+`get_usage_summary_by_app`, `get_provider_stats`, `get_model_stats`, and
+`recent_router_attempts` reject Free/community with `PRO_REQUIRED`; the router
+command retains its existing string error type. Official Pro/ProP3 bypass
+these legacy restrictions; public commands use the existing community status.
+
+**Explicit user refinement (option b):** legacy object responses report
+`clampedFrom = today_local - 29` (YYYY-MM-DD) when the requested start is
+omitted or earlier than that boundary. Otherwise the field is omitted, even
+for an upper-only clamp. This is the effective lower date, not the original
+start. BE-16's new `query_usage_trend` original-from metadata stays unchanged.
+Free legacy trends with omitted bounds use the allowed calendar window;
+Pro defaults remain unchanged. Arrays do not gain an envelope or metadata.
+Event/request-log lists and filters, the 52-week heatmap reader, and hourly
+bucket selection remain unchanged. Disjoint intersections stay empty rather
+than triggering the old store's 24h expansion fallback. Local day boundaries
+handle DST, including skipped midnight, without subtracting fixed UTC days.
+
+Linux orb verification, offline Rust, one build job, debug/incremental disabled,
+temporary 2 GiB swap:
+
+- `pnpm rust -- test --offline --locked --manifest-path src-tauri/Cargo.toml`:
+  **1379 library + 15 integration passed, 0 failed, 3 existing ignored**;
+  final library runtime 63.94s. Includes four new regression tests and both
+  dependency/command guards. Initial test-only mistakes assumed product order
+  and zero-based event pagination; those fixtures were corrected and the full
+  suite rerun. No production behavior was changed to accommodate the fixtures.
+- `pnpm rust -- clippy --offline --locked --manifest-path src-tauri/Cargo.toml
+  -- -D warnings`: **passed**. Three existing test-compilation warnings remain.
+- Focused Vitest: `src/lib/usageRange.test.ts`,
+  `src/components/usage-dashboard/UsageDashboardPage.freeLimits.test.tsx`,
+  `src/components/lub/TrendsPage.test.tsx`: **3 files / 30 passed**;
+  `src/lib/api/usageTrend.test.ts`: **1 file / 2 passed**, all with maxWorkers=1.
+- TypeScript check, Rust fmt check, changed TypeScript Prettier check, and
+  `git diff --check`: **passed**.
+
+No dependency/schema upgrade or UI appearance/interaction change. Native
+Windows/macOS, private official-license integration, and the existing §20
+shutdown acceptance gaps remain unverified. No release or merge is authorized.

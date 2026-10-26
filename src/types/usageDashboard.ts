@@ -274,6 +274,7 @@ export interface ProductUsageView {
 }
 
 export interface UsageDashboardView {
+  clampedFrom?: string;
   agentModuleId: string;
   startAt: number;
   endAt: number;
@@ -282,6 +283,7 @@ export interface UsageDashboardView {
 }
 
 export interface ProviderMonitoringDashboardView {
+  clampedFrom?: string;
   startAt: number;
   endAt: number;
   providers: ProviderUsageView[];
@@ -343,6 +345,7 @@ export interface ModelProductGroupView {
 }
 
 export interface ModelUsageDashboardView {
+  clampedFrom?: string;
   startAt: number;
   endAt: number;
   totalTokens: number;
@@ -391,6 +394,7 @@ export interface AgentUsageRow {
 }
 
 export interface AgentUsageBreakdownView {
+  clampedFrom?: string;
   startAt: number;
   endAt: number;
   totalTokens: number;

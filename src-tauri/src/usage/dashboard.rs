@@ -139,6 +139,7 @@ impl<'a> UsageDashboardService<'a> {
             trend_granularity,
             trend_buckets,
             warnings: vec![],
+            clamped_from: None,
         })
     }
 
@@ -276,6 +277,7 @@ impl<'a> UsageDashboardService<'a> {
             end_at,
             product_groups,
             warnings: vec![],
+            clamped_from: None,
         })
     }
 

@@ -632,6 +632,7 @@ pub fn aggregate_model_usage(
         product_groups,
         models,
         warnings,
+        clamped_from: None,
     })
 }
 
@@ -776,6 +777,7 @@ pub fn aggregate_agent_usage(
         total_cost_usd: dashboard_usage.total_cost_usd(),
         agents,
         warnings: vec![],
+        clamped_from: None,
     })
 }
 

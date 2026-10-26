@@ -19,6 +19,62 @@ fn pro() -> LicenseStatus {
     license(LicenseBuild::Official, LicenseTier::Pro)
 }
 
+#[test]
+fn legacy_window_uses_local_days_dst_end_conventions_and_server_owned_entitlement() {
+    use chrono::TimeZone;
+    let hk = chrono_tz::Asia::Hong_Kong;
+    // UTC is still Oct 26, but the local window must be Sep 28 through Oct 27.
+    let now = instant("2026-10-26T16:30:00Z").with_timezone(&hk);
+    let free = LicenseStatus::community_free();
+    let range = clamp_legacy_usage_query(None, None, false, &free, now).unwrap();
+    assert_eq!(
+        range.start,
+        Some(instant("2026-09-27T16:00:00Z").timestamp())
+    );
+    assert_eq!(range.end, Some(instant("2026-10-27T16:00:00Z").timestamp()));
+    assert_eq!(range.clamped_from.as_deref(), Some("2026-09-28"));
+    let havana = chrono_tz::America::Havana;
+    let now = havana.with_ymd_and_hms(2026, 4, 6, 12, 0, 0).unwrap();
+    let range = clamp_legacy_usage_query(None, None, false, &free, now).unwrap();
+    // Mar 8 has no 00:00; it starts at 01:00 after the DST jump.
+    assert_eq!(
+        range.start,
+        Some(instant("2026-03-08T05:00:00Z").timestamp())
+    );
+    assert_eq!(range.clamped_from.as_deref(), Some("2026-03-08"));
+    let ny = chrono_tz::America::New_York;
+    let now = ny.with_ymd_and_hms(2026, 11, 2, 12, 0, 0).unwrap();
+    let range = clamp_legacy_usage_query(None, None, true, &free, now).unwrap();
+    // The 30 local dates straddle the 25-hour fall-back day.
+    assert_eq!(
+        range.end.unwrap() - range.start.unwrap() + 1,
+        30 * 86400 + 3600
+    );
+    for status in [
+        license(LicenseBuild::Official, LicenseTier::Free),
+        license(LicenseBuild::Community, LicenseTier::Pro),
+        license(LicenseBuild::Community, LicenseTier::ProP3),
+    ] {
+        assert_eq!(
+            clamp_legacy_usage_query(None, None, true, &status, now)
+                .unwrap()
+                .clamped_from,
+            range.clamped_from
+        );
+        let error = require_usage_split(&status).unwrap_err();
+        assert_eq!(serde_json::to_value(error).unwrap()["code"], "PRO_REQUIRED");
+    }
+    for tier in [LicenseTier::Pro, LicenseTier::ProP3] {
+        let status = license(LicenseBuild::Official, tier);
+        require_usage_split(&status).unwrap();
+        let range = clamp_legacy_usage_query(None, None, true, &status, now).unwrap();
+        assert_eq!(
+            (range.start, range.end, range.clamped_from),
+            (None, None, None)
+        );
+    }
+}
+
 fn request(from: &str, to: &str) -> serde_json::Value {
     json!({"tz":"UTC", "from":from, "to":to, "granularity":"day"})
 }
@@ -377,7 +433,7 @@ fn free_and_community_clamp_local_calendar_window_and_reject_every_group() {
 }
 
 #[test]
-fn malformed_query_is_coded_and_legacy_trends_stay_unclamped() {
+fn malformed_query_is_coded_and_store_reads_remain_policy_free() {
     let db = Database::memory().unwrap();
     for (field, value) in [
         ("tz", json!("Not/A_Zone")),

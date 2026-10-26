@@ -66,6 +66,8 @@ pub struct UsageSummary {
     /// cache_read / (input + cache_creation + cache_read). Range 0.0–1.0.
     /// Reported as a fraction; multiply by 100 in UI for percentage display.
     pub cache_hit_rate: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clamped_from: Option<String>,
 }
 
 /// Per-app-type usage summary used by the dashboard breakdown rail.
@@ -688,6 +690,7 @@ impl Database {
                 success_rate,
                 real_total_tokens,
                 cache_hit_rate,
+                clamped_from: None,
             })
         })?;
 
@@ -841,6 +844,7 @@ impl Database {
                     success_rate,
                     real_total_tokens,
                     cache_hit_rate,
+                    clamped_from: None,
                 },
             })
         })?;
