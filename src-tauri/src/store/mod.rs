@@ -44,6 +44,7 @@ pub(crate) use dao::hourly_rollup::{
     insert_proxy_settlement, upsert_hourly_delta, HourlyLogDelta, ProxySettlement,
 };
 pub use dao::hourly_rollup::{CommunityRetentionPolicy, RetentionPolicy, RetentionPolicyProvider};
+pub use dao::license_retention::{activation_retryable, RetentionStore};
 pub(crate) use dao::provider_credentials::{
     ProviderCredentialJournalEntry, ProviderCredentialOperationReservation,
     ProviderCredentialSnapshot,
@@ -195,7 +196,12 @@ impl Database {
         db.ensure_model_pricing_seeded()?;
 
         // Startup cleanup: prune old logs and reclaim space
-        if let Err(e) = db.rollup_and_prune_configured() {
+        // Retry pending retention even in a community build, BEFORE pruning.
+        // A retry failure skips cleanup, never database startup or proxy use.
+        if let Err(e) = db
+            .retry_pending_retention()
+            .and_then(|()| db.rollup_and_prune_configured())
+        {
             log::warn!("Startup rollup_and_prune failed: {e}");
         }
         // Reclaim disk space after cleanup

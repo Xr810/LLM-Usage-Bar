@@ -4,7 +4,7 @@
 //! `COMMUNITY_BUILD`，不读也不写设置、数据库或钥匙串。
 
 use crate::error::AppError;
-use crate::policy::{activate_community_license, deactivate_community_license, LicenseStatus};
+use crate::policy::LicenseStatus;
 
 #[tauri::command]
 pub fn get_license_status(state: tauri::State<'_, crate::AppState>) -> LicenseStatus {
@@ -12,19 +12,25 @@ pub fn get_license_status(state: tauri::State<'_, crate::AppState>) -> LicenseSt
 }
 
 #[tauri::command]
-pub fn activate_license(token: String) -> Result<LicenseStatus, AppError> {
-    activate_community_license(&token)
+pub fn activate_license(
+    state: tauri::State<'_, crate::AppState>,
+    token: String,
+) -> Result<LicenseStatus, AppError> {
+    state.license.activate(&token)
 }
 
 #[tauri::command]
-pub fn deactivate_license() -> Result<(), AppError> {
-    deactivate_community_license()
+pub fn deactivate_license(state: tauri::State<'_, crate::AppState>) -> Result<(), AppError> {
+    state.license.deactivate()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::policy::{LicenseBuild, LicenseProvider, LicenseTier};
+    use crate::policy::{
+        activate_community_license, deactivate_community_license, LicenseBuild, LicenseProvider,
+        LicenseTier,
+    };
     use std::sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -196,10 +202,10 @@ mod tests {
         assert_eq!(before.build, crate::policy::LicenseBuild::Community);
 
         let token = "shell-token";
-        let err = activate_license(token.to_string()).expect_err("community");
+        let err = activate_license(app.state(), token.to_string()).expect_err("community");
         assert_eq!(err.code(), Some(crate::error::CODE_COMMUNITY_BUILD));
         assert!(!serde_json::to_string(&err).expect("json").contains(token));
-        assert!(deactivate_license().is_err());
+        assert!(deactivate_license(app.state()).is_err());
         assert_eq!(get_license_status(app.state()), before);
     }
 }

@@ -872,6 +872,28 @@ pub fn run_with_injections(injections: Injections) {
                 &injections,
             );
 
+            let license_app = app.handle().clone();
+            app_state.license_lifecycle.set_publisher(Arc::new(move |status| {
+                license_app.emit(crate::policy::LICENSE_CHANGED_EVENT, status)
+                    .map_err(|_| AppError::internal("Cannot emit license-changed."))
+            }));
+            let lifecycle = app_state.license_lifecycle.clone();
+            if let Err(error) = lifecycle.reconcile(chrono::Utc::now()) {
+                log::error!("Startup license reconciliation will retry: {error}");
+            }
+            app_state.spawn_background(async move {
+                let mut interval = tokio::time::interval_at(
+                    tokio::time::Instant::now() + std::time::Duration::from_secs(3600),
+                    std::time::Duration::from_secs(3600),
+                );
+                loop {
+                    interval.tick().await;
+                    if let Err(error) = lifecycle.reconcile(chrono::Utc::now()) {
+                        log::error!("License reconciliation will retry: {error}");
+                    }
+                }
+            });
+
             // —— T24:启动早期先把已保存的代理配置廉价记录到 http_client ——
             // 只存字符串、不构建客户端(构建要上百毫秒,挪到后台)。
             // 必须放在任何可能触发 get() 的任务(router、同步 worker)启动

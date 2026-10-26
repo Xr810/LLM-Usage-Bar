@@ -2076,3 +2076,44 @@ local clippy `-D warnings` passed in 19.24s; fmt/diff checks passed. No further
 local full-test retries after exit 137: the new targeted tests require the same
 unbuilt library test executable. New-head CI, not the prior green run, must
 validate this enforcement change. No frontend changes or merge authorized.
+
+#### 2026-10-26 BE-31: public license lifecycle (C20 v1.6, final event option 1)
+
+Baseline: `a9b53743795e29f8c32be36decbcdcfbf1daa502`. Public core owns
+`LicenseLifecycle`; commands and tray share its effective license provider.
+The getter remains `get_license_status`. Activation/deactivation dispatch to
+the injected provider; community returns `COMMUNITY_BUILD` and emits nothing.
+Token verification and publishing an activated tier remain the
+build provider's responsibility; this change contains no official verifier.
+
+Only `license-changed` is emitted, with full `LicenseStatus`, now including
+`state: active | grace | free`. The superseded `license_state_changed` event
+is not implemented. Core computes a 14-day grace from `expiresAt`; grace keeps
+the paid tier, and the grace deadline changes effective tier to Free without
+deleting data or changing proxy admission. Startup reconciliation and an
+application-managed hourly task compare tier/state/expiry/grace against the
+persisted `license_last_emitted_state`. A mutex plus transactional CAS selects
+the emitter; failed delivery rolls back the acknowledgement, not the license.
+Delivery is at-least-once across emit/commit failures, not exactly-once transport.
+
+Providers call public `RetentionStore::set_pending_target(days)` before
+publishing a higher tier. Pending target and BE-30's raise-only high-water write
+share a settings transaction; a savepoint preserves pending on a recoverable
+high-water failure. Success clears pending atomically. Errors retain the full
+AppError envelope with code `LICENSE_ACTIVATION_RETRYABLE` and details
+`{stage: "pending_record" | "retention_high_water", retryable: true}`. If the
+pending record cannot commit, activation fails and the user must reactivate.
+Core retries pending at database startup, regardless of tier/build, before
+pruning. Failed retry does not abort startup; pruning also refuses to run while
+a pending target exists. No license token is persisted by this mechanism.
+
+Validation: local `pnpm rust -- fmt --manifest-path src-tauri/Cargo.toml --check`,
+`git diff --check`, `pnpm typecheck`, and `pnpm rust -- clippy --locked
+--manifest-path src-tauri/Cargo.toml -- -D warnings` passed (clippy: 3m43s).
+The targeted `pnpm rust -- test --locked
+--manifest-path src-tauri/Cargo.toml --lib policy:: -- --nocapture` build exited
+137 under the 2 GB orb limit, even with single-job/no-debug/no-incremental
+settings; no test execution is claimed. Final-head PR CI must execute the new
+Tauri event, grace boundary, concurrent CAS, retry and disk-reopen regressions.
+Native interactive acceptance and existing §20 shutdown gaps remain open.
+No frontend `src/**`, private code, dependencies or release configuration changed.

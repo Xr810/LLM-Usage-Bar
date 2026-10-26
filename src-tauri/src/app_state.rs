@@ -41,6 +41,7 @@ impl Injections {
 pub struct AppState {
     pub db: Arc<Database>,
     pub license: Arc<dyn crate::policy::LicenseProvider>,
+    pub license_lifecycle: Arc<crate::policy::LicenseLifecycle>,
     pub gate: Arc<dyn crate::policy::PolicyGate>,
     pub credential_store: Arc<dyn CredentialStore>,
     pub binding_credential_service: Arc<BindingCredentialService>,
@@ -136,17 +137,22 @@ impl AppState {
             ));
         let session_usage_service = Arc::new(SessionUsageService::new(db.clone()));
         let tool_detection_cache = Arc::new(ToolDetectionCache::default());
+        let license_lifecycle = Arc::new(crate::policy::LicenseLifecycle::new(
+            injections.license.clone(),
+            db.clone(),
+        ));
         let tray_usage_service = Arc::new(TrayUsageService::new(
             db.clone(),
             quota_service.clone(),
             session_usage_service.clone(),
             tool_detection_cache.clone(),
-            injections.license.clone(),
+            license_lifecycle.clone(),
         ));
 
         Self {
             db,
-            license: injections.license.clone(),
+            license: license_lifecycle.clone(),
+            license_lifecycle,
             gate: injections.gate.clone(),
             credential_store,
             binding_credential_service,
