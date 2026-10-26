@@ -130,7 +130,9 @@ export function SourceList({
   locale: string;
 }) {
   const { t } = useTranslation();
-  const codexNote = model.noteCodes?.includes("codex_websocket")
+  const codexNote = model.sources.some((source) =>
+    source.noteCodes?.includes("codex_websocket"),
+  )
     ? t("lub.panel.note_codex_websocket")
     : null;
   if (model.sources.length === 0 && !codexNote) return null;
