@@ -1963,3 +1963,54 @@ temporary 2 GiB swap:
 No dependency/schema upgrade or UI appearance/interaction change. Native
 Windows/macOS, private official-license integration, and the existing §20
 shutdown acceptance gaps remain unverified. No release or merge is authorized.
+
+#### 2026-10-26 BE-16b architect follow-up: ADR v7.19.3 (PR #109)
+
+Supersedes the two historical v7.19.2 decisions above: `recent_router_attempts`
+is RouterSettings diagnostics, not a blocked split. It now silently intersects
+its half-open timestamps with the shared local calendar window, preserving
+provider rows and the bare array; disjoint windows return `[]`. Official
+Pro/ProP3 bounds remain untouched. BE-16 `query_usage_trend` now also reports
+effective lower date in `clampedFrom` only when the start was clamped, never
+for upper-only clipping, matching option (b). Its timezone is the request's
+IANA zone; legacy commands retain machine-local time.
+
+Latest main was inspected (including D2+D3 PR #108). It is deliberately not
+integrated in this follow-up because the explicit frontend freeze requires
+all `src/**` to remain identical to approved head `dd93c89d`. No pushed history
+is rewritten; follow-up commits stay on `be-16b-legacy-usage-clamp`.
+
+Read-only frontend findings:
+
+- The three split APIs have only API wrappers (`src/lib/api/usage.ts:45-56`,
+  `76-88`, `92-104`) and React Query hook callers (`src/lib/query/usage.ts:198`,
+  `254`, `283`); no component consumes those hooks. No mounted page-wide throw
+  path found. The hooks and shared query client do not enable `throwOnError`.
+  This does **not** prove per-panel PRO_REQUIRED UI: there is no mounted
+  consumer, and direct API promises propagate rejection.
+- Codex review `r4376572852` is confirmed: `usageDashboardProjection.ts:214-220`
+  derives both provider lists from the redacted array; `ProviderUsagePage.tsx:76-99`
+  returns the no-accounts message before the heatmap (`118-123`) and trend
+  (`124-132`). `UsageDashboardPage.tsx:141-143,379-387` passes this projection
+  and separate activity results. Free provider-view charts are therefore
+  hidden despite preserved backend trends and exempt activity. Left unfixed
+  under the frontend freeze; do not claim end-to-end Free provider usability.
+- `src/types/usage.ts:143` retains a stale original-from comment because no
+  frontend edits are authorized. Backend comments and PR body define option (b).
+
+Follow-up verification (same offline Rust wrapper/environment as above):
+
+- Full `pnpm rust -- test --offline --locked --manifest-path src-tauri/Cargo.toml`:
+  **1380 library + 15 integration passed, 0 failed, 3 existing ignored**;
+  library runtime **76.70s**. Initial new test import used private DAO path;
+  fixed to the existing public store re-export before this full successful run.
+- Offline clippy with `-- -D warnings`: **passed, 39.61s**.
+- Focused Vitest (`src/lib/api/usageTrend.test.ts`, RouterSettings test,
+  UsageDashboardPage.freeLimits test, `--maxWorkers=1`): **3 files / 14 passed**,
+  **20.73s**, without editing those frontend tests. These do not disprove the
+  confirmed provider-page early return.
+- Rust fmt check, diff whitespace check, and `git diff --quiet dd93c89d -- src/`:
+  **passed**, zero frontend diffs against approved head.
+
+Native interaction and §20 shutdown acceptance gaps remain unchanged;
+no release or merge authorized.

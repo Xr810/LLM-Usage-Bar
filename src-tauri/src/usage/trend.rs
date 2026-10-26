@@ -136,7 +136,8 @@ fn clamp_usage_query(
         tz,
         from: effective_from,
         to: effective_to,
-        clamped_from: (effective_from != from || effective_to != to).then(|| request.from.clone()),
+        // ADR v7.19.3 option (b): effective lower date, only for a start clamp.
+        clamped_from: (effective_from != from).then(|| effective_from.to_string()),
     })
 }
 
