@@ -222,7 +222,8 @@
     "sevenDayWindow": "周额度",
     "addBuiltInProvider": "添加内置 Provider",
     "noPickedProviders": "还没有选择内置 Provider，把你用的加进来。",
-    "removeProvider": "移除 {{name}}"
+    "removeProvider": "移除 {{name}}",
+    "cacheEstimatedAtInputPrice": "按输入价估算（${{input}}）"
   },
   "usageBreakdown": {
     "dimensionNavigation": "用量分类",
@@ -685,6 +686,17 @@
       "failure_policy": "故障策略",
       "clients_export": "客户与导出",
       "about": "关于",
+      "nav": {
+        "license": "许可证"
+      },
+      "license": {
+        "title": "许可证",
+        "build": "构建",
+        "tier": "方案",
+        "activate": "激活",
+        "deactivate": "停用",
+        "communityNote": "社区构建没有购买入口。激活和停用只在官方构建里可用。"
+      },
       "what_does_the_line_on": "进度条上的竖线 | 是什么？",
       "dark_line_spending_stops_here": "<b>深色竖线：到这里会自动停。</b>画在托盘的合计进度条上，代表 API Key 花费的日上限。",
       "light_line_monthly_cap_drawn": "<b>浅色竖线：月上限。</b>画在合计下方的月度细条上。",
@@ -841,6 +853,20 @@
     },
     "errors": {
       "feature_unavailable": "社区构建不包含此功能"
+    }
+  },
+  "native": {
+    "notify": {
+      "budgetReachedTitle": "已达每日 API 预算",
+      "budgetReachedBody": "今日 API 花费 ${{spent}}，占每日预算 ${{budget}} 的 {{percent}}%。",
+      "budgetReachedScopedBody": "{{scope}} 今日已花费 ${{spent}}，占每日预算 ${{budget}} 的 {{percent}}%。"
+    },
+    "tray": {
+      "showMain": "打开主界面",
+      "openWebsite": "打开官方网站",
+      "noProviders": "(无供应商)",
+      "lightweightMode": "轻量模式",
+      "quit": "退出"
     }
   }
 }

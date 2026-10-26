@@ -22,6 +22,7 @@ pub struct RouterProvider {
 pub enum WireApi {
     Responses,
     ChatCompletions,
+    Messages,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,6 +79,7 @@ fn wire_api_to_db(api: WireApi) -> &'static str {
     match api {
         WireApi::Responses => "responses",
         WireApi::ChatCompletions => "chat_completions",
+        WireApi::Messages => "messages",
     }
 }
 
@@ -85,6 +87,7 @@ fn wire_api_from_db(raw: &str) -> Result<WireApi, AppError> {
     match raw {
         "responses" => Ok(WireApi::Responses),
         "chat_completions" => Ok(WireApi::ChatCompletions),
+        "messages" => Ok(WireApi::Messages),
         other => Err(AppError::Database(format!("非法 wire_api 值: {other}"))),
     }
 }

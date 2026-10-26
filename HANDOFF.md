@@ -1487,3 +1487,429 @@ git diff --check
 ```
 
 新增测试须纳入相应验证命令。完成某项后直接更新本节的状态与证据，并写明下一未完成项；不要另建一份竞争的交接清单。受限环境中只能完成部分验证时，明确报告未完成，不勾选验收门。
+
+### 2026-10-25 BE-2 subscription transport / C22 reader
+
+Approved C22 key: `subscription_terms_ack`, intended shape `{version, ackedAt}`.
+This reader introduces the typed database shape `{"version":"1","ackedAt":<Unix seconds>}`:
+version is a decimal string compared numerically against
+`CURRENT_SUBSCRIPTION_TERMS_VERSION = 1`, matching BE-17's current
+`CLAUDE_SUBSCRIPTION_PROXY_TERMS_VERSION = "1"`. Timestamp is an i64, positive and
+not future, matching BE-17's existing acknowledgement timestamp validation.
+Missing/malformed/stale records fail closed; current and newer numeric versions
+pass. No consent is synthesized or migrated. Per the backend owner's ADR v7.16
+clarification, BE-17's `set_claude_subscription_proxy` writes this record, not
+`apply_takeover`. The JSON `version` is a STRING, for example `"1"`, not a number.
+#93 adds only a test writer. The existing sidecar is not read or silently converted.
+The frontend mock's
+`"r16-2026-10-25"` is not a valid numeric terms version.
+
+Anthropic subscription requests bypass model routing and use only
+`https://api.anthropic.com/v1/messages`, preserving the original body/model.
+The HTTPS/443 exact-host allowlist has an explicit trusted-host extension argument,
+empty in production; no setting/UI is exposed yet. Redirects and failover are
+disabled. Codex subscription requests are classified and recorded as blocked with
+zero observed tokens, return 501, and send no upstream request; actual Codex usage
+metering remains the existing session-ingestion path. API-key relay routing,
+model rewriting, stored API-key injection, and failover remain unchanged. Stored
+Codex OAuth injection is disabled as another prohibited passthrough path.
+Broken upstream streams settle as `upstream_error`, not `client_abort`.
+
+The post-rebase Linux verification below supersedes the earlier resource-limited
+runs. No Windows/macOS native interaction verification has been performed;
+§20's existing acceptance gaps remain.
+
+### 2026-10-25 stacked architect-fix validation (Linux orb)
+
+The invented C22 contract was removed. The approved key is `subscription_terms_ack`,
+shape `{version, ackedAt}`. The reader now validates the typed representation
+documented above; missing/malformed/stale records fail closed. BE-17 owns the
+`set_claude_subscription_proxy` production writer, explicitly excluded from #93.
+The end-to-end router regression
+uses a test-only persisted acknowledgement to verify official-host forwarding.
+No consent is synthesized from credential detection.
+
+BE-5 now separates attempt/success timestamps, preserves estimated costs in both
+usage tables, distinguishes NULL cache rates from explicit zero in Settings, and
+warns on first import of a zero input/output price. The old refresh timestamp key
+remains compatible but advances only on accepted batches.
+
+Re-run after rebasing only #97's two pricing commits onto squash-merged main
+`3bad6ea1` (#93 merged), with #97 now based directly on main. The rebase applied
+cleanly and preserved the code tree; this batch also corrects the BE-17 writer
+name and confirms the JSON-string version contract above:
+
+- `pnpm rust -- test --manifest-path src-tauri/Cargo.toml`, both default and
+  `--no-default-features`: each 1338 library + 15 integration tests passed; three
+  existing ignored tests remain. Retention startup/periodic injection, subscription
+  isolation versus relay failover, disabled stored Codex OAuth injection, broken
+  upstream streams, ingestion, and pricing regressions passed in both runs.
+- `pnpm rust -- clippy --manifest-path src-tauri/Cargo.toml -- -D warnings`, also
+  with `--no-default-features` before `--`: both passed.
+- `pnpm rust -- fmt --manifest-path src-tauri/Cargo.toml --check`: passed.
+- Rust environment: `CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0
+  CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0`, with temporary 2 GiB swap after
+  earlier memory exhaustion. Test compilation retains three existing warnings.
+- `pnpm typecheck`, `pnpm format:check`: passed.
+- `pnpm test:unit --maxWorkers=1`: 55 files / 370 tests passed standalone. The
+  unchanged UsageDashboardPage suite also passed 4/4 in isolation. Earlier
+  timeouts coincided with Rust compilation; no timeout increase or test skip was
+  needed. This supports resource contention, not a reproduced minute-tick bug.
+- Durable `first_zero_price_warns_once` regression passes in both Rust matrices:
+  zero input/output each warn once; repeat import and paid model do not warn.
+  Its logger runs in an isolated test subprocess to avoid conflicting with the
+  credential-redaction tests' process-global logger.
+- Actual pricing component rendered and inspected at desktop and narrow widths:
+  missing cache rates show estimated input pricing, explicit zero stays free.
+  Native Windows/macOS interaction acceptance remains unexecuted.
+- PR #89 exact head `29d2fa2fd7ad9154baf0c1c69635c9f79af123cc`: all six checks
+  passed, including both backend modes and macOS/Windows desktop builds:
+  https://github.com/Xr810/LLM-Usage-Bar/actions/runs/40202713551.
+
+### 2026-10-26 BE-21b initial tray contract (superseded by v7.19 follow-up below)
+
+Based on `a7954917`, `TrayUsageSnapshot.buildType` reuses `LicenseBuild` and
+`community_license_status().build`, the same source as the license command.
+The public repository has no official provider selection or `pro` feature;
+private official-build integration remains unverified. No new build selector
+or Cargo feature is introduced.
+
+`SourceRowView.nextResetAt` is the earliest parseable RFC3339 instant in its
+published windows, serialized as UTC ISO-8601. Missing windows, invalid values,
+and timezone-free timestamps yield `null` when no known instant remains. No
+local midnight or timezone is invented. The shared fixture deliberately orders
+offset timestamps differently lexically and chronologically.
+
+`noteCodes: string[]` is present but currently empty. ADR v7.18 / the C17
+`reasonCode` enumeration and emission rules are unavailable in this checkout.
+BE-17's `ToolDetectRow` emits `codex_websocket` for an unproxied Codex
+subscription, but `UsageProviderView` has no equivalent transport evidence or
+approved tool-to-provider mapping. Do not infer it from provider names, quota
+sources, or all Codex subscriptions. **C17 mapping and the Codex WebSocket
+source-row acceptance fixture remain blocked**, not completed by the empty
+array. Obtain the authoritative contract before implementing that mapping.
+
+This is an explicitly requested wire-format addition, not completion of §20's
+broader refactor or native-platform exit acceptance gates. BE-24 locale and
+notification text work, trusted subscription relay settings, official host
+allowlists, and the other orb's license UI flags are unchanged.
+
+Linux orb verification before push:
+
+- `pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml` and
+  `pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml --no-default-features`:
+  **each 1364 library + 15 integration tests passed**, including the new shared
+  contract fixture and both dependency guards. Three existing ignored tests and
+  three existing test-compilation warnings remain. These are the actual public
+  manifest/CI configurations, not an invented `pro` configuration.
+- `pnpm rust -- clippy --locked --manifest-path src-tauri/Cargo.toml -- -D warnings`
+  and `pnpm rust -- clippy --locked --manifest-path src-tauri/Cargo.toml --no-default-features -- -D warnings`:
+  **both passed**.
+- Rust environment: `CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0
+  CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0`. The initial focused build
+  exited 137 under memory pressure; the successful runs used temporary 2 GiB
+  swap. A subsequent test compile exposed the existing large `json!` fixture's
+  recursion limit when adding a field; adding the expected field separately
+  fixed it without changing the crate's recursion limit.
+- `pnpm test:unit --maxWorkers=1`: **55 files / 371 tests passed standalone**.
+  The first run concurrent with compilation had three timeouts; the unchanged
+  timed-out tests passed in the standalone rerun. No timeouts were increased.
+- `pnpm typecheck`, `pnpm format:check`,
+  `pnpm exec prettier --check src/types/trayUsage.ts src/lib/query/trayUsage.test.tsx src/components/tray-usage/TrayUsagePopover.test.tsx tests/msw/handlers.ts tests/fixtures/tray-source-contract.json`,
+  `pnpm rust -- fmt --manifest-path src-tauri/Cargo.toml --check`,
+  `git diff --check`, and §17 conflict-marker scan: **passed**.
+- No UI appearance/interaction changed; no native Windows/macOS run performed.
+  C17/Codex acceptance remains blocked as described above despite these passes.
+
+### 2026-10-26 BE-1b display-only License UI flags
+
+Based on main `a7954917` and the task owner's requirements. ADR v7.18 is not
+available in this checkout; this entry does not reconstruct its text.
+`LicenseStatus` now includes required `uiFlags: {upsellEntry: boolean}` in
+camelCase, mirrored by `src/types/license.ts`. `get_license_status` and
+`PRO_REQUIRED` authorization are unchanged. No UI rendering is changed.
+
+Community status always uses `LicenseUiFlags::for_build(LicenseBuild::Community)`
+and reports false, regardless of build environment. Official providers should
+populate the field using `LicenseUiFlags::for_build(LicenseBuild::Official)`.
+Its value is compiled with Rust `option_env!("LLM_USAGE_BAR_UPSELL_ENTRY")`:
+only the exact string `true` enables it; unset, `false`, or other values disable
+it. For example, prefix an official build with
+`LLM_USAGE_BAR_UPSELL_ENTRY=true pnpm tauri -- build`. Cargo tracks this
+compile-time environment input and recompiles when it changes. Changing the
+environment after compilation cannot change the flag. This variable is not a
+secret, does not select an official provider, and grants no license capability.
+The public crate still has only a community provider, `default = []`, and no
+`pro` feature. Official serialization tests cover the shared DTO/configuration,
+not a private official provider or license verification.
+
+No BE-24 locale/notification code, BE-21b subscription types, trusted relay
+setting, Codex hosts, or dependency-guard exceptions are changed. The existing
+§20 native Windows/macOS shutdown acceptance gaps remain open.
+
+Linux orb validation (before push): Rust commands below used
+`CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
+CARGO_INCREMENTAL=0` and temporary 2 GiB swap.
+
+- `pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml` with the
+  display variable unset: 1363 library + 15 integration tests passed, 3 existing
+  ignored tests; build 11m17s, library tests 65.88s.
+- `LLM_USAGE_BAR_UPSELL_ENTRY=true pnpm rust -- test --locked --manifest-path
+  src-tauri/Cargo.toml --no-default-features`: the same 1378 passed / 3 ignored;
+  build 1m59s, library tests 62.83s. Both runs include dependency guards and
+  community/official serialization snapshots. CI's no-default test step now
+  sets this variable too, so both display configurations stay covered.
+- Re-executed the second run's compiled test binary with runtime
+  `LLM_USAGE_BAR_UPSELL_ENTRY=false` and filter `policy::license::tests`: 4/4
+  passed, confirming the compiled official flag is not a runtime setting.
+- `pnpm test:unit --maxWorkers=1`: 55 files / 370 tests passed (180.21s).
+- `pnpm rust -- clippy --locked --manifest-path src-tauri/Cargo.toml -- -D
+  warnings`: passed (3m47s); repeated with `--no-default-features` before `--`
+  and `LLM_USAGE_BAR_UPSELL_ENTRY=true`: passed (21.70s).
+- `pnpm typecheck`, `pnpm format:check`,
+  `pnpm exec prettier --check .github/workflows/ci.yml src/types/license.ts`,
+  `pnpm rust -- fmt --manifest-path src-tauri/Cargo.toml --check`,
+  `git diff --check`, and §17 conflict-marker scan: passed.
+- Test compilation retains three existing test-only unused-import/dead-code
+  warnings. No native Windows/macOS validation was performed in this orb.
+
+### 2026-10-26 BE-16 usage trend contract investigation (historical)
+
+The blockers recorded in this initial investigation were subsequently resolved
+by the owner's v7.19 / v7.19.1 decisions; see the implementation entry below.
+
+Baseline: main `e17c6418` (includes BE-1b / #103). This is an investigation-only
+delivery, not an implementation or acceptance of BE-16. No runtime or TypeScript
+contract is changed. The owner requires daily `groupBy` values `provider`,
+`project`, and `client`; grouped `series` with `groupKey`, `groupLabel`, and
+`points` containing `dateLocal`, `requests`, `tokens`, and optional
+`costMicroUsd`; an unattributed bucket; centralized 30-day Free/community
+clamping with `clampedFrom`; and `PRO_REQUIRED` for grouped Free/community
+requests. These requirements do not specify the complete wire contract.
+
+Evidence inspected:
+
+- Neither `query_usage_trend` nor `clamp_usage_query` exists in this baseline.
+  `src-tauri/src/api/commands/usage.rs::get_usage_trends` delegates to
+  `store/usage_stats.rs::get_daily_trends` and returns `Vec<DailyStats>`.
+  `src/lib/api/usage.ts` and `src/types/usage.ts` mirror that array, with `date`,
+  `requestCount`, `totalTokens`, token subtotals, and decimal-string `totalCost`.
+  Adding an envelope to that API would not preserve its existing wire format.
+- `store/dao/hourly_rollup.rs::local_day_for_hour` accepts an explicit UTC
+  offset and flags non-whole-hour offsets as approximate. It does not select
+  a timezone or define the requested `dateLocal` contract.
+- Schema v29 raw logs have `project_alias` and `client_tag_id`; hourly rollups
+  have neither dimension. The rollup backfill deliberately reads raw proxy
+  logs only, not `usage_events`, to avoid counting a request twice. This does
+  not establish the new endpoint's source/retention/attribution policy.
+- `policy/license.rs` defines Free/Pro/ProP3 and Community/Official separately;
+  the public provider is community Free. Cargo has `default = []` and
+  `test-hooks`, no `pro` feature. Display-only `uiFlags` are not authorization.
+- ADR v7.18 is not present in the inspected checkout or the originating owner
+  thread's BE-16 requirement. That requirement explicitly prohibits inventing
+  ambiguous contracts. Neighboring APIs are evidence, not replacement specs.
+
+BLOCKED — owner must supply the authoritative definitions before implementation:
+
+1. Full request and ungrouped response, including range names/types/defaults,
+   granularity, filters, and whether this is a new command or a legacy alias.
+2. `unattributed` placement/shape/key/label, missing versus empty dimension rules,
+   empty bucket behavior, and group key/label mappings for each dimension.
+3. `costMicroUsd` wire type and omission rules (including mixed billing identities),
+   token accounting, request inclusion, and source selection/deduplication.
+4. `dateLocal` timezone selection, date format, DST handling, and hourly-rollup
+   approximation behavior; no timezone is inferred from the operator's locale.
+5. `clampedFrom` meaning/type/presence; 30-day anchor, calendar versus elapsed
+   days, endpoint inclusivity, invalid/future ranges, and which existing query
+   paths “everything” covers. No clamp helper signature currently exists.
+6. Whether “split” means only `groupBy` or another request field, non-daily
+   grouping behavior, and the server-side official-provider integration seam.
+
+All BE-16 acceptance tests (each dimension, unattributed, clamping metadata,
+Free/community grouped rejection) remain BLOCKED, not passed by baseline tests.
+Unused DTOs, a disconnected clamp helper, or a fabricated endpoint would not
+deliver an independently usable unambiguous part, so none is added. BE-24,
+BE-1b, BE-21b, trusted relay settings, and Codex hosts remain untouched. Existing
+§20 native shutdown acceptance gaps remain open.
+
+Baseline verification before push (Linux orb; documentation-only diff):
+
+- Rust environment: `CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0
+  CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0`, temporary 2 GiB swap.
+- `pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml`: 1363
+  library + 15 integration tests passed, 3 existing ignored. Repeated after
+  the baseline update, library runtime 62.49s.
+- `LLM_USAGE_BAR_UPSELL_ENTRY=true pnpm rust -- test --locked --manifest-path
+  src-tauri/Cargo.toml --no-default-features`: same counts, library 63.14s.
+  This follows #103's CI configuration; no nonexistent Pro feature is used.
+- `pnpm rust -- clippy --locked --manifest-path src-tauri/Cargo.toml -- -D
+  warnings`: passed (3m58s). Repeated with `--no-default-features` before `--`
+  and `LLM_USAGE_BAR_UPSELL_ENTRY=true`: passed (23.75s).
+- `pnpm test:unit --maxWorkers=1`: standalone rerun passed 55 files / 370
+  tests (127.62s). Initial concurrent Rust/frontend run had 368 passed and
+  two 5-second timeouts in `UsageDashboardPage.test.tsx` (minute-tick draft
+  preservation and exact range queries). No code, timeout, or test was changed
+  to obtain the standalone pass; resource contention is not proven causation.
+- `pnpm typecheck`, `pnpm format:check`,
+  `pnpm rust -- fmt --manifest-path src-tauri/Cargo.toml --check`,
+  `git diff --check`, and §17 conflict-marker scan passed.
+- Three existing Rust test compilation warnings remain. Native Windows/macOS
+  validation and BE-16 feature acceptance were not performed. These baseline
+  passes do not establish grouped queries, clamping, or license rejection.
+
+### 2026-10-26 BE-21b v7.19 cached source-note follow-up
+
+Merged `origin/main` `e17c6418` normally into PR #105's existing branch,
+preserving BE-1b and both HANDOFF entries. No published history was rewritten.
+The owner relayed the v7.19 note-code rules: closed set `stale`, `error`,
+`not_proxied`, `codex_websocket`, `license_required`;
+stale/error are mutually exclusive. Community builds never emit the license
+note, and other builds require the row's truncation unavailable reason to be
+`license_required`. Rust and TypeScript now represent the closed set explicitly.
+
+No backend `detect_tools` cache existed. AppState now shares an in-memory cache
+between that command and the tray projector. The command replaces its completed
+result; snapshot projection clones the cached result once, without triggering
+detection, reading credentials, changing takeover settings, or fetching quota.
+An empty cache is unknown, not `proxied=false`. Only exact provider/tool IDs
+bind detection evidence; provider display names/presets never supply it. Only
+`providerId=codex` plus subscription billing and a cached `codex_websocket` note
+produce that note; other detection codes are not copied to source rows.
+
+**Final architect clarification received:** emit `not_proxied` for cached
+`proxied=false` metered rows and Codex subscription rows (`providerId=codex`,
+`billingKind=subscription`), never other subscriptions. For Codex, the final
+order overrides the original generic order: `codex_websocket` precedes
+`not_proxied`. State notes still lead and any eligible license note follows.
+The shared fixture now seeds a fresh stored quota read and expects exactly
+`["codex_websocket", "not_proxied"]`; a matched non-Codex subscription is a
+negative control. No additional WebSocket classification is inferred.
+
+The new cache fixture exercises the real AppState/tray service with cached
+Codex evidence, then removes the WebSocket note and finally clears the cache.
+Additional cases cover note order, duplicate/unsupported detection codes,
+stale/error distinction, community/official license-note behavior, known versus
+unknown proxy state, and same-name/different-ID providers. Build/reset behavior
+from the initial delivery is retained.
+
+Earlier Linux orb validation after the BE-1b merge, before final clarification:
+
+- `pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml` with
+  `LLM_USAGE_BAR_UPSELL_ENTRY` unset: **1366 library + 15 integration passed**.
+- `LLM_USAGE_BAR_UPSELL_ENTRY=true pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml --no-default-features`:
+  **1366 library + 15 integration passed**. This preserves BE-1b's display-flag
+  coverage; no `pro` feature is invented. Both runs retain 3 existing ignored
+  tests and 3 existing test-compilation warnings; dependency guards pass.
+- `pnpm rust -- clippy --locked --manifest-path src-tauri/Cargo.toml -- -D warnings`
+  with the display flag unset, and
+  `LLM_USAGE_BAR_UPSELL_ENTRY=true pnpm rust -- clippy --locked --manifest-path src-tauri/Cargo.toml --no-default-features -- -D warnings`:
+  **both passed**.
+- Rust commands used `CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0
+  CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0` and temporary 2 GiB swap.
+- `pnpm typecheck` and `pnpm test:unit --maxWorkers=1`: **passed; 55 files /
+  372 tests**. Rust's first fixture comparison distinguished JSON `0` from
+  `0.0`; the fixture expectation now normalizes that numeric representation,
+  and both complete Rust reruns pass without changing production output.
+- `pnpm format:check`, `pnpm exec prettier --check tests/fixtures/tray-source-contract.json`,
+  `pnpm rust -- fmt --manifest-path src-tauri/Cargo.toml --check`,
+  `git diff --check`, and §17 conflict-marker scan: **passed**.
+- Native Windows/macOS acceptance has not been performed in this orb.
+  These earlier checks do not validate the final contract adjustment below.
+
+Latest `origin/main` `a94dccf0` (BE-24) was merged normally without conflicts;
+BE-24 files are unchanged relative to main. An overlapping frontend run during the cold Rust build
+had one existing dashboard test hit its 5-second timeout (371 passed); the
+standalone rerun passed without changing test timeouts.
+
+Final-contract validation after that merge, with the same Rust environment
+and command lines listed above:
+
+- Full Rust tests, default/display flag unset: **1369 library + 15 integration
+  passed**, 3 existing ignored tests; no failures.
+- Full Rust tests, `--no-default-features` and display flag `true`: **1369
+  library + 15 integration passed**, 3 existing ignored tests; no failures.
+- Both Clippy configurations with `-D warnings`: **passed**.
+- Standalone `pnpm test:unit --maxWorkers=1`: **55 files / 372 tests passed**.
+- `pnpm typecheck`, `pnpm format:check`, targeted fixture Prettier,
+  wrapper-managed Rust `fmt --check`, `git diff --check`, and §17 conflict scan:
+  **passed**. Three existing test compilation warnings remain.
+- Final fresh fetch confirmed main is included. Temporary swap was removed.
+  No native Windows/macOS interactive acceptance was performed in this orb.
+  No official provider/build selector was invented; private official provider
+  integration remains outside this public repository's validation.
+
+### 2026-10-26 BE-16 daily trends (v7.19 / ADR v7.19.1)
+
+Resumed on the existing PR #106 branch and merged main `5cf500dd` normally.
+The HANDOFF append conflict was resolved by retaining both entries. Published
+history, BE-1b display flags, BE-21b tray contracts, BE-24 locale/notification
+code, trusted subscription relay settings, and Codex hosts are preserved.
+
+`query_usage_trend` is a new command. It takes flat camelCase arguments `tz`,
+`from`, `to`, `granularity`, optional `groupBy`, and optional `filters`.
+Only daily granularity and `{providerIds?: string[]}` filters are accepted;
+unknown filter fields, invalid IANA zones/dates, and reversed ranges return
+`INVALID_ARGUMENT`. TypeScript request/response types and `usageApi.queryUsageTrend`
+match the new envelope. The existing `get_usage_trends` remains unchanged and
+unclamped, with decimal-string costs, and is documented as deprecated.
+
+Every new query passes `clamp_usage_query`. Community builds (regardless of
+tier) and Free licenses reject grouping with `PRO_REQUIRED`; ungrouped dates
+are intersected with `[today_local - 29, today_local]`. `clampedFrom` contains
+the original `from` only when either endpoint changes. Disjoint windows return
+the single `all` series with empty points. Official Pro/ProP3 policy is tested
+through server-owned status values; no private license verification or official
+provider implementation is claimed. The public command uses community status.
+
+Provider/ungrouped queries read only hourly rollups; project/client queries
+read only raw request logs. The four stored token categories are summed, and
+each raw row counts as one request. Provider labels use stored display names,
+project labels use aliases, and missing names fall back to keys. There is no
+client-name registry in the current public schema, so client labels use the
+approved key fallback. `unattributed` always has an empty label. Every returned
+series is zero-filled over the effective closed range, with cost zero on days
+without rows; days with rows but no parseable cost omit `costMicroUsd`.
+
+Accepted limitations and follow-up:
+
+- No schema migration. Nullable rollup costs are read as unknown; stored
+  integer zero remains zero and does not reconstruct historical parseability.
+  The production v29 schema is NOT NULL; a disposable nullable test relation
+  exercises the reader's NULL contract without changing that schema.
+- Hourly buckets use the IANA local date of the bucket's start. This is an
+  approximation when a fractional-hour timezone splits a UTC hour at midnight.
+  Raw rows use their exact instant. `chrono-tz` supplies IANA/DST rules; tests
+  cover 23-hour and 25-hour New York days and Kolkata's half-hour boundary.
+- Raw logs default to 90-day retention (configurable); older project/client
+  groups have no data after pruning. No second source is mixed in to fill them.
+- **BE-16b** owns old-dashboard clamping. No old dashboard, heatmap (52-week
+  policy), today-hourly view, or request-log filter behavior changes here.
+- Native Windows/macOS interaction and the §20 shutdown gaps remain unverified.
+
+Verification on this implementation before push (Linux orb):
+
+- Rust environment: `CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0
+  CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0`, temporary 2 GiB swap.
+- `pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml --lib
+  usage::trend::`: **6 passed**. The initial compile failed with E0277 because
+  test-only `()` helpers used the production Result-returning lock macro;
+  replacing those test locks with explicit `lock().unwrap()` fixed compilation.
+- `pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml` with the
+  display flag unset: **1375 library + 15 integration passed**, 3 existing
+  ignored tests; library runtime 63.67s.
+- `LLM_USAGE_BAR_UPSELL_ENTRY=true pnpm rust -- test --locked --manifest-path
+  src-tauri/Cargo.toml --no-default-features`: **same counts**, library 63.78s.
+  No `pro` feature exists. Both runs include the dependency and command guards.
+- `pnpm rust -- clippy --locked --manifest-path src-tauri/Cargo.toml -- -D
+  warnings`: **passed** (3m53s). With `--no-default-features` before `--` and
+  `LLM_USAGE_BAR_UPSELL_ENTRY=true`: **passed** (22.38s).
+- `pnpm test:unit --maxWorkers=1`: **56 files / 374 tests passed** standalone
+  (124.46s). The focused `pnpm test:unit src/lib/api/usageTrend.test.ts
+  --maxWorkers=1` also passed 2/2. The shared JSON fixture is checked against
+  the real Rust query and serialization, not merely a mocked backend response.
+- `pnpm typecheck`, `pnpm format:check`, targeted fixture Prettier,
+  `pnpm rust -- fmt --manifest-path src-tauri/Cargo.toml --check`,
+  `git diff --check`, and §17 conflict scan: **passed**.
+- Three existing Rust test compilation warnings remain. No local native
+  Windows/macOS interaction test or private official-provider integration was
+  performed. No UI appearance or interaction was changed.

@@ -2,13 +2,15 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { RefreshCw } from "lucide-react";
 import { ensureProCopy } from "@/i18n/proCopy";
+import { CommunityAllowPlaceholder } from "./CommunityAllowPlaceholder";
+import { CommunityBuildBadge } from "./CommunityBuildBadge";
+import { communityChromeVisible } from "./detectLubBuild";
 import { formatResetInstant, sharedNextResetAt } from "./money";
-import { proCompareEnabled as proCompareDefault } from "./proCompare";
 import { SessionList } from "./SessionList";
 import { SourceList } from "./SourceList";
 import { StatusBanner } from "./StatusBanner";
 import { TotalCard } from "./TotalCard";
-import type { LubBuild, LubPanelModel } from "./panelModel";
+import type { LubBuild, LubPanelModel, LubTier } from "./panelModel";
 
 interface TrayPanelV5Props {
   model: LubPanelModel;
@@ -22,10 +24,19 @@ interface TrayPanelV5Props {
   openDayTip?: boolean;
   scrollMaxPx?: number;
   refreshError?: string | null;
-  /** C2 build. Defaults to official until get_license_state is wired. */
+  /**
+   * Snapshot `buildType`, or live `get_license_status.build`.
+   * Design samples that omit it stay official. Live detection stays
+   * community while the command is loading or has failed.
+   */
   build?: LubBuild;
-  /** Batch 1 default is false. The compare line stays out of the banner. */
-  proCompareEnabled?: boolean;
+  /** C2 tier. It does not show or hide community chrome. */
+  tier?: LubTier;
+  /**
+   * C2 `uiFlags.upsellEntry`. Gates the Free vs Pro line on an official
+   * build. Default off. A community build never shows that line.
+   */
+  upsellEntry?: boolean;
 }
 
 function PowerIcon() {
@@ -141,7 +152,8 @@ export function TrayPanelV5({
   scrollMaxPx,
   refreshError,
   build = "official",
-  proCompareEnabled = proCompareDefault,
+  tier = "free",
+  upsellEntry = false,
 }: TrayPanelV5Props) {
   ensureProCopy();
   const { t } = useTranslation();
@@ -174,6 +186,7 @@ export function TrayPanelV5({
   const stopLabel = model.betaOn
     ? t("lub.panel.stop_all_spend_incl_plans")
     : t("lub.panel.stop_all_api_spend");
+  const community = communityChromeVisible({ build, upsellEntry, tier });
 
   if (model.state === "killed") {
     const resumeLabel = model.betaOn
@@ -219,9 +232,9 @@ export function TrayPanelV5({
           <StatusBanner
             capUsd={model.dailyCapUsd}
             locale={locale}
-            proCompareEnabled={proCompareEnabled}
+            upsellEntry={build !== "community" && upsellEntry}
           />
-          {build === "community" ? <div data-slot="community-allow" /> : null}
+          {community ? <CommunityAllowPlaceholder locale={locale} /> : null}
         </>
       ) : null}
       <TotalCard model={model} locale={locale} openDayTip={openDayTip} />
@@ -291,36 +304,43 @@ export function TrayPanelV5({
             {t("lub.panel.client_receipts")}
           </button>
         </span>
-        {model.sample ? (
-          <span className="lub-muted">{t("lub.panel.sample_data")}</span>
-        ) : null}
-        {showUtilityActions ? (
-          <span className="lub-utility">
-            <button
-              type="button"
-              className="lub-icon-button"
-              onClick={onRefresh}
-              disabled={refreshing}
-              aria-label={
-                refreshing
-                  ? t("trayUsage.refreshing", { defaultValue: "Refreshing" })
-                  : t("trayUsage.refresh", { defaultValue: "Refresh" })
-              }
-            >
-              <RefreshCw
-                className={refreshing ? "animate-spin" : undefined}
-                aria-hidden="true"
-                size={16}
-              />
-            </button>
-            <button
-              type="button"
-              className="lub-icon-button"
-              onClick={onQuit}
-              aria-label={t("trayUsage.quit", { defaultValue: "Quit" })}
-            >
-              <PowerIcon />
-            </button>
+        {model.sample || community || showUtilityActions ? (
+          <span className="lub-foot-meta">
+            {model.sample ? (
+              <span className="lub-muted">{t("lub.panel.sample_data")}</span>
+            ) : null}
+            {community ? <CommunityBuildBadge /> : null}
+            {showUtilityActions ? (
+              <span className="lub-utility">
+                <button
+                  type="button"
+                  className="lub-icon-button"
+                  onClick={onRefresh}
+                  disabled={refreshing}
+                  aria-label={
+                    refreshing
+                      ? t("trayUsage.refreshing", {
+                          defaultValue: "Refreshing",
+                        })
+                      : t("trayUsage.refresh", { defaultValue: "Refresh" })
+                  }
+                >
+                  <RefreshCw
+                    className={refreshing ? "animate-spin" : undefined}
+                    aria-hidden="true"
+                    size={16}
+                  />
+                </button>
+                <button
+                  type="button"
+                  className="lub-icon-button"
+                  onClick={onQuit}
+                  aria-label={t("trayUsage.quit", { defaultValue: "Quit" })}
+                >
+                  <PowerIcon />
+                </button>
+              </span>
+            ) : null}
           </span>
         ) : null}
       </footer>

@@ -1,12 +1,15 @@
-import type { TrayBuildType, TrayCostQuality } from "@/types/trayUsage";
+import type { SourceNoteCode, TrayCostQuality } from "@/types/trayUsage";
 
 /** C18 default until get_ui_prefs is wired. FE-3 reads this from mock prefs. */
 export const DEFAULT_ALERT_THRESHOLD_PCT = 80;
 
 export type LubPanelState = "ok" | "warn" | "over" | "capped" | "killed";
 
-/** Official builds and the community build both only alert when level is over. */
+/** Official and community builds both alert only when the budget level is `reached`. */
 export type LubBuild = "official" | "community";
+
+/** C2 tier. Not on the tray snapshot. Does not gate community chrome. */
+export type LubTier = "free" | "pro" | "pro_p3";
 
 export type LubSubtitleKey =
   "api_key" | "plan_hour_window" | "plan_codex" | "not_proxied";
@@ -31,11 +34,11 @@ export interface LubSourceModel {
   /** Existing affordance when a metered row has no daily budget yet. */
   onSetBudget?: () => void;
   /**
-   * BE-21b. Codes such as `codex_websocket`. Null or absent shows no note.
+   * C17 codes from the matching source row. Empty or absent shows no note.
    */
-  noteCodes?: string[] | null;
+  noteCodes?: SourceNoteCode[] | null;
   /**
-   * BE-21b. Reset instant for this row. Null or absent shows no caption.
+   * BE-21b reset instant for this row. Null shows no caption.
    */
   nextResetAt?: string | null;
 }
@@ -69,8 +72,8 @@ export interface LubPanelModel {
   sessions: LubSessionModel[] | null;
   /** C14. Rows whose amount could not be parsed. 0 hides the hint. */
   invalidCostRows?: number;
-  /** BE-21b. Null when the snapshot omits `buildType`. */
-  buildType?: TrayBuildType | null;
+  /** BE-21b snapshot build. Design fixtures may omit it. */
+  buildType?: LubBuild;
   sample: boolean;
   stale: boolean;
   betaOn: boolean;

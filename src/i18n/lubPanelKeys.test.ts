@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import i18n from "i18next";
 import en from "./locales/en.json";
 import ja from "./locales/ja.json";
 import zh from "./locales/zh.json";
@@ -31,22 +32,32 @@ function dollarAmounts(value: unknown): string[] {
   return Object.values(value).flatMap((child) => dollarAmounts(child));
 }
 
+const LICENSE_KEYS = [
+  "settings.nav.license",
+  "settings.license.title",
+  "settings.license.build",
+  "settings.license.tier",
+  "settings.license.activate",
+  "settings.license.deactivate",
+  "settings.license.communityNote",
+];
+
 const supplementalOnboard = [
   "onboard.terms_risk",
   "onboard.claude_subscription_via_proxy",
 ] as const;
 
-function withoutSupplemental(keys: string[]): string[] {
-  const extra = new Set<string>(supplementalOnboard);
+function withoutLicense(keys: string[]): string[] {
+  const extra = new Set<string>([...LICENSE_KEYS, ...supplementalOnboard]);
   return keys.filter((key) => !extra.has(key));
 }
 
 describe("lub panel copy", () => {
-  it("matches the v5.8 asset pack aside from the supplemental onboard keys", () => {
-    expect(withoutSupplemental(flat(zh.lub)).sort()).toEqual(
+  it("matches the v5.8 asset pack and has no lub keys outside it", () => {
+    expect(withoutLicense(flat(zh.lub)).sort()).toEqual(
       flat(packLub("zh-CN.json")).sort(),
     );
-    expect(withoutSupplemental(flat(en.lub)).sort()).toEqual(
+    expect(withoutLicense(flat(en.lub)).sort()).toEqual(
       flat(packLub("en.json")).sort(),
     );
     expect(flat(proZh.lub).sort()).toEqual(
@@ -55,9 +66,13 @@ describe("lub panel copy", () => {
     expect(flat(proEn.lub).sort()).toEqual(flat(packLub("pro.en.json")).sort());
     // The uploaded pack is 203 public keys: the v5.8 set of 199 plus
     // community badge/aria keys and errors.feature_unavailable.
-    // Two onboard strings sit outside that pack.
-    expect(flat(zh.lub)).toHaveLength(205);
-    expect(flat(en.lub)).toHaveLength(205);
+    // FE-1a adds the seven license settings keys on top of that pack.
+    expect(flat(zh.lub)).toHaveLength(
+      203 + LICENSE_KEYS.length + supplementalOnboard.length,
+    );
+    expect(flat(en.lub)).toHaveLength(
+      203 + LICENSE_KEYS.length + supplementalOnboard.length,
+    );
     expect(flat(proZh.lub)).toHaveLength(85);
     expect(flat(proEn.lub)).toHaveLength(85);
   });
@@ -92,6 +107,11 @@ describe("lub panel copy", () => {
     expect(keys.has("log.pro_note")).toBe(true);
     expect(keys.has("log.cleared_before")).toBe(true);
     expect(keys.has("community.allow_this_one")).toBe(true);
+    expect(keys.has("community.badge")).toBe(true);
+    expect(keys.has("community.aria_badge")).toBe(true);
+    expect(keys.has("community.aria_allow_disabled")).toBe(true);
+    expect(keys.has("community.placeholder_note")).toBe(true);
+    expect(keys.has("errors.feature_unavailable")).toBe(true);
     expect(keys.has("panel.group_unattributed")).toBe(true);
     expect(keys.has("panel.invalid_cost_rows")).toBe(true);
     expect(keys.has("panel.quota_stale")).toBe(true);
@@ -105,6 +125,20 @@ describe("lub panel copy", () => {
     expect(en.lub.overcap.caption_resets).toContain("{{time}}");
     expect(zh.lub.community.allow_more_today).toContain("{{amount}}");
     expect(en.lub.community.allow_more_today).toContain("{{amount}}");
+    expect(zh.lub.community.aria_allow_disabled).toContain("{{action}}");
+    expect(en.lub.community.aria_allow_disabled).toContain("{{action}}");
+    expect(Object.keys(zh.lub.community).sort()).toEqual(
+      Object.keys(en.lub.community).sort(),
+    );
+    expect(Object.keys(zh.lub.errors).sort()).toEqual(
+      Object.keys(en.lub.errors).sort(),
+    );
+    expect(zh.lub.community.badge).toBe("社区构建");
+    expect(en.lub.community.badge).toBe("Community build");
+    expect(zh.lub.errors.feature_unavailable).toBe("社区构建不包含此功能");
+    expect(en.lub.errors.feature_unavailable).toBe(
+      "Not included in the community build",
+    );
     expect(dollarAmounts(zh.lub)).toEqual([]);
     expect(dollarAmounts(en.lub)).toEqual([]);
     expect(dollarAmounts(proZh.lub)).toEqual([]);
@@ -116,6 +150,58 @@ describe("lub panel copy", () => {
     );
     expect(proEn.lub.export.total_amt_matches_attribution_api).toContain(
       "{{amount}}",
+    );
+  });
+
+  it("covers the license keys in all four locales and keeps the other lub fallback", async () => {
+    expect(flat(zhTW.lub).sort()).toEqual(
+      [...LICENSE_KEYS, ...supplementalOnboard].sort(),
+    );
+    expect(flat(ja.lub).sort()).toEqual(
+      [...LICENSE_KEYS, ...supplementalOnboard].sort(),
+    );
+    for (const key of LICENSE_KEYS) {
+      expect(flat(zh.lub)).toContain(key);
+      expect(flat(en.lub)).toContain(key);
+    }
+    expect(zh.lub.settings.nav.license).toBe("许可证");
+    expect(zh.lub.settings.license.title).toBe("许可证");
+    expect(zh.lub.settings.license.build).toBe("构建");
+    expect(zh.lub.settings.license.tier).toBe("方案");
+    expect(zh.lub.settings.license.activate).toBe("激活");
+    expect(zh.lub.settings.license.deactivate).toBe("停用");
+    expect(zh.lub.settings.license.communityNote).toContain("没有购买入口");
+    expect(en.lub.settings.nav.license).toBe("License");
+    expect(en.lub.settings.license.title).toBe("License");
+    expect(en.lub.settings.license.build).toBe("Build");
+    expect(en.lub.settings.license.tier).toBe("Plan");
+    expect(en.lub.settings.license.activate).toBe("Activate");
+    expect(en.lub.settings.license.deactivate).toBe("Deactivate");
+    expect(en.lub.settings.license.communityNote).toContain(
+      "no purchase entry",
+    );
+    expect(zhTW.lub.settings.nav.license).toBe("授權");
+    expect(ja.lub.settings.nav.license).toBe("ライセンス");
+
+    const local = i18n.createInstance();
+    await local.init({
+      lng: "zh-TW",
+      fallbackLng: "en",
+      resources: {
+        en: { translation: en },
+        "zh-TW": { translation: zhTW },
+        ja: { translation: ja },
+      },
+      interpolation: { escapeValue: false },
+    });
+    expect(local.t("lub.settings.about")).toBe(en.lub.settings.about);
+    expect(local.t("lub.settings.nav.license")).toBe(
+      zhTW.lub.settings.nav.license,
+    );
+    await local.changeLanguage("ja");
+    expect(local.t("lub.settings.about")).toBe(en.lub.settings.about);
+    expect(local.t("lub.settings.license.communityNote")).toBe(
+      ja.lub.settings.license.communityNote,
     );
   });
 
@@ -140,8 +226,6 @@ describe("lub panel copy", () => {
     expect(en.lub.onboard.claude_subscription_via_proxy).toBe(proxy.en);
     expect(zhTW.lub.onboard.claude_subscription_via_proxy).toBe(proxy["zh-TW"]);
     expect(ja.lub.onboard.claude_subscription_via_proxy).toBe(proxy.ja);
-    expect(flat(zhTW.lub).sort()).toEqual([...supplementalOnboard].sort());
-    expect(flat(ja.lub).sort()).toEqual([...supplementalOnboard].sort());
     expect(terms["zh-TW"]).not.toBe(terms.en);
     expect(terms.ja).not.toBe(terms.en);
   });

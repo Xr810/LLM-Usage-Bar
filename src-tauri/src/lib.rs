@@ -8,6 +8,7 @@ mod cli;
 mod config;
 mod error;
 pub mod http_client;
+mod i18n;
 mod ingest;
 mod init_status;
 mod lightweight;
@@ -20,6 +21,7 @@ mod macos_material;
 pub mod metering;
 mod model;
 mod panic_hook;
+pub mod policy;
 pub mod product_identity;
 mod prompt;
 mod provider;
@@ -58,7 +60,7 @@ pub use model::{
 pub use prompt::Prompt;
 pub use provider::{Provider, ProviderMeta};
 pub use quota::claude_quota::run_claude_statusline_bridge;
-pub use store::Database;
+pub use store::{CommunityRetentionPolicy, Database, RetentionPolicy, RetentionPolicyProvider};
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
@@ -69,6 +71,7 @@ use std::sync::Arc;
 #[cfg(target_os = "macos")]
 use tauri::image::Image;
 use tauri::tray::{TrayIconBuilder, TrayIconEvent};
+use tauri::Emitter;
 use tauri::Manager;
 use tauri::RunEvent;
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
@@ -224,7 +227,10 @@ pub fn create_schema_v13_fixture_test_hook(path: &Path) -> Result<(), AppError> 
     // v13, so the baseline below is untouched.
     // Reviewed for schema v27: v26 -> v27 只新增三张 router_* 表，与 v13 基线无关。
     // Reviewed for schema v28: v27 -> v28 只给 router_providers 加两个可空/带默认的列，与 v13 基线无关。
-    if store::SCHEMA_VERSION != 28
+    // Reviewed for schema v29: v28 -> v29 给 proxy_request_logs 加 ADR-021 列，新建
+    // usage_hourly_rollups / rollup_dirty_hours / guard_counters，并把 model_pricing
+    // 的 cache 价改成可空、补上 pending 列。这些都在 v13 之后，不改下面的 v13 基线。
+    if store::SCHEMA_VERSION != 29
         || product_identity::DATABASE_IDENTITY_SOURCE_SCHEMA_VERSION != 13
     {
         return Err(AppError::Database(
@@ -643,6 +649,10 @@ pub fn run() {
                 )?;
             }
 
+            // Initialize language before database preparation/open can create an
+            // install marker. Only an install with neither settings nor a DB is fresh.
+            let _ = crate::config::settings::get_settings();
+
             // Keep the OS login item aligned with the persisted setting on every
             // manual launch. This also repairs the invalid `.app` LaunchAgent
             // written by auto-launch 0.6 before the executable-path fix.
@@ -826,6 +836,27 @@ pub fn run() {
                 db.clone(),
                 codex_oauth_manager.clone(),
             ));
+            let quota_emit_app = app.handle().clone();
+            quota_service.set_on_snapshot_written(Arc::new(move || {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|duration| duration.as_secs() as i64)
+                    .unwrap_or(0);
+                let Some(state) = quota_emit_app.try_state::<AppState>() else {
+                    return;
+                };
+                match quota::source_status::quota_status_at(&state.db, now) {
+                    Ok(rows) => {
+                        let _ = quota_emit_app.emit(
+                            quota::source_status::QUOTA_UPDATED_EVENT,
+                            quota::source_status::quota_updated_payload(&rows),
+                        );
+                    }
+                    Err(_) => {
+                        log::warn!("quota-updated payload unavailable");
+                    }
+                }
+            }));
             let credential_store = crate::secrets::production_credential_store();
             let app_state = AppState::new_with_credential_store_and_quota_service(
                 db,
@@ -1514,6 +1545,7 @@ pub fn run() {
             commands::get_usage_summary,
             commands::get_usage_summary_by_app,
             commands::get_usage_trends,
+            commands::query_usage_trend,
             commands::get_provider_stats,
             commands::get_model_stats,
             commands::get_request_logs,
@@ -1569,6 +1601,29 @@ pub fn run() {
             // Workspace files (OpenClaw)
             // Daily memory files (OpenClaw workspace)
             // lightweight mode (for testing or low-resource environments)
+            // BE-1: license shell (community build; C2 / C20)
+            commands::get_license_status,
+            commands::activate_license,
+            commands::deactivate_license,
+            // BE-20: monthly budget (C10 / C15). Does not change set_api_budget_config.
+            commands::set_monthly_budget,
+            // BE-23: UI prefs (C18). Language uses settings-changed too (C8).
+            commands::get_ui_prefs,
+            commands::set_ui_prefs,
+            // BE-12: Rust i18n (C8). No language-changed event.
+            commands::get_language,
+            commands::set_language,
+            // BE-5b: quota source status (C4)
+            commands::get_quota_status,
+            // BE-21: tray guard snapshot (C12 read)
+            commands::get_guard_state,
+            // BE-22: read-only session list (C14)
+            commands::list_sessions,
+            // BE-17: takeover wizard and detect_tools (C3 / C22)
+            commands::detect_claude_auth_mode,
+            commands::set_claude_subscription_proxy,
+            commands::detect_tools,
+            commands::apply_takeover,
         ]);
 
     let app = builder

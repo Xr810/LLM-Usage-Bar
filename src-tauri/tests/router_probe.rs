@@ -874,8 +874,8 @@ fn phase_migration(tmp: &std::path::Path) {
 
     let (after_version, after) = snapshot(&copy);
     check(
-        after_version == 28,
-        "副本迁移后 user_version = 28",
+        after_version == 29,
+        "副本迁移后 user_version = 29",
         format!("实际 {after_version}"),
     );
     let router_tables: Vec<&str> = after
