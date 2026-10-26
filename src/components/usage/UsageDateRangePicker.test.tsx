@@ -1,7 +1,11 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { UsageDateRangePicker } from "./UsageDateRangePicker";
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("UsageDateRangePicker", () => {
   it.each(["10:00", "09:59"])(
@@ -65,5 +69,52 @@ describe("UsageDateRangePicker", () => {
     await user.click(screen.getByRole("button", { name: "1 year" }));
 
     expect(onApply).toHaveBeenCalledWith({ preset: "1y" });
+  });
+
+  it("limits presets to 30 days, disables earlier dates, and clamps Apply", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 9, 26, 12, 0, 0));
+    const user = userEvent.setup();
+    const onApply = vi.fn();
+
+    render(
+      <UsageDateRangePicker
+        limited
+        selection={{ preset: "30d" }}
+        onApply={onApply}
+        triggerLabel="Custom range"
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Custom range" }));
+    const dialog = await screen.findByRole("dialog");
+    for (const name of ["当天", "1d", "7d", "14d", "30d"]) {
+      expect(within(dialog).getByRole("button", { name })).toBeInTheDocument();
+    }
+    expect(within(dialog).queryByRole("button", { name: "1 year" })).toBeNull();
+
+    const blocked = dialog.querySelectorAll('button[aria-disabled="true"]');
+    expect(blocked.length).toBeGreaterThan(0);
+    const startInput = dialog.querySelector(
+      'input[type="date"]',
+    ) as HTMLInputElement;
+    const startBefore = startInput.value;
+    fireEvent.click(blocked[0]!);
+    expect(startInput.value).toBe(startBefore);
+
+    fireEvent.change(startInput, { target: { value: "2026-01-01" } });
+    await user.click(screen.getByRole("button", { name: "common.confirm" }));
+
+    expect(onApply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        preset: "custom",
+        customStartDate: Math.floor(new Date(2026, 8, 27).getTime() / 1000),
+      }),
+    );
+    const applied = onApply.mock.calls[0]![0] as {
+      customStartDate: number;
+      customEndDate: number;
+    };
+    expect(applied.customStartDate).toBeLessThan(applied.customEndDate);
   });
 });

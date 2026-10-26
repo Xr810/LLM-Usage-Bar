@@ -12,6 +12,47 @@ function getStartOfLocalDayDate(nowMs: number): Date {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate());
 }
 
+/** Presets a restricted dashboard may offer. `1y` is intentionally absent. */
+export const FREE_PRESETS = ["today", "1d", "7d", "14d", "30d"] as const;
+
+/**
+ * Local midnight of the earliest day a restricted custom range may start:
+ * today 00:00 minus 29 days (a 30-day window including today).
+ */
+export function freeWindowStart(nowMs: number): Date {
+  const start = getStartOfLocalDayDate(nowMs);
+  start.setDate(start.getDate() - 29);
+  return start;
+}
+
+/** True when `day` falls strictly before {@link freeWindowStart}. */
+export function isBeforeFreeWindow(day: Date, nowMs: number): boolean {
+  const boundary = freeWindowStart(nowMs);
+  const dayStart = new Date(day.getFullYear(), day.getMonth(), day.getDate());
+  return dayStart.getTime() < boundary.getTime();
+}
+
+/**
+ * Frontend clamp for restricted dashboards. `1y` becomes 30d. A custom start
+ * earlier than {@link freeWindowStart} moves to that local midnight. Every
+ * other selection is returned unchanged. The activity heatmap is not clamped.
+ */
+export function clampToFreeWindow(
+  selection: UsageRangeSelection,
+  nowMs: number,
+): UsageRangeSelection {
+  if (selection.preset === "1y") return { preset: "30d" };
+  if (selection.preset !== "custom") return selection;
+  const minStart = Math.floor(freeWindowStart(nowMs).getTime() / 1000);
+  if (
+    selection.customStartDate != null &&
+    selection.customStartDate < minStart
+  ) {
+    return { ...selection, customStartDate: minStart };
+  }
+  return selection;
+}
+
 function getPresetLookbackStart(
   preset: Exclude<UsageRangePreset, "today" | "1d" | "custom">,
   nowMs: number,

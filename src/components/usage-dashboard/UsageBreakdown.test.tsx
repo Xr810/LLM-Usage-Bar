@@ -13,13 +13,18 @@ import { describe, expect, it, vi } from "vitest";
 import { http, HttpResponse } from "msw";
 import { server } from "../../../tests/msw/server";
 import { commandCalls } from "../../../tests/msw/tauriMocks";
+import { primeOfficialProLicense } from "../../../tests/licenseStatus";
 import { UsageDashboardPage } from "./UsageDashboardPage";
 import { usageDashboardApi } from "@/lib/api/usageDashboard";
 
 function renderPage() {
   const client = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    defaultOptions: {
+      queries: { retry: false, refetchOnWindowFocus: false },
+      mutations: { retry: false },
+    },
   });
+  primeOfficialProLicense(client);
   return render(
     <QueryClientProvider client={client}>
       <UsageDashboardPage />

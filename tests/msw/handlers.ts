@@ -1129,7 +1129,20 @@ const agentUsageBreakdownFixture = (startAt: number, endAt: number) => {
   };
 };
 
+/** Default C2 fixture. Existing dashboard tests keep the unrestricted Pro path. */
+export const officialProLicenseStatus = {
+  tier: "pro" as const,
+  expiresAt: null,
+  graceUntil: null,
+  build: "official" as const,
+  features: [] as string[],
+  emailMasked: null,
+};
+
 export const handlers = [
+  http.post(`${TAURI_ENDPOINT}/get_license_status`, () =>
+    success(officialProLicenseStatus),
+  ),
   http.post(`${TAURI_ENDPOINT}/get_tray_usage_snapshot`, () =>
     success(trayUsageSnapshotFixture),
   ),

@@ -3,6 +3,7 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setPendingMainWindowDestination } from "../tests/msw/handlers";
+import { primeOfficialProLicense } from "../tests/licenseStatus";
 import { emitTauriEvent } from "../tests/msw/tauriMocks";
 import App from "./App";
 
@@ -18,8 +19,11 @@ vi.mock("@tauri-apps/api/window", () => ({
 
 function renderApp() {
   const client = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
+    defaultOptions: {
+      queries: { retry: false, refetchOnWindowFocus: false },
+    },
   });
+  primeOfficialProLicense(client);
   return render(
     <QueryClientProvider client={client}>
       <App />
