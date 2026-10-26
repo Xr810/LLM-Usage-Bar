@@ -2115,3 +2115,16 @@ The corresponding low-memory `check --tests` was also killed (exit 137).
 Neither is a passing result. Exact-head PR CI must validate the new
 router assertions and aggregate/session-dedup fixtures. No merge or release
 is authorized; the existing §20 native interactive shutdown gaps remain open.
+
+PR #113 initial-head CI (`91c494d7`, run `40341707394`) passed all 1387 library
+tests in each backend mode, including the Deny/Hold/aggregate/session cases,
+but both backend jobs failed the dependency guard: the cross-layer fixture
+under `store/qa12_fixtures.rs` imported `usage`. The correction moves that
+fixture to `usage/trend/tests.rs`, exercises dirty-hour maintenance through
+`Database::rollup_and_prune`, and extends the existing store-only full-rebuild
+fixture with Deny rows. No runtime change or guard exception was needed.
+The unmodified dependency-guard source passed locally, 2/2 tests, through a
+temporary dependency-free Cargo harness pointing at the actual repository
+source/root; the normal app-linked guard build also hit exit 137. Production
+Clippy `-D warnings` passed (2m27s). New-head CI must verify the moved fixture;
+the initial run's frontend and both desktop passes are not new-head evidence.
