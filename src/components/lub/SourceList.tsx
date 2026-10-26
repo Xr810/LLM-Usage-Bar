@@ -56,8 +56,20 @@ function SourceRow({
     <span className="lub-value">{valueText}</span>
   );
 
+  const quotaLabel = quotaGapLabel
+    ? t("lub.panel.aria_plan_no_pct", {
+        name: source.name,
+        status: quotaGapLabel,
+      })
+    : undefined;
+
   return (
-    <div className="lub-source-row" data-lub-row="">
+    <div
+      className="lub-source-row"
+      data-lub-row=""
+      role={quotaLabel ? "group" : undefined}
+      aria-label={quotaLabel}
+    >
       <div className="lub-row-between">
         <span className="lub-name">
           <span className="lub-mono" aria-hidden="true">
@@ -118,24 +130,30 @@ export function SourceList({
   locale: string;
 }) {
   const { t } = useTranslation();
-  if (model.sources.length === 0) return null;
+  const codexNote = model.noteCodes?.includes("codex_websocket")
+    ? t("lub.panel.note_codex_websocket")
+    : null;
+  if (model.sources.length === 0 && !codexNote) return null;
   const killed = model.state === "killed";
   return (
     <section aria-label={t("lub.panel.traffic_sources")}>
-      {killed ? null : (
+      {killed || model.sources.length === 0 ? null : (
         <h2 className="lub-section-title">{t("lub.panel.traffic_sources")}</h2>
       )}
-      <div className="lub-card">
-        {model.sources.map((source) => (
-          <SourceRow
-            key={source.id}
-            source={source}
-            locale={locale}
-            betaOn={model.betaOn}
-            killed={killed}
-          />
-        ))}
-      </div>
+      {model.sources.length === 0 ? null : (
+        <div className="lub-card">
+          {model.sources.map((source) => (
+            <SourceRow
+              key={source.id}
+              source={source}
+              locale={locale}
+              betaOn={model.betaOn}
+              killed={killed}
+            />
+          ))}
+        </div>
+      )}
+      {codexNote ? <p className="lub-muted lub-note">{codexNote}</p> : null}
     </section>
   );
 }

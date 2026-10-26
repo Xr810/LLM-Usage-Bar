@@ -87,8 +87,13 @@
   background: var(--lub-ok);
 }
 
-.lub-dot-warn {
+.lub-dot-warn,
+.lub-dot-over {
   background: var(--lub-warn);
+}
+
+.lub-status-warn {
+  color: var(--lub-warn);
 }
 
 .lub-dot-capped,
@@ -223,6 +228,18 @@
   display: block;
   font-size: var(--lub-fs-body);
   line-height: var(--lub-lh-body);
+}
+
+.lub-banner-warn {
+  background: color-mix(in srgb, var(--lub-warn) 11%, var(--lub-group));
+}
+
+.lub-banner-warn b {
+  color: var(--lub-warn);
+}
+
+.lub-note {
+  margin: var(--lub-sp-2) 0 0;
 }
 
 .lub-resume {

@@ -8,6 +8,23 @@ export function displayUsd(text: string): string {
   return text.replace(/\.00$/, "");
 }
 
+/** Daily caps reset at local midnight. The snapshot has no reset timestamp. */
+export function formatLocalMidnight(locale: string, now = new Date()): string {
+  const midnight = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate(),
+    0,
+    0,
+    0,
+    0,
+  );
+  return new Intl.DateTimeFormat(locale, {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(midnight);
+}
+
 export interface MoneyParts {
   approximate: boolean;
   text: string;

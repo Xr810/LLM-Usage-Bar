@@ -18,6 +18,11 @@ interface CapBarProps {
   label: string;
   valueText: string;
   marker?: ReactNode;
+  /**
+   * Paint past the cap line. `stop` is the red overflow segment.
+   * An over-cap alert keeps one accent fill and draws no second segment.
+   */
+  overflow?: "stop" | "accent";
 }
 
 export function CapBar({
@@ -31,9 +36,14 @@ export function CapBar({
   label,
   valueText,
   marker,
+  overflow = "stop",
 }: CapBarProps) {
   const fill = barFill(value, cap, scale);
   const hasCap = cap != null && cap > 0;
+  const accentPastLine = overflow === "accent";
+  const fillPercent = accentPastLine
+    ? fill.fillPercent + fill.overflowPercent
+    : fill.fillPercent;
   return (
     <div
       className={
@@ -60,9 +70,9 @@ export function CapBar({
               ? "lub-meter-fill lub-meter-fill-month"
               : "lub-meter-fill"
         }
-        style={{ width: `${fill.fillPercent}%` }}
+        style={{ width: `${fillPercent}%` }}
       />
-      {fill.overflowPercent > 0 ? (
+      {!accentPastLine && fill.overflowPercent > 0 ? (
         <span
           className="lub-meter-overflow"
           style={{

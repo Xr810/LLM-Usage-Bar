@@ -360,6 +360,11 @@ describe("TrayUsagePopover Provider-only UI", () => {
     expect(screen.queryByText("0%")).toBeNull();
     expect(screen.getByText("Stale data")).toBeInTheDocument();
     expect(screen.queryByRole("meter", { name: /ChatGPT/ })).toBeNull();
+    expect(
+      screen.getByRole("group", {
+        name: "ChatGPT Plus: no usage percentage, Stale data",
+      }),
+    ).toBeInTheDocument();
   });
 
   it("says the read failed when the refresh failed and the window is empty", () => {
@@ -369,6 +374,22 @@ describe("TrayUsagePopover Provider-only UI", () => {
     render(<TrayUsagePopoverView {...props({ snapshot: failed })} />);
     expect(screen.getByText("Couldn't read usage")).toBeInTheDocument();
     expect(screen.queryByText("0%")).toBeNull();
+    expect(
+      screen.getByRole("group", {
+        name: /ChatGPT Plus: no usage percentage, Couldn't read usage/,
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("treats a window unavailable reason as a failed read, not 0%", () => {
+    const failed = structuredClone(snapshot);
+    const window = failed.agents[0].providers[0].subscription!.windows[0];
+    window.usedPercent = null;
+    window.unavailableReason = "read_failed";
+    render(<TrayUsagePopoverView {...props({ snapshot: failed })} />);
+    expect(screen.getByText("Couldn't read usage")).toBeInTheDocument();
+    expect(screen.queryByText("0%")).toBeNull();
+    expect(screen.queryByRole("meter", { name: /ChatGPT/ })).toBeNull();
   });
 
   it("still shows a real zero percent window", () => {
@@ -401,6 +422,52 @@ describe("TrayUsagePopover Provider-only UI", () => {
       "data-state",
       "warn",
     );
+    expect(screen.queryByText(/Over today/)).toBeNull();
+  });
+
+  it("alerts when level is over even if spend is under the cap", () => {
+    const over = structuredClone(snapshot);
+    over.apiBudget.level = "over";
+    over.apiBudget.mode = "shared";
+    over.apiBudget.todayCostUsd = "3";
+    over.apiBudget.dailyBudgetUsd = "10";
+    over.apiBudget.budgetConsumedPercent = "30";
+    over.apiBudget.status = "green";
+    const { rerender } = render(
+      <TrayUsagePopoverView {...props({ snapshot: over })} />,
+    );
+    expect(screen.getByTestId("lub-tray-panel")).toHaveAttribute(
+      "data-state",
+      "over",
+    );
+    expect(screen.getByText(/Over today.s \$10 cap/)).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Alert only. Nothing is paused; API requests keep going.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Over cap")).toBeInTheDocument();
+    expect(screen.queryByText("Compare Free vs Pro")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Stop all API spend" }),
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: /Allow/ })).toBeNull();
+    expect(screen.queryByText("Paused")).toBeNull();
+    expect(document.querySelector("[data-slot='community-allow']")).toBeNull();
+    expect(document.querySelector(".lub-meter-overflow")).toBeNull();
+
+    const underTheLevel = structuredClone(over);
+    underTheLevel.apiBudget.level = "ok";
+    underTheLevel.apiBudget.todayCostUsd = "12";
+    underTheLevel.apiBudget.budgetConsumedPercent = "120";
+    underTheLevel.apiBudget.status = "red";
+    rerender(<TrayUsagePopoverView {...props({ snapshot: underTheLevel })} />);
+    expect(screen.getByTestId("lub-tray-panel")).toHaveAttribute(
+      "data-state",
+      "ok",
+    );
+    expect(screen.queryByText(/Over today/)).toBeNull();
+    expect(screen.queryByText("Over cap")).toBeNull();
   });
 
   it("does not refresh when quota or guard events arrive without a snapshot change", async () => {

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -5,6 +6,7 @@ import i18n from "i18next";
 import en from "@/i18n/locales/en.json";
 import zh from "@/i18n/locales/zh.json";
 import { CAP_LINE_RATIO } from "./capMath";
+import { formatLocalMidnight } from "./money";
 import {
   betaPanelFixture,
   designPanelFixture,
@@ -189,5 +191,117 @@ describe("TrayPanelV5 session groups", () => {
       "有 2 条记录金额无法解析",
     );
     expect(screen.queryByText("0%")).toBeNull();
+  });
+});
+
+describe("TrayPanelV5 free over cap", () => {
+  function overFixture() {
+    return designPanelFixture({
+      state: "over",
+      todayUsd: "12.00",
+      dailyCapUsd: "10",
+    });
+  }
+
+  it("alerts without kill, compare, or a red overflow segment", async () => {
+    const user = userEvent.setup();
+    renderPanel(overFixture());
+    expect(screen.getByText(/已超出今日上限 \$10/)).toBeInTheDocument();
+    expect(
+      screen.getByText("只提醒，不会暂停。API 请求照常发送。"),
+    ).toBeInTheDocument();
+    expect(document.querySelector(".lub-status-warn")).toHaveTextContent(
+      "超出上限",
+    );
+    expect(document.querySelector(".lub-dot-over")).not.toBeNull();
+    expect(screen.queryByText("比较 Free 与 Pro")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "停止全部 API 花费" }),
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: /放行/ })).toBeNull();
+    expect(screen.queryByText("已暂停")).toBeNull();
+    expect(document.querySelector("[data-slot='community-allow']")).toBeNull();
+    expect(document.querySelector(".lub-meter-overflow")).toBeNull();
+    expect(screen.queryByText(/浅色为月上限/)).toBeNull();
+    expect(screen.getByText(/重新计算/)).toHaveTextContent(
+      formatLocalMidnight("zh-CN"),
+    );
+
+    const day = document.querySelector("[data-lub-marker='day']");
+    expect(day).toHaveAttribute("data-cap-ink", "day");
+    expect(day?.className ?? "").not.toMatch(/warn/);
+    const hero = document.querySelector(".lub-hero .lub-meter");
+    expect(hero?.getAttribute("aria-label") ?? "").toContain("已超出");
+    const fill = hero?.querySelector(".lub-meter-fill");
+    expect(fill).toHaveStyle({ width: "100%" });
+    expect(fill?.className ?? "").not.toMatch(/warn/);
+
+    const warnNodes = document.querySelectorAll("[class*='warn']");
+    expect(warnNodes.length).toBeGreaterThan(0);
+    for (const node of warnNodes) {
+      expect(node.className).toMatch(/lub-banner-warn|lub-status-warn/);
+    }
+
+    await user.click(day as HTMLElement);
+    expect(
+      await screen.findByText("日上限 $10，只提醒、不停"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("到 $10 自动停")).toBeNull();
+  });
+
+  it("leaves an empty slot for the community build and still no actions", () => {
+    render(
+      <TrayPanelV5
+        model={overFixture()}
+        locale="zh-CN"
+        build="community"
+        onOpenTrends={() => undefined}
+        onOpenSettings={() => undefined}
+      />,
+    );
+    const slot = document.querySelector("[data-slot='community-allow']");
+    expect(slot).not.toBeNull();
+    expect(slot?.childElementCount).toBe(0);
+    expect(slot?.querySelector("a, button, [href]")).toBeNull();
+    expect(screen.queryByText("比较 Free 与 Pro")).toBeNull();
+    expect(screen.queryByRole("button", { name: /放行|停止全部/ })).toBeNull();
+  });
+
+  it("shows the compare line only when the batch switch is on", () => {
+    const { container } = render(
+      <TrayPanelV5
+        model={overFixture()}
+        locale="zh-CN"
+        proCompareEnabled
+        onOpenTrends={() => undefined}
+        onOpenSettings={() => undefined}
+      />,
+    );
+    expect(
+      screen.getByRole("button", { name: "比较 Free 与 Pro" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("想到上限就自动停？")).toBeInTheDocument();
+    expect(container.querySelector("a, [href]")).toBeNull();
+  });
+
+  it("shows the codex websocket note only from a note code", () => {
+    const model = designPanelFixture();
+    model.noteCodes = ["codex_websocket"];
+    renderPanel(model);
+    expect(screen.getByText(/Codex 订阅未走代理/)).toBeInTheDocument();
+  });
+});
+
+describe("lub warn color", () => {
+  it("applies --lub-warn only to the banner, status label, and dot", () => {
+    const css = readFileSync("src/styles/lub-panel.css", "utf8");
+    const rules = css.match(/[^{}]+\{[^{}]+\}/g) ?? [];
+    const warnRules = rules.filter((rule) => rule.includes("--lub-warn"));
+    expect(warnRules.length).toBeGreaterThan(0);
+    for (const rule of warnRules) {
+      expect(rule).toMatch(
+        /lub-dot-warn|lub-dot-over|lub-status-warn|lub-banner-warn/,
+      );
+    }
   });
 });

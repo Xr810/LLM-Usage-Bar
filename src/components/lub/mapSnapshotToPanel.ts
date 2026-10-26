@@ -47,8 +47,11 @@ function panelState(
 ): LubPanelModel["state"] {
   const consumed = parseNonNegative(budget.budgetConsumedPercent);
   if (budget.level != null) {
-    // C10 / C12: warn follows level. Pace status stays on the dot only.
-    return budget.level === "ok" ? "ok" : "warn";
+    // C10: over is the alert-only state. Do not compare amounts here.
+    // Pace status stays on the dot only.
+    if (budget.level === "over") return "over";
+    if (budget.level === "near") return "warn";
+    return "ok";
   }
   // TODO(BE-20): drop this once `level` is always on the snapshot.
   const capped = budget.status === "red" && consumed != null && consumed >= 100;
@@ -68,6 +71,9 @@ function sourceFromProvider(
   );
   if (provider.billingKind === "subscription") {
     const usedPercent = primaryUsedPercent(provider);
+    const windowFailed = (provider.subscription?.windows ?? []).some(
+      (window) => (window.unavailableReason ?? "").trim() !== "",
+    );
     return {
       id: provider.providerId,
       name,
@@ -78,8 +84,14 @@ function sourceFromProvider(
       usedPercent,
       scaleCapUsd: null,
       costQuality: provider.recentUsage.costQuality,
-      // C13 omits usedPct when the provider has no quota window.
-      quotaGap: usedPercent == null ? (readFailed ? "error" : "stale") : null,
+      // C13 omits usedPct. C4 empty windows are stale; a read error is
+      // refreshError or a window unavailableReason (there is no `state` field).
+      quotaGap:
+        usedPercent == null
+          ? readFailed || windowFailed
+            ? "error"
+            : "stale"
+          : null,
     };
   }
 

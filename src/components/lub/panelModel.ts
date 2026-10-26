@@ -3,7 +3,10 @@ import type { TrayCostQuality } from "@/types/trayUsage";
 /** C18 default until get_ui_prefs is wired. FE-3 reads this from mock prefs. */
 export const DEFAULT_ALERT_THRESHOLD_PCT = 80;
 
-export type LubPanelState = "ok" | "warn" | "capped" | "killed";
+export type LubPanelState = "ok" | "warn" | "over" | "capped" | "killed";
+
+/** Official builds and the community build both only alert when level is over. */
+export type LubBuild = "official" | "community";
 
 export type LubSubtitleKey =
   "api_key" | "plan_hour_window" | "plan_codex" | "not_proxied";
@@ -58,6 +61,11 @@ export interface LubPanelModel {
   sessions: LubSessionModel[] | null;
   /** C14. Rows whose amount could not be parsed. 0 hides the hint. */
   invalidCostRows?: number;
+  /**
+   * C4 note codes such as `codex_websocket`. The tray snapshot does not
+   * publish these yet, so the mapper leaves this unset.
+   */
+  noteCodes?: string[];
   sample: boolean;
   stale: boolean;
   betaOn: boolean;
