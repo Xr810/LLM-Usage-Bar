@@ -165,14 +165,16 @@ impl TrayUsageService {
         quota_service: Arc<QuotaService>,
         session_usage_service: Arc<SessionUsageService>,
         tool_detection_cache: Arc<ToolDetectionCache>,
+        license: Arc<dyn crate::policy::LicenseProvider>,
     ) -> Self {
         #[cfg(test)]
         let production_quota_service = quota_service.clone();
         #[cfg(test)]
         let production_session_usage_service = session_usage_service.clone();
-        let projector = Arc::new(TrayUsageProjector::with_tool_detection_cache(
+        let projector = Arc::new(TrayUsageProjector::with_license(
             db.clone(),
             tool_detection_cache,
+            license.clone(),
         ));
         let project_snapshot: ProjectSnapshotFn = Arc::new(move |now| projector.project_at(now));
         let refresh_sources: RefreshSourcesFn = Arc::new(move || {
@@ -183,8 +185,9 @@ impl TrayUsageService {
                 async move { refresh_all_sources(db, quota_service, session_usage_service).await },
             )
         });
-        let service =
+        let mut service =
             Self::new_with_dependencies(project_snapshot, refresh_sources, Arc::new(Local::now));
+        *service.cache.get_mut() = TrayUsageSnapshot::unknown_with_license(0, license.as_ref());
         #[cfg(test)]
         let service = {
             let mut service = service;

@@ -2,7 +2,9 @@
 
 use crate::app_state::AppState;
 use crate::error::AppError;
-use crate::policy::{community_license_status, LicenseStatus};
+#[cfg(test)]
+use crate::policy::community_license_status;
+use crate::policy::LicenseStatus;
 use crate::store::Database;
 use crate::usage::trend::{clamp_legacy_usage_query, require_usage_split};
 use crate::usage::usage_stats::*;
@@ -51,7 +53,7 @@ pub fn get_usage_summary(
         app_type.as_deref(),
         provider_name.as_deref(),
         model.as_deref(),
-        &community_license_status(),
+        &state.license.status(),
         Local::now(),
     )
 }
@@ -84,7 +86,7 @@ pub fn get_usage_summary_by_app(
     model: Option<String>,
 ) -> Result<Vec<UsageSummaryByApp>, AppError> {
     // app_type is the legacy agent/application breakdown, not an agent filter.
-    require_usage_split(&community_license_status())?;
+    require_usage_split(&state.license.status())?;
     state.db.get_usage_summary_by_app(
         start_date,
         end_date,
@@ -110,7 +112,7 @@ pub fn query_usage_trend(
             "tz": tz, "from": from, "to": to, "granularity": granularity,
             "groupBy": group_by, "filters": filters,
         }),
-        &crate::policy::community_license_status(),
+        &state.license.status(),
         chrono::Utc::now(),
     )
 }
@@ -133,7 +135,7 @@ pub fn get_usage_trends(
         app_type.as_deref(),
         provider_name.as_deref(),
         model.as_deref(),
-        &community_license_status(),
+        &state.license.status(),
         Local::now(),
     )
 }
@@ -170,7 +172,7 @@ pub fn get_provider_stats(
     provider_name: Option<String>,
     model: Option<String>,
 ) -> Result<Vec<ProviderStats>, AppError> {
-    require_usage_split(&community_license_status())?;
+    require_usage_split(&state.license.status())?;
     state.db.get_provider_stats(
         start_date,
         end_date,
@@ -190,7 +192,7 @@ pub fn get_model_stats(
     provider_name: Option<String>,
     model: Option<String>,
 ) -> Result<Vec<ModelStats>, AppError> {
-    require_usage_split(&community_license_status())?;
+    require_usage_split(&state.license.status())?;
     state.db.get_model_stats(
         start_date,
         end_date,

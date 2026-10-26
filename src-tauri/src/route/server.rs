@@ -103,9 +103,19 @@ pub async fn start(
     port: u16,
     auth: Arc<dyn UpstreamAuth>,
 ) -> Result<(), AppError> {
+    start_with_gate(db, port, auth, Arc::new(AllowAllGate)).await
+}
+
+pub async fn start_with_gate(
+    db: Arc<Database>,
+    port: u16,
+    auth: Arc<dyn UpstreamAuth>,
+    gate: Arc<dyn PolicyGate>,
+) -> Result<(), AppError> {
     let state = Arc::new(RouterState {
         db,
         auth,
+        gate,
         sender: Arc::new(ReqwestSender),
         blacklist: Mutex::new(Vec::new()),
     });
@@ -161,6 +171,7 @@ async fn not_found(_state: State<Arc<RouterState>>) -> (StatusCode, &'static str
 struct RouterState {
     db: Arc<Database>,
     auth: Arc<dyn UpstreamAuth>,
+    gate: Arc<dyn PolicyGate>,
     sender: Arc<dyn UpstreamSender>,
     /// 拉黑状态(内存,不落库)。过期靠读的时候判 `until_ms > now`,
     /// 不起任何后台清理任务(§6.4 第 2 条)。
@@ -660,7 +671,7 @@ async fn handle_proxy_inner(
             state.db.get_setting(SUBSCRIPTION_TERMS_KEY)?.as_deref(),
             now_millis(),
         );
-    let decision = AllowAllGate.admit(&ReqMeta {
+    let decision = state.gate.admit(&ReqMeta {
         req_id: request_id.clone(),
         app_type: app_type.to_string(),
         provider_id: String::new(),
@@ -1089,6 +1100,7 @@ fn stream_upstream_success(
     );
     let db = state.db.clone();
     let provider_id = candidate.provider_id.clone();
+    let gate = state.gate.clone();
     let logical_model = logical_model.to_string();
     let status_code = status.as_u16();
     let settlement_request_id = seed.request_id;
@@ -1170,7 +1182,7 @@ fn stream_upstream_success(
                 backfill_attempt_tokens(&db, attempt_id, input_tokens, output_tokens);
             }
         }
-        AllowAllGate.settle(
+        gate.settle(
             &settlement_request_id,
             &crate::policy::Usage {
                 input_tokens: u64::try_from(settled_input).unwrap_or(0),
@@ -1582,6 +1594,7 @@ mod tests {
             db,
             auth,
             sender,
+            gate: Arc::new(AllowAllGate),
             blacklist: Mutex::new(Vec::new()),
         })
     }
@@ -2363,6 +2376,23 @@ mod tests {
     /// 5. 非流式响应,顶层有 usage:正确回填。
     #[tokio::test]
     async fn non_streaming_body_with_top_level_usage_is_backfilled() {
+        #[derive(Default)]
+        struct RecordingGate {
+            admitted: Mutex<Vec<ReqMeta>>,
+            settled: Mutex<Vec<(String, crate::policy::Usage)>>,
+        }
+        impl PolicyGate for RecordingGate {
+            fn admit(&self, req: &ReqMeta) -> crate::policy::Decision {
+                self.admitted.lock().unwrap().push(req.clone());
+                crate::policy::Decision::Allow
+            }
+            fn settle(&self, req_id: &str, usage: &crate::policy::Usage) {
+                self.settled
+                    .lock()
+                    .unwrap()
+                    .push((req_id.to_owned(), *usage));
+            }
+        }
         let db = memory_db();
         seed_route(&db, "packyapi", WireApi::Responses, 1, MODEL);
         let body: &[u8] = br#"{"id":"resp_1","object":"response","usage":{"input_tokens":10,"output_tokens":20}}"#;
@@ -2371,7 +2401,10 @@ mod tests {
             headers: vec![("content-type".to_string(), "application/json".to_string())],
             body: body.to_vec(),
         }]);
-        let router = test_router(test_state(db.clone(), ok_auth(), sender));
+        let gate = Arc::new(RecordingGate::default());
+        let mut state = test_state(db.clone(), ok_auth(), sender);
+        Arc::get_mut(&mut state).unwrap().gate = gate.clone();
+        let router = test_router(state);
 
         let (status, _, out) = post_json(
             router,
@@ -2386,6 +2419,19 @@ mod tests {
             attempt_tokens(&db),
             vec![(Some(10), Some(20))],
             "非流式响应的顶层 usage 要回填"
+        );
+        let admitted = gate.admitted.lock().unwrap();
+        let settled = gate.settled.lock().unwrap();
+        assert_eq!(admitted.len(), 1);
+        assert_eq!(settled.len(), 1);
+        assert_eq!(settled[0].0, admitted[0].req_id);
+        assert_eq!(
+            settled[0].1,
+            crate::policy::Usage {
+                input_tokens: 10,
+                output_tokens: 20,
+                ..Default::default()
+            }
         );
     }
 

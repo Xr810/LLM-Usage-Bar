@@ -2014,3 +2014,44 @@ Follow-up verification (same offline Rust wrapper/environment as above):
 
 Native interaction and §20 shutdown acceptance gaps remain unchanged;
 no release or merge authorized.
+
+#### 2026-10-26 BE-30: build injections and retention high-water (plan v1.1)
+
+Baseline: `380ca25a5c14477a4d3b6927d9967ab722aae478`. Community startup now
+uses `Injections::community()`; `run_with_injections` selects retention before
+opening the database, shares the license provider with commands and tray, and
+passes the policy gate to router admission/settlement. The specified files had
+14 production community-license calls, plus two gate calls (16 sites total).
+
+Hourly pruning uses max(persisted `retention_high_water_days`, requested
+retention), never lowers the setting, and keeps the DB connection locked from
+high-water selection through pruning. Detail retention stays unchanged. A
+failed high-water write aborts pruning; unchanged floors do not write settings.
+The documented BE-31/PRO-1 contract requires persistence before a higher tier
+becomes effective; failure preserves the current tier, logs an error, returns
+a retryable frontend error and retries on next startup/activation without
+affecting proxy traffic or existing features. Activation wiring is not included.
+
+Regression coverage includes the actual query command with a test-only Pro
+provider (grouping allowed, 30-day clamp lifted), initial/refreshed official
+tray snapshots, a recording router gate, and test (d): Pro730d with a 500-day
+row, downgrade to Free400d, configured prune, row survives while queries stay
+clamped. The disk fixture also reopens under the community provider and checks
+the 730-day setting survives; its 800-day control row is still removed.
+
+Local Linux x64 orb verification (2 GB RAM, no swap):
+
+- `pnpm rust -- fmt --manifest-path src-tauri/Cargo.toml --check` and
+  `git diff --check`: passed; zero frontend changes.
+- `pnpm rust -- clippy --locked --manifest-path src-tauri/Cargo.toml -- -D warnings`:
+  passed during implementation (1m58s).
+- `pnpm rust -- check --locked --manifest-path src-tauri/Cargo.toml --tests`
+  and `pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml`:
+  both killed by the orb memory limit (exit 137), not passing tests. Both used
+  `CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
+  CARGO_INCREMENTAL=0`, as did clippy. Final PR CI is the execution evidence;
+  do not infer success from local compilation or these added assertions.
+
+No frontend, dependency-version, private-feature, activation/event or release
+changes. Existing Tauri's test feature is dev-only for managed command tests.
+Native Windows/macOS interactive acceptance and §20 shutdown gaps remain open.

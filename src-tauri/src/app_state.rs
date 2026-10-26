@@ -20,9 +20,28 @@ pub(crate) use background::BackgroundShutdown;
 use background::BackgroundTasks;
 use std::sync::Arc;
 
+/// Build-owned dependencies, selected before opening the database.
+pub struct Injections {
+    pub license: Arc<dyn crate::policy::LicenseProvider>,
+    pub gate: Arc<dyn crate::policy::PolicyGate>,
+    pub retention: Arc<dyn crate::store::RetentionPolicyProvider>,
+}
+
+impl Injections {
+    pub fn community() -> Self {
+        Self {
+            license: Arc::new(crate::policy::CommunityLicenseProvider),
+            gate: Arc::new(crate::policy::AllowAllGate),
+            retention: Arc::new(crate::store::CommunityRetentionPolicy),
+        }
+    }
+}
+
 /// 全局应用状态
 pub struct AppState {
     pub db: Arc<Database>,
+    pub license: Arc<dyn crate::policy::LicenseProvider>,
+    pub gate: Arc<dyn crate::policy::PolicyGate>,
     pub credential_store: Arc<dyn CredentialStore>,
     pub binding_credential_service: Arc<BindingCredentialService>,
     pub claude_cli_auth_service: Arc<ClaudeCliAuthService>,
@@ -51,6 +70,7 @@ impl AppState {
             credential_store,
             Arc::new(ClaudeCliAuthService::production()),
             quota_service,
+            &Injections::community(),
         )
     }
 
@@ -59,11 +79,26 @@ impl AppState {
         credential_store: Arc<dyn CredentialStore>,
         quota_service: Arc<QuotaService>,
     ) -> Self {
+        Self::new_with_injections(
+            db,
+            credential_store,
+            quota_service,
+            &Injections::community(),
+        )
+    }
+
+    pub fn new_with_injections(
+        db: Arc<Database>,
+        credential_store: Arc<dyn CredentialStore>,
+        quota_service: Arc<QuotaService>,
+        injections: &Injections,
+    ) -> Self {
         Self::new_with_services(
             db,
             credential_store,
             Arc::new(ClaudeCliAuthService::production()),
             quota_service,
+            injections,
         )
     }
 
@@ -79,6 +114,7 @@ impl AppState {
             credential_store,
             Arc::new(ClaudeCliAuthService::new(runner)),
             quota_service,
+            &Injections::community(),
         )
     }
 
@@ -87,6 +123,7 @@ impl AppState {
         credential_store: Arc<dyn CredentialStore>,
         claude_cli_auth_service: Arc<ClaudeCliAuthService>,
         quota_service: Arc<QuotaService>,
+        injections: &Injections,
     ) -> Self {
         let binding_credential_service = Arc::new(BindingCredentialService::new(
             db.clone(),
@@ -104,10 +141,13 @@ impl AppState {
             quota_service.clone(),
             session_usage_service.clone(),
             tool_detection_cache.clone(),
+            injections.license.clone(),
         ));
 
         Self {
             db,
+            license: injections.license.clone(),
+            gate: injections.gate.clone(),
             credential_store,
             binding_credential_service,
             claude_cli_auth_service,
