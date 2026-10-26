@@ -6,10 +6,12 @@ import { SettingsPage } from "@/components/settings/SettingsPage";
 import { UsageDashboardPage } from "@/components/usage-dashboard/UsageDashboardPage";
 import { useTranslation } from "react-i18next";
 import { useSettingsQuery } from "@/lib/query";
+import { useLicenseChangedRefresh } from "@/lib/query/license";
 import { isMac } from "@/lib/platform";
 import { useMainWindowNavigation } from "@/hooks/useMainWindowNavigation";
 
 export default function App() {
+  useLicenseChangedRefresh();
   const { t } = useTranslation();
   const [settingsTarget, setSettingsTarget] = useState<{
     open: boolean;

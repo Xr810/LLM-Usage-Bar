@@ -19,11 +19,17 @@ function wrapper() {
 
 describe("get_license_status", () => {
   it("types optional identity fields as omitted strings, not null", () => {
+    expectTypeOf<LicenseStatus["state"]>().toEqualTypeOf<
+      "active" | "grace" | "free"
+    >();
     expectTypeOf<LicenseStatus["expiresAt"]>().toEqualTypeOf<
       string | undefined
     >();
     expectTypeOf<LicenseStatus["graceUntil"]>().toEqualTypeOf<
       string | undefined
+    >();
+    expectTypeOf<LicenseStatus["graceDays"]>().toEqualTypeOf<
+      number | undefined
     >();
     expectTypeOf<LicenseStatus["emailMasked"]>().toEqualTypeOf<
       string | undefined
@@ -40,23 +46,27 @@ describe("get_license_status", () => {
     const status = await getLicenseStatus();
     expect(status).toEqual({
       tier: "free",
+      state: "free",
       build: "community",
       features: [],
       uiFlags: { upsellEntry: false },
     });
     expect(status.expiresAt).toBeUndefined();
     expect(status.graceUntil).toBeUndefined();
+    expect(status.graceDays).toBeUndefined();
     expect(status.emailMasked).toBeUndefined();
   });
 
   it("keeps a present upsellEntry flag without treating missing optionals as null", async () => {
     const official: LicenseStatus = {
       tier: "pro",
+      state: "grace",
       build: "official",
       features: ["heatmap_12m"],
       uiFlags: { upsellEntry: true },
       expiresAt: "2026-12-01T00:00:00Z",
       graceUntil: "2026-12-15T00:00:00Z",
+      graceDays: 14,
       emailMasked: "a***@example.com",
     };
     server.use(

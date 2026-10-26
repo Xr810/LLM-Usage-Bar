@@ -12,6 +12,7 @@ export interface CodedError {
 export function communityLicenseStatus(): LicenseStatus {
   return {
     tier: "free",
+    state: "free",
     build: "community",
     features: [],
     uiFlags: { upsellEntry: false },
