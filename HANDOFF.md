@@ -1566,6 +1566,61 @@ name and confirms the JSON-string version contract above:
   passed, including both backend modes and macOS/Windows desktop builds:
   https://github.com/Xr810/LLM-Usage-Bar/actions/runs/40202713551.
 
+### 2026-10-26 BE-21b initial tray contract (superseded by v7.19 follow-up below)
+
+Based on `a7954917`, `TrayUsageSnapshot.buildType` reuses `LicenseBuild` and
+`community_license_status().build`, the same source as the license command.
+The public repository has no official provider selection or `pro` feature;
+private official-build integration remains unverified. No new build selector
+or Cargo feature is introduced.
+
+`SourceRowView.nextResetAt` is the earliest parseable RFC3339 instant in its
+published windows, serialized as UTC ISO-8601. Missing windows, invalid values,
+and timezone-free timestamps yield `null` when no known instant remains. No
+local midnight or timezone is invented. The shared fixture deliberately orders
+offset timestamps differently lexically and chronologically.
+
+`noteCodes: string[]` is present but currently empty. ADR v7.18 / the C17
+`reasonCode` enumeration and emission rules are unavailable in this checkout.
+BE-17's `ToolDetectRow` emits `codex_websocket` for an unproxied Codex
+subscription, but `UsageProviderView` has no equivalent transport evidence or
+approved tool-to-provider mapping. Do not infer it from provider names, quota
+sources, or all Codex subscriptions. **C17 mapping and the Codex WebSocket
+source-row acceptance fixture remain blocked**, not completed by the empty
+array. Obtain the authoritative contract before implementing that mapping.
+
+This is an explicitly requested wire-format addition, not completion of §20's
+broader refactor or native-platform exit acceptance gates. BE-24 locale and
+notification text work, trusted subscription relay settings, official host
+allowlists, and the other orb's license UI flags are unchanged.
+
+Linux orb verification before push:
+
+- `pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml` and
+  `pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml --no-default-features`:
+  **each 1364 library + 15 integration tests passed**, including the new shared
+  contract fixture and both dependency guards. Three existing ignored tests and
+  three existing test-compilation warnings remain. These are the actual public
+  manifest/CI configurations, not an invented `pro` configuration.
+- `pnpm rust -- clippy --locked --manifest-path src-tauri/Cargo.toml -- -D warnings`
+  and `pnpm rust -- clippy --locked --manifest-path src-tauri/Cargo.toml --no-default-features -- -D warnings`:
+  **both passed**.
+- Rust environment: `CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0
+  CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0`. The initial focused build
+  exited 137 under memory pressure; the successful runs used temporary 2 GiB
+  swap. A subsequent test compile exposed the existing large `json!` fixture's
+  recursion limit when adding a field; adding the expected field separately
+  fixed it without changing the crate's recursion limit.
+- `pnpm test:unit --maxWorkers=1`: **55 files / 371 tests passed standalone**.
+  The first run concurrent with compilation had three timeouts; the unchanged
+  timed-out tests passed in the standalone rerun. No timeouts were increased.
+- `pnpm typecheck`, `pnpm format:check`,
+  `pnpm exec prettier --check src/types/trayUsage.ts src/lib/query/trayUsage.test.tsx src/components/tray-usage/TrayUsagePopover.test.tsx tests/msw/handlers.ts tests/fixtures/tray-source-contract.json`,
+  `pnpm rust -- fmt --manifest-path src-tauri/Cargo.toml --check`,
+  `git diff --check`, and §17 conflict-marker scan: **passed**.
+- No UI appearance/interaction changed; no native Windows/macOS run performed.
+  C17/Codex acceptance remains blocked as described above despite these passes.
+
 ### 2026-10-26 BE-1b display-only License UI flags
 
 Based on main `a7954917` and the task owner's requirements. ADR v7.18 is not
@@ -1698,3 +1753,84 @@ Baseline verification before push (Linux orb; documentation-only diff):
 - Three existing Rust test compilation warnings remain. Native Windows/macOS
   validation and BE-16 feature acceptance were not performed. These baseline
   passes do not establish grouped queries, clamping, or license rejection.
+
+### 2026-10-26 BE-21b v7.19 cached source-note follow-up
+
+Merged `origin/main` `e17c6418` normally into PR #105's existing branch,
+preserving BE-1b and both HANDOFF entries. No published history was rewritten.
+The owner relayed the v7.19 note-code rules: closed set `stale`, `error`,
+`not_proxied`, `codex_websocket`, `license_required`;
+stale/error are mutually exclusive. Community builds never emit the license
+note, and other builds require the row's truncation unavailable reason to be
+`license_required`. Rust and TypeScript now represent the closed set explicitly.
+
+No backend `detect_tools` cache existed. AppState now shares an in-memory cache
+between that command and the tray projector. The command replaces its completed
+result; snapshot projection clones the cached result once, without triggering
+detection, reading credentials, changing takeover settings, or fetching quota.
+An empty cache is unknown, not `proxied=false`. Only exact provider/tool IDs
+bind detection evidence; provider display names/presets never supply it. Only
+`providerId=codex` plus subscription billing and a cached `codex_websocket` note
+produce that note; other detection codes are not copied to source rows.
+
+**Final architect clarification received:** emit `not_proxied` for cached
+`proxied=false` metered rows and Codex subscription rows (`providerId=codex`,
+`billingKind=subscription`), never other subscriptions. For Codex, the final
+order overrides the original generic order: `codex_websocket` precedes
+`not_proxied`. State notes still lead and any eligible license note follows.
+The shared fixture now seeds a fresh stored quota read and expects exactly
+`["codex_websocket", "not_proxied"]`; a matched non-Codex subscription is a
+negative control. No additional WebSocket classification is inferred.
+
+The new cache fixture exercises the real AppState/tray service with cached
+Codex evidence, then removes the WebSocket note and finally clears the cache.
+Additional cases cover note order, duplicate/unsupported detection codes,
+stale/error distinction, community/official license-note behavior, known versus
+unknown proxy state, and same-name/different-ID providers. Build/reset behavior
+from the initial delivery is retained.
+
+Earlier Linux orb validation after the BE-1b merge, before final clarification:
+
+- `pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml` with
+  `LLM_USAGE_BAR_UPSELL_ENTRY` unset: **1366 library + 15 integration passed**.
+- `LLM_USAGE_BAR_UPSELL_ENTRY=true pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml --no-default-features`:
+  **1366 library + 15 integration passed**. This preserves BE-1b's display-flag
+  coverage; no `pro` feature is invented. Both runs retain 3 existing ignored
+  tests and 3 existing test-compilation warnings; dependency guards pass.
+- `pnpm rust -- clippy --locked --manifest-path src-tauri/Cargo.toml -- -D warnings`
+  with the display flag unset, and
+  `LLM_USAGE_BAR_UPSELL_ENTRY=true pnpm rust -- clippy --locked --manifest-path src-tauri/Cargo.toml --no-default-features -- -D warnings`:
+  **both passed**.
+- Rust commands used `CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0
+  CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0` and temporary 2 GiB swap.
+- `pnpm typecheck` and `pnpm test:unit --maxWorkers=1`: **passed; 55 files /
+  372 tests**. Rust's first fixture comparison distinguished JSON `0` from
+  `0.0`; the fixture expectation now normalizes that numeric representation,
+  and both complete Rust reruns pass without changing production output.
+- `pnpm format:check`, `pnpm exec prettier --check tests/fixtures/tray-source-contract.json`,
+  `pnpm rust -- fmt --manifest-path src-tauri/Cargo.toml --check`,
+  `git diff --check`, and §17 conflict-marker scan: **passed**.
+- Native Windows/macOS acceptance has not been performed in this orb.
+  These earlier checks do not validate the final contract adjustment below.
+
+Latest `origin/main` `a94dccf0` (BE-24) was merged normally without conflicts;
+BE-24 files are unchanged relative to main. An overlapping frontend run during the cold Rust build
+had one existing dashboard test hit its 5-second timeout (371 passed); the
+standalone rerun passed without changing test timeouts.
+
+Final-contract validation after that merge, with the same Rust environment
+and command lines listed above:
+
+- Full Rust tests, default/display flag unset: **1369 library + 15 integration
+  passed**, 3 existing ignored tests; no failures.
+- Full Rust tests, `--no-default-features` and display flag `true`: **1369
+  library + 15 integration passed**, 3 existing ignored tests; no failures.
+- Both Clippy configurations with `-D warnings`: **passed**.
+- Standalone `pnpm test:unit --maxWorkers=1`: **55 files / 372 tests passed**.
+- `pnpm typecheck`, `pnpm format:check`, targeted fixture Prettier,
+  wrapper-managed Rust `fmt --check`, `git diff --check`, and §17 conflict scan:
+  **passed**. Three existing test compilation warnings remain.
+- Final fresh fetch confirmed main is included. Temporary swap was removed.
+  No native Windows/macOS interactive acceptance was performed in this orb.
+  No official provider/build selector was invented; private official provider
+  integration remains outside this public repository's validation.

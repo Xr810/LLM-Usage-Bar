@@ -614,6 +614,11 @@
     "output": "輸出 token"
   },
   "native": {
+    "notify": {
+      "budgetReachedTitle": "已達每日 API 預算",
+      "budgetReachedBody": "今日 API 花費 ${{spent}}，佔每日預算 ${{budget}} 的 {{percent}}%。",
+      "budgetReachedScopedBody": "{{scope}} 今日已花費 ${{spent}}，佔每日預算 ${{budget}} 的 {{percent}}%。"
+    },
     "tray": {
       "showMain": "開啟主介面",
       "openWebsite": "開啟官方網站",

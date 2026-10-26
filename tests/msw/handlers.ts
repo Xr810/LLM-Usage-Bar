@@ -17,6 +17,8 @@ import type {
 const TAURI_ENDPOINT = "http://tauri.local";
 
 export const trayUsageSnapshotFixture: TrayUsageSnapshot = {
+  buildType: "community",
+  sources: [],
   status: "green",
   generatedAt: 1_000,
   lastSuccessAt: 1_000,

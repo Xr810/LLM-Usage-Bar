@@ -614,6 +614,11 @@
     "output": "出力トークン"
   },
   "native": {
+    "notify": {
+      "budgetReachedTitle": "1日のAPI予算に到達しました",
+      "budgetReachedBody": "本日のAPI利用額は1日の予算 ${{budget}} のうち ${{spent}} です（{{percent}}%）。",
+      "budgetReachedScopedBody": "{{scope}} は1日の予算 ${{budget}} のうち ${{spent}} を使用しました（{{percent}}%）。"
+    },
     "tray": {
       "showMain": "メインウィンドウを開く",
       "openWebsite": "公式サイトを開く",

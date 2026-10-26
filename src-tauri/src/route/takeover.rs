@@ -18,6 +18,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::RwLock;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -64,6 +65,27 @@ pub struct ToolDetectRow {
     pub proxied: bool,
     pub enforceable: bool,
     pub note_codes: Vec<String>,
+}
+
+/// Last completed detect_tools result. Reading this cache never probes the host.
+#[derive(Default)]
+pub struct ToolDetectionCache {
+    rows: RwLock<Vec<ToolDetectRow>>,
+}
+
+impl ToolDetectionCache {
+    pub fn replace(&self, rows: Vec<ToolDetectRow>) {
+        if let Ok(mut cached) = self.rows.write() {
+            *cached = rows;
+        }
+    }
+
+    pub fn snapshot(&self) -> Vec<ToolDetectRow> {
+        self.rows
+            .read()
+            .map(|rows| rows.clone())
+            .unwrap_or_default()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
