@@ -5,6 +5,7 @@ import { I18nextProvider, useTranslation } from "react-i18next";
 import i18n from "@/i18n";
 import { ensureProCopy } from "@/i18n/proCopy";
 import { LicenseSettings } from "@/components/lub/LicenseSettings";
+import { OnboardingWizard } from "@/components/lub/OnboardingWizard";
 import { TrayPanelV5 } from "@/components/lub/TrayPanelV5";
 import { TrendsPage } from "@/components/lub/TrendsPage";
 import { splitUsd } from "@/components/lub/money";
@@ -111,6 +112,10 @@ function Gallery({
         {screen === "license" ? (
           <div className="lub-stage lub-stage-window">
             <LicenseSettings />
+          </div>
+        ) : screen === "onboard" ? (
+          <div className="lub-stage lub-stage-window">
+            <OnboardingWizard />
           </div>
         ) : screen === "trends" ? (
           <div className="lub-stage">
