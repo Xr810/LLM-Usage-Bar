@@ -114,6 +114,34 @@ export interface UsageSummaryByApp {
   summary: UsageSummary;
 }
 
+export interface UsageTrendRequest {
+  tz: string;
+  from: string;
+  to: string;
+  granularity: "day";
+  groupBy?: "provider" | "project" | "client";
+  filters?: { providerIds?: string[] };
+}
+
+export interface UsageTrendPoint {
+  dateLocal: string;
+  requests: number;
+  /** Sum of the four stored token categories. */
+  tokens: number;
+  /** i64 JSON number; absent only when every row's cost is unparseable. */
+  costMicroUsd?: number;
+}
+
+export interface UsageTrendResponse {
+  series: {
+    groupKey: string;
+    groupLabel: string;
+    points: UsageTrendPoint[];
+  }[];
+  /** Original from date, present only when the Free/community window clamps. */
+  clampedFrom?: string;
+}
+
 export interface DailyStats {
   date: string;
   requestCount: number;

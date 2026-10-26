@@ -20,6 +20,7 @@ pub(crate) use crate::model::system_providers;
 pub mod tray_snapshot;
 pub mod tray_usage;
 pub mod tray_usage_scheduler;
+pub mod trend;
 pub mod usage_cache;
 pub(crate) mod watcher;
 // watcher_state:生产路径只使用 begin_due/finish/mark_* 等子集;其余 getter 与

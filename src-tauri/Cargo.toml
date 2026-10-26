@@ -80,6 +80,7 @@ sha2 = "0.11"
 subtle = "2"
 zeroize = "1"
 hmac = "0.13"
+chrono-tz = "0.10"
 
 [target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
 tauri-plugin-single-instance = "2"

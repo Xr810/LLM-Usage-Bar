@@ -13,6 +13,8 @@ import type {
   SessionSyncResult,
   DataSourceSummary,
   OfficialPricingRefreshOutcome,
+  UsageTrendRequest,
+  UsageTrendResponse,
 } from "@/types/usage";
 import type {
   ModelPriceInput,
@@ -20,6 +22,9 @@ import type {
 } from "@/types/usageDashboard";
 
 export const usageApi = {
+  queryUsageTrend: (request: UsageTrendRequest): Promise<UsageTrendResponse> =>
+    invoke("query_usage_trend", { ...request }),
+
   // Proxy usage statistics methods
   getUsageSummary: async (
     startDate?: number,
@@ -51,6 +56,7 @@ export const usageApi = {
     });
   },
 
+  /** @deprecated Use query_usage_trend for the v7.19 contract. This legacy API remains unclamped. */
   getUsageTrends: async (
     startDate?: number,
     endDate?: number,

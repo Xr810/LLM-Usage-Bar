@@ -1673,6 +1673,90 @@ CARGO_INCREMENTAL=0` and temporary 2 GiB swap.
 - Test compilation retains three existing test-only unused-import/dead-code
   warnings. No native Windows/macOS validation was performed in this orb.
 
+### 2026-10-26 BE-16 usage trend contract investigation (historical)
+
+The blockers recorded in this initial investigation were subsequently resolved
+by the owner's v7.19 / v7.19.1 decisions; see the implementation entry below.
+
+Baseline: main `e17c6418` (includes BE-1b / #103). This is an investigation-only
+delivery, not an implementation or acceptance of BE-16. No runtime or TypeScript
+contract is changed. The owner requires daily `groupBy` values `provider`,
+`project`, and `client`; grouped `series` with `groupKey`, `groupLabel`, and
+`points` containing `dateLocal`, `requests`, `tokens`, and optional
+`costMicroUsd`; an unattributed bucket; centralized 30-day Free/community
+clamping with `clampedFrom`; and `PRO_REQUIRED` for grouped Free/community
+requests. These requirements do not specify the complete wire contract.
+
+Evidence inspected:
+
+- Neither `query_usage_trend` nor `clamp_usage_query` exists in this baseline.
+  `src-tauri/src/api/commands/usage.rs::get_usage_trends` delegates to
+  `store/usage_stats.rs::get_daily_trends` and returns `Vec<DailyStats>`.
+  `src/lib/api/usage.ts` and `src/types/usage.ts` mirror that array, with `date`,
+  `requestCount`, `totalTokens`, token subtotals, and decimal-string `totalCost`.
+  Adding an envelope to that API would not preserve its existing wire format.
+- `store/dao/hourly_rollup.rs::local_day_for_hour` accepts an explicit UTC
+  offset and flags non-whole-hour offsets as approximate. It does not select
+  a timezone or define the requested `dateLocal` contract.
+- Schema v29 raw logs have `project_alias` and `client_tag_id`; hourly rollups
+  have neither dimension. The rollup backfill deliberately reads raw proxy
+  logs only, not `usage_events`, to avoid counting a request twice. This does
+  not establish the new endpoint's source/retention/attribution policy.
+- `policy/license.rs` defines Free/Pro/ProP3 and Community/Official separately;
+  the public provider is community Free. Cargo has `default = []` and
+  `test-hooks`, no `pro` feature. Display-only `uiFlags` are not authorization.
+- ADR v7.18 is not present in the inspected checkout or the originating owner
+  thread's BE-16 requirement. That requirement explicitly prohibits inventing
+  ambiguous contracts. Neighboring APIs are evidence, not replacement specs.
+
+BLOCKED — owner must supply the authoritative definitions before implementation:
+
+1. Full request and ungrouped response, including range names/types/defaults,
+   granularity, filters, and whether this is a new command or a legacy alias.
+2. `unattributed` placement/shape/key/label, missing versus empty dimension rules,
+   empty bucket behavior, and group key/label mappings for each dimension.
+3. `costMicroUsd` wire type and omission rules (including mixed billing identities),
+   token accounting, request inclusion, and source selection/deduplication.
+4. `dateLocal` timezone selection, date format, DST handling, and hourly-rollup
+   approximation behavior; no timezone is inferred from the operator's locale.
+5. `clampedFrom` meaning/type/presence; 30-day anchor, calendar versus elapsed
+   days, endpoint inclusivity, invalid/future ranges, and which existing query
+   paths “everything” covers. No clamp helper signature currently exists.
+6. Whether “split” means only `groupBy` or another request field, non-daily
+   grouping behavior, and the server-side official-provider integration seam.
+
+All BE-16 acceptance tests (each dimension, unattributed, clamping metadata,
+Free/community grouped rejection) remain BLOCKED, not passed by baseline tests.
+Unused DTOs, a disconnected clamp helper, or a fabricated endpoint would not
+deliver an independently usable unambiguous part, so none is added. BE-24,
+BE-1b, BE-21b, trusted relay settings, and Codex hosts remain untouched. Existing
+§20 native shutdown acceptance gaps remain open.
+
+Baseline verification before push (Linux orb; documentation-only diff):
+
+- Rust environment: `CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0
+  CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0`, temporary 2 GiB swap.
+- `pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml`: 1363
+  library + 15 integration tests passed, 3 existing ignored. Repeated after
+  the baseline update, library runtime 62.49s.
+- `LLM_USAGE_BAR_UPSELL_ENTRY=true pnpm rust -- test --locked --manifest-path
+  src-tauri/Cargo.toml --no-default-features`: same counts, library 63.14s.
+  This follows #103's CI configuration; no nonexistent Pro feature is used.
+- `pnpm rust -- clippy --locked --manifest-path src-tauri/Cargo.toml -- -D
+  warnings`: passed (3m58s). Repeated with `--no-default-features` before `--`
+  and `LLM_USAGE_BAR_UPSELL_ENTRY=true`: passed (23.75s).
+- `pnpm test:unit --maxWorkers=1`: standalone rerun passed 55 files / 370
+  tests (127.62s). Initial concurrent Rust/frontend run had 368 passed and
+  two 5-second timeouts in `UsageDashboardPage.test.tsx` (minute-tick draft
+  preservation and exact range queries). No code, timeout, or test was changed
+  to obtain the standalone pass; resource contention is not proven causation.
+- `pnpm typecheck`, `pnpm format:check`,
+  `pnpm rust -- fmt --manifest-path src-tauri/Cargo.toml --check`,
+  `git diff --check`, and §17 conflict-marker scan passed.
+- Three existing Rust test compilation warnings remain. Native Windows/macOS
+  validation and BE-16 feature acceptance were not performed. These baseline
+  passes do not establish grouped queries, clamping, or license rejection.
+
 ### 2026-10-26 BE-21b v7.19 cached source-note follow-up
 
 Merged `origin/main` `e17c6418` normally into PR #105's existing branch,
@@ -1753,3 +1837,79 @@ and command lines listed above:
   No native Windows/macOS interactive acceptance was performed in this orb.
   No official provider/build selector was invented; private official provider
   integration remains outside this public repository's validation.
+
+### 2026-10-26 BE-16 daily trends (v7.19 / ADR v7.19.1)
+
+Resumed on the existing PR #106 branch and merged main `5cf500dd` normally.
+The HANDOFF append conflict was resolved by retaining both entries. Published
+history, BE-1b display flags, BE-21b tray contracts, BE-24 locale/notification
+code, trusted subscription relay settings, and Codex hosts are preserved.
+
+`query_usage_trend` is a new command. It takes flat camelCase arguments `tz`,
+`from`, `to`, `granularity`, optional `groupBy`, and optional `filters`.
+Only daily granularity and `{providerIds?: string[]}` filters are accepted;
+unknown filter fields, invalid IANA zones/dates, and reversed ranges return
+`INVALID_ARGUMENT`. TypeScript request/response types and `usageApi.queryUsageTrend`
+match the new envelope. The existing `get_usage_trends` remains unchanged and
+unclamped, with decimal-string costs, and is documented as deprecated.
+
+Every new query passes `clamp_usage_query`. Community builds (regardless of
+tier) and Free licenses reject grouping with `PRO_REQUIRED`; ungrouped dates
+are intersected with `[today_local - 29, today_local]`. `clampedFrom` contains
+the original `from` only when either endpoint changes. Disjoint windows return
+the single `all` series with empty points. Official Pro/ProP3 policy is tested
+through server-owned status values; no private license verification or official
+provider implementation is claimed. The public command uses community status.
+
+Provider/ungrouped queries read only hourly rollups; project/client queries
+read only raw request logs. The four stored token categories are summed, and
+each raw row counts as one request. Provider labels use stored display names,
+project labels use aliases, and missing names fall back to keys. There is no
+client-name registry in the current public schema, so client labels use the
+approved key fallback. `unattributed` always has an empty label. Every returned
+series is zero-filled over the effective closed range, with cost zero on days
+without rows; days with rows but no parseable cost omit `costMicroUsd`.
+
+Accepted limitations and follow-up:
+
+- No schema migration. Nullable rollup costs are read as unknown; stored
+  integer zero remains zero and does not reconstruct historical parseability.
+  The production v29 schema is NOT NULL; a disposable nullable test relation
+  exercises the reader's NULL contract without changing that schema.
+- Hourly buckets use the IANA local date of the bucket's start. This is an
+  approximation when a fractional-hour timezone splits a UTC hour at midnight.
+  Raw rows use their exact instant. `chrono-tz` supplies IANA/DST rules; tests
+  cover 23-hour and 25-hour New York days and Kolkata's half-hour boundary.
+- Raw logs default to 90-day retention (configurable); older project/client
+  groups have no data after pruning. No second source is mixed in to fill them.
+- **BE-16b** owns old-dashboard clamping. No old dashboard, heatmap (52-week
+  policy), today-hourly view, or request-log filter behavior changes here.
+- Native Windows/macOS interaction and the §20 shutdown gaps remain unverified.
+
+Verification on this implementation before push (Linux orb):
+
+- Rust environment: `CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0
+  CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0`, temporary 2 GiB swap.
+- `pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml --lib
+  usage::trend::`: **6 passed**. The initial compile failed with E0277 because
+  test-only `()` helpers used the production Result-returning lock macro;
+  replacing those test locks with explicit `lock().unwrap()` fixed compilation.
+- `pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml` with the
+  display flag unset: **1375 library + 15 integration passed**, 3 existing
+  ignored tests; library runtime 63.67s.
+- `LLM_USAGE_BAR_UPSELL_ENTRY=true pnpm rust -- test --locked --manifest-path
+  src-tauri/Cargo.toml --no-default-features`: **same counts**, library 63.78s.
+  No `pro` feature exists. Both runs include the dependency and command guards.
+- `pnpm rust -- clippy --locked --manifest-path src-tauri/Cargo.toml -- -D
+  warnings`: **passed** (3m53s). With `--no-default-features` before `--` and
+  `LLM_USAGE_BAR_UPSELL_ENTRY=true`: **passed** (22.38s).
+- `pnpm test:unit --maxWorkers=1`: **56 files / 374 tests passed** standalone
+  (124.46s). The focused `pnpm test:unit src/lib/api/usageTrend.test.ts
+  --maxWorkers=1` also passed 2/2. The shared JSON fixture is checked against
+  the real Rust query and serialization, not merely a mocked backend response.
+- `pnpm typecheck`, `pnpm format:check`, targeted fixture Prettier,
+  `pnpm rust -- fmt --manifest-path src-tauri/Cargo.toml --check`,
+  `git diff --check`, and §17 conflict scan: **passed**.
+- Three existing Rust test compilation warnings remain. No local native
+  Windows/macOS interaction test or private official-provider integration was
+  performed. No UI appearance or interaction was changed.
