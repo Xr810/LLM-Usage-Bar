@@ -722,6 +722,7 @@ async fn handle_proxy_inner(
         } => {
             // BE-30 is an immediate, fail-closed 429, not a suspended request.
             // PRO-2 interactive Hold handling will extend this response.
+            log::debug!("guard immediate hold: {reason}");
             let mut details = serde_json::json!({ "reason": reason });
             if let Some(seconds) = retry_after_seconds {
                 details["retryAfter"] = seconds.into();
@@ -760,7 +761,7 @@ async fn handle_proxy_inner(
                             key_fingerprint: classified.key_fp,
                             session_id: classified.session_id,
                             end_reason: "guard_hold".to_string(),
-                            error_message: Some(reason),
+                            error_message: Some("immediate".to_string()),
                         },
                     ) {
                         log::warn!("guard hold recording failed: {error}");
@@ -1836,7 +1837,7 @@ mod tests {
                     r.get(0)
                 })
                 .unwrap();
-            assert_eq!(stored_reason.as_deref(), Some(reason));
+            assert_eq!(stored_reason.as_deref(), Some("immediate"));
             let requests: i64 = conn
                 .query_row(
                     "SELECT COALESCE(SUM(request_count), 0) FROM usage_hourly_rollups",

@@ -579,6 +579,106 @@ mod tests {
     }
 
     #[test]
+    fn startup_hold_repair_failure_is_nonfatal_and_retries_atomically() -> Result<(), AppError> {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hold-repair-failure.db");
+        let hour = super::super::hourly_rollup::hour_bucket_utc(
+            chrono::Utc::now().timestamp() - 2 * 86_400,
+        );
+        {
+            let db = Database::init_at(&path)?;
+            let conn = crate::store::lock_conn!(db.conn);
+            conn.execute(
+                "DELETE FROM settings WHERE key = 'guard_hold_hourly_repaired_v1'",
+                [],
+            )?;
+            for (id, reason) in [("used", None), ("held", Some("guard_hold"))] {
+                conn.execute(
+                    "INSERT INTO proxy_request_logs (request_id, provider_id, app_type,
+                         model, input_tokens, output_tokens, total_cost_usd, latency_ms,
+                         status_code, created_at, end_reason)
+                     VALUES (?1, 'p', 'claude', 'm', 13, 7, '0.25', 11, 200, ?2, ?3)",
+                    rusqlite::params![id, hour, reason],
+                )?;
+            }
+            conn.execute(
+                "INSERT INTO usage_hourly_rollups (hour_utc, app_type, provider_id, model,
+                     billing_identity, data_source, request_count, input_tokens,
+                     output_tokens, cost_micro_usd)
+                 VALUES (?1, 'claude', 'p', 'm', '', 'proxy', 2, 26, 14, 500000),
+                        (?2, 'claude', 'p', 'archived', '', 'proxy', 9, 31, 43, 750000)",
+                rusqlite::params![hour, hour - 120 * 86_400],
+            )?;
+            // Fail after backfill deletes the cached hour, proving that both
+            // the deletion and the newly queued dirty hour roll back as well.
+            conn.execute_batch(
+                "CREATE TRIGGER fail_hold_repair BEFORE INSERT ON usage_hourly_rollups
+                 BEGIN SELECT RAISE(ABORT, 'injected hold repair failure'); END;",
+            )?;
+        }
+
+        // Exercise the real startup warning-and-continue path, not just the DAO.
+        {
+            let db = Database::init_at(&path)?;
+            let conn = crate::store::lock_conn!(db.conn);
+            let marker: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM settings WHERE key = 'guard_hold_hourly_repaired_v1'",
+                [],
+                |row| row.get(0),
+            )?;
+            assert_eq!(marker, 0, "failed repair must remain eligible for retry");
+            let cached: (i64, i64, i64, i64) = conn.query_row(
+                "SELECT request_count, input_tokens, output_tokens, cost_micro_usd
+                 FROM usage_hourly_rollups WHERE model = 'm'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )?;
+            assert_eq!(cached, (2, 26, 14, 500000));
+            let dirty: i64 =
+                conn.query_row("SELECT COUNT(*) FROM rollup_dirty_hours", [], |row| {
+                    row.get(0)
+                })?;
+            assert_eq!(
+                dirty, 0,
+                "repair transaction must roll back its dirty hours"
+            );
+            conn.execute_batch("DROP TRIGGER fail_hold_repair;")?;
+        }
+
+        let db = Database::init_at(&path)?;
+        let conn = crate::store::lock_conn!(db.conn);
+        let marker: String = conn.query_row(
+            "SELECT value FROM settings WHERE key = 'guard_hold_hourly_repaired_v1'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(marker, "1");
+        let mut stmt = conn.prepare(
+            "SELECT model, request_count, input_tokens, output_tokens, cost_micro_usd
+             FROM usage_hourly_rollups ORDER BY model",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        assert_eq!(
+            rows,
+            vec![
+                ("archived".into(), 9, 31, 43, 750000),
+                ("m".into(), 1, 13, 7, 250000),
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_rollup_merges_with_existing() -> Result<(), AppError> {
         let db = Database::memory()?;
         let now = chrono::Utc::now().timestamp();
