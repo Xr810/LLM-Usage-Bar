@@ -6,7 +6,10 @@ import {
   openMainFromTray,
   quitFromTray,
 } from "@/lib/api/trayUsage";
-import { useLicenseStatus } from "@/lib/query/license";
+import {
+  useLicenseChangedRefresh,
+  useLicenseStatus,
+} from "@/lib/query/license";
 import {
   trayUsageKeys,
   useRefreshTrayUsage,
@@ -19,6 +22,7 @@ import { TrayUsagePopoverView } from "./TrayUsagePopoverView";
 const initialRefreshKey = [...trayUsageKeys.all, "initial-refresh"] as const;
 
 export function TrayUsagePopover() {
+  useLicenseChangedRefresh();
   const queryClient = useQueryClient();
   const { data, isLoading } = useTrayUsageSnapshot();
   const license = useLicenseStatus();

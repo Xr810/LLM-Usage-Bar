@@ -27,9 +27,9 @@ interface TrayPanelV5Props {
   scrollMaxPx?: number;
   refreshError?: string | null;
   /**
-   * Snapshot `buildType`, or live `get_license_status.build`.
-   * Design samples that omit it stay official. Live detection stays
-   * community while the command is loading or has failed.
+   * Live panels pass `get_license_status.build`. Design samples that omit
+   * it stay official. Loading, a failed read, or an unknown build stays
+   * community.
    */
   build?: LubBuild;
   /** C2 tier. It does not show or hide community chrome. */

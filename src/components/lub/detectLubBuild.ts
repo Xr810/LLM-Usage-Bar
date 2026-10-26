@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { useTauriEvent } from "@/hooks/useTauriEvent";
 import type { LicenseStatus, LicenseUiFlags } from "@/types/license";
 import type { LubBuild, LubTier } from "./panelModel";
 
@@ -25,78 +26,81 @@ export function readUpsellEntry(flags: LicenseUiFlags | undefined): boolean {
 }
 
 export interface DetectLubBuildInput {
-  snapshotBuildType?: string | null;
   license?: LicenseStatus | null;
   /** True while `get_license_status` has not settled, including after a failure. */
   pending?: boolean;
 }
 
+const COMMUNITY_EDITION: LubEdition = {
+  build: "community",
+  upsellEntry: false,
+};
+
 /**
- * Snapshot `buildType` wins when it is `community` or `official`.
- * Otherwise the build is `get_license_status.build`. Loading, a failed
- * command, or a missing build stays `community`, so a community install
- * never shows a purchase entry.
+ * Build comes only from `get_license_status.build` — the same provider the
+ * tray snapshot's `buildType` is read from. Loading, a failed command, or a
+ * missing/unknown build stays `community`, so a community install never
+ * shows a purchase entry.
  */
 export function resolveLubBuild(input: DetectLubBuildInput = {}): LubBuild {
-  const fromSnapshot = readLubBuild(input.snapshotBuildType);
-  if (fromSnapshot) return fromSnapshot;
   if (input.pending || input.license == null) return "community";
   return readLubBuild(input.license.build) ?? "community";
 }
 
 /** Reads `get_license_status`. Does not change the command contract. */
-export async function detectLubBuild(input?: {
-  snapshotBuildType?: string | null;
-}): Promise<LubEdition> {
-  const fromSnapshot = readLubBuild(input?.snapshotBuildType);
+export async function detectLubBuild(): Promise<LubEdition> {
   try {
     const license = await invoke<LicenseStatus | null>("get_license_status");
+    const build = readLubBuild(license?.build);
+    if (license == null || build == null) return COMMUNITY_EDITION;
     return {
-      build:
-        fromSnapshot ??
-        resolveLubBuild({ license, pending: false, snapshotBuildType: null }),
-      upsellEntry: readUpsellEntry(license?.uiFlags),
+      build,
+      upsellEntry: readUpsellEntry(license.uiFlags),
     };
   } catch {
-    return {
-      build: fromSnapshot ?? "community",
-      upsellEntry: false,
-    };
+    return COMMUNITY_EDITION;
   }
 }
 
 /**
- * Community until `get_license_status` settles, unless the snapshot already
- * carries `buildType`. `upsellEntry` stays false until the payload says true.
+ * Community until `get_license_status` settles. A later `license-changed`
+ * refetches the provider build without resetting to community first, so a
+ * duplicate delivery does not flash locked chrome. `upsellEntry` stays
+ * false until a known build says true.
  */
-export function useLubEdition(snapshotBuildType?: string | null): LubEdition {
-  const [edition, setEdition] = useState<LubEdition>({
-    build: readLubBuild(snapshotBuildType) ?? "community",
-    upsellEntry: false,
-  });
+export function useLubEdition(): LubEdition {
+  const [edition, setEdition] = useState<LubEdition>(COMMUNITY_EDITION);
+  const requestId = useRef(0);
 
   useEffect(() => {
+    const id = ++requestId.current;
     let cancelled = false;
-    setEdition({
-      build: readLubBuild(snapshotBuildType) ?? "community",
-      upsellEntry: false,
-    });
-    detectLubBuild({ snapshotBuildType })
+    setEdition(COMMUNITY_EDITION);
+    detectLubBuild()
       .then((next) => {
-        if (!cancelled) setEdition(next);
+        if (!cancelled && requestId.current === id) setEdition(next);
       })
       .catch(() => {
-        if (!cancelled) {
-          setEdition({
-            build: readLubBuild(snapshotBuildType) ?? "community",
-            upsellEntry: false,
-          });
+        if (!cancelled && requestId.current === id) {
+          setEdition(COMMUNITY_EDITION);
         }
       });
     return () => {
       cancelled = true;
+      requestId.current += 1;
     };
-  }, [snapshotBuildType]);
+  }, []);
+
+  useTauriEvent<LicenseStatus>("license-changed", () => {
+    const id = ++requestId.current;
+    void detectLubBuild()
+      .then((next) => {
+        if (requestId.current === id) setEdition(next);
+      })
+      .catch(() => {
+        if (requestId.current === id) setEdition(COMMUNITY_EDITION);
+      });
+  });
 
   return edition;
 }
