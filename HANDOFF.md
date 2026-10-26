@@ -1673,7 +1673,10 @@ CARGO_INCREMENTAL=0` and temporary 2 GiB swap.
 - Test compilation retains three existing test-only unused-import/dead-code
   warnings. No native Windows/macOS validation was performed in this orb.
 
-### 2026-10-26 BE-16 usage trend contract investigation (BLOCKED)
+### 2026-10-26 BE-16 usage trend contract investigation (historical)
+
+The blockers recorded in this initial investigation were subsequently resolved
+by the owner's v7.19 / v7.19.1 decisions; see the implementation entry below.
 
 Baseline: main `e17c6418` (includes BE-1b / #103). This is an investigation-only
 delivery, not an implementation or acceptance of BE-16. No runtime or TypeScript
@@ -1834,3 +1837,79 @@ and command lines listed above:
   No native Windows/macOS interactive acceptance was performed in this orb.
   No official provider/build selector was invented; private official provider
   integration remains outside this public repository's validation.
+
+### 2026-10-26 BE-16 daily trends (v7.19 / ADR v7.19.1)
+
+Resumed on the existing PR #106 branch and merged main `5cf500dd` normally.
+The HANDOFF append conflict was resolved by retaining both entries. Published
+history, BE-1b display flags, BE-21b tray contracts, BE-24 locale/notification
+code, trusted subscription relay settings, and Codex hosts are preserved.
+
+`query_usage_trend` is a new command. It takes flat camelCase arguments `tz`,
+`from`, `to`, `granularity`, optional `groupBy`, and optional `filters`.
+Only daily granularity and `{providerIds?: string[]}` filters are accepted;
+unknown filter fields, invalid IANA zones/dates, and reversed ranges return
+`INVALID_ARGUMENT`. TypeScript request/response types and `usageApi.queryUsageTrend`
+match the new envelope. The existing `get_usage_trends` remains unchanged and
+unclamped, with decimal-string costs, and is documented as deprecated.
+
+Every new query passes `clamp_usage_query`. Community builds (regardless of
+tier) and Free licenses reject grouping with `PRO_REQUIRED`; ungrouped dates
+are intersected with `[today_local - 29, today_local]`. `clampedFrom` contains
+the original `from` only when either endpoint changes. Disjoint windows return
+the single `all` series with empty points. Official Pro/ProP3 policy is tested
+through server-owned status values; no private license verification or official
+provider implementation is claimed. The public command uses community status.
+
+Provider/ungrouped queries read only hourly rollups; project/client queries
+read only raw request logs. The four stored token categories are summed, and
+each raw row counts as one request. Provider labels use stored display names,
+project labels use aliases, and missing names fall back to keys. There is no
+client-name registry in the current public schema, so client labels use the
+approved key fallback. `unattributed` always has an empty label. Every returned
+series is zero-filled over the effective closed range, with cost zero on days
+without rows; days with rows but no parseable cost omit `costMicroUsd`.
+
+Accepted limitations and follow-up:
+
+- No schema migration. Nullable rollup costs are read as unknown; stored
+  integer zero remains zero and does not reconstruct historical parseability.
+  The production v29 schema is NOT NULL; a disposable nullable test relation
+  exercises the reader's NULL contract without changing that schema.
+- Hourly buckets use the IANA local date of the bucket's start. This is an
+  approximation when a fractional-hour timezone splits a UTC hour at midnight.
+  Raw rows use their exact instant. `chrono-tz` supplies IANA/DST rules; tests
+  cover 23-hour and 25-hour New York days and Kolkata's half-hour boundary.
+- Raw logs default to 90-day retention (configurable); older project/client
+  groups have no data after pruning. No second source is mixed in to fill them.
+- **BE-16b** owns old-dashboard clamping. No old dashboard, heatmap (52-week
+  policy), today-hourly view, or request-log filter behavior changes here.
+- Native Windows/macOS interaction and the §20 shutdown gaps remain unverified.
+
+Verification on this implementation before push (Linux orb):
+
+- Rust environment: `CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0
+  CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0`, temporary 2 GiB swap.
+- `pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml --lib
+  usage::trend::`: **6 passed**. The initial compile failed with E0277 because
+  test-only `()` helpers used the production Result-returning lock macro;
+  replacing those test locks with explicit `lock().unwrap()` fixed compilation.
+- `pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml` with the
+  display flag unset: **1375 library + 15 integration passed**, 3 existing
+  ignored tests; library runtime 63.67s.
+- `LLM_USAGE_BAR_UPSELL_ENTRY=true pnpm rust -- test --locked --manifest-path
+  src-tauri/Cargo.toml --no-default-features`: **same counts**, library 63.78s.
+  No `pro` feature exists. Both runs include the dependency and command guards.
+- `pnpm rust -- clippy --locked --manifest-path src-tauri/Cargo.toml -- -D
+  warnings`: **passed** (3m53s). With `--no-default-features` before `--` and
+  `LLM_USAGE_BAR_UPSELL_ENTRY=true`: **passed** (22.38s).
+- `pnpm test:unit --maxWorkers=1`: **56 files / 374 tests passed** standalone
+  (124.46s). The focused `pnpm test:unit src/lib/api/usageTrend.test.ts
+  --maxWorkers=1` also passed 2/2. The shared JSON fixture is checked against
+  the real Rust query and serialization, not merely a mocked backend response.
+- `pnpm typecheck`, `pnpm format:check`, targeted fixture Prettier,
+  `pnpm rust -- fmt --manifest-path src-tauri/Cargo.toml --check`,
+  `git diff --check`, and §17 conflict scan: **passed**.
+- Three existing Rust test compilation warnings remain. No local native
+  Windows/macOS interaction test or private official-provider integration was
+  performed. No UI appearance or interaction was changed.

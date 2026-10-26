@@ -66,7 +66,30 @@ pub fn get_usage_summary_by_app(
     )
 }
 
-/// 获取每日趋势
+/// Daily trends (ADR v7.19.1). Entitlement is server-owned, never a request field.
+#[tauri::command]
+pub fn query_usage_trend(
+    state: State<'_, AppState>,
+    tz: String,
+    from: String,
+    to: String,
+    granularity: String,
+    group_by: Option<String>,
+    filters: Option<serde_json::Value>,
+) -> Result<crate::usage::trend::UsageTrendResponse, AppError> {
+    crate::usage::trend::query_usage_trend_at(
+        &state.db,
+        serde_json::json!({
+            "tz": tz, "from": from, "to": to, "granularity": granularity,
+            "groupBy": group_by, "filters": filters,
+        }),
+        &crate::policy::community_license_status(),
+        chrono::Utc::now(),
+    )
+}
+
+/// Deprecated: legacy trend API. Use `query_usage_trend` for the v7.19 contract.
+/// Kept unchanged: returns `Vec<DailyStats>` with string costs and no range clamp.
 #[tauri::command]
 pub fn get_usage_trends(
     state: State<'_, AppState>,
