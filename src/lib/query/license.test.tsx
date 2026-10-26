@@ -40,6 +40,7 @@ describe("get_license_status", () => {
     const status = await getLicenseStatus();
     expect(status).toEqual({
       tier: "free",
+      state: "free",
       build: "community",
       features: [],
       uiFlags: { upsellEntry: false },
@@ -52,6 +53,7 @@ describe("get_license_status", () => {
   it("keeps a present upsellEntry flag without treating missing optionals as null", async () => {
     const official: LicenseStatus = {
       tier: "pro",
+      state: "active",
       build: "official",
       features: ["heatmap_12m"],
       uiFlags: { upsellEntry: true },

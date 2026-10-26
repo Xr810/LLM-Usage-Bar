@@ -1135,6 +1135,7 @@ const agentUsageBreakdownFixture = (startAt: number, endAt: number) => {
 /** Unrestricted official Pro. Dashboard tests prime this so they do not flash the Free gate. */
 export const officialProLicenseStatus: LicenseStatus = {
   tier: "pro",
+  state: "active",
   build: "official",
   features: [],
   uiFlags: { upsellEntry: false },
@@ -1142,6 +1143,7 @@ export const officialProLicenseStatus: LicenseStatus = {
 
 export const communityLicenseStatus: LicenseStatus = {
   tier: "free",
+  state: "free",
   build: "community",
   features: [],
   uiFlags: { upsellEntry: false },

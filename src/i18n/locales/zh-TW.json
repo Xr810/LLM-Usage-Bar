@@ -743,7 +743,9 @@
       "no_license": "還沒有？",
       "compare_free_vs_pro": "比較 Free 與 Pro",
       "community_build": "社群組建",
-      "official_build_required": "需官方組建"
+      "official_build_required": "需官方組建",
+      "pro_expired": "Pro 已過期",
+      "renew": "續訂 Pro"
     },
     "trends": {
       "day": "日",

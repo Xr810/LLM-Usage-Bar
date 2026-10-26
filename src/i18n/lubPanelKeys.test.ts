@@ -45,6 +45,8 @@ const LICENSE_KEYS = [
 const supplementalLicense = [
   "license.community_build",
   "license.official_build_required",
+  "license.pro_expired",
+  "license.renew",
 ] as const;
 
 const supplementalOnboard = [
@@ -269,6 +271,14 @@ describe("lub panel copy", () => {
     );
     expect(zhTW.lub.license.official_build_required).toBe("需官方組建");
     expect(ja.lub.license.official_build_required).toBe("公式ビルドが必要です");
+    expect(zh.lub.license.pro_expired).toBe("Pro 已过期");
+    expect(en.lub.license.pro_expired).toBe("Pro expired");
+    expect(zhTW.lub.license.pro_expired).toBe("Pro 已過期");
+    expect(ja.lub.license.pro_expired).toBe("Pro は期限切れです");
+    expect(zh.lub.license.renew).toBe("续订 Pro");
+    expect(en.lub.license.renew).toBe("Renew Pro");
+    expect(zhTW.lub.license.renew).toBe("續訂 Pro");
+    expect(ja.lub.license.renew).toBe("Pro を更新");
     expect(zhTW.lub.license.community_build).not.toBe(
       en.lub.license.community_build,
     );

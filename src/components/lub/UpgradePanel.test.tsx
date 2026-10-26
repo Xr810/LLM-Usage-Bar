@@ -16,7 +16,7 @@ import { UpgradePanel } from "./UpgradePanel";
 const readyPurchase: PurchaseInfo = {
   trialAvailable: true,
   trialDays: 7,
-  purchaseUrl: "https://example.com/pro",
+  purchaseUrl: "https://buy.polar.sh/checkout/test",
 };
 
 const hiddenPriceCopy = [
@@ -139,6 +139,30 @@ describe("UpgradePanel", () => {
     expect(
       screen.queryByRole("button", { name: zh.lub.purchase.buy }),
     ).toBeNull();
+
+    rerender(
+      <PurchaseSlot
+        info={{
+          trialAvailable: false,
+          trialDays: 0,
+          purchaseUrl: "https://example.com/pro",
+        }}
+        upsellEntry
+        enabled
+        purpose="renew"
+      />,
+    );
+    expect(
+      screen.queryByRole("button", { name: zh.lub.license.renew }),
+    ).toBeNull();
+
+    rerender(
+      <PurchaseSlot info={readyPurchase} upsellEntry enabled purpose="renew" />,
+    );
+    await user.click(
+      screen.getByRole("button", { name: zh.lub.license.renew }),
+    );
+    expect(openExternal).toHaveBeenLastCalledWith(readyPurchase.purchaseUrl);
   });
 });
 

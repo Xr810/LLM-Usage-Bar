@@ -743,7 +743,9 @@
       "no_license": "ライセンスはまだですか？",
       "compare_free_vs_pro": "Free と Pro を比較",
       "community_build": "コミュニティビルド",
-      "official_build_required": "公式ビルドが必要です"
+      "official_build_required": "公式ビルドが必要です",
+      "pro_expired": "Pro は期限切れです",
+      "renew": "Pro を更新"
     },
     "trends": {
       "day": "日",

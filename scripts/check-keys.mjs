@@ -33,6 +33,8 @@ const LICENSE_KEYS = [
 const supplementalLub = [
   "lub.license.community_build",
   "lub.license.official_build_required",
+  "lub.license.pro_expired",
+  "lub.license.renew",
   "lub.onboard.terms_risk",
   "lub.onboard.claude_subscription_via_proxy",
   "lub.upgrade.close",

@@ -210,6 +210,7 @@ describe("community build detection", () => {
       resolveLubBuild({
         license: {
           tier: "free",
+          state: "free",
           build: "community",
           features: [],
           uiFlags: { upsellEntry: false },
@@ -282,6 +283,7 @@ describe("community build detection", () => {
         pending: true,
         license: {
           tier: "pro",
+          state: "active",
           build: "official",
           features: [],
           uiFlags: { upsellEntry: false },

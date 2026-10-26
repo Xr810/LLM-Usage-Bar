@@ -1,4 +1,5 @@
 import { useTranslation } from "react-i18next";
+import { allowlistedPurchaseUrl } from "@/lib/api/purchase";
 import { settingsApi } from "@/lib/api/settings";
 import type { PurchaseInfo } from "@/types/purchase";
 
@@ -13,15 +14,20 @@ export function PurchaseSlot({
   info,
   upsellEntry,
   enabled = PURCHASE_UI_ENABLED,
+  purpose = "buy",
 }: {
   info: PurchaseInfo;
   upsellEntry: boolean;
   enabled?: boolean;
+  /** Renewal uses the same hidden purchase slot. */
+  purpose?: "buy" | "renew";
 }) {
   const { t } = useTranslation();
   const showTrial =
     enabled && upsellEntry && info.trialAvailable && info.trialDays > 0;
-  const purchaseUrl = enabled ? info.purchaseUrl : undefined;
+  const purchaseUrl = enabled
+    ? allowlistedPurchaseUrl(info.purchaseUrl)
+    : undefined;
   if (!showTrial && !purchaseUrl) {
     return <div data-slot="purchase" hidden data-purchase-ui="off" />;
   }
@@ -49,7 +55,7 @@ export function PurchaseSlot({
             void settingsApi.openExternal(purchaseUrl);
           }}
         >
-          {t("lub.purchase.buy")}
+          {t(purpose === "renew" ? "lub.license.renew" : "lub.purchase.buy")}
         </button>
       ) : null}
     </div>

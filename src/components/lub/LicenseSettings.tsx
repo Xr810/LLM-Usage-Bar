@@ -1,10 +1,13 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { MOCK_PURCHASE_INFO } from "@/lib/api/purchase";
 import {
   activateLicense,
   communityLicenseStatus,
   type LicenseStatus,
 } from "./licenseMock";
+import { isExpiredPro, renewalEntryVisible } from "./licenseState";
+import { PurchaseSlot } from "./PurchaseSlot";
 /** Batch 1 hides every path to the Free vs Pro page on this shell. */
 const proCompareEnabled = false;
 
@@ -27,8 +30,9 @@ function localizedDefault(language: string, zh: string, en: string): string {
 
 function StatusValue({ status }: { status: LicenseStatus }) {
   const { t } = useTranslation();
-  const label =
-    status.build === "community"
+  const label = isExpiredPro(status)
+    ? t("lub.license.pro_expired")
+    : status.build === "community"
       ? t("lub.license.community_build")
       : status.tier;
   return <span data-testid="license-tier">{label}</span>;
@@ -36,11 +40,12 @@ function StatusValue({ status }: { status: LicenseStatus }) {
 
 export function LicenseSettings({
   variant = "window",
+  status = communityLicenseStatus(),
 }: {
   variant?: "window" | "embedded";
+  status?: LicenseStatus;
 }) {
   const { t, i18n } = useTranslation();
-  const [status] = useState(communityLicenseStatus);
   const [token, setToken] = useState(SAMPLE_TOKEN);
   const [notice, setNotice] = useState<string | null>(null);
   const prompt = t("lub.license.official_build_required");
@@ -93,6 +98,9 @@ export function LicenseSettings({
           <span data-testid="license-email">{status.emailMasked ?? "—"}</span>
         </div>
       </div>
+      {renewalEntryVisible(status) ? (
+        <PurchaseSlot info={MOCK_PURCHASE_INFO} upsellEntry purpose="renew" />
+      ) : null}
       <p className="lub-muted">
         {t("lub.license.no_license")}
         {proCompareEnabled ? (

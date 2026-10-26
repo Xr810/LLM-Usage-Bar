@@ -9,6 +9,7 @@ export function licenseStatus(
 ): LicenseStatus {
   return {
     tier,
+    state: tier === "free" ? "free" : "active",
     build,
     features: [],
     uiFlags: { upsellEntry: false },
