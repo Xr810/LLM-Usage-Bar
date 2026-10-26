@@ -2237,3 +2237,28 @@ tests, but that does not validate the added upgrade regression. Final exact-head
 CI results (Frontend, Backend, Backend no-pro, macOS, Windows, label) belong
 to the PR/thread; do not infer test success from this entry. No merge or
 release authorized.
+
+#### 2026-10-26 Contract v1.7.2: immediate reason and startup repair fault
+
+Baseline: `c00cea2fae49e4a1c1ad8da317b63ba4948cc4df`, verified as local
+`main` and `origin/main` before creating `contract-v1.7.2-followup-115`.
+The closed Hold audit reason set is `immediate|denied|timeout|queue_full|shutdown|client_gone`.
+BE-30 has no queue: every immediate 429 now stores `error_message = 'immediate'`
+on its `guard_hold` row. Raw gate reasons remain diagnostic logging and the
+unchanged 429 wire details only; Retry-After is unchanged. The existing router
+test still injects distinct raw reasons and checks the exact response, but
+expects `immediate` in storage. No PRO-2 lifecycle or frontend change.
+
+`store/dao/usage_rollup.rs` adds a disk-backed fault regression using a SQLite
+trigger installed only by test code. Startup repair fails during hourly
+insertion after deletion: `Database::init_at` must still succeed, the repair
+marker must be absent, cached counts must remain unchanged and dirty-hour
+enqueueing must roll back. After dropping the trigger, a second startup must
+commit the marker, exclude Hold usage and preserve archived hourly history.
+Production repair/startup code, atomicity, exclusions and schema are unchanged.
+
+Formatting and `git diff --check` pass locally. A wrapper-managed low-memory
+focused Rust test is being attempted; actual execution results and the six
+exact-head CI checks are recorded in the PR/thread, not inferred here.
+Existing §20 native interactive shutdown acceptance gaps remain open.
+No merge or release authorized.
