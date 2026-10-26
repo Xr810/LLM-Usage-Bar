@@ -13,12 +13,29 @@ const ZH: &str = include_str!("../../../src/i18n/locales/zh.json");
 const ZH_TW: &str = include_str!("../../../src/i18n/locales/zh-TW.json");
 const JA: &str = include_str!("../../../src/i18n/locales/ja.json");
 
-/// Language used when `settings.language` is unset.
-///
-/// This keeps the tray's historical default. ADR-019 asks for the OS locale
-/// on first launch, then `en` when that locale is not one of the four
-/// supported languages. That behavior is not implemented here.
-pub const UNSET_LANGUAGE: &str = "zh";
+/// Safe fallback before settings initialization or for unknown stored codes.
+pub const UNSET_LANGUAGE: &str = "en";
+
+/// First-launch policy; the caller supplies the OS reader for deterministic tests.
+pub(crate) fn initial_language(read_locale: impl FnOnce() -> Option<String>) -> &'static str {
+    let locale = read_locale()
+        .unwrap_or_default()
+        .replace('_', "-")
+        .to_ascii_lowercase();
+    if locale.starts_with("zh") {
+        if locale == "zhtw"
+            || locale
+                .split('-')
+                .any(|part| matches!(part, "tw" | "hk" | "hant"))
+        {
+            "zh-TW"
+        } else {
+            "zh"
+        }
+    } else {
+        "en"
+    }
+}
 
 pub fn effective_language(stored: Option<&str>) -> &str {
     match stored {
@@ -216,8 +233,8 @@ mod tests {
         assert_eq!(t("fr", "native.tray.quit", &[]), "Quit");
         assert_eq!(t("en", "native.tray.missing", &[]), "native.tray.missing");
         assert_eq!(t("en", "app.title", &[]), "app.title");
-        assert_eq!(effective_language(None), "zh");
+        assert_eq!(effective_language(None), "en");
         assert_eq!(effective_language(Some("ja")), "ja");
-        assert_eq!(effective_language(Some("fr")), "zh");
+        assert_eq!(effective_language(Some("fr")), "en");
     }
 }
