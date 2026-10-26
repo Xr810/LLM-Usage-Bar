@@ -6,6 +6,7 @@ import {
   openMainFromTray,
   quitFromTray,
 } from "@/lib/api/trayUsage";
+import { useLicenseStatus } from "@/lib/query/license";
 import {
   trayUsageKeys,
   useRefreshTrayUsage,
@@ -20,6 +21,7 @@ const initialRefreshKey = [...trayUsageKeys.all, "initial-refresh"] as const;
 export function TrayUsagePopover() {
   const queryClient = useQueryClient();
   const { data, isLoading } = useTrayUsageSnapshot();
+  const license = useLicenseStatus();
   const refresh = useRefreshTrayUsage();
   const hiddenForCycle = useRef(false);
   const navigationInProgress = useRef(false);
@@ -99,6 +101,7 @@ export function TrayUsagePopover() {
       onOpenDetails={openDetails}
       onOpenSettings={openSettings}
       onQuit={() => void quitFromTray().catch(() => undefined)}
+      upsellEntry={license.data?.uiFlags.upsellEntry === true}
     />
   );
 }

@@ -7,10 +7,8 @@ export type PaceBasis = "measured" | "window_average" | "static" | "idle";
 export type TrayCostQuality =
   "complete" | "estimated" | "partial" | "unavailable";
 
-/** BE-21b. Absent until the snapshot publishes a build. */
-export type TrayBuildType = "community" | "official";
-
 export interface TrayUsageSnapshot {
+  buildType: "community" | "official";
   status: TrayUsageStatus;
   generatedAt: number;
   lastSuccessAt: number | null;
@@ -19,8 +17,34 @@ export interface TrayUsageSnapshot {
   refreshInProgress: boolean;
   apiBudget: TrayApiBudgetView;
   agents: TrayAgentUsageView[];
-  /** BE-21b. Null or absent when the snapshot has no build yet. */
-  buildType?: TrayBuildType | null;
+  sources: SourceRowView[];
+}
+
+export type SourceNoteCode =
+  "stale" | "error" | "not_proxied" | "codex_websocket" | "license_required";
+
+export interface SourceRowView {
+  providerId: string;
+  displayName: string;
+  billingKind: "metered" | "subscription" | "untracked";
+  enforceable: boolean;
+  valueUsd?: string;
+  usedPct?: number;
+  windows?: {
+    kind: "5h" | "weekly" | "daily" | "monthly";
+    usedPct: number;
+    resetsAt?: string;
+  }[];
+  progress: number;
+  stopped: boolean;
+  sourceState: "ok" | "stale" | "error";
+  noteCodes: SourceNoteCode[];
+  nextResetAt: string | null;
+  betaTruncate?: {
+    enabled: boolean;
+    available: boolean;
+    unavailableReason?: "license_required";
+  };
 }
 
 export type ApiBudgetMode = "shared" | "per_provider";
@@ -39,10 +63,11 @@ export interface TrayApiBudgetView {
   costQuality: TrayCostQuality;
   status: TrayUsageStatus;
   /**
-   * C10 budget level. Pace `status` is display-only and must not set warn.
-   * Absent until BE-20; the panel then keeps the old status fallback.
+   * C10 daily budget level. Only `reached` is over the cap.
+   * Deprecated `warn` must not alert. Pace `status` is display-only.
+   * Omitted payloads use the backend default, `ok`.
    */
-  level?: "ok" | "near" | "over";
+  level?: "ok" | "warn" | "reached";
   warningReason: string | null;
   burnRateUsdPerHour?: string | null;
   projectedExhaustAt?: string | null;
@@ -70,15 +95,6 @@ export interface TrayProviderUsageView {
   recentUsage: TrayProviderRecentUsageView;
   subscription: TraySubscriptionUsageView | null;
   metered: TrayMeteredUsageView | null;
-  /**
-   * BE-21b. Codes such as `codex_websocket`. Null or absent means no note.
-   */
-  noteCodes?: string[] | null;
-  /**
-   * BE-21b. Next reset instant. Null or absent means unknown — do not
-   * substitute local midnight.
-   */
-  nextResetAt?: string | null;
 }
 
 export interface TrayProviderRecentUsageView {

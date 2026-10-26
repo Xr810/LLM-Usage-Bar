@@ -3,7 +3,6 @@ import { useTranslation } from "react-i18next";
 import { RefreshCw } from "lucide-react";
 import { ensureProCopy } from "@/i18n/proCopy";
 import { formatResetInstant, sharedNextResetAt } from "./money";
-import { proCompareEnabled as proCompareDefault } from "./proCompare";
 import { SessionList } from "./SessionList";
 import { SourceList } from "./SourceList";
 import { StatusBanner } from "./StatusBanner";
@@ -22,10 +21,13 @@ interface TrayPanelV5Props {
   openDayTip?: boolean;
   scrollMaxPx?: number;
   refreshError?: string | null;
-  /** C2 build. Defaults to official until get_license_state is wired. */
+  /** Snapshot `buildType`. Design samples that omit it stay official. */
   build?: LubBuild;
-  /** Batch 1 default is false. The compare line stays out of the banner. */
-  proCompareEnabled?: boolean;
+  /**
+   * C2 `uiFlags.upsellEntry`. Gates the Free vs Pro line. Default off.
+   * Community status is `{ upsellEntry: false }`.
+   */
+  upsellEntry?: boolean;
 }
 
 function PowerIcon() {
@@ -141,7 +143,7 @@ export function TrayPanelV5({
   scrollMaxPx,
   refreshError,
   build = "official",
-  proCompareEnabled = proCompareDefault,
+  upsellEntry = false,
 }: TrayPanelV5Props) {
   ensureProCopy();
   const { t } = useTranslation();
@@ -219,7 +221,7 @@ export function TrayPanelV5({
           <StatusBanner
             capUsd={model.dailyCapUsd}
             locale={locale}
-            proCompareEnabled={proCompareEnabled}
+            upsellEntry={upsellEntry}
           />
           {build === "community" ? <div data-slot="community-allow" /> : null}
         </>

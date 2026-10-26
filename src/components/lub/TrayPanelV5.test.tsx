@@ -265,12 +265,12 @@ describe("TrayPanelV5 free over cap", () => {
     expect(screen.queryByRole("button", { name: /放行|停止全部/ })).toBeNull();
   });
 
-  it("shows the compare line only when the batch switch is on", () => {
+  it("shows the compare line only when upsellEntry is on", () => {
     const { container } = render(
       <TrayPanelV5
         model={overFixture()}
         locale="zh-CN"
-        proCompareEnabled
+        upsellEntry
         onOpenTrends={() => undefined}
         onOpenSettings={() => undefined}
       />,
@@ -330,7 +330,7 @@ describe("TrayPanelV5 free over cap", () => {
 
     const other = designPanelFixture();
     other.sources = other.sources.map((source, index) =>
-      index === 0 ? { ...source, noteCodes: ["something_else"] } : source,
+      index === 0 ? { ...source, noteCodes: ["stale"] } : source,
     );
     const rendered = renderPanel(other);
     expect(screen.queryByText(/Codex 订阅未走代理/)).toBeNull();

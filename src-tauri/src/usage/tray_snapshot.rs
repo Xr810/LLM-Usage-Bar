@@ -4,8 +4,9 @@ use super::aggregation::{
 };
 use super::rhythm::{cached_metered_profile, RhythmProfile, DAILY_BUDGET_WINDOW_KIND};
 use super::status::{
-    classify_metered, worst_status, CostQuality, PaceBasis, PaceInput, PaceMeasurement,
-    SourceClassification, SubscriptionThresholds, UsageStatus, MIN_RATE_SPAN_SECONDS,
+    classify_metered, worst_status, BudgetLevel, CostQuality, PaceBasis, PaceInput,
+    PaceMeasurement, SourceClassification, SubscriptionThresholds, UsageStatus,
+    MIN_RATE_SPAN_SECONDS,
 };
 #[cfg(test)]
 use super::subscription_pace::quota_rate_from_snapshots;
@@ -19,9 +20,10 @@ use crate::model::{
     BillingKind, ManualResetCreditView, QuotaStatusView, UsageProviderView, UsageTrendBucketView,
 };
 use crate::store::Database;
-use chrono::{DateTime, Local, LocalResult, NaiveDate, SecondsFormat, TimeZone, Utc};
+use chrono::{DateTime, Datelike, Local, LocalResult, NaiveDate, SecondsFormat, TimeZone, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 const ROLLING_30_DAYS_SECONDS: i64 = 30 * 86_400;
@@ -29,9 +31,10 @@ const METERED_RATE_LOOKBACK_SECONDS: i64 = 3_600;
 const INVALID_RESET_TIMESTAMP: &str = "invalid_reset_timestamp";
 const RESET_PENDING_REFRESH: &str = "reset_pending_refresh";
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TrayUsageSnapshot {
+    pub build_type: crate::policy::LicenseBuild,
     pub status: UsageStatus,
     pub generated_at: i64,
     pub last_success_at: Option<i64>,
@@ -40,6 +43,9 @@ pub struct TrayUsageSnapshot {
     pub refresh_in_progress: bool,
     pub api_budget: TrayApiBudgetView,
     pub agents: Vec<TrayAgentUsageView>,
+    /// C13 source rows. Absent in older cached JSON.
+    #[serde(default)]
+    pub sources: Vec<crate::usage::source_row::SourceRowView>,
 }
 
 /// "pro" as the upstream reports it, "Pro" as a person reads it. Only the first
@@ -55,6 +61,7 @@ fn display_plan_label(plan_type: &str) -> String {
 impl TrayUsageSnapshot {
     pub fn unknown(generated_at: i64) -> Self {
         Self {
+            build_type: crate::policy::community_license_status().build,
             status: UsageStatus::Unknown,
             generated_at,
             last_success_at: None,
@@ -63,6 +70,7 @@ impl TrayUsageSnapshot {
             refresh_in_progress: false,
             api_budget: TrayApiBudgetView::default(),
             agents: Vec::new(),
+            sources: Vec::new(),
         }
     }
 }
@@ -77,6 +85,12 @@ pub struct TrayApiBudgetView {
     pub budget_consumed_percent: Option<String>,
     pub cost_quality: CostQuality,
     pub status: UsageStatus,
+    /// Daily budget level from `classify_metered` (C10 `TrayApiBudgetView`).
+    /// `reached` means today's known cost is at or over the daily budget.
+    /// `warn` is deprecated and is never emitted. This is not `monthReached`
+    /// and not a C12 guard state — main has no `get_guard_state`.
+    #[serde(default)]
+    pub level: BudgetLevel,
     pub warning_reason: Option<String>,
     #[serde(default)]
     pub burn_rate_usd_per_hour: Option<String>,
@@ -94,6 +108,28 @@ pub struct TrayApiBudgetView {
     /// actually moved the colour. `None` when no profile applied.
     #[serde(default)]
     pub flat_status: Option<UsageStatus>,
+    /// Metered / API-key spend in the user's local calendar month (C10).
+    /// Subscription rows are not included. `None` when every metered cost
+    /// in the month is unavailable.
+    #[serde(default)]
+    pub month_cost_usd: Option<String>,
+    /// Month cap. `None` when the user has not set one. Still present in
+    /// `per_provider` mode: the month cap is a total gate (C15).
+    #[serde(default)]
+    pub monthly_budget_usd: Option<String>,
+    /// `monthCostUsd / monthlyBudgetUsd`, as a percentage string. Absent
+    /// when the month total is incomplete or the cap is unset.
+    #[serde(default)]
+    pub month_consumed_percent: Option<String>,
+    /// The known month total has reached the month cap. This is not
+    /// enforcement: a community build can reach the cap and still leave
+    /// `capped` false.
+    #[serde(default)]
+    pub month_reached: bool,
+    /// Pro enforcement (BE-7) is the only writer. Community builds stay
+    /// false, including when `monthReached` is true.
+    #[serde(default)]
+    pub capped: bool,
 }
 
 impl Default for TrayApiBudgetView {
@@ -106,6 +142,7 @@ impl Default for TrayApiBudgetView {
             budget_consumed_percent: None,
             cost_quality: CostQuality::Complete,
             status: UsageStatus::Unknown,
+            level: BudgetLevel::Ok,
             warning_reason: Some("daily_budget_missing".to_string()),
             burn_rate_usd_per_hour: None,
             projected_exhaust_at: None,
@@ -113,6 +150,11 @@ impl Default for TrayApiBudgetView {
             pace_basis: PaceBasis::Static,
             rhythm_adjustment: None,
             flat_status: None,
+            month_cost_usd: Some("0".to_string()),
+            monthly_budget_usd: None,
+            month_consumed_percent: None,
+            month_reached: false,
+            capped: false,
         }
     }
 }
@@ -205,6 +247,10 @@ pub struct TrayMeteredUsageView {
     pub rolling_30_day_cost_usd: Option<String>,
     pub daily_budget_usd: Option<String>,
     pub budget_consumed_percent: Option<String>,
+    /// Same daily level as `TrayApiBudgetView.level` (C10). Per-provider
+    /// alerts read this field. `warn` is deprecated and is never emitted.
+    #[serde(default)]
+    pub level: BudgetLevel,
     pub total_tokens: u64,
     pub cost_quality: CostQuality,
     /// Weighted remaining time divided by raw remaining seconds.
@@ -267,6 +313,53 @@ impl TrayUsageWindows {
     }
 }
 
+/// Local calendar month, half-open `[start_at, end_at)`.
+///
+/// `start_at` is the local midnight that opens the month. `end_at` is one
+/// second past `now`, matching [`TrayUsageWindows`]. A timezone change
+/// recomputes this window from the new local calendar; nothing is rewritten.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LocalMonthWindow {
+    pub start_at: i64,
+    pub end_at: i64,
+}
+
+impl LocalMonthWindow {
+    pub fn from_zoned_now<Tz>(now: DateTime<Tz>) -> Option<Self>
+    where
+        Tz: TimeZone,
+    {
+        let now_timestamp = now.timestamp();
+        let local_date = now.date_naive();
+        let timezone = now.timezone();
+        Self::from_calendar_now(now_timestamp, local_date, |date| {
+            resolve_local_midnight(&timezone, date)
+        })
+    }
+
+    pub fn from_calendar_now(
+        now_timestamp: i64,
+        local_date: NaiveDate,
+        mut resolve_midnight: impl FnMut(NaiveDate) -> Option<i64>,
+    ) -> Option<Self> {
+        let start_date = NaiveDate::from_ymd_opt(local_date.year(), local_date.month(), 1)?;
+        let start_at = resolve_midnight(start_date)?;
+        let end_at = now_timestamp.checked_add(1)?;
+        if start_at > end_at {
+            return None;
+        }
+        Some(Self { start_at, end_at })
+    }
+}
+
+struct MonthCost {
+    usd: Option<String>,
+    /// Every metered provider in the window contributed a known non-negative
+    /// cost (zero events count as zero). An incomplete total can still prove
+    /// the cap was reached when the known lower bound is already over it.
+    complete: bool,
+}
+
 fn resolve_local_midnight<Tz>(timezone: &Tz, date: NaiveDate) -> Option<i64>
 where
     Tz: TimeZone,
@@ -288,11 +381,22 @@ where
 
 pub struct TrayUsageProjector {
     db: Arc<Database>,
+    tool_detection_cache: Arc<crate::route::takeover::ToolDetectionCache>,
 }
 
 impl TrayUsageProjector {
     pub fn new(db: Arc<Database>) -> Self {
-        Self { db }
+        Self::with_tool_detection_cache(db, Arc::default())
+    }
+
+    pub fn with_tool_detection_cache(
+        db: Arc<Database>,
+        tool_detection_cache: Arc<crate::route::takeover::ToolDetectionCache>,
+    ) -> Self {
+        Self {
+            db,
+            tool_detection_cache,
+        }
     }
 
     pub fn project_at(&self, now: DateTime<Local>) -> Result<TrayUsageSnapshot, AppError> {
@@ -349,7 +453,7 @@ impl TrayUsageProjector {
         } else {
             None
         };
-        let (api_budget, api_budget_classification) = project_api_budget(
+        let (mut api_budget, api_budget_classification) = project_api_budget(
             &projected_providers,
             &api_budget_config,
             windows,
@@ -357,6 +461,20 @@ impl TrayUsageProjector {
             thresholds,
             shared_measurement,
             shared_rhythm_profile,
+        );
+        let month_cost = match LocalMonthWindow::from_zoned_now(now) {
+            Some(month) => {
+                self.sum_metered_month_cost(&metered_provider_ids, month.start_at, month.end_at)?
+            }
+            None => MonthCost {
+                usd: None,
+                complete: false,
+            },
+        };
+        apply_monthly_budget_fields(
+            &mut api_budget,
+            &month_cost,
+            api_budget_config.monthly_budget_usd.as_deref(),
         );
         if api_budget_config.mode == ApiBudgetMode::Shared
             && api_budget_config.shared_daily_budget_usd.is_some()
@@ -375,6 +493,23 @@ impl TrayUsageProjector {
                 .map(|provider| provider.status)
                 .chain(std::iter::once(api_budget.status)),
         );
+        let mut metered_value_usd = HashMap::new();
+        for provider in &projected_providers {
+            if provider.billing_kind == BillingKind::Metered {
+                if let Some(cost) = provider.recent_usage.today_cost_usd.clone() {
+                    metered_value_usd.insert(provider.provider_id.clone(), cost);
+                }
+            }
+        }
+        let build_type = crate::policy::community_license_status().build;
+        let detected_tools = self.tool_detection_cache.snapshot();
+        let sources = crate::usage::source_row::source_rows_at(
+            self.db.as_ref(),
+            generated_at,
+            &metered_value_usd,
+            build_type,
+            &detected_tools,
+        )?;
         let projected_agents = vec![TrayAgentUsageView {
             agent_module_id: "providers".to_string(),
             name: "Providers".to_string(),
@@ -384,6 +519,7 @@ impl TrayUsageProjector {
         }];
 
         Ok(TrayUsageSnapshot {
+            build_type,
             status,
             generated_at,
             last_success_at: Some(generated_at),
@@ -392,6 +528,7 @@ impl TrayUsageProjector {
             refresh_in_progress: false,
             api_budget,
             agents: projected_agents,
+            sources,
         })
     }
 
@@ -632,6 +769,7 @@ impl TrayUsageProjector {
                 rolling_30_day_cost_usd,
                 daily_budget_usd: daily_budget_usd.map(str::to_string),
                 budget_consumed_percent: classification.consumed_percent.clone(),
+                level: classification.level,
                 total_tokens,
                 cost_quality: quality,
                 rhythm_adjustment: classification.rhythm_adjustment_string(),
@@ -699,6 +837,55 @@ impl TrayUsageProjector {
                 None
             }
         }
+    }
+
+    fn sum_metered_month_cost(
+        &self,
+        provider_ids: &[&str],
+        start_at: i64,
+        end_at: i64,
+    ) -> Result<MonthCost, AppError> {
+        if provider_ids.is_empty() {
+            return Ok(MonthCost {
+                usd: Some("0".to_string()),
+                complete: true,
+            });
+        }
+
+        let mut total = Decimal::ZERO;
+        let mut any_known = false;
+        let mut incomplete = false;
+        for provider_id in provider_ids {
+            let aggregate =
+                aggregate_provider_account_range(&self.db, provider_id, start_at, end_at)?;
+            if aggregate.event_count == 0 {
+                any_known = true;
+                continue;
+            }
+            if aggregate.cost_source_counts.unavailable > 0 {
+                incomplete = true;
+            }
+            match aggregate
+                .total_cost_usd
+                .as_deref()
+                .and_then(|value| Decimal::from_str_exact(value.trim()).ok())
+                .filter(|value| *value >= Decimal::ZERO)
+            {
+                Some(value) => match total.checked_add(value) {
+                    Some(next) => {
+                        total = next;
+                        any_known = true;
+                    }
+                    None => incomplete = true,
+                },
+                None => incomplete = true,
+            }
+        }
+
+        Ok(MonthCost {
+            usd: any_known.then(|| total.normalize().to_string()),
+            complete: !incomplete && any_known,
+        })
     }
 
     fn record_prediction_best_effort(
@@ -801,8 +988,11 @@ fn project_api_budget(
             thresholds,
         )
     } else {
+        // Per-provider mode has no shared daily cap. Each provider's level
+        // lives on its metered view (C10). This rollup stays `ok`.
         SourceClassification {
             status: worst_status(metered.iter().map(|(provider, _)| provider.status)),
+            level: BudgetLevel::Ok,
             used_percent: None,
             remaining_percent: None,
             consumed_percent: None,
@@ -831,6 +1021,7 @@ fn project_api_budget(
         budget_consumed_percent: classification.consumed_percent.clone(),
         cost_quality,
         status: classification.status,
+        level: classification.level,
         warning_reason: classification.reason.map(str::to_string),
         burn_rate_usd_per_hour,
         projected_exhaust_at,
@@ -838,8 +1029,51 @@ fn project_api_budget(
         pace_basis: classification.pace_basis,
         rhythm_adjustment: classification.rhythm_adjustment_string(),
         flat_status: classification.flat_status,
+        ..TrayApiBudgetView::default()
     };
     (view, classification)
+}
+
+fn apply_monthly_budget_fields(
+    view: &mut TrayApiBudgetView,
+    month_cost: &MonthCost,
+    monthly_budget_usd: Option<&str>,
+) {
+    view.month_cost_usd = month_cost.usd.clone();
+    view.monthly_budget_usd = monthly_budget_usd.map(str::to_string);
+    view.capped = false;
+    view.month_reached = false;
+    view.month_consumed_percent = None;
+
+    let Some(budget_raw) = monthly_budget_usd else {
+        return;
+    };
+    let Some(budget) = Decimal::from_str_exact(budget_raw.trim())
+        .ok()
+        .filter(|value| *value > Decimal::ZERO)
+    else {
+        return;
+    };
+    let Some(cost_raw) = month_cost.usd.as_deref() else {
+        return;
+    };
+    let Some(cost) = Decimal::from_str_exact(cost_raw.trim())
+        .ok()
+        .filter(|value| *value >= Decimal::ZERO)
+    else {
+        return;
+    };
+
+    // A missing cost can only raise the total. The known sum is a lower
+    // bound: once it is at the cap, the month has been reached; while it is
+    // still short, an incomplete month is not reported as reached.
+    view.month_reached = cost >= budget;
+    if month_cost.complete {
+        view.month_consumed_percent = cost
+            .checked_div(budget)
+            .and_then(|ratio| ratio.checked_mul(Decimal::ONE_HUNDRED))
+            .map(|value| value.normalize().to_string());
+    }
 }
 
 fn subscription_window(
@@ -1442,6 +1676,7 @@ mod tests {
                 Some(ApiBudgetConfig {
                     mode: ApiBudgetMode::PerProvider,
                     shared_daily_budget_usd: None,
+                    monthly_budget_usd: None,
                 }),
             )
             .unwrap();
@@ -1491,6 +1726,7 @@ mod tests {
         assert_eq!(metered.rolling_30_day_cost_usd.as_deref(), Some("18.75"),);
         assert_eq!(metered.total_tokens, 110);
         assert_eq!(metered.cost_quality, CostQuality::Complete);
+        assert_eq!(metered.level, BudgetLevel::Ok);
         let recent = &find_provider(&snapshot, "codex", "b-metered").recent_usage;
         assert_eq!(recent.today_cost_usd.as_deref(), Some("8.75"));
         assert_eq!(recent.total_cost_usd.as_deref(), Some("18.75"));
@@ -1544,12 +1780,13 @@ mod tests {
         assert!(!serialized.contains("ignored-reset-secret"));
         assert!(!serialized.contains("ignored-payload-secret"));
 
-        let shared = TrayUsageProjector::new(db)
+        let shared = TrayUsageProjector::new(db.clone())
             .project_at_with_budget_config(
                 now,
                 Some(ApiBudgetConfig {
                     mode: ApiBudgetMode::Shared,
                     shared_daily_budget_usd: Some("10".to_string()),
+                    monthly_budget_usd: None,
                 }),
             )
             .unwrap();
@@ -1560,12 +1797,48 @@ mod tests {
             Some("87.5")
         );
         assert_eq!(shared.api_budget.status, UsageStatus::Red);
+        assert_eq!(shared.api_budget.level, BudgetLevel::Ok);
         assert!(find_provider(&shared, "codex", "b-metered")
             .metered
             .as_ref()
             .unwrap()
             .daily_budget_usd
             .is_none());
+
+        db.set_provider_daily_budget("b-metered", Some("8"))
+            .unwrap();
+        let reached_provider = TrayUsageProjector::new(db.clone())
+            .project_at_with_budget_config(
+                now,
+                Some(ApiBudgetConfig {
+                    mode: ApiBudgetMode::PerProvider,
+                    shared_daily_budget_usd: None,
+                    monthly_budget_usd: None,
+                }),
+            )
+            .unwrap();
+        assert_eq!(
+            find_provider(&reached_provider, "codex", "b-metered")
+                .metered
+                .as_ref()
+                .unwrap()
+                .level,
+            BudgetLevel::Reached
+        );
+        assert_eq!(reached_provider.api_budget.level, BudgetLevel::Ok);
+
+        let reached = TrayUsageProjector::new(db)
+            .project_at_with_budget_config(
+                now,
+                Some(ApiBudgetConfig {
+                    mode: ApiBudgetMode::Shared,
+                    shared_daily_budget_usd: Some("8".to_string()),
+                    monthly_budget_usd: None,
+                }),
+            )
+            .unwrap();
+        assert_eq!(reached.api_budget.level, BudgetLevel::Reached);
+        assert_eq!(reached.api_budget.status, UsageStatus::Red);
     }
 
     #[test]
@@ -1663,6 +1936,7 @@ mod tests {
                 Some(ApiBudgetConfig {
                     mode: ApiBudgetMode::PerProvider,
                     shared_daily_budget_usd: None,
+                    monthly_budget_usd: None,
                 }),
             )
             .unwrap();
@@ -1977,6 +2251,73 @@ mod tests {
     }
 
     #[test]
+    fn month_window_follows_the_local_calendar_month_across_the_boundary() {
+        let offset = FixedOffset::east_opt(8 * 3_600).unwrap();
+        let last_second = offset
+            .with_ymd_and_hms(2026, 7, 31, 23, 59, 59)
+            .single()
+            .unwrap();
+        let first_second = offset
+            .with_ymd_and_hms(2026, 8, 1, 0, 0, 0)
+            .single()
+            .unwrap();
+
+        let july = LocalMonthWindow::from_zoned_now(last_second).unwrap();
+        let august = LocalMonthWindow::from_zoned_now(first_second).unwrap();
+
+        assert_eq!(
+            july.start_at,
+            midnight_at(offset, NaiveDate::from_ymd_opt(2026, 7, 1).unwrap())
+        );
+        assert_eq!(
+            august.start_at,
+            midnight_at(offset, NaiveDate::from_ymd_opt(2026, 8, 1).unwrap())
+        );
+        assert!(last_second.timestamp() < august.start_at);
+        assert!(first_second.timestamp() >= august.start_at);
+        assert_eq!(august.end_at, first_second.timestamp() + 1);
+        assert_ne!(july.start_at, august.start_at);
+    }
+
+    #[test]
+    fn month_window_uses_a_half_hour_local_offset() {
+        let offset = FixedOffset::east_opt(5 * 3_600 + 30 * 60).unwrap();
+        let now = offset
+            .with_ymd_and_hms(2026, 3, 1, 0, 0, 0)
+            .single()
+            .unwrap();
+
+        let window = LocalMonthWindow::from_zoned_now(now).unwrap();
+
+        assert_eq!(
+            window.start_at,
+            midnight_at(offset, NaiveDate::from_ymd_opt(2026, 3, 1).unwrap())
+        );
+        assert_eq!(window.end_at, now.timestamp() + 1);
+        assert!(now.timestamp() - 1 < window.start_at);
+    }
+
+    #[test]
+    fn month_window_on_a_dst_fallback_keeps_the_local_calendar_month() {
+        let daylight = FixedOffset::west_opt(4 * 3_600).unwrap();
+        let standard = FixedOffset::west_opt(5 * 3_600).unwrap();
+        let month_start = NaiveDate::from_ymd_opt(2026, 11, 1).unwrap();
+        let now = standard
+            .with_ymd_and_hms(2026, 11, 1, 12, 30, 0)
+            .single()
+            .unwrap();
+
+        let window = LocalMonthWindow::from_calendar_now(now.timestamp(), month_start, |date| {
+            (date == month_start).then(|| midnight_at(daylight, date))
+        })
+        .unwrap();
+
+        assert_eq!(window.start_at, midnight_at(daylight, month_start));
+        assert_eq!(now.timestamp() - window.start_at, 13 * 3_600 + 30 * 60);
+        assert_eq!(window.end_at, now.timestamp() + 1);
+    }
+
+    #[test]
     fn calendar_window_fails_when_either_local_midnight_cannot_be_resolved() {
         let today = NaiveDate::from_ymd_opt(2026, 7, 16).unwrap();
 
@@ -2031,6 +2372,7 @@ mod tests {
     #[test]
     fn stale_snapshot_can_retain_a_known_alert() {
         let snapshot = TrayUsageSnapshot {
+            build_type: crate::policy::LicenseBuild::Community,
             status: UsageStatus::Red,
             generated_at: 200,
             last_success_at: Some(100),
@@ -2039,6 +2381,7 @@ mod tests {
             refresh_in_progress: false,
             api_budget: TrayApiBudgetView::default(),
             agents: Vec::new(),
+            sources: Vec::new(),
         };
 
         assert_eq!(snapshot.status, UsageStatus::Red);
@@ -2049,6 +2392,7 @@ mod tests {
     #[test]
     fn tray_snapshot_serializes_only_presentation_safe_fields() {
         let snapshot = TrayUsageSnapshot {
+            build_type: crate::policy::LicenseBuild::Community,
             status: UsageStatus::Yellow,
             generated_at: 200,
             last_success_at: Some(190),
@@ -2118,6 +2462,7 @@ mod tests {
                         rolling_30_day_cost_usd: Some("80".to_string()),
                         daily_budget_usd: Some("10".to_string()),
                         budget_consumed_percent: Some("50".to_string()),
+                        level: BudgetLevel::Ok,
                         total_tokens: 42,
                         cost_quality: CostQuality::Partial,
                         rhythm_adjustment: None,
@@ -2125,6 +2470,7 @@ mod tests {
                     }),
                 }],
             }],
+            sources: Vec::new(),
         };
 
         let value = serde_json::to_value(&snapshot).unwrap();
@@ -2154,76 +2500,84 @@ mod tests {
                 }
             }]
         });
-        assert_eq!(
-            value,
-            json!({
+        let mut expected = json!({
+            "status": "yellow",
+            "generatedAt": 200,
+            "lastSuccessAt": 190,
+            "stale": false,
+            "refreshError": null,
+            "refreshInProgress": true,
+            "apiBudget": {
+                "mode": "shared",
+                "providerCount": 0,
+                "todayCostUsd": "0",
+                "dailyBudgetUsd": null,
+                "budgetConsumedPercent": null,
+                "costQuality": "complete",
+                "status": "unknown",
+                "level": "ok",
+                "warningReason": "daily_budget_missing",
+                "burnRateUsdPerHour": null,
+                "projectedExhaustAt": null,
+                "headroomRatio": null,
+                "paceBasis": "static",
+                "flatStatus": null,
+                "rhythmAdjustment": null,
+                "monthCostUsd": "0",
+                "monthlyBudgetUsd": null,
+                "monthConsumedPercent": null,
+                "monthReached": false,
+                "capped": false
+            },
+            "agents": [{
+                "agentModuleId": "codex",
+                "name": "Codex",
+                "sortOrder": 1,
                 "status": "yellow",
-                "generatedAt": 200,
-                "lastSuccessAt": 190,
-                "stale": false,
-                "refreshError": null,
-                "refreshInProgress": true,
-                "apiBudget": {
-                    "mode": "shared",
-                    "providerCount": 0,
-                    "todayCostUsd": "0",
-                    "dailyBudgetUsd": null,
-                    "budgetConsumedPercent": null,
-                    "costQuality": "complete",
-                    "status": "unknown",
-                    "warningReason": "daily_budget_missing",
-                    "burnRateUsdPerHour": null,
-                    "projectedExhaustAt": null,
-                    "headroomRatio": null,
-                    "paceBasis": "static",
-                    "flatStatus": null,
-                    "rhythmAdjustment": null
-                },
-                "agents": [{
-                    "agentModuleId": "codex",
-                    "name": "Codex",
-                    "sortOrder": 1,
+                "providers": [{
+                    "providerId": "openai",
+                    "providerName": "OpenAI",
+                    "systemPresetKey": "openai",
+                    "billingKind": "metered",
                     "status": "yellow",
-                    "providers": [{
-                        "providerId": "openai",
-                        "providerName": "OpenAI",
-                        "systemPresetKey": "openai",
-                        "billingKind": "metered",
-                        "status": "yellow",
-                        "warningReason": "partial_cost",
-                        "recentUsage": recent_usage_json,
-                        "subscription": {
-                            "planLabel": "Plus",
-                            "windows": [{
-                                "kind": "five_hour",
-                                "usedPercent": "50",
-                                "remainingPercent": "50",
-                                "resetsAt": "2026-07-16T13:00:00Z",
-                                "status": "yellow",
-                                "unavailableReason": null,
-                                "burnRatePercentPerHour": null,
-                                "projectedExhaustAt": null,
-                                "headroomRatio": null,
-                                "paceBasis": "static",
-                                "flatStatus": null,
-                                "rhythmAdjustment": null
-                            }],
-                            "manualResetsRemaining": null
-                        },
-                        "metered": {
-                            "todayCostUsd": "5",
-                            "rolling30DayCostUsd": "80",
-                            "dailyBudgetUsd": "10",
-                            "budgetConsumedPercent": "50",
-                            "totalTokens": 42,
-                            "costQuality": "partial",
+                    "warningReason": "partial_cost",
+                    "recentUsage": recent_usage_json,
+                    "subscription": {
+                        "planLabel": "Plus",
+                        "windows": [{
+                            "kind": "five_hour",
+                            "usedPercent": "50",
+                            "remainingPercent": "50",
+                            "resetsAt": "2026-07-16T13:00:00Z",
+                            "status": "yellow",
+                            "unavailableReason": null,
+                            "burnRatePercentPerHour": null,
+                            "projectedExhaustAt": null,
+                            "headroomRatio": null,
+                            "paceBasis": "static",
                             "flatStatus": null,
                             "rhythmAdjustment": null
-                        }
-                    }]
+                        }],
+                        "manualResetsRemaining": null
+                    },
+                    "metered": {
+                        "todayCostUsd": "5",
+                        "rolling30DayCostUsd": "80",
+                        "dailyBudgetUsd": "10",
+                        "budgetConsumedPercent": "50",
+                        "level": "ok",
+                        "totalTokens": 42,
+                        "costQuality": "partial",
+                        "flatStatus": null,
+                        "rhythmAdjustment": null
+                    }
                 }]
-            }),
-        );
+            }],
+            "sources": []
+        });
+        // Keep the large json! fixture below the macro recursion limit.
+        expected["buildType"] = json!("community");
+        assert_eq!(value, expected);
 
         let serialized = serde_json::to_string(&snapshot).unwrap();
         let round_trip: TrayUsageSnapshot = serde_json::from_str(&serialized).unwrap();
@@ -2276,6 +2630,140 @@ mod tests {
         assert!(!serde_json::to_string(&snapshot)
             .unwrap()
             .contains("must-not-leak"));
+    }
+
+    #[test]
+    fn month_total_counts_only_metered_spend_inside_the_local_month() {
+        let db = clean_projector_database();
+        let now = Local
+            .with_ymd_and_hms(2026, 7, 15, 12, 0, 0)
+            .single()
+            .expect("local noon on 15 July 2026");
+        let month = LocalMonthWindow::from_zoned_now(now).unwrap();
+
+        db.save_usage_provider(&provider("metered", BillingKind::Metered, None))
+            .unwrap();
+        db.save_usage_provider(&provider("subscription", BillingKind::Subscription, None))
+            .unwrap();
+        db.save_usage_provider(&provider("disabled", BillingKind::Metered, None))
+            .unwrap();
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE usage_providers SET enabled = 0 WHERE id = 'disabled'",
+                [],
+            )
+            .unwrap();
+        }
+        bind(&db, "binding-metered", "codex", "metered", true);
+        bind(&db, "binding-subscription", "codex", "subscription", true);
+
+        db.insert_usage_event(&event(
+            "metered-this-month",
+            "codex",
+            "metered",
+            "group-metered",
+            now.timestamp(),
+            1,
+            1,
+            0,
+            0,
+            Some("3"),
+            CostSource::Upstream,
+        ))
+        .unwrap();
+        db.insert_usage_event(&event(
+            "metered-previous-month",
+            "codex",
+            "metered",
+            "group-metered",
+            month.start_at - 1,
+            1,
+            1,
+            0,
+            0,
+            Some("9"),
+            CostSource::Upstream,
+        ))
+        .unwrap();
+        db.insert_usage_event(&event(
+            "subscription-this-month",
+            "codex",
+            "subscription",
+            "group-subscription",
+            now.timestamp(),
+            1,
+            1,
+            0,
+            0,
+            Some("50"),
+            CostSource::Upstream,
+        ))
+        .unwrap();
+        db.insert_usage_event(&event(
+            "disabled-this-month",
+            "codex",
+            "disabled",
+            "group-disabled",
+            now.timestamp(),
+            1,
+            1,
+            0,
+            0,
+            Some("100"),
+            CostSource::Upstream,
+        ))
+        .unwrap();
+
+        let snapshot = TrayUsageProjector::new(db)
+            .project_at_with_budget_config(
+                now,
+                Some(ApiBudgetConfig {
+                    mode: ApiBudgetMode::PerProvider,
+                    shared_daily_budget_usd: None,
+                    monthly_budget_usd: Some("2".to_string()),
+                }),
+            )
+            .unwrap();
+
+        assert_eq!(snapshot.api_budget.month_cost_usd.as_deref(), Some("3"));
+        assert_eq!(snapshot.api_budget.monthly_budget_usd.as_deref(), Some("2"));
+        assert_eq!(
+            snapshot.api_budget.month_consumed_percent.as_deref(),
+            Some("150")
+        );
+        assert!(snapshot.api_budget.month_reached);
+        assert!(!snapshot.api_budget.capped);
+        assert_eq!(snapshot.api_budget.level, BudgetLevel::Ok);
+        let serialized = serde_json::to_value(&snapshot.api_budget).unwrap();
+        assert_eq!(serialized["monthCostUsd"], "3");
+        assert_eq!(serialized["capped"], false);
+        assert_eq!(serialized["monthReached"], true);
+    }
+
+    #[test]
+    fn legacy_budget_view_json_omits_nothing_required_and_defaults_the_month_fields() {
+        let legacy = serde_json::from_str::<TrayApiBudgetView>(
+            r#"{
+                "mode": "shared",
+                "providerCount": 0,
+                "todayCostUsd": "0",
+                "dailyBudgetUsd": null,
+                "budgetConsumedPercent": null,
+                "costQuality": "complete",
+                "status": "unknown",
+                "warningReason": "daily_budget_missing",
+                "paceBasis": "static"
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(legacy.month_cost_usd, None);
+        assert_eq!(legacy.monthly_budget_usd, None);
+        assert_eq!(legacy.month_consumed_percent, None);
+        assert!(!legacy.month_reached);
+        assert!(!legacy.capped);
+        assert_eq!(legacy.level, BudgetLevel::Ok);
     }
 
     #[test]

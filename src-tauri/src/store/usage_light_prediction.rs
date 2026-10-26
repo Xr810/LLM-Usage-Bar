@@ -222,12 +222,13 @@ fn pace_basis_text(basis: PaceBasis) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{BillingKind, TokenSource, UsageProviderInput};
+    use crate::model::{BillingKind, BudgetLevel, TokenSource, UsageProviderInput};
     use serde_json::json;
 
     fn classification(status: UsageStatus) -> SourceClassification {
         SourceClassification {
             status,
+            level: BudgetLevel::Ok,
             used_percent: Some("50".to_string()),
             remaining_percent: Some("50".to_string()),
             consumed_percent: None,

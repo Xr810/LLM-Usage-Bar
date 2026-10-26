@@ -17,6 +17,8 @@ export interface TrayUsagePopoverViewProps {
   onSelectAgent?: (agentModuleId: "overview" | string) => void;
   focusRequestKey?: number;
   now?: Date;
+  /** C2 `uiFlags.upsellEntry`. Off until get_license_status says otherwise. */
+  upsellEntry?: boolean;
 }
 
 export function TrayUsagePopoverView({
@@ -27,6 +29,7 @@ export function TrayUsagePopoverView({
   onOpenDetails,
   onOpenSettings,
   onQuit,
+  upsellEntry = false,
 }: TrayUsagePopoverViewProps) {
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage || i18n.language || "en";
@@ -57,6 +60,8 @@ export function TrayUsagePopoverView({
           onOpenSettings={() => onOpenSettings(null)}
           onRefresh={onRefresh}
           onQuit={onQuit}
+          build={model.buildType}
+          upsellEntry={upsellEntry}
           refreshError={
             snapshot?.refreshError
               ? t("trayUsage.refreshFailed", {

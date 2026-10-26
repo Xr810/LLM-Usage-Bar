@@ -425,6 +425,13 @@ impl Database {
                         Self::migrate_v27_to_v28(conn)?;
                         Self::set_user_version(conn, 28)?;
                     }
+                    28 => {
+                        log::info!(
+                            "迁移数据库从 v28 到 v29（小时聚合、明细保留和 model_pricing pending 列）"
+                        );
+                        super::migrations::schema_v29::migrate_v28_to_v29(conn)?;
+                        Self::set_user_version(conn, 29)?;
+                    }
                     _ => {
                         return Err(AppError::Database(format!(
                             "未知的数据库版本 {version}，无法迁移到 {SCHEMA_VERSION}"
@@ -470,6 +477,9 @@ impl Database {
             }
             if version >= 26 {
                 Self::validate_schema_v26_complete(conn)?;
+            }
+            if version >= 29 {
+                super::migrations::schema_v29::validate_schema_v29_complete(conn)?;
             }
             Ok(())
         })();

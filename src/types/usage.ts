@@ -61,15 +61,38 @@ export interface ModelPricing {
   displayName: string;
   inputCostPerMillion: string;
   outputCostPerMillion: string;
-  cacheReadCostPerMillion: string;
-  cacheCreationCostPerMillion: string;
+  cacheReadCostPerMillion: string | null;
+  cacheCreationCostPerMillion: string | null;
+}
+
+export interface OfficialPricingRejection {
+  modelId: string;
+  reason: "invalid_value" | "change_too_large" | "zero_price" | string;
+}
+
+export interface OfficialPricingPending {
+  modelId: string;
+  firstSeenAt: number;
+}
+
+export interface OfficialPricingCollision {
+  modelId: string;
+  publishedIds: string[];
+  chosen: string;
 }
 
 export interface OfficialPricingRefreshOutcome {
   fetchedAt: number;
+  lastAttemptAt: number;
+  lastSuccessAt: number | null;
   modelsImported: number;
   modelsSkipped: number;
   sourceUrl: string;
+  rejected?: OfficialPricingRejection[];
+  pending?: OfficialPricingPending[];
+  acceptedAfterConfirm?: string[];
+  collisions?: OfficialPricingCollision[];
+  batchRejected?: boolean;
 }
 
 export interface UsageSummary {

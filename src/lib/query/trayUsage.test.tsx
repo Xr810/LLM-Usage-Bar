@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { http, HttpResponse } from "msw";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
   getApiBudgetConfig,
   getTrayUsageSnapshot,
@@ -24,7 +24,8 @@ import {
 } from "@/lib/query/trayUsage";
 import { usageDashboardApi } from "@/lib/api/usageDashboard";
 import { usageDashboardKeys } from "@/lib/query/usageDashboard";
-import type { TrayUsageSnapshot } from "@/types/trayUsage";
+import type { SourceRowView, TrayUsageSnapshot } from "@/types/trayUsage";
+import sourceContract from "../../../tests/fixtures/tray-source-contract.json";
 import {
   setPendingMainWindowDestination,
   trayUsageSnapshotFixture,
@@ -52,6 +53,66 @@ function createQueryWrapper(client = createQueryClient()) {
 }
 
 describe("tray usage wire contract", () => {
+  it("preserves build identity and nullable source reset timestamps", async () => {
+    expectTypeOf<TrayUsageSnapshot["buildType"]>().toEqualTypeOf<
+      "community" | "official"
+    >();
+    expectTypeOf<SourceRowView["nextResetAt"]>().toEqualTypeOf<string | null>();
+    expectTypeOf<SourceRowView["noteCodes"]>().toEqualTypeOf<
+      (
+        | "stale"
+        | "error"
+        | "not_proxied"
+        | "codex_websocket"
+        | "license_required"
+      )[]
+    >();
+    const sources: SourceRowView[] = sourceContract.cases.map((fixture) => ({
+      providerId: fixture.id,
+      displayName: fixture.id,
+      billingKind: "subscription",
+      enforceable: false,
+      progress: 0,
+      stopped: false,
+      sourceState: "ok",
+      noteCodes: [],
+      nextResetAt: fixture.nextResetAt,
+    }));
+    server.use(
+      http.post("http://tauri.local/get_tray_usage_snapshot", () =>
+        HttpResponse.json({
+          ...trayUsageSnapshotFixture,
+          buildType: sourceContract.buildType,
+          sources,
+        }),
+      ),
+    );
+    const snapshot = await getTrayUsageSnapshot();
+    expect(snapshot.buildType).toBe("community");
+    expect(snapshot.sources.map((row) => row.noteCodes)).toEqual([[], [], []]);
+    expect(snapshot.sources.map((row) => row.nextResetAt)).toEqual([
+      "2026-10-26T23:00:00Z",
+      null,
+      null,
+    ]);
+  });
+
+  it("preserves the shared Codex WebSocket source fixture without adding license notes", async () => {
+    server.use(
+      http.post("http://tauri.local/get_tray_usage_snapshot", () =>
+        HttpResponse.json({
+          ...trayUsageSnapshotFixture,
+          sources: [sourceContract.codexWebSocket.source],
+        }),
+      ),
+    );
+    const snapshot = await getTrayUsageSnapshot();
+    expect(snapshot.sources[0]).toEqual(sourceContract.codexWebSocket.source);
+    expect(snapshot.sources[0].noteCodes).toContain("codex_websocket");
+    expect(snapshot.sources[0].noteCodes).not.toContain("license_required");
+    expect(snapshot.sources[0].nextResetAt).toBeNull();
+  });
+
   it("mirrors decimal fields as strings and excludes protected quota configuration", () => {
     const subscription = trayUsageSnapshotFixture.agents[0].providers[0];
     const metered = trayUsageSnapshotFixture.agents[0].providers[1];
