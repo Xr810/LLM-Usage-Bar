@@ -38,6 +38,7 @@
     "fiveHour": "5 hour",
     "sevenDay": "7 day",
     "stale": "Stale",
+    "quotaReadFailed": "Couldn't read usage",
     "refreshQuota": "Refresh quota",
     "syncSessions": "Sync sessions",
     "costUpstream": "Upstream",

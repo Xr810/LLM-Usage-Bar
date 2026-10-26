@@ -38,6 +38,7 @@
     "fiveHour": "5 小時",
     "sevenDay": "7 天",
     "stale": "資料已過期",
+    "quotaReadFailed": "讀取失敗",
     "refreshQuota": "重新整理額度",
     "syncSessions": "同步工作階段",
     "costUpstream": "上游費用",

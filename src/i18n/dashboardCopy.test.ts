@@ -55,6 +55,8 @@ const requiredKeys = [
   "usageDashboard.durationHours",
   "usageDashboard.durationMinutes",
   "usageDashboard.quotaWindowUnavailable",
+  "usageDashboard.quotaReadFailed",
+  "usageDashboard.stale",
   "usageDashboard.paceWhyThisColour",
   "usageDashboard.paceBurnRate",
   "usageDashboard.paceIdle",
@@ -218,6 +220,7 @@ describe("Agent dashboard locale copy", () => {
       "trayUsage.setProviderBudget",
       "trayUsage.providerAllowanceForAgent",
       "trayUsage.invalidQuotaPercent",
+      "usageDashboard.quotaReadFailed",
       "usageDashboard.customPricingDescription",
       "usageDashboard.customPricingEmptyHint",
     ]) {
