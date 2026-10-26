@@ -1620,3 +1620,55 @@ Linux orb verification before push:
   `git diff --check`, and §17 conflict-marker scan: **passed**.
 - No UI appearance/interaction changed; no native Windows/macOS run performed.
   C17/Codex acceptance remains blocked as described above despite these passes.
+
+### 2026-10-26 BE-1b display-only License UI flags
+
+Based on main `a7954917` and the task owner's requirements. ADR v7.18 is not
+available in this checkout; this entry does not reconstruct its text.
+`LicenseStatus` now includes required `uiFlags: {upsellEntry: boolean}` in
+camelCase, mirrored by `src/types/license.ts`. `get_license_status` and
+`PRO_REQUIRED` authorization are unchanged. No UI rendering is changed.
+
+Community status always uses `LicenseUiFlags::for_build(LicenseBuild::Community)`
+and reports false, regardless of build environment. Official providers should
+populate the field using `LicenseUiFlags::for_build(LicenseBuild::Official)`.
+Its value is compiled with Rust `option_env!("LLM_USAGE_BAR_UPSELL_ENTRY")`:
+only the exact string `true` enables it; unset, `false`, or other values disable
+it. For example, prefix an official build with
+`LLM_USAGE_BAR_UPSELL_ENTRY=true pnpm tauri -- build`. Cargo tracks this
+compile-time environment input and recompiles when it changes. Changing the
+environment after compilation cannot change the flag. This variable is not a
+secret, does not select an official provider, and grants no license capability.
+The public crate still has only a community provider, `default = []`, and no
+`pro` feature. Official serialization tests cover the shared DTO/configuration,
+not a private official provider or license verification.
+
+No BE-24 locale/notification code, BE-21b subscription types, trusted relay
+setting, Codex hosts, or dependency-guard exceptions are changed. The existing
+§20 native Windows/macOS shutdown acceptance gaps remain open.
+
+Linux orb validation (before push): Rust commands below used
+`CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
+CARGO_INCREMENTAL=0` and temporary 2 GiB swap.
+
+- `pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml` with the
+  display variable unset: 1363 library + 15 integration tests passed, 3 existing
+  ignored tests; build 11m17s, library tests 65.88s.
+- `LLM_USAGE_BAR_UPSELL_ENTRY=true pnpm rust -- test --locked --manifest-path
+  src-tauri/Cargo.toml --no-default-features`: the same 1378 passed / 3 ignored;
+  build 1m59s, library tests 62.83s. Both runs include dependency guards and
+  community/official serialization snapshots. CI's no-default test step now
+  sets this variable too, so both display configurations stay covered.
+- Re-executed the second run's compiled test binary with runtime
+  `LLM_USAGE_BAR_UPSELL_ENTRY=false` and filter `policy::license::tests`: 4/4
+  passed, confirming the compiled official flag is not a runtime setting.
+- `pnpm test:unit --maxWorkers=1`: 55 files / 370 tests passed (180.21s).
+- `pnpm rust -- clippy --locked --manifest-path src-tauri/Cargo.toml -- -D
+  warnings`: passed (3m47s); repeated with `--no-default-features` before `--`
+  and `LLM_USAGE_BAR_UPSELL_ENTRY=true`: passed (21.70s).
+- `pnpm typecheck`, `pnpm format:check`,
+  `pnpm exec prettier --check .github/workflows/ci.yml src/types/license.ts`,
+  `pnpm rust -- fmt --manifest-path src-tauri/Cargo.toml --check`,
+  `git diff --check`, and §17 conflict-marker scan: passed.
+- Test compilation retains three existing test-only unused-import/dead-code
+  warnings. No native Windows/macOS validation was performed in this orb.
