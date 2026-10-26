@@ -319,11 +319,63 @@ pub enum ApiBudgetMode {
     PerProvider,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApiBudgetConfig {
     pub mode: ApiBudgetMode,
     pub shared_daily_budget_usd: Option<String>,
+    /// C10. `null` when the user has not set a month cap. Omitted keys in
+    /// configs written before BE-20 deserialize as `null`.
+    #[serde(default)]
+    pub monthly_budget_usd: Option<String>,
+}
+
+/// What to do when a confirmed identity switches onto an API key (C18).
+///
+/// File loads coerce an unknown value to [`IdentitySwitchPolicy::Ask`].
+/// `set_ui_prefs` rejects unknown values instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum IdentitySwitchPolicy {
+    #[default]
+    Ask,
+    AutoAllow,
+}
+
+/// Local safety policy for the proxy or a license check (ADR-012 / ADR-013).
+///
+/// `open` is the less safe choice. File loads coerce an unknown value to
+/// [`FailureMode::Closed`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum FailureMode {
+    #[default]
+    Closed,
+    Open,
+}
+
+/// Device-local failure policy. Not a sqlite `settings` row and not part of
+/// a WebDAV or S3 snapshot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct FailureModes {
+    #[serde(default)]
+    pub proxy: FailureMode,
+    #[serde(default)]
+    pub license: FailureMode,
+}
+
+/// C18 preferences returned by `get_ui_prefs` / `set_ui_prefs`.
+///
+/// These are consumed-percent alert settings. They are not
+/// `usage_warning_remaining_percent` or `usage_critical_remaining_percent`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiPrefs {
+    pub alert_threshold_pct: u8,
+    pub subscription_warn_pct: u8,
+    pub on_identity_switch: IdentitySwitchPolicy,
+    pub failure_modes: FailureModes,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -427,6 +479,10 @@ pub struct AppSettings {
     pub api_budget_mode: ApiBudgetMode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shared_api_daily_budget_usd: Option<String>,
+    /// Month cap for metered / API-key spend (C10). Device-local, like the
+    /// daily cap. `null` means no month cap. Not a database column.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub monthly_budget_usd: Option<String>,
     /// User has confirmed the stream check first-run notice
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stream_check_confirmed: Option<bool>,
@@ -456,8 +512,34 @@ pub struct AppSettings {
     /// User has confirmed the common config first-run notice
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub common_config_confirmed: Option<bool>,
+    /// UI language and the source for native copy. An existing install without
+    /// a value retains `zh`; only a fresh install consults the OS locale.
+    /// Existing values are preserved, including unknown codes.
+    /// Supported values are `en`, `zh`, `zh-TW`, and `ja`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
+    /// Consumed-percent warning for metered spend (C18). Default 80.
+    /// Distinct from `usage_warning_remaining_percent`, which is a remaining
+    /// percent. Device-local; `save_settings` cannot overwrite it.
+    #[serde(
+        default = "default_alert_threshold_pct",
+        deserialize_with = "deserialize_alert_threshold_pct"
+    )]
+    pub alert_threshold_pct: u8,
+    /// Consumed-percent warning for subscription usage (C18). Default 70.
+    /// Independent of the C17 truncation threshold.
+    #[serde(
+        default = "default_subscription_warn_pct",
+        deserialize_with = "deserialize_subscription_warn_pct"
+    )]
+    pub subscription_warn_pct: u8,
+    /// Confirmed API-key identity switch. Default `ask`.
+    #[serde(default, deserialize_with = "deserialize_on_identity_switch")]
+    pub on_identity_switch: IdentitySwitchPolicy,
+    /// Proxy and license failure policy. Default closed/closed.
+    /// Must not be copied into the synced sqlite `settings` table.
+    #[serde(default, deserialize_with = "deserialize_failure_modes")]
+    pub failure_modes: FailureModes,
 
     // ===== 主页面显示的应用 =====
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -561,6 +643,84 @@ fn default_usage_critical_remaining_percent() -> u8 {
     20
 }
 
+fn default_alert_threshold_pct() -> u8 {
+    80
+}
+
+fn default_subscription_warn_pct() -> u8 {
+    70
+}
+
+fn normalize_percent(value: u8, default: u8) -> u8 {
+    if (1..=100).contains(&value) {
+        value
+    } else {
+        default
+    }
+}
+
+fn coerce_stored_percent(value: &serde_json::Value, default: u8) -> u8 {
+    match value.as_u64() {
+        Some(number) if (1..=100).contains(&number) => number as u8,
+        _ => default,
+    }
+}
+
+fn deserialize_alert_threshold_pct<'de, D>(deserializer: D) -> Result<u8, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(coerce_stored_percent(&value, default_alert_threshold_pct()))
+}
+
+fn deserialize_subscription_warn_pct<'de, D>(deserializer: D) -> Result<u8, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(coerce_stored_percent(
+        &value,
+        default_subscription_warn_pct(),
+    ))
+}
+
+fn coerce_identity_switch(value: &serde_json::Value) -> IdentitySwitchPolicy {
+    match value.as_str() {
+        Some("auto_allow") => IdentitySwitchPolicy::AutoAllow,
+        _ => IdentitySwitchPolicy::Ask,
+    }
+}
+
+fn deserialize_on_identity_switch<'de, D>(deserializer: D) -> Result<IdentitySwitchPolicy, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(coerce_identity_switch(&value))
+}
+
+fn coerce_failure_mode(value: Option<&serde_json::Value>) -> FailureMode {
+    match value.and_then(serde_json::Value::as_str) {
+        Some("open") => FailureMode::Open,
+        _ => FailureMode::Closed,
+    }
+}
+
+fn deserialize_failure_modes<'de, D>(deserializer: D) -> Result<FailureModes, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    let Some(object) = value.as_object() else {
+        return Ok(FailureModes::default());
+    };
+    Ok(FailureModes {
+        proxy: coerce_failure_mode(object.get("proxy")),
+        license: coerce_failure_mode(object.get("license")),
+    })
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
@@ -582,6 +742,7 @@ impl Default for AppSettings {
             usage_critical_remaining_percent: default_usage_critical_remaining_percent(),
             api_budget_mode: ApiBudgetMode::Shared,
             shared_api_daily_budget_usd: None,
+            monthly_budget_usd: None,
             stream_check_confirmed: None,
             enable_failover_toggle: false,
             preserve_codex_official_auth_on_switch: false,
@@ -591,6 +752,10 @@ impl Default for AppSettings {
             first_run_notice_confirmed: None,
             common_config_confirmed: None,
             language: None,
+            alert_threshold_pct: default_alert_threshold_pct(),
+            subscription_warn_pct: default_subscription_warn_pct(),
+            on_identity_switch: IdentitySwitchPolicy::Ask,
+            failure_modes: FailureModes::default(),
             visible_apps: None,
             claude_config_dir: None,
             codex_config_dir: None,
@@ -631,6 +796,13 @@ impl AppSettings {
             .min(self.usage_warning_remaining_percent);
         self.shared_api_daily_budget_usd = self
             .shared_api_daily_budget_usd
+            .as_deref()
+            .map(crate::usage::budget_migration::canonicalize_daily_budget)
+            .transpose()
+            .ok()
+            .flatten();
+        self.monthly_budget_usd = self
+            .monthly_budget_usd
             .as_deref()
             .map(crate::usage::budget_migration::canonicalize_daily_budget)
             .transpose()
@@ -679,12 +851,10 @@ impl AppSettings {
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string());
 
-        self.language = self
-            .language
-            .as_ref()
-            .map(|s| s.trim())
-            .filter(|s| matches!(*s, "en" | "zh" | "zh-TW" | "ja"))
-            .map(|s| s.to_string());
+        self.alert_threshold_pct =
+            normalize_percent(self.alert_threshold_pct, default_alert_threshold_pct());
+        self.subscription_warn_pct =
+            normalize_percent(self.subscription_warn_pct, default_subscription_warn_pct());
 
         if let Some(sync) = &mut self.webdav_sync {
             sync.normalize();
@@ -701,10 +871,20 @@ impl AppSettings {
         }
     }
 
+    pub fn ui_prefs(&self) -> UiPrefs {
+        UiPrefs {
+            alert_threshold_pct: self.alert_threshold_pct,
+            subscription_warn_pct: self.subscription_warn_pct,
+            on_identity_switch: self.on_identity_switch,
+            failure_modes: self.failure_modes,
+        }
+    }
+
     pub fn api_budget_config(&self) -> ApiBudgetConfig {
         ApiBudgetConfig {
             mode: self.api_budget_mode,
             shared_daily_budget_usd: self.shared_api_daily_budget_usd.clone(),
+            monthly_budget_usd: self.monthly_budget_usd.clone(),
         }
     }
 
@@ -734,20 +914,50 @@ impl AppSettings {
     }
 
     fn load_from_path(path: &Path) -> Self {
-        Self::load_from_path_with_writer(path, write_canonical_settings_value)
+        Self::load_from_path_with_writer(
+            path,
+            write_canonical_settings_value,
+            sys_locale::get_locale,
+        )
     }
 
-    fn load_from_path_with_writer<F>(path: &Path, write_canonical: F) -> Self
+    fn load_from_path_with_writer<F>(
+        path: &Path,
+        write_canonical: F,
+        read_locale: impl FnOnce() -> Option<String>,
+    ) -> Self
     where
         F: FnOnce(&Path, &serde_json::Value) -> Result<(), AppError>,
     {
-        if let Ok(content) = fs::read_to_string(path) {
+        let existing_install = path.exists()
+            || path.parent().is_some_and(|app_dir| {
+                crate::product_identity::current_database_path(app_dir).exists()
+                    || crate::product_identity::prior_current_app_database_path(app_dir).exists()
+            });
+        let content = match fs::read_to_string(path) {
+            Ok(content) => Ok(content),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok("{}".to_string()),
+            Err(error) => Err(error),
+        };
+        if let Ok(content) = content {
             match Self::decode_settings_json(&content) {
-                Ok((settings, canonical_value)) => {
+                Ok((mut settings, mut canonical_value)) => {
+                    if settings.language.is_none() {
+                        let language = if existing_install {
+                            "zh"
+                        } else {
+                            crate::i18n::initial_language(read_locale)
+                        };
+                        settings.language = Some(language.to_string());
+                        let value = canonical_value.get_or_insert_with(|| {
+                            serde_json::from_str(&content).expect("decoded settings JSON")
+                        });
+                        value["language"] = serde_json::Value::String(language.to_string());
+                    }
                     if let Some(canonical_value) = canonical_value.as_ref() {
                         if let Err(error) = write_canonical(path, canonical_value) {
                             log::warn!(
-                                "已读取旧 skillStorageLocation，但规范化写回失败。路径: {}, 错误: {}",
+                                "Settings initialization write failed. Path: {}, error: {}",
                                 path.display(),
                                 error
                             );
@@ -1175,8 +1385,81 @@ mod tests {
             ApiBudgetConfig {
                 mode: ApiBudgetMode::Shared,
                 shared_daily_budget_usd: Some("20".to_string()),
+                monthly_budget_usd: None,
             }
         );
+    }
+
+    #[test]
+    fn old_settings_json_leaves_the_monthly_budget_null() {
+        let (settings, _) = AppSettings::decode_settings_json("{}").expect("defaults");
+        assert_eq!(settings.monthly_budget_usd, None);
+        assert_eq!(settings.api_budget_config().monthly_budget_usd, None);
+
+        let legacy = serde_json::from_str::<ApiBudgetConfig>(
+            r#"{"mode":"shared","sharedDailyBudgetUsd":"10"}"#,
+        )
+        .expect("legacy config");
+        assert_eq!(legacy.monthly_budget_usd, None);
+        assert_eq!(legacy.shared_daily_budget_usd.as_deref(), Some("10"));
+    }
+
+    #[test]
+    fn monthly_budget_round_trips_and_canonicalizes_without_clearing_the_daily_cap() {
+        let (mut settings, _) = AppSettings::decode_settings_json(
+            r#"{"sharedApiDailyBudgetUsd":"10","monthlyBudgetUsd":"020.50"}"#,
+        )
+        .expect("settings");
+        settings.normalize_paths();
+        assert_eq!(settings.shared_api_daily_budget_usd.as_deref(), Some("10"));
+        assert_eq!(settings.monthly_budget_usd.as_deref(), Some("20.5"));
+
+        settings.api_budget_mode = ApiBudgetMode::PerProvider;
+        settings.shared_api_daily_budget_usd = Some("12".to_string());
+        assert_eq!(settings.monthly_budget_usd.as_deref(), Some("20.5"));
+        assert_eq!(
+            settings.api_budget_config().monthly_budget_usd.as_deref(),
+            Some("20.5")
+        );
+    }
+
+    #[test]
+    fn old_settings_json_uses_ui_pref_defaults() {
+        let (settings, _) = AppSettings::decode_settings_json("{}").expect("defaults");
+        assert_eq!(settings.ui_prefs(), default_ui_prefs());
+        assert_eq!(settings.usage_warning_remaining_percent, 50);
+        assert_eq!(settings.usage_critical_remaining_percent, 20);
+    }
+
+    #[test]
+    fn stored_ui_prefs_coerce_unknown_values_instead_of_failing_the_file() {
+        let (settings, _) = AppSettings::decode_settings_json(
+            r#"{
+                "alertThresholdPct": 0,
+                "subscriptionWarnPct": 70.5,
+                "onIdentitySwitch": "later",
+                "failureModes": {"proxy": "wide", "license": "open", "extra": true}
+            }"#,
+        )
+        .expect("lenient load");
+
+        assert_eq!(settings.alert_threshold_pct, default_alert_threshold_pct());
+        assert_eq!(
+            settings.subscription_warn_pct,
+            default_subscription_warn_pct()
+        );
+        assert_eq!(settings.on_identity_switch, IdentitySwitchPolicy::Ask);
+        assert_eq!(settings.failure_modes.proxy, FailureMode::Closed);
+        assert_eq!(settings.failure_modes.license, FailureMode::Open);
+    }
+
+    fn default_ui_prefs() -> UiPrefs {
+        UiPrefs {
+            alert_threshold_pct: default_alert_threshold_pct(),
+            subscription_warn_pct: default_subscription_warn_pct(),
+            on_identity_switch: IdentitySwitchPolicy::Ask,
+            failure_modes: FailureModes::default(),
+        }
     }
 
     #[test]
@@ -1210,6 +1493,117 @@ mod tests {
     }
 
     #[test]
+    fn first_launch_language_is_persisted_without_replacing_stored_values() {
+        for (locale, expected) in [
+            (Some("zh"), "zh"),
+            (Some("zh-CN"), "zh"),
+            (Some("zh_SG"), "zh"),
+            (Some("zhTW"), "zh-TW"),
+            (Some("zh-TW"), "zh-TW"),
+            (Some("zh-Hant-HK"), "zh-TW"),
+            (Some("zh_HK"), "zh-TW"),
+            (Some("fr-FR"), "en"),
+            (Some("unknown"), "en"),
+            (Some("ja-JP"), "en"),
+            (None, "en"),
+        ] {
+            let temp = tempdir().unwrap();
+            let path = temp.path().join("settings.json");
+            let settings = AppSettings::load_from_path_with_writer(
+                &path,
+                write_canonical_settings_value,
+                || locale.map(str::to_string),
+            );
+            assert_eq!(settings.language.as_deref(), Some(expected));
+            let saved: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            assert_eq!(saved["language"], expected);
+            let reloaded = AppSettings::load_from_path_with_writer(
+                &path,
+                |_, _| panic!("must not rewrite stored language"),
+                || panic!("must not read host locale on subsequent launches"),
+            );
+            assert_eq!(reloaded.language, settings.language);
+        }
+        for stored in ["en", "zh", "zh-TW", "ja", "fr-FR", "", " zh "] {
+            let temp = tempdir().unwrap();
+            let path = temp.path().join("settings.json");
+            let original = serde_json::json!({"language": stored}).to_string();
+            fs::write(&path, &original).unwrap();
+            let settings = AppSettings::load_from_path_with_writer(
+                &path,
+                |_, _| panic!("must not overwrite stored value"),
+                || panic!("must not consult OS for stored value"),
+            );
+            assert_eq!(settings.language.as_deref(), Some(stored));
+            assert_eq!(fs::read_to_string(path).unwrap(), original);
+        }
+    }
+
+    #[test]
+    fn existing_install_without_language_retains_chinese_without_reading_locale() {
+        for (settings_exist, database_file) in [
+            (true, None),
+            (false, Some(crate::product_identity::DATABASE_FILE)),
+            (true, Some(crate::product_identity::DATABASE_FILE)),
+            (false, Some(crate::product_identity::LEGACY_DATABASE_FILE)),
+        ] {
+            let temp = tempdir().unwrap();
+            let path = temp.path().join("settings.json");
+            if settings_exist {
+                fs::write(&path, r#"{"futureSetting":42}"#).unwrap();
+            }
+            if let Some(database_file) = database_file {
+                let connection =
+                    rusqlite::Connection::open(temp.path().join(database_file)).unwrap();
+                connection
+                    .execute_batch("CREATE TABLE existing_data (id INTEGER)")
+                    .unwrap();
+            }
+            let settings = AppSettings::load_from_path_with_writer(
+                &path,
+                write_canonical_settings_value,
+                || panic!("existing installs must never read the OS locale"),
+            );
+            assert_eq!(settings.language.as_deref(), Some("zh"));
+            let saved: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            assert_eq!(saved["language"], "zh");
+            if settings_exist {
+                assert_eq!(saved["futureSetting"], 42);
+            }
+            let reloaded = AppSettings::load_from_path_with_writer(
+                &path,
+                |_, _| panic!("persisted language must not be rewritten"),
+                || panic!("persisted language must not read the OS locale"),
+            );
+            assert_eq!(reloaded.language, settings.language);
+        }
+    }
+
+    #[test]
+    fn first_launch_language_does_not_destroy_unreadable_settings() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("settings.json");
+        fs::write(&path, "broken JSON").unwrap();
+        AppSettings::load_from_path_with_writer(
+            &path,
+            |_, _| panic!("must not overwrite malformed settings"),
+            || panic!("cannot establish that stored language is absent"),
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), "broken JSON");
+
+        fs::remove_file(&path).unwrap();
+        let settings = AppSettings::load_from_path_with_writer(
+            &path,
+            |_, _| Err(AppError::Config("injected write failure".to_string())),
+            || Some("zh-CN".to_string()),
+        );
+        assert_eq!(settings.language.as_deref(), Some("zh"));
+        assert!(!path.exists());
+    }
+
+    #[test]
     fn identity_discriminator_settings_load_rewrites_legacy_storage_value() {
         let temp = tempdir().expect("create settings migration tempdir");
         let path = temp.path().join("settings.json");
@@ -1232,7 +1626,10 @@ mod tests {
         )
         .expect("write legacy settings");
 
-        let settings = AppSettings::load_from_path(&path);
+        let settings =
+            AppSettings::load_from_path_with_writer(&path, write_canonical_settings_value, || {
+                panic!("legacy settings must not consult OS locale")
+            });
         assert_eq!(
             settings.skill_storage_location,
             SkillStorageLocation::LlmUsageBar
@@ -1263,12 +1660,16 @@ mod tests {
         .expect("write legacy settings");
 
         let write_attempted = std::cell::Cell::new(false);
-        let settings = AppSettings::load_from_path_with_writer(&path, |_, _| {
-            write_attempted.set(true);
-            Err(AppError::Config(
-                "injected canonicalization failure".to_string(),
-            ))
-        });
+        let settings = AppSettings::load_from_path_with_writer(
+            &path,
+            |_, _| {
+                write_attempted.set(true);
+                Err(AppError::Config(
+                    "injected canonicalization failure".to_string(),
+                ))
+            },
+            || panic!("stored language must not read OS locale"),
+        );
         assert_eq!(
             settings.skill_storage_location,
             SkillStorageLocation::LlmUsageBar

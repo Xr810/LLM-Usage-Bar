@@ -840,5 +840,19 @@
     "errors": {
       "feature_unavailable": "社区构建不包含此功能"
     }
+  },
+  "native": {
+    "notify": {
+      "budgetReachedTitle": "已达每日 API 预算",
+      "budgetReachedBody": "今日 API 花费 ${{spent}}，占每日预算 ${{budget}} 的 {{percent}}%。",
+      "budgetReachedScopedBody": "{{scope}} 今日已花费 ${{spent}}，占每日预算 ${{budget}} 的 {{percent}}%。"
+    },
+    "tray": {
+      "showMain": "打开主界面",
+      "openWebsite": "打开官方网站",
+      "noProviders": "(无供应商)",
+      "lightweightMode": "轻量模式",
+      "quit": "退出"
+    }
   }
 }
