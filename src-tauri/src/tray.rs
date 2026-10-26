@@ -66,6 +66,50 @@ impl TrayTexts {
     }
 }
 
+/// Native notification copy, using the same catalog and fallbacks as tray copy.
+pub struct NotificationTexts {
+    pub budget_reached_title: String,
+    budget_reached_body: String,
+    budget_reached_scoped_body: String,
+}
+
+impl NotificationTexts {
+    pub fn from_language(language: &str) -> Self {
+        Self {
+            budget_reached_title: crate::i18n::t(language, "native.notify.budgetReachedTitle", &[]),
+            budget_reached_body: crate::i18n::t(language, "native.notify.budgetReachedBody", &[]),
+            budget_reached_scoped_body: crate::i18n::t(
+                language,
+                "native.notify.budgetReachedScopedBody",
+                &[],
+            ),
+        }
+    }
+
+    pub fn budget_reached_body(
+        &self,
+        scope: Option<&str>,
+        spent: &str,
+        budget: &str,
+        percent: &str,
+    ) -> String {
+        let template = if scope.is_some() {
+            &self.budget_reached_scoped_body
+        } else {
+            &self.budget_reached_body
+        };
+        crate::i18n::interpolate(
+            template,
+            &[
+                ("spent", spent),
+                ("budget", budget),
+                ("percent", percent),
+                ("scope", scope.unwrap_or_default()),
+            ],
+        )
+    }
+}
+
 /// 托盘应用分区配置
 pub struct TrayAppSection {
     pub app_type: AppType,

@@ -132,63 +132,16 @@ pub fn save_ledger(db: &Database, ledger: &AlertLedger) -> Result<(), AppError> 
     db.set_setting(LEDGER_SETTING_KEY, &encoded)
 }
 
-/// 提醒文案。跟托盘菜单一样按 `settings.language` 选语言，未知语言回落中文。
+/// 提醒文案。跟托盘菜单一样使用嵌入式语言目录，未知语言回落英文。
 pub fn render_alert(alert: &BudgetAlert, language: &str) -> (String, String) {
-    let scope = alert.scope_label.as_deref();
-    match language {
-        "en" => (
-            "Daily API budget reached".to_string(),
-            match scope {
-                Some(name) => format!(
-                    "{name} has spent ${} of its ${} daily budget ({}%).",
-                    alert.spent_usd, alert.budget_usd, alert.consumed_percent
-                ),
-                None => format!(
-                    "Today's API spend is ${} of your ${} daily budget ({}%).",
-                    alert.spent_usd, alert.budget_usd, alert.consumed_percent
-                ),
-            },
-        ),
-        "ja" => (
-            "1日のAPI予算に到達しました".to_string(),
-            match scope {
-                Some(name) => format!(
-                    "{name} は1日の予算 ${} のうち ${} を使用しました（{}%）。",
-                    alert.budget_usd, alert.spent_usd, alert.consumed_percent
-                ),
-                None => format!(
-                    "本日のAPI利用額は1日の予算 ${} のうち ${} です（{}%）。",
-                    alert.budget_usd, alert.spent_usd, alert.consumed_percent
-                ),
-            },
-        ),
-        "zh-TW" => (
-            "已達每日 API 預算".to_string(),
-            match scope {
-                Some(name) => format!(
-                    "{name} 今日已花費 ${}，佔每日預算 ${} 的 {}%。",
-                    alert.spent_usd, alert.budget_usd, alert.consumed_percent
-                ),
-                None => format!(
-                    "今日 API 花費 ${}，佔每日預算 ${} 的 {}%。",
-                    alert.spent_usd, alert.budget_usd, alert.consumed_percent
-                ),
-            },
-        ),
-        _ => (
-            "已达每日 API 预算".to_string(),
-            match scope {
-                Some(name) => format!(
-                    "{name} 今日已花费 ${}，占每日预算 ${} 的 {}%。",
-                    alert.spent_usd, alert.budget_usd, alert.consumed_percent
-                ),
-                None => format!(
-                    "今日 API 花费 ${}，占每日预算 ${} 的 {}%。",
-                    alert.spent_usd, alert.budget_usd, alert.consumed_percent
-                ),
-            },
-        ),
-    }
+    let texts = crate::tray::NotificationTexts::from_language(language);
+    let body = texts.budget_reached_body(
+        alert.scope_label.as_deref(),
+        &alert.spent_usd,
+        &alert.budget_usd,
+        &alert.consumed_percent,
+    );
+    (texts.budget_reached_title, body)
 }
 
 /// 快照发布时的副作用入口：判断、发通知、记账。
@@ -210,11 +163,10 @@ pub fn notify_for_snapshot(app: &tauri::AppHandle, snapshot: &TrayUsageSnapshot)
         return;
     }
 
-    let language = crate::config::settings::get_settings()
-        .language
-        .unwrap_or_else(|| "zh".to_string());
+    let settings = crate::config::settings::get_settings();
+    let language = crate::i18n::effective_language(settings.language.as_deref());
     for alert in &alerts {
-        let (title, body) = render_alert(alert, &language);
+        let (title, body) = render_alert(alert, language);
         deliver(app, &title, &body);
     }
     if let Err(error) = save_ledger(&state.db, &next_ledger) {
@@ -491,22 +443,57 @@ mod tests {
     }
 
     #[test]
-    fn rendered_copy_names_the_provider_in_per_provider_mode() {
-        let alert = BudgetAlert {
+    fn rendered_copy_preserves_amounts_scope_and_catalog_fallbacks() {
+        let mut alert = BudgetAlert {
             scope_key: "provider:x".to_string(),
             scope_label: Some("OpenRouter".to_string()),
-            spent_usd: "7".to_string(),
-            budget_usd: "5".to_string(),
-            consumed_percent: "140".to_string(),
+            spent_usd: "7.1250".to_string(),
+            budget_usd: "5.00".to_string(),
+            consumed_percent: "142.50".to_string(),
         };
-        for language in ["zh", "en", "ja", "zh-TW", "de"] {
-            let (title, body) = render_alert(&alert, language);
-            assert!(!title.is_empty(), "{language}");
-            assert!(body.contains("OpenRouter"), "{language}: {body}");
-            assert!(
-                body.contains('7') && body.contains('5'),
-                "{language}: {body}"
+        for (language, title, scoped, shared) in [
+            (
+                "en",
+                "Daily API budget reached",
+                "OpenRouter has spent $7.1250 of its $5.00 daily budget (142.50%).",
+                "Today's API spend is $7.1250 of your $5.00 daily budget (142.50%).",
+            ),
+            (
+                "zh",
+                "已达每日 API 预算",
+                "OpenRouter 今日已花费 $7.1250，占每日预算 $5.00 的 142.50%。",
+                "今日 API 花费 $7.1250，占每日预算 $5.00 的 142.50%。",
+            ),
+            (
+                "zh-TW",
+                "已達每日 API 預算",
+                "OpenRouter 今日已花費 $7.1250，佔每日預算 $5.00 的 142.50%。",
+                "今日 API 花費 $7.1250，佔每日預算 $5.00 的 142.50%。",
+            ),
+            (
+                "ja",
+                "1日のAPI予算に到達しました",
+                "OpenRouter は1日の予算 $5.00 のうち $7.1250 を使用しました（142.50%）。",
+                "本日のAPI利用額は1日の予算 $5.00 のうち $7.1250 です（142.50%）。",
+            ),
+        ] {
+            alert.scope_label = Some("OpenRouter".to_string());
+            assert_eq!(
+                render_alert(&alert, language),
+                (title.to_string(), scoped.to_string())
             );
+            alert.scope_label = None;
+            assert_eq!(
+                render_alert(&alert, language),
+                (title.to_string(), shared.to_string())
+            );
+        }
+        for scope in [None, Some("Provider {{spent}} <&>".to_string())] {
+            alert.scope_label = scope;
+            assert_eq!(render_alert(&alert, "unknown"), render_alert(&alert, "en"));
+            if let Some(scope) = &alert.scope_label {
+                assert!(render_alert(&alert, "en").1.starts_with(scope));
+            }
         }
     }
 

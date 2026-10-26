@@ -649,6 +649,10 @@ pub fn run() {
                 )?;
             }
 
+            // Initialize language before database preparation/open can create an
+            // install marker. Only an install with neither settings nor a DB is fresh.
+            let _ = crate::config::settings::get_settings();
+
             // Keep the OS login item aligned with the persisted setting on every
             // manual launch. This also repairs the invalid `.app` LaunchAgent
             // written by auto-launch 0.6 before the executable-path fix.

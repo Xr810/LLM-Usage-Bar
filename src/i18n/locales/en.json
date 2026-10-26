@@ -614,6 +614,11 @@
     "output": "Output tokens"
   },
   "native": {
+    "notify": {
+      "budgetReachedTitle": "Daily API budget reached",
+      "budgetReachedBody": "Today's API spend is ${{spent}} of your ${{budget}} daily budget ({{percent}}%).",
+      "budgetReachedScopedBody": "{{scope}} has spent ${{spent}} of its ${{budget}} daily budget ({{percent}}%)."
+    },
     "tray": {
       "showMain": "Open main window",
       "openWebsite": "Open Official Website",
