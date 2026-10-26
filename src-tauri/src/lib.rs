@@ -878,7 +878,7 @@ pub fn run_with_injections(injections: Injections) {
                     .map_err(|_| AppError::internal("Cannot emit license-changed."))
             }));
             let lifecycle = app_state.license_lifecycle.clone();
-            if let Err(error) = lifecycle.reconcile(chrono::Utc::now()) {
+            if let Err(error) = lifecycle.reconcile() {
                 log::error!("Startup license reconciliation will retry: {error}");
             }
             app_state.spawn_background(async move {
@@ -888,7 +888,7 @@ pub fn run_with_injections(injections: Injections) {
                 );
                 loop {
                     interval.tick().await;
-                    if let Err(error) = lifecycle.reconcile(chrono::Utc::now()) {
+                    if let Err(error) = lifecycle.reconcile() {
                         log::error!("License reconciliation will retry: {error}");
                     }
                 }

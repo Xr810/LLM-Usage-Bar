@@ -2270,12 +2270,21 @@ with `949012ce` already merged. `LicenseStatus.grace_days` is optional (wire
 `graceDays`, omitted when absent); lifecycle derives grace from expiry plus
 `min(grace_days.unwrap_or(14), 14)` days, ignoring provider `graceUntil`.
 Queued delivery re-reads its originating provider instead of retaining a status
-snapshot. Regressions cover 7/30/default/zero days and exact free boundaries,
-and reentrant queue changes across two providers sharing one database.
+snapshot. The queue carries a clock callable, not a timestamp; send and post-send
+validation each sample it afresh (production uses `Utc::now`). `reconcile()` no
+longer accepts a caller timestamp. After the publisher returns, the ack
+transaction re-reads the provider and only writes if the fresh lifecycle key
+equals the sent key and the stored acknowledgement has not changed.
+Regressions cover 7/30/default/zero days and exact free boundaries, reentrant
+queue changes across two providers sharing one database, grace expiring while
+queued, and callback changes to expiry/tier/grace or time that must leave no
+stale acknowledgement and emit the new state exactly once on the next round.
 The existing acknowledgement-CAS regression covers replacement and deletion
 during send, preservation of the competing value, and next-round resend.
 
 Local wrapper `fmt --check` and `git diff --check` pass. Full-crate focused
-policy tests are compiling in this 2 GB orb; results and all six exact-head
-CI checks must be taken from the PR/thread, not inferred from this entry.
+policy test compilation was killed by the 2 GB orb limit (137); production
+Clippy passed. The first pushed revision passed all six checks, but that does
+not validate the subsequent clock/provider-ack correction. Final exact-head
+CI and local check results belong to the PR/thread, not inferred here.
 No frontend/private code, merge, or release. §20 native shutdown gaps remain.

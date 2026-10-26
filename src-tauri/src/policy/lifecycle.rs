@@ -9,10 +9,11 @@ use super::{LicenseBuild, LicenseProvider, LicenseState, LicenseStatus, LicenseT
 use crate::{error::AppError, Database};
 
 pub type LicensePublisher = Arc<dyn Fn(&LicenseStatus) -> Result<(), AppError> + Send + Sync>;
+type LicenseClock = Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>;
 
 struct PendingPublication {
     provider: Arc<dyn LicenseProvider>,
-    now: DateTime<Utc>,
+    clock: LicenseClock,
     publisher: LicensePublisher,
 }
 
@@ -44,6 +45,7 @@ pub struct LicenseLifecycle {
     db: Arc<Database>,
     transitions: Arc<Mutex<Transitions>>,
     publisher: Mutex<Option<LicensePublisher>>,
+    clock: LicenseClock,
 }
 
 impl LicenseLifecycle {
@@ -53,6 +55,7 @@ impl LicenseLifecycle {
             transitions: transitions_for(&db),
             db,
             publisher: Mutex::new(None),
+            clock: Arc::new(Utc::now),
         }
     }
 
@@ -86,19 +89,19 @@ impl LicenseLifecycle {
         status
     }
 
-    pub fn reconcile(&self, now: DateTime<Utc>) -> Result<(), AppError> {
+    pub fn reconcile(&self) -> Result<(), AppError> {
         {
             let mut transitions = self.transitions.lock()?;
-            self.enqueue(&mut transitions, now)?;
+            self.enqueue(&mut transitions)?;
         }
         self.drain()
     }
 
-    fn enqueue(&self, transitions: &mut Transitions, now: DateTime<Utc>) -> Result<(), AppError> {
+    fn enqueue(&self, transitions: &mut Transitions) -> Result<(), AppError> {
         if let Some(publisher) = self.publisher.lock()?.clone() {
             transitions.queue.push_back(PendingPublication {
                 provider: self.provider.clone(),
-                now,
+                clock: self.clock.clone(),
                 publisher,
             });
         }
@@ -129,38 +132,42 @@ impl LicenseLifecycle {
             };
             // Re-read the originating provider at delivery, not enqueue time:
             // a prior callback may have activated or deactivated it meanwhile.
-            let status = Self::status_at(next.provider.as_ref(), next.now);
+            let status = Self::status_at(next.provider.as_ref(), (next.clock)());
             if status.build == LicenseBuild::Community {
                 continue;
             }
-            if let Err(error) = self.publish(&status, &next.publisher) {
+            if let Err(error) = self.publish(&status, &next) {
                 failure.get_or_insert(error);
             }
         }
         failure.map_or(Ok(()), Err)
     }
 
-    fn publish(
-        &self,
-        status: &LicenseStatus,
-        publisher: &LicensePublisher,
-    ) -> Result<(), AppError> {
-        let key = serde_json::to_string(&(
+    fn state_key(status: &LicenseStatus) -> Result<String, AppError> {
+        serde_json::to_string(&(
             status.tier,
             status.state,
             &status.expires_at,
             &status.grace_until,
         ))
-        .map_err(|_| AppError::internal("Cannot serialize license state."))?;
+        .map_err(|_| AppError::internal("Cannot serialize license state."))
+    }
+
+    fn publish(&self, status: &LicenseStatus, next: &PendingPublication) -> Result<(), AppError> {
+        let key = Self::state_key(status)?;
         let previous = self.db.get_setting("license_last_emitted_state")?;
         if previous.as_deref() == Some(&key) {
             return Ok(());
         }
         // No DB mutex, transaction, transition or publisher lock crosses the
         // callback. It may synchronously read the DB or change the license.
-        publisher(status)?;
+        (next.publisher)(status)?;
+        // Use the same lock order as commands (transition, then DB), but only
+        // after the callback. A changed provider or clock must not be acked.
+        let _guard = self.transitions.lock()?;
         let mut conn = self.db.conn.lock()?;
         let tx = conn.transaction()?;
+        let fresh = Self::status_at(next.provider.as_ref(), (next.clock)());
         let current: Option<String> = tx
             .query_row(
                 "SELECT value FROM settings WHERE key='license_last_emitted_state'",
@@ -168,9 +175,9 @@ impl LicenseLifecycle {
                 |row| row.get(0),
             )
             .optional()?;
-        if current != previous {
+        if current != previous || Self::state_key(&fresh)? != key {
             return Err(AppError::internal(
-                "License acknowledgement changed during delivery; retry required.",
+                "License state or acknowledgement changed during delivery; retry required.",
             ));
         }
         tx.execute(
@@ -192,7 +199,7 @@ impl LicenseLifecycle {
 impl LicenseProvider for LicenseLifecycle {
     fn status(&self) -> LicenseStatus {
         let _guard = self.transitions.lock().unwrap();
-        Self::status_at(self.provider.as_ref(), Utc::now())
+        Self::status_at(self.provider.as_ref(), (self.clock)())
     }
 
     fn activate(&self, token: &str) -> Result<LicenseStatus, AppError> {
@@ -200,9 +207,8 @@ impl LicenseProvider for LicenseLifecycle {
         let status = {
             let mut transitions = self.transitions.lock()?;
             self.provider.activate(token)?;
-            let now = Utc::now();
-            let status = Self::status_at(self.provider.as_ref(), now);
-            self.enqueue(&mut transitions, now)?;
+            let status = Self::status_at(self.provider.as_ref(), (self.clock)());
+            self.enqueue(&mut transitions)?;
             status
         };
         self.drain_or_log();
@@ -213,7 +219,7 @@ impl LicenseProvider for LicenseLifecycle {
         {
             let mut transitions = self.transitions.lock()?;
             self.provider.deactivate()?;
-            self.enqueue(&mut transitions, Utc::now())?;
+            self.enqueue(&mut transitions)?;
         }
         self.drain_or_log();
         Ok(())
