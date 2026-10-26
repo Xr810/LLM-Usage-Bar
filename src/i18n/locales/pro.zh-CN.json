@@ -43,7 +43,7 @@
       "request_waiting_allowed_manually": "1 个请求等待中，已手动放行 2 笔",
       "allow": "放行 1 笔",
       "paused": "已暂停",
-      "hit_amt_extra_was_allowed": "已到 $10，超出部分为手动放行",
+      "hit_amt_extra_was_allowed": "已到 {{amount}}，超出部分为手动放行",
       "red_amt_you_allowed_manually": "红色部分是你手动放行的 {{amount}}",
       "running": "运行中，{{percent}}",
       "below": "{{percent}}，未到 {{percent2}}",
@@ -69,7 +69,7 @@
       "source": "来源",
       "basis": "依据",
       "metered": "计量",
-      "total_amt_matches_attribution_api": "合计 $86.10，与归因视图一致，仅含 API 花费",
+      "total_amt_matches_attribution_api": "合计 {{amount}}，与归因视图一致，仅含 API 花费",
       "export_csv": "导出 CSV"
     },
     "betaconfirm": {
@@ -87,6 +87,21 @@
     "allowmore": {
       "amount_label": "「今日再放行」额度",
       "amount_hint": "硬停弹窗一键用这个数"
+    },
+    "upsell": {
+      "pro_tag": "PRO",
+      "aria_pro_tag": "{{name}}，Pro 功能",
+      "title": "用 Pro 看更多维度",
+      "body": "按周、按月、按项目或客户查看花费，还有星期 × 小时热力图。",
+      "preview_note": "以下为示例数据预览",
+      "start_trial": "开始 7 天免费试用",
+      "trial_note": "不需绑卡，随时取消",
+      "compare_link": "比较 Free 与 Pro",
+      "close": "以后再说",
+      "dim_week": "周",
+      "dim_month": "月",
+      "dim_project": "项目",
+      "dim_client": "客户"
     }
   }
 }
