@@ -2128,3 +2128,48 @@ temporary dependency-free Cargo harness pointing at the actual repository
 source/root; the normal app-linked guard build also hit exit 137. Production
 Clippy `-D warnings` passed (2m27s). New-head CI must verify the moved fixture;
 the initial run's frontend and both desktop passes are not new-head evidence.
+
+#### 2026-10-26 Contract v1.7: Hold audit reason and usage exclusions
+
+Baseline: `d849ac55a946f481c6d4a59cf31e2732b5a59870`, verified as both
+#113's merge commit and current `origin/main` before branching. The BE-30
+immediate Hold now writes the gate-supplied reason to `error_message` on its
+single `guard_hold` settlement; its 429 body and Retry-After are unchanged.
+No new Hold sub-reason is written. Usage SQL excludes `guard_hold%` alongside
+`guard_deny`, and hourly contributions exclude the same legacy prefix for
+live settlement, dirty-hour maintenance and full rebuild. Daily archival,
+summaries, trends, provider limits, session spend and session deduplication
+use these exclusions. Audit list access remains available. No schema or
+migration change, frontend edit, BE-31 activation or private PRO-1 work.
+
+Existing router tests inject `approval_required`, `denied`, `timeout` and
+`queue_full` reasons and assert one row, exact stored message, no forwarding,
+and zero hourly requests. Aggregate fixtures compare nonempty usage views
+after each reason/legacy import (including nonzero tokens/cost and HTTP 200),
+then exercise daily archival. Full hourly rebuild and session-dedup fixtures
+also cover legacy `guard_hold_timeout` rows. Allow completion still counts.
+
+Upgrade correction: startup/periodic maintenance queues retained Hold-detail
+hours for a one-time dirty-hour repair, atomically committing the repair and
+an existing-settings-table marker. It does not full-rebuild or discard older
+hourly history whose details are gone. A disk-backed startup regression seeds
+pre-v1.7 cached counts without dirty hours, reopens through `Database::init_at`,
+and checks mixed ordinary/Hold hours, Hold-only hours, untouched archived
+history and repeated maintenance. No versioned migration or schema edit.
+
+**Contract blocker / scope boundary:** the public repository has no held
+queue, interactive wait, release, timeout, overflow, shutdown or client-gone
+Hold lifecycle. Injected reason labels exercise the actual immediate gate,
+not those absent lifecycle paths. A released-Hold integration test cannot be
+implemented here without adding PRO-2; ordinary Allow is only the normal
+completion control. Do not treat these tests as PRO-2 acceptance. Existing
+§20 native interactive shutdown gaps remain open.
+
+Local wrapper-managed test compilation was killed by the 2 GB orb memory
+limit (exit 137), before executing tests. Production Clippy `-D warnings`
+passes, including after the upgrade correction (19.87s); formatting and
+`git diff --check` pass. Initial-head CI passed 1387 library and 15 integration
+tests, but that does not validate the added upgrade regression. Final exact-head
+CI results (Frontend, Backend, Backend no-pro, macOS, Windows, label) belong
+to the PR/thread; do not infer test success from this entry. No merge or
+release authorized.

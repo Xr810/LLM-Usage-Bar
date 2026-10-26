@@ -157,14 +157,25 @@ fn hourly_total_matches_proxy_logs_and_ignores_usage_events() -> Result<(), AppE
             params![request_id, cost, billing],
         )?;
     }
-    for status in [200, 451] {
+    for (index, (reason, status)) in [
+        ("guard_deny", 200),
+        ("guard_deny", 451),
+        ("guard_hold", 200),
+        ("guard_hold", 429),
+        ("guard_hold_timeout", 200),
+        ("guard_hold_overflow", 429),
+        ("guard_hold_denied", 429),
+    ]
+    .into_iter()
+    .enumerate()
+    {
         conn.execute(
             "INSERT INTO proxy_request_logs (
                  request_id, provider_id, app_type, model, input_tokens, output_tokens,
                  total_cost_usd, latency_ms, status_code, created_at, end_reason
              ) VALUES (?1, 'anthropic', 'claude', 'claude', 19, 23, '7.5', 99, ?2,
-                       1700000100, 'guard_deny')",
-            params![format!("denied-{status}"), status],
+                       1700000100, ?3)",
+            params![format!("audit-{index}"), status, reason],
         )?;
     }
     rebuild_usage_hourly_rollups(&conn)?;
@@ -215,6 +226,76 @@ fn dirty_hour_rebuild_replaces_the_bucket_instead_of_adding() -> Result<(), AppE
         row.get(0)
     })?;
     assert_eq!(pending, 0);
+    Ok(())
+}
+
+#[test]
+fn startup_repairs_cached_hold_hours_without_erasing_archived_history() -> Result<(), AppError> {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("hold-upgrade.db");
+    let hour = hour_bucket_utc(chrono::Utc::now().timestamp() - 2 * 86_400);
+    {
+        let db = Database::init_at(&path)?;
+        let conn = lock_conn!(db.conn);
+        // Simulate an existing pre-v1.7 DB: cached usage, retained Hold details,
+        // no dirty hours, and older archived hours whose details are gone.
+        conn.execute(
+            "DELETE FROM settings WHERE key = 'guard_hold_hourly_repaired_v1'",
+            [],
+        )?;
+        for (id, reason, at) in [
+            ("used", None, hour),
+            ("held", Some("guard_hold"), hour),
+            ("timeout", Some("guard_hold_timeout"), hour),
+            ("overflow", Some("guard_hold_overflow"), hour),
+            ("denied", Some("guard_hold_denied"), hour),
+            ("hold-only", Some("guard_hold"), hour + 3600),
+        ] {
+            conn.execute(
+                "INSERT INTO proxy_request_logs (request_id, provider_id, app_type,
+                     model, input_tokens, output_tokens, total_cost_usd, latency_ms,
+                     status_code, created_at, end_reason)
+                 VALUES (?1, 'p', 'claude', 'm', 13, 7, '0.25', 11, 200, ?2, ?3)",
+                params![id, at, reason],
+            )?;
+        }
+        conn.execute(
+            "INSERT INTO usage_hourly_rollups (hour_utc, app_type, provider_id, model,
+                 billing_identity, data_source, request_count, input_tokens,
+                 output_tokens, cost_micro_usd)
+             SELECT created_at, 'claude', 'p', 'm', '', 'proxy', COUNT(*),
+                    SUM(input_tokens), SUM(output_tokens), COUNT(*) * 250000
+             FROM proxy_request_logs GROUP BY created_at",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO usage_hourly_rollups (hour_utc, app_type, provider_id, model,
+                 billing_identity, data_source, request_count, input_tokens,
+                 output_tokens, cost_micro_usd)
+             VALUES (?1, 'claude', 'p', 'archived', '', 'proxy', 9, 31, 43, 500000)",
+            [hour - 120 * 86_400],
+        )?;
+    }
+    // Public startup maintenance, without manually marking or rebuilding hours.
+    let db = Database::init_at(&path)?;
+    for _ in 0..2 {
+        let totals: (i64, i64, i64, i64, i64) = lock_conn!(db.conn).query_row(
+            "SELECT COUNT(*), SUM(request_count), SUM(input_tokens),
+                    SUM(output_tokens), SUM(cost_micro_usd) FROM usage_hourly_rollups",
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )?;
+        assert_eq!(totals, (2, 10, 44, 50, 750000));
+        db.rollup_and_prune_configured()?;
+    }
     Ok(())
 }
 

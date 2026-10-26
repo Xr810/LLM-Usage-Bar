@@ -760,7 +760,7 @@ async fn handle_proxy_inner(
                             key_fingerprint: classified.key_fp,
                             session_id: classified.session_id,
                             end_reason: "guard_hold".to_string(),
-                            error_message: None,
+                            error_message: Some(reason),
                         },
                     ) {
                         log::warn!("guard hold recording failed: {error}");
@@ -1771,13 +1771,18 @@ mod tests {
 
     #[tokio::test]
     async fn injected_hold_returns_429_immediately_and_records_guard_hold() {
-        for retry_after_seconds in [None, Some(0), Some(17)] {
+        for (reason, retry_after_seconds) in [
+            ("approval_required", None),
+            ("denied", Some(0)),
+            ("timeout", Some(17)),
+            ("queue_full", None),
+        ] {
             let db = memory_db();
             seed_route(&db, "upstream", WireApi::Responses, 1, MODEL);
             let sender = fake_sender(vec![]);
             let gate = Arc::new(FixedGate {
                 decision: crate::policy::Decision::Hold {
-                    reason: "approval_required".into(),
+                    reason: reason.into(),
                     retry_after_seconds,
                 },
                 settlements: Default::default(),
@@ -1809,7 +1814,7 @@ mod tests {
             let body: serde_json::Value =
                 serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap())
                     .unwrap();
-            let mut details = json!({"reason": "approval_required"});
+            let mut details = json!({"reason": reason});
             if let Some(seconds) = retry_after_seconds {
                 details["retryAfter"] = seconds.into();
             }
@@ -1826,20 +1831,20 @@ mod tests {
                 .unwrap().collect::<Result<_, _>>().unwrap();
             assert_eq!(rows, vec![("guard_hold".into(), 429, 0)]);
             let conn = db.conn.lock().unwrap();
-            let reason: Option<String> = conn
+            let stored_reason: Option<String> = conn
                 .query_row("SELECT error_message FROM proxy_request_logs", [], |r| {
                     r.get(0)
                 })
                 .unwrap();
-            assert_eq!(reason, None, "D2 leaves Hold's stored fields unchanged");
+            assert_eq!(stored_reason.as_deref(), Some(reason));
             let requests: i64 = conn
                 .query_row(
-                    "SELECT SUM(request_count) FROM usage_hourly_rollups",
+                    "SELECT COALESCE(SUM(request_count), 0) FROM usage_hourly_rollups",
                     [],
                     |r| r.get(0),
                 )
                 .unwrap();
-            assert_eq!(requests, 1, "D2 preserves Hold's baseline aggregation");
+            assert_eq!(requests, 0, "Hold is audit-only, including request counts");
         }
     }
 
@@ -1858,7 +1863,7 @@ mod tests {
                 decision: crate::policy::Decision::Allow,
                 settlements: Default::default(),
             });
-            let mut state = test_state(db, ok_auth(), sender.clone());
+            let mut state = test_state(db.clone(), ok_auth(), sender.clone());
             if inject {
                 Arc::get_mut(&mut state).unwrap().gate = gate.clone();
             }
@@ -1869,6 +1874,13 @@ mod tests {
             assert_eq!(body.as_ref(), expected);
             assert_eq!(sender.requests.lock().unwrap().len(), 1);
             assert_eq!(gate.settlements.load(Ordering::SeqCst), usize::from(inject));
+            assert_eq!(
+                db.get_usage_summary(None, None, None, None, None)
+                    .unwrap()
+                    .total_requests,
+                1,
+                "An admitted request completes and counts normally"
+            );
         }
     }
 
