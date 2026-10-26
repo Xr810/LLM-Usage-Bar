@@ -18,6 +18,8 @@ export interface TrayUsagePopoverViewProps {
   onSelectAgent?: (agentModuleId: "overview" | string) => void;
   focusRequestKey?: number;
   now?: Date;
+  /** C2 `uiFlags.upsellEntry`. Off until get_license_status says otherwise. */
+  upsellEntry?: boolean;
 }
 
 export function TrayUsagePopoverView({
@@ -28,6 +30,7 @@ export function TrayUsagePopoverView({
   onOpenDetails,
   onOpenSettings,
   onQuit,
+  upsellEntry = false,
 }: TrayUsagePopoverViewProps) {
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage || i18n.language || "en";
@@ -54,7 +57,7 @@ export function TrayUsagePopoverView({
           model={model}
           locale={locale}
           build={edition.build}
-          upsellEntry={edition.upsellEntry}
+          upsellEntry={upsellEntry || edition.upsellEntry}
           refreshing={refreshing}
           showUtilityActions
           onOpenTrends={onOpenDetails}

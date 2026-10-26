@@ -131,7 +131,7 @@ describe("community allow placeholder", () => {
     expect(screen.queryByText(zh.lub.overcap.compare_link)).toBeNull();
   });
 
-  it("renders nothing extra for official Free, including upsell, or Pro", () => {
+  it("keeps official Free and Pro free of community chrome when upsell is on", () => {
     const { unmount } = renderPanel({
       build: "official",
       tier: "free",
@@ -140,14 +140,19 @@ describe("community allow placeholder", () => {
     expect(allowButtons()).toHaveLength(0);
     expect(screen.queryByText(zh.lub.community.badge)).toBeNull();
     expect(document.querySelector("[data-slot='community-allow']")).toBeNull();
-    expect(screen.queryByText(zh.lub.overcap.compare_link)).toBeNull();
+    expect(
+      screen.getByRole("button", { name: zh.lub.overcap.compare_link }),
+    ).toBeInTheDocument();
     expect(document.querySelector("a, [href]")).toBeNull();
     unmount();
 
     renderPanel({ build: "official", tier: "pro", upsellEntry: true });
     expect(allowButtons()).toHaveLength(0);
     expect(screen.queryByText(zh.lub.community.badge)).toBeNull();
-    expect(screen.queryByText(zh.lub.overcap.compare_link)).toBeNull();
+    expect(
+      screen.getByRole("button", { name: zh.lub.overcap.compare_link }),
+    ).toBeInTheDocument();
+    expect(document.querySelector("a, [href]")).toBeNull();
   });
 
   it("ignores upsell_entry for a community build", () => {
@@ -201,13 +206,18 @@ describe("community build detection", () => {
   it("stays community while license status is loading, missing, or failed", async () => {
     expect(resolveLubBuild({ pending: true })).toBe("community");
     expect(resolveLubBuild({ license: null })).toBe("community");
-    expect(resolveLubBuild({ license: { tier: "free", features: [] } })).toBe(
-      "community",
-    );
+    expect(
+      resolveLubBuild({
+        license: {
+          tier: "free",
+          build: "community",
+          features: [],
+          uiFlags: { upsellEntry: false },
+        },
+      }),
+    ).toBe("community");
     expect(readUpsellEntry(undefined)).toBe(false);
-    expect(readUpsellEntry(null)).toBe(false);
-    expect(readUpsellEntry({ upsellEntry: null })).toBe(false);
-    expect(readUpsellEntry({})).toBe(false);
+    expect(readUpsellEntry({ upsellEntry: false })).toBe(false);
     expect(readUpsellEntry({ upsellEntry: true })).toBe(true);
 
     server.use(
@@ -270,7 +280,12 @@ describe("community build detection", () => {
       resolveLubBuild({
         snapshotBuildType: "community",
         pending: true,
-        license: { tier: "pro", build: "official", features: [] },
+        license: {
+          tier: "pro",
+          build: "official",
+          features: [],
+          uiFlags: { upsellEntry: false },
+        },
       }),
     ).toBe("community");
   });
@@ -307,7 +322,6 @@ describe("community build detection", () => {
         model={overFixture()}
         locale="zh-CN"
         build="community"
-        proCompareEnabled
         upsellEntry
         onOpenTrends={() => undefined}
         onOpenSettings={() => undefined}

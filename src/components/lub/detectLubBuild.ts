@@ -1,22 +1,9 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import type { LicenseStatus, LicenseUiFlags } from "@/types/license";
 import type { LubBuild, LubTier } from "./panelModel";
 
-/**
- * `get_license_status` (src-tauri/src/api/commands/license.rs).
- * camelCase matches the serde rename. `uiFlags` is BE-1b and may be absent.
- */
-export interface LicenseStatus {
-  tier: "free" | "pro" | "pro_p3";
-  expiresAt?: string | null;
-  graceUntil?: string | null;
-  build?: LubBuild | null;
-  features?: string[] | null;
-  emailMasked?: string | null;
-  uiFlags?: {
-    upsellEntry?: boolean | null;
-  } | null;
-}
+export type { LicenseStatus };
 
 export interface LubEdition {
   build: LubBuild;
@@ -32,8 +19,8 @@ export function readLubBuild(
   return value != null && BUILDS.has(value) ? (value as LubBuild) : null;
 }
 
-/** Missing, null, or any value other than true stays false. */
-export function readUpsellEntry(flags: LicenseStatus["uiFlags"]): boolean {
+/** Missing flags, or any value other than true, stay false. */
+export function readUpsellEntry(flags: LicenseUiFlags | undefined): boolean {
   return flags?.upsellEntry === true;
 }
 

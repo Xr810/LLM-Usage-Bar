@@ -6,7 +6,6 @@ import { CommunityAllowPlaceholder } from "./CommunityAllowPlaceholder";
 import { CommunityBuildBadge } from "./CommunityBuildBadge";
 import { communityChromeVisible } from "./detectLubBuild";
 import { formatResetInstant, sharedNextResetAt } from "./money";
-import { proCompareEnabled as proCompareDefault } from "./proCompare";
 import { SessionList } from "./SessionList";
 import { SourceList } from "./SourceList";
 import { StatusBanner } from "./StatusBanner";
@@ -26,18 +25,18 @@ interface TrayPanelV5Props {
   scrollMaxPx?: number;
   refreshError?: string | null;
   /**
-   * C2 build. Fixture renders may omit it. Live detection stays community
-   * while `get_license_status` is loading or has failed.
+   * Snapshot `buildType`, or live `get_license_status.build`.
+   * Design samples that omit it stay official. Live detection stays
+   * community while the command is loading or has failed.
    */
   build?: LubBuild;
-  /**
-   * C2 tier and BE-1b `uiFlags.upsellEntry`. Neither one shows community
-   * chrome. A community build does not show a purchase entry.
-   */
+  /** C2 tier. It does not show or hide community chrome. */
   tier?: LubTier;
+  /**
+   * C2 `uiFlags.upsellEntry`. Gates the Free vs Pro line on an official
+   * build. Default off. A community build never shows that line.
+   */
   upsellEntry?: boolean;
-  /** Batch 1 default is false. The compare line stays out of the banner. */
-  proCompareEnabled?: boolean;
 }
 
 function PowerIcon() {
@@ -155,7 +154,6 @@ export function TrayPanelV5({
   build = "official",
   tier = "free",
   upsellEntry = false,
-  proCompareEnabled = proCompareDefault,
 }: TrayPanelV5Props) {
   ensureProCopy();
   const { t } = useTranslation();
@@ -234,7 +232,7 @@ export function TrayPanelV5({
           <StatusBanner
             capUsd={model.dailyCapUsd}
             locale={locale}
-            proCompareEnabled={build !== "community" && proCompareEnabled}
+            upsellEntry={build !== "community" && upsellEntry}
           />
           {community ? <CommunityAllowPlaceholder locale={locale} /> : null}
         </>

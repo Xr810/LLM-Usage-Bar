@@ -28,7 +28,7 @@ use crate::error::AppError;
 use crate::metering::calculator::CostCalculator;
 use crate::metering::calculator::ModelPricing;
 use crate::metering::parser::TokenUsage;
-use crate::store::usage_stats::find_model_pricing_row;
+use crate::store::usage_stats::{bill_cache_rate, find_model_pricing_row};
 use rusqlite::{params, Connection};
 use rust_decimal::Decimal;
 use std::str::FromStr;
@@ -141,7 +141,9 @@ fn rewrite(conn: &Connection, pending: &[UncostedEvent]) -> Result<u64, AppError
             }
             continue;
         };
-        let pricing = ModelPricing::from_strings(&row.0, &row.1, &row.2, &row.3)
+        let (cache_read, _) = bill_cache_rate(row.2.as_deref(), &row.0);
+        let (cache_creation, _) = bill_cache_rate(row.3.as_deref(), &row.0);
+        let pricing = ModelPricing::from_strings(&row.0, &row.1, &cache_read, &cache_creation)
             .map_err(|error| AppError::Database(format!("v21 -> v22 定价无效: {error}")))?;
 
         let usage = TokenUsage {

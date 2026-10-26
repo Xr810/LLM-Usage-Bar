@@ -14,7 +14,7 @@ use toml_edit::{value, DocumentMut, Item, Table};
 use crate::error::AppError;
 
 /// 写入 Codex 配置的 provider id,带 app 前缀,避免与用户自建 provider 撞名。
-const ROUTER_PROVIDER_ID: &str = "llm_usage_bar_router";
+pub(crate) const ROUTER_PROVIDER_ID: &str = "llm_usage_bar_router";
 /// 备份文件名后缀;逃生脚本 scripts/codex-unroute.sh 按同一 glob 找备份。
 const BACKUP_NAME_SUFFIX: &str = "-before-router";
 
@@ -34,7 +34,7 @@ pub fn disconnect_codex() -> Result<(), AppError> {
     disconnect_codex_inner(&crate::agent_paths::get_codex_config_dir().join("config.toml"))
 }
 
-fn disconnect_codex_inner(config_path: &Path) -> Result<(), AppError> {
+pub(crate) fn disconnect_codex_inner(config_path: &Path) -> Result<(), AppError> {
     let current = fs::read_to_string(config_path).map_err(|e| AppError::io(config_path, e))?;
     let mut doc: DocumentMut = current
         .parse()
@@ -111,7 +111,7 @@ pub fn inspect_pointer() -> PointerState {
 
 /// `point_codex_at_router` 的路径可注入版本:测试用 tempfile 造临时文件,
 /// 绝不碰用户真实的 `~/.codex/config.toml`。
-fn point_codex_at_router_inner(config_path: &Path, port: u16) -> Result<(), AppError> {
+pub(crate) fn point_codex_at_router_inner(config_path: &Path, port: u16) -> Result<(), AppError> {
     // 读原文件。config.toml 不存在时按首次写入处理:没有可备份的旧内容,
     // 校验失败时把新建的文件删掉,还原成「不存在」。
     let (original, existed) = match fs::read_to_string(config_path) {
