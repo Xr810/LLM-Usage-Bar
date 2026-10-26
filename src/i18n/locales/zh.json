@@ -675,7 +675,9 @@
       "check_up_found_risk": "体检发现 1 个风险",
       "code_acme_web_env_sets": "~/code/acme-web/.env 含 ANTHROPIC_API_KEY，会悄悄覆盖订阅计费。",
       "back": "上一步",
-      "connect_set_daily_cap": "接入并设置日上限"
+      "connect_set_daily_cap": "接入并设置日上限",
+      "terms_risk": "可能违反服务商条款，账号可能被限制，由你自行判断。",
+      "claude_subscription_via_proxy": "Claude 订阅经代理"
     },
     "settings": {
       "trends_heatmaps": "趋势与热力图",

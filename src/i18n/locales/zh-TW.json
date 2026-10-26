@@ -615,6 +615,10 @@
     "output": "輸出 token"
   },
   "lub": {
+    "onboard": {
+      "terms_risk": "可能違反服務商條款，帳號可能被限制，由你自行判斷。",
+      "claude_subscription_via_proxy": "Claude 訂閱經代理"
+    },
     "settings": {
       "nav": {
         "license": "授權"
