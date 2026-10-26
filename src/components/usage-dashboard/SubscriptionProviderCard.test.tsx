@@ -105,6 +105,96 @@ describe("SubscriptionProviderCard localized reset countdown", () => {
     expect(screen.queryByText(/2d/)).toBeNull();
   });
 
+  it("shows the window as a percent and never a dollar amount", () => {
+    const usage = subscriptionUsage();
+    usage.totalCostUsd = "12.50";
+    render(
+      <SubscriptionProviderCard
+        usage={usage}
+        onRefreshQuota={vi.fn()}
+        onSyncSessions={vi.fn()}
+      />,
+    );
+    const card = screen.getByTestId(
+      "subscription-provider-system-chatgpt-subscription",
+    );
+    expect(card.textContent).toMatch(/%/);
+    expect(card.textContent).not.toMatch(/\$/);
+    expect(card.textContent).not.toContain("12.5");
+  });
+
+  it("does not draw 0% when a known quota has no windows", () => {
+    const usage = subscriptionUsage();
+    usage.quota!.fiveHourUtilizationPercent = null;
+    usage.quota!.fiveHourResetsAt = "2026-07-14T01:00:00.000Z";
+    usage.quota!.sevenDayUtilizationPercent = null;
+    usage.quota!.sevenDayResetsAt = "2026-07-20T01:00:00.000Z";
+
+    render(
+      <SubscriptionProviderCard
+        usage={usage}
+        onRefreshQuota={vi.fn()}
+        onSyncSessions={vi.fn()}
+      />,
+    );
+
+    expect(screen.getAllByText("Stale")).toHaveLength(2);
+    expect(screen.queryByRole("progressbar")).toBeNull();
+    expect(screen.queryByText("0%")).toBeNull();
+    expect(
+      screen.queryByText(
+        "This subscription does not provide this quota window",
+      ),
+    ).toBeNull();
+  });
+
+  it("says the read failed when both windows are empty after an error", () => {
+    const usage = subscriptionUsage();
+    usage.quota!.fiveHourUtilizationPercent = null;
+    usage.quota!.sevenDayUtilizationPercent = null;
+    usage.quotaFetchState = {
+      providerId: usage.provider.id,
+      lastAttemptAt: 10,
+      lastSuccessAt: null,
+      lastError: "timeout",
+      consecutiveFailures: 1,
+      stale: false,
+    };
+
+    render(
+      <SubscriptionProviderCard
+        usage={usage}
+        onRefreshQuota={vi.fn()}
+        onSyncSessions={vi.fn()}
+      />,
+    );
+
+    expect(screen.getAllByText("Couldn't read usage")).toHaveLength(2);
+    expect(screen.queryByRole("progressbar")).toBeNull();
+    expect(screen.queryByText("0%")).toBeNull();
+  });
+
+  it("still draws a bar for a real zero percent window", () => {
+    const usage = subscriptionUsage();
+    usage.quota!.fiveHourUtilizationPercent = "0";
+    usage.quota!.sevenDayUtilizationPercent = "0";
+
+    render(
+      <SubscriptionProviderCard
+        usage={usage}
+        onRefreshQuota={vi.fn()}
+        onSyncSessions={vi.fn()}
+      />,
+    );
+
+    expect(screen.getAllByRole("progressbar")).toHaveLength(2);
+    expect(screen.getAllByText("{{value}}% left")).toHaveLength(2);
+    expect(screen.queryByText("Stale")).toBeNull();
+    expect(
+      screen.getByRole("progressbar", { name: "5-hour window" }),
+    ).toHaveAttribute("aria-valuenow", "100");
+  });
+
   it("ignores stale quota payloads when quota collection is unavailable", () => {
     const usage = subscriptionUsage();
     usage.provider.id = "system-claude-subscription";

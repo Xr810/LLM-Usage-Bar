@@ -38,6 +38,7 @@
     "fiveHour": "5 時間",
     "sevenDay": "7 日間",
     "stale": "データ期限切れ",
+    "quotaReadFailed": "読み取れませんでした",
     "refreshQuota": "上限を更新",
     "syncSessions": "セッションを同期",
     "costUpstream": "上流料金",

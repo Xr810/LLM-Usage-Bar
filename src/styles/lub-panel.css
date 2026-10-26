@@ -1147,6 +1147,36 @@ html[data-window-surface="tray-popover"] .lub-scroll {
   gap: 12px;
   padding: 22px 26px;
 }
+.lub-legend-title {
+  margin: 0 0 4px;
+  font-weight: 600;
+}
+.lub-legend-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 8px 0;
+}
+.lub-legend-bar {
+  width: 88px;
+  flex: none;
+  padding-top: 4px;
+}
+.lub-legend-copy {
+  min-width: 0;
+  margin: 0;
+  font-size: var(--lub-fs-body);
+  line-height: var(--lub-lh-body);
+}
+.lub-legend-copy b {
+  font-weight: 600;
+}
+.lub-stale {
+  color: var(--lub-ink-2);
+  font-size: var(--lub-fs-cap);
+  font-weight: 500;
+  line-height: var(--lub-lh-cap);
+}
 .lub-field {
   display: flex;
   gap: 8px;
