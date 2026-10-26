@@ -44,6 +44,28 @@ function MenuBar({ model, locale }: { model: LubPanelModel; locale: string }) {
   );
 }
 
+function MainWindowTokens({ lang }: { lang: "zh" | "en" }) {
+  return (
+    <main className="min-h-screen bg-background p-8 text-foreground">
+      <section className="mx-auto max-w-xl rounded-xl border border-border bg-card p-6 text-card-foreground shadow-sm">
+        <p className="text-xs text-muted-foreground">Main window</p>
+        <h1 className="mt-1 text-lg font-semibold">LLM Usage Bar</h1>
+        <p className="mt-2 text-sm text-muted-foreground">
+          {lang === "en"
+            ? "Usage stays on this device."
+            : "用量留在这台设备上。"}
+        </p>
+        <button
+          type="button"
+          className="mt-4 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"
+        >
+          {lang === "en" ? "Primary" : "主要操作"}
+        </button>
+      </section>
+    </main>
+  );
+}
+
 function SampleMark() {
   const { t } = useTranslation();
   return (
@@ -75,6 +97,13 @@ function Gallery({
         : screen === "lapsed"
           ? designPanelFixture({ licenseLapsed: true })
           : designPanelFixture();
+  if (screen === "main") {
+    return (
+      <GalleryReady>
+        <MainWindowTokens lang={lang} />
+      </GalleryReady>
+    );
+  }
   return (
     <GalleryReady>
       <div className="lub-gallery">
