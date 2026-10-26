@@ -11,6 +11,6 @@ pub use gate::{AllowAllGate, BillingIdentity, Decision, PolicyGate, ReqMeta, Usa
 pub use license::{
     activate_community_license, community_license_status, deactivate_community_license,
     CommunityLicenseProvider, LicenseBuild, LicenseChangedPayload, LicenseProvider, LicenseStatus,
-    LicenseTier, LICENSE_CHANGED_EVENT, LICENSE_TOKEN_MAX_BYTES,
+    LicenseTier, LicenseUiFlags, LICENSE_CHANGED_EVENT, LICENSE_TOKEN_MAX_BYTES,
 };
 pub use receipt::{CommunityReceiptExporter, ExportFilter, ExportRange, ReceiptExporter};
