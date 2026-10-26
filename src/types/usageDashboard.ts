@@ -279,6 +279,8 @@ export interface UsageDashboardView {
   endAt: number;
   productGroups: ProductUsageView[];
   warnings: string[];
+  /** Clamped start date (`YYYY-MM-DD`) when a Free window moves `startAt`. */
+  clampedFrom?: string;
 }
 
 export interface ProviderMonitoringDashboardView {
@@ -288,6 +290,8 @@ export interface ProviderMonitoringDashboardView {
   trendGranularity: UsageTrendGranularity;
   trendBuckets: UsageTrendBucketView[];
   warnings: string[];
+  /** Clamped start date (`YYYY-MM-DD`) when a Free window moves `startAt`. */
+  clampedFrom?: string;
 }
 
 /** One concrete model, scoped to a single Provider account. */
@@ -351,6 +355,8 @@ export interface ModelUsageDashboardView {
   productGroups: ModelProductGroupView[];
   models: ModelTotalsRow[];
   warnings: string[];
+  /** Clamped start date (`YYYY-MM-DD`) when a Free window moves `startAt`. */
+  clampedFrom?: string;
 }
 
 /** One Provider account's contribution inside a single Agent. */
@@ -398,6 +404,8 @@ export interface AgentUsageBreakdownView {
   totalCostUsd: string | null;
   agents: AgentUsageRow[];
   warnings: string[];
+  /** Clamped start date (`YYYY-MM-DD`) when a Free window moves `startAt`. */
+  clampedFrom?: string;
 }
 
 export interface UsageEvent {

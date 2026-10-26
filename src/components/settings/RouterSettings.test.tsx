@@ -151,4 +151,27 @@ describe("Local routing settings", () => {
       screen.getByText(/lower bound, not your account balance/),
     ).toBeInTheDocument();
   });
+
+  it("renders a shorter attempts list without an error", async () => {
+    vi.mocked(routerApi.usage).mockResolvedValue([
+      {
+        providerId: "primary",
+        attempts: 2,
+        failures: 0,
+        inputTokens: 11,
+        outputTokens: 4,
+      },
+    ]);
+    const user = userEvent.setup();
+    mount();
+    await user.selectOptions(
+      await screen.findByRole("combobox", { name: "Time range" }),
+      "30",
+    );
+    expect(await screen.findByText("2")).toBeInTheDocument();
+    expect(screen.getByText("11")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByText("PRO_REQUIRED")).toBeNull();
+    expect(screen.queryByText(/upgrade|purchase|subscribe/i)).toBeNull();
+  });
 });

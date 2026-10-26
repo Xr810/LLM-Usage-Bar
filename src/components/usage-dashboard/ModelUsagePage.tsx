@@ -16,6 +16,7 @@ import {
 import { UsageBreakdownHeader, UsageBreakdownRow } from "./UsageBreakdownRow";
 import { BreakdownSummary } from "./BreakdownSummary";
 import { BreakdownEmpty } from "./BreakdownEmpty";
+import { visibleUsageWarnings } from "./proRequiredBreakdown";
 import { dashboardProviderIcon } from "./usagePresentation";
 
 type ModelGrouping = "product" | "model";
@@ -71,8 +72,21 @@ export function ModelUsagePage({
       ? t("usageBreakdown.plan", { defaultValue: "Plan" })
       : t("usageBreakdown.model", { defaultValue: "Model" });
 
+  const modelListsEmpty =
+    dashboard.models.length === 0 &&
+    dashboard.productGroups.length > 0 &&
+    dashboard.productGroups.every((group) => group.models.length === 0);
   const empty =
-    dashboard.totalEventCount === 0 || dashboard.productGroups.length === 0;
+    dashboard.totalEventCount === 0 ||
+    (dashboard.productGroups.length === 0 && dashboard.models.length === 0);
+  const emptyModelText =
+    dashboard.totalEventCount > 0
+      ? t("usageBreakdown.modelListUnavailable", {
+          defaultValue: "Per-model breakdown isn't available for this range.",
+        })
+      : t("usageBreakdown.modelEmpty", {
+          defaultValue: "No model usage was recorded in this range.",
+        });
 
   return (
     <div className="space-y-4">
@@ -88,18 +102,14 @@ export function ModelUsagePage({
         })}
       />
 
-      {dashboard.warnings.map((warning) => (
+      {visibleUsageWarnings(dashboard.warnings).map((warning) => (
         <p key={warning} className="text-xs text-muted-foreground">
           {warning}
         </p>
       ))}
 
       {empty ? (
-        <BreakdownEmpty
-          text={t("usageBreakdown.modelEmpty", {
-            defaultValue: "No model usage was recorded in this range.",
-          })}
-        />
+        <BreakdownEmpty text={emptyModelText} />
       ) : (
         <Card className="overflow-hidden">
           <div className="flex flex-wrap items-center justify-between gap-3 px-3 py-3">
@@ -115,128 +125,152 @@ export function ModelUsagePage({
             />
           </div>
 
-          <UsageBreakdownHeader
-            label={listLabel}
-            shareLabel={t("usageBreakdown.share", { defaultValue: "Share" })}
-            tokensLabel={t("usageDashboard.tokens", { defaultValue: "Tokens" })}
-            requestsLabel={t("usageDashboard.requests", {
-              defaultValue: "Requests",
-            })}
-          />
+          {grouping === "model" && dashboard.models.length === 0 ? (
+            <div className="px-3 pb-4">
+              <BreakdownEmpty text={emptyModelText} />
+            </div>
+          ) : (
+            <>
+              <UsageBreakdownHeader
+                label={listLabel}
+                shareLabel={t("usageBreakdown.share", {
+                  defaultValue: "Share",
+                })}
+                tokensLabel={t("usageDashboard.tokens", {
+                  defaultValue: "Tokens",
+                })}
+                requestsLabel={t("usageDashboard.requests", {
+                  defaultValue: "Requests",
+                })}
+              />
 
-          <div className="divide-y divide-border/40">
-            {grouping === "product"
-              ? dashboard.productGroups.map((group) => {
-                  const label = productGroupLabel(
-                    group.productGroupId,
-                    group.providerNames,
-                    t,
-                  );
-                  const { icon, iconColor } = dashboardProviderIcon({
-                    systemPresetKey: null,
-                    productGroupId: group.productGroupId,
-                    name: label,
-                  });
-                  // A single account whose name already is the plan name would
-                  // just repeat the title, so the subtitle is dropped.
-                  const accountsText = group.providerNames.join(" · ");
-                  return (
-                    <UsageBreakdownRow
-                      key={group.productGroupId}
-                      data-testid={`model-group-${group.productGroupId}`}
-                      title={label}
-                      subtitle={
-                        accountsText === label ? undefined : accountsText
-                      }
-                      leading={
-                        <ProviderIcon
-                          icon={icon}
-                          color={iconColor}
-                          name={label}
-                          size={22}
-                          className="shrink-0 rounded-[6px] border border-border/50"
-                        />
-                      }
-                      badges={
-                        <Badge variant="secondary" className="shrink-0">
-                          {group.billingKind === "subscription"
-                            ? t("usageDashboard.subscription", {
-                                defaultValue: "Subscription",
-                              })
-                            : t("usageDashboard.metered", {
-                                defaultValue: "Metered",
-                              })}
-                        </Badge>
-                      }
-                      share={sharePercent(
-                        group.totalTokens,
-                        dashboard.totalTokens,
-                      )}
-                      tokens={group.totalTokens}
-                      requests={group.eventCount}
-                      costText={costText(group.totalCostUsd, t)}
-                      costMuted={group.totalCostUsd == null}
-                    >
-                      {group.models.map((model) => (
+              <div className="divide-y divide-border/40">
+                {grouping === "product"
+                  ? dashboard.productGroups.map((group) => {
+                      const label = productGroupLabel(
+                        group.productGroupId,
+                        group.providerNames,
+                        t,
+                      );
+                      const { icon, iconColor } = dashboardProviderIcon({
+                        systemPresetKey: null,
+                        productGroupId: group.productGroupId,
+                        name: label,
+                      });
+                      // A single account whose name already is the plan name would
+                      // just repeat the title, so the subtitle is dropped.
+                      const accountsText = group.providerNames.join(" · ");
+                      return (
                         <UsageBreakdownRow
-                          key={`${model.providerId}:${model.model}`}
-                          variant="nested"
-                          title={modelLabel(model.model, t)}
+                          key={group.productGroupId}
+                          data-testid={`model-group-${group.productGroupId}`}
+                          title={label}
                           subtitle={
-                            group.providerIds.length > 1
-                              ? model.providerName
-                              : undefined
+                            accountsText === label ? undefined : accountsText
+                          }
+                          leading={
+                            <ProviderIcon
+                              icon={icon}
+                              color={iconColor}
+                              name={label}
+                              size={22}
+                              className="shrink-0 rounded-[6px] border border-border/50"
+                            />
+                          }
+                          badges={
+                            <Badge variant="secondary" className="shrink-0">
+                              {group.billingKind === "subscription"
+                                ? t("usageDashboard.subscription", {
+                                    defaultValue: "Subscription",
+                                  })
+                                : t("usageDashboard.metered", {
+                                    defaultValue: "Metered",
+                                  })}
+                            </Badge>
+                          }
+                          share={sharePercent(
+                            group.totalTokens,
+                            dashboard.totalTokens,
+                          )}
+                          tokens={group.totalTokens}
+                          requests={group.eventCount}
+                          costText={costText(group.totalCostUsd, t)}
+                          costMuted={group.totalCostUsd == null}
+                        >
+                          {group.models.length === 0
+                            ? null
+                            : group.models.map((model) => (
+                                <UsageBreakdownRow
+                                  key={`${model.providerId}:${model.model}`}
+                                  variant="nested"
+                                  title={modelLabel(model.model, t)}
+                                  subtitle={
+                                    group.providerIds.length > 1
+                                      ? model.providerName
+                                      : undefined
+                                  }
+                                  share={sharePercent(
+                                    model.totalTokens,
+                                    group.totalTokens,
+                                  )}
+                                  tokens={model.totalTokens}
+                                  requests={model.eventCount}
+                                  costText={costText(model.totalCostUsd, t)}
+                                  costMuted={model.totalCostUsd == null}
+                                />
+                              ))}
+                        </UsageBreakdownRow>
+                      );
+                    })
+                  : dashboard.models.map((model) => {
+                      const accounts = model.providerIds
+                        .map((providerId) => providerNameById.get(providerId))
+                        .filter((name): name is string => Boolean(name));
+                      const status = rowCostStatus(
+                        model.totalCostUsd,
+                        model.costSourceCounts,
+                      );
+                      return (
+                        <UsageBreakdownRow
+                          key={model.model}
+                          data-testid={`model-total-${model.model}`}
+                          title={
+                            <span className="font-mono text-[13px]">
+                              {modelLabel(model.model, t)}
+                            </span>
+                          }
+                          subtitle={accounts.join(" · ")}
+                          badges={
+                            status === "complete" ? null : (
+                              <Badge variant="outline" className="shrink-0">
+                                {costStatusLabel(status, t)}
+                              </Badge>
+                            )
                           }
                           share={sharePercent(
                             model.totalTokens,
-                            group.totalTokens,
+                            dashboard.totalTokens,
                           )}
                           tokens={model.totalTokens}
                           requests={model.eventCount}
                           costText={costText(model.totalCostUsd, t)}
                           costMuted={model.totalCostUsd == null}
                         />
-                      ))}
-                    </UsageBreakdownRow>
-                  );
-                })
-              : dashboard.models.map((model) => {
-                  const accounts = model.providerIds
-                    .map((providerId) => providerNameById.get(providerId))
-                    .filter((name): name is string => Boolean(name));
-                  const status = rowCostStatus(
-                    model.totalCostUsd,
-                    model.costSourceCounts,
-                  );
-                  return (
-                    <UsageBreakdownRow
-                      key={model.model}
-                      data-testid={`model-total-${model.model}`}
-                      title={
-                        <span className="font-mono text-[13px]">
-                          {modelLabel(model.model, t)}
-                        </span>
-                      }
-                      subtitle={accounts.join(" · ")}
-                      badges={
-                        status === "complete" ? null : (
-                          <Badge variant="outline" className="shrink-0">
-                            {costStatusLabel(status, t)}
-                          </Badge>
-                        )
-                      }
-                      share={sharePercent(
-                        model.totalTokens,
-                        dashboard.totalTokens,
-                      )}
-                      tokens={model.totalTokens}
-                      requests={model.eventCount}
-                      costText={costText(model.totalCostUsd, t)}
-                      costMuted={model.totalCostUsd == null}
-                    />
-                  );
-                })}
-          </div>
+                      );
+                    })}
+              </div>
+              {grouping === "product" &&
+              dashboard.totalEventCount > 0 &&
+              modelListsEmpty ? (
+                <p
+                  className="px-3 py-4 text-sm text-muted-foreground"
+                  data-testid="model-list-empty"
+                >
+                  {emptyModelText}
+                </p>
+              ) : null}
+            </>
+          )}
         </Card>
       )}
     </div>
