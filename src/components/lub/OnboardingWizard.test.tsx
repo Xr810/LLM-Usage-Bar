@@ -104,7 +104,7 @@ describe("takeover wizard", () => {
       },
     });
     expect(noteCopyKey("codex_websocket")).toBe(
-      "lub.onboard.code_codex_websocket",
+      "lub.panel.note_codex_websocket",
     );
     expect(
       detectTools().find((tool) => tool.tool === "codex-subscription")?.control,
@@ -118,7 +118,11 @@ describe("takeover wizard", () => {
     expect(screen.getAllByText("受上限管控")).toHaveLength(2);
     expect(screen.getAllByText("仅监控")).toHaveLength(3);
     expect(screen.getByText(/acme-web\/\.env/)).toBeInTheDocument();
-    expect(screen.getByText(/Codex 订阅走 WebSocket/)).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Codex 订阅未走代理（WebSocket 连接），只能检测，无法计量或停止",
+      ),
+    ).toBeInTheDocument();
     expect(screen.queryByText("只统计")).toBeNull();
     expect(screen.getAllByRole("switch")).toHaveLength(1);
     expect(screen.queryByRole("checkbox", { name: /Codex 订阅/ })).toBeNull();

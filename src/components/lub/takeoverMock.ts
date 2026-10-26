@@ -40,7 +40,7 @@ type ProxyError =
 
 const NOTE_KEYS: Record<string, string> = {
   env_overrides_plan: "lub.onboard.code_acme_web_env_sets",
-  codex_websocket: "lub.onboard.code_codex_websocket",
+  codex_websocket: "lub.panel.note_codex_websocket",
 };
 
 let lastProxyCall: ClaudeProxyCall | null = null;
