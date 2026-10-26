@@ -1420,6 +1420,18 @@ pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml --test extension
 
 路径修复提交为 `9c48788d`，本次按用户授权与交接更新一起推送 GitHub main；未发布或安装应用。推送自动触发既有 CI，**本文记录时修复后的远端结果仍待确认**，不能沿用修复前其他平台的通过结果。
 
+#### 2026-10-15 Issue #67：MSI 显式安装目录修复交付，原生验收仍待完成
+
+仅处理 [#67](https://github.com/Xr810/LLM-Usage-Bar/issues/67)，基于 `origin/main` 的 `aa828178c59bfd7db9358ef5df912e369602f99d`。复用[原修复线程](https://ampcode.com/threads/T-01a11c4e-0d14-7109-9b85-90fb8279cb0e)的两份精确补丁，而非重写：实现补丁 SHA256 `c9afad75147fdcd841c48d3dbb499db56cba7593f6d15527a435fa0ff691de49`；CRLF 测试增量 SHA256 `99f71f3f49a3c13567a6a8f76a5c4a20e91c5bbc50350df7b83c21284535cfbd`。应用后配置／模板／测试 Git blobs 分别为 `84eefbf4ce177aebe01f6aa963ca43b51f9d6cbf`、`eb5eb94e8737fcc3645b10210da42ee46fa641ca`、`1635a2629fc639c0dd454635ae19fea0b5bba46a`，与原 Windows 验证报告一致。
+
+- **生效入口：** `tauri.windows.conf.json` 接线 `wix/main.wxs`，未启用旧 `per-user-main.wxs`。本轮直接下载 `tauri-cli-v2.11.4` 上游模板比对，仅安装目录搜索／回填块不同；per-machine、ProgramFiles 默认目录、组件与升级／repair authoring 不变。
+- **路径规则：** AppSearch 只写独立历史属性；仅在 `NOT INSTALLDIR` 时回填，命名 MSI 路径优先于 NSIS 无名值。UI／execute 均安排回填但不能覆盖已有路径，不按 Installed／升级状态禁用历史恢复。
+- **本轮 Linux 验证：** `pnpm test:unit tests/config/windowsInstaller.test.ts tests/config/productIdentity.test.ts tests/config/frontendIdentityContract.test.ts --maxWorkers=1`：3 文件、18 项通过；`pnpm typecheck`、`pnpm exec prettier --check src-tauri/tauri.windows.conf.json tests/config/windowsInstaller.test.ts`、`git diff --check` 通过。Vite 的既有 native config-loader 警告保留。这只是源码契约检查，不是 MSI 运行验证。
+- **历史 Windows 证据：** 已下载并核对原报告：相同配置／模板构建 `pnpm tauri -- build --target x86_64-pc-windows-msvc` exit 0，实际 candle 输入含新逻辑；只读 MSI 表检查通过。原测试首次 7 通过／1 个 CRLF parity 失败，精确测试增量后 9 通过；失败记录不删除。这不是本轮最终提交重新构建或安装的证据。
+- **全部仍未执行：** 原生 Windows 可丢弃环境中的无 key／仅 NSIS／仅 MSI／双 key × 显式／无显式路径矩阵、既有 MSI 同版本升级、repair、UI 改选目录，以及各项 verbose log、实际文件位置／哈希和干净卸载。Linux 与 MSI 表检查均不能替代。未访问用户本机，未改真实注册表或安装状态；需协调者安排获授权的隔离 Windows 环境。
+
+本轮授权独立分支 `fix/issue-67-installdir` 提交、推送并创建 PR；最终提交与 PR 链接由交付线程／PR 记录。PR 使用 `Refs #67`，不自动关闭 Issue；不合并、不部署，原生矩阵与 §20 整体验收门继续开放。
+
 #### 当前未关闭项（后续接手以此及 §20.3–20.5 为准）
 
 1. **macOS watcher 超时：修复已写，原生复验待完成。** 检查包含 `9c48788d` 的新 CI，确认 macOS 真实文件事件测试通过，并核对 Windows/Linux 无回归。若仍超时，采集注册根目录、实际事件路径和 watch 返回错误后再定位；不要仅增大超时或跳过测试。
