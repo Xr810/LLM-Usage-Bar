@@ -65,6 +65,8 @@ pub struct LicenseStatus {
     pub expires_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub grace_until: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grace_days: Option<u32>,
     pub build: LicenseBuild,
     pub features: Vec<String>,
     pub ui_flags: LicenseUiFlags,
@@ -80,6 +82,7 @@ impl LicenseStatus {
             state: LicenseState::Free,
             expires_at: None,
             grace_until: None,
+            grace_days: None,
             build: LicenseBuild::Community,
             features: Vec::new(),
             ui_flags: LicenseUiFlags::for_build(LicenseBuild::Community),
@@ -196,6 +199,7 @@ mod tests {
             state: LicenseState::Active,
             expires_at: Some("2026-12-01T00:00:00Z".to_string()),
             grace_until: Some("2026-12-15T00:00:00Z".to_string()),
+            grace_days: Some(14),
             build: LicenseBuild::Official,
             features: vec!["heatmap_12m".to_string()],
             ui_flags: LicenseUiFlags::for_build(LicenseBuild::Official),
@@ -209,6 +213,7 @@ mod tests {
                 "state": "active",
                 "expiresAt": "2026-12-01T00:00:00Z",
                 "graceUntil": "2026-12-15T00:00:00Z",
+                "graceDays": 14,
                 "build": "official",
                 "features": ["heatmap_12m"],
                 "uiFlags": { "upsellEntry": upsell_entry },
@@ -220,6 +225,11 @@ mod tests {
                 .expect("round trip"),
             status
         );
+        let mut legacy = serde_json::to_value(&status).unwrap();
+        legacy.as_object_mut().unwrap().remove("graceDays");
+        let decoded = serde_json::from_value::<LicenseStatus>(legacy.clone()).unwrap();
+        assert_eq!(decoded.grace_days, None);
+        assert_eq!(serde_json::to_value(decoded).unwrap(), legacy);
     }
 
     #[test]

@@ -114,6 +114,94 @@ fn publisher_can_read_database_and_reenter_status_activate_and_deactivate() {
 }
 
 #[test]
+fn queued_delivery_rereads_originating_provider_instead_of_snapshot() {
+    bounded(|| {
+        let db = Arc::new(Database::memory().unwrap());
+        let first_provider = Arc::new(TestProvider::new(db.clone()));
+        let queued_provider = Arc::new(TestProvider::new(db.clone()));
+        let first = LicenseLifecycle::new(first_provider, db.clone());
+        let queued = Arc::new(LicenseLifecycle::new(queued_provider.clone(), db));
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let recorded = events.clone();
+        queued.set_publisher(Arc::new(move |status| {
+            recorded.lock().unwrap().push(status.clone());
+            Ok(())
+        }));
+        let other = queued.clone();
+        first.set_publisher(Arc::new(move |_| {
+            // Both requests wait behind this callback. Neither snapshot is
+            // current by delivery time, and the draining provider is different.
+            other.deactivate()?;
+            other.activate("test")?;
+            let mut status = queued_provider.current.lock().unwrap();
+            status.expires_at = Some("2091-02-01T00:00:00Z".into());
+            status.email_masked = Some("n***@example.com".into());
+            Ok(())
+        }));
+        first.activate("test").unwrap();
+        queued.reconcile(Utc::now()).unwrap();
+        let events = events.lock().unwrap();
+        assert_eq!(events.as_slice(), &[queued.status()]);
+        assert_eq!(events[0].state, LicenseState::Active);
+        assert_eq!(
+            events[0].expires_at.as_deref(),
+            Some("2091-02-01T00:00:00Z")
+        );
+        assert_eq!(events[0].email_masked.as_deref(), Some("n***@example.com"));
+    });
+}
+
+#[test]
+fn provider_grace_days_default_cap_and_exact_free_boundary() {
+    for (days, deadline) in [
+        (None, "2090-01-15T00:00:00Z"),
+        (Some(7), "2090-01-08T00:00:00Z"),
+        (Some(30), "2090-01-15T00:00:00Z"),
+        (Some(0), "2090-01-01T00:00:00Z"),
+    ] {
+        let db = Arc::new(Database::memory().unwrap());
+        let provider = Arc::new(TestProvider::new(db.clone()));
+        provider.activate("test").unwrap();
+        {
+            let mut status = provider.current.lock().unwrap();
+            status.grace_days = days;
+            status.grace_until = Some("2190-01-01T00:00:00Z".into());
+        }
+        let lifecycle = LicenseLifecycle::new(provider, db);
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let recorded = events.clone();
+        lifecycle.set_publisher(Arc::new(move |status| {
+            recorded.lock().unwrap().push(status.clone());
+            Ok(())
+        }));
+        lifecycle
+            .reconcile(at(deadline) - Duration::seconds(1))
+            .unwrap();
+        lifecycle.reconcile(at(deadline)).unwrap();
+        lifecycle
+            .reconcile(at(deadline) + Duration::seconds(1))
+            .unwrap();
+        let events = events.lock().unwrap();
+        assert_eq!(events.len(), 2, "grace_days={days:?}");
+        assert_eq!(events[0].tier, LicenseTier::Pro);
+        assert_eq!(
+            events[0].state,
+            if days == Some(0) {
+                LicenseState::Active
+            } else {
+                LicenseState::Grace
+            }
+        );
+        assert_eq!(events[1].tier, LicenseTier::Free);
+        assert_eq!(events[1].state, LicenseState::Free);
+        for status in events.iter() {
+            assert_eq!(status.grace_until.as_deref(), Some(deadline));
+            assert_eq!(status.grace_days, days);
+        }
+    }
+}
+
+#[test]
 fn callback_cannot_overwrite_an_acknowledgement_changed_during_delivery() {
     bounded(|| {
         for erase in [false, true] {

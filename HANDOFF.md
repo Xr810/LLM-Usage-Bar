@@ -2262,3 +2262,20 @@ focused Rust test is being attempted; actual execution results and the six
 exact-head CI checks are recorded in the PR/thread, not inferred here.
 Existing §20 native interactive shutdown acceptance gaps remain open.
 No merge or release authorized.
+
+#### 2026-10-26 BE-31 architect review: grace duration and fresh delivery
+
+PR #114 review follow-up starts from `f7713cde4cec6b3f87f28c7d2765375a349767c5`,
+with `949012ce` already merged. `LicenseStatus.grace_days` is optional (wire
+`graceDays`, omitted when absent); lifecycle derives grace from expiry plus
+`min(grace_days.unwrap_or(14), 14)` days, ignoring provider `graceUntil`.
+Queued delivery re-reads its originating provider instead of retaining a status
+snapshot. Regressions cover 7/30/default/zero days and exact free boundaries,
+and reentrant queue changes across two providers sharing one database.
+The existing acknowledgement-CAS regression covers replacement and deletion
+during send, preservation of the competing value, and next-round resend.
+
+Local wrapper `fmt --check` and `git diff --check` pass. Full-crate focused
+policy tests are compiling in this 2 GB orb; results and all six exact-head
+CI checks must be taken from the PR/thread, not inferred from this entry.
+No frontend/private code, merge, or release. §20 native shutdown gaps remain.

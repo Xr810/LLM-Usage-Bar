@@ -10,10 +10,16 @@ use crate::{error::AppError, Database};
 
 pub type LicensePublisher = Arc<dyn Fn(&LicenseStatus) -> Result<(), AppError> + Send + Sync>;
 
+struct PendingPublication {
+    provider: Arc<dyn LicenseProvider>,
+    now: DateTime<Utc>,
+    publisher: LicensePublisher,
+}
+
 #[derive(Default)]
 struct Transitions {
     emitting: bool,
-    queue: VecDeque<(LicenseStatus, LicensePublisher)>,
+    queue: VecDeque<PendingPublication>,
 }
 
 type TransitionRegistry = Mutex<HashMap<usize, Weak<Mutex<Transitions>>>>;
@@ -54,8 +60,10 @@ impl LicenseLifecycle {
         *self.publisher.lock().unwrap() = Some(publisher);
     }
 
-    fn status_at(&self, now: DateTime<Utc>) -> LicenseStatus {
-        let mut status = self.provider.status();
+    fn status_at(provider: &dyn LicenseProvider, now: DateTime<Utc>) -> LicenseStatus {
+        let mut status = provider.status();
+        // Only the expiry and bounded grace duration determine this deadline.
+        status.grace_until = None;
         if status.build == LicenseBuild::Community || status.tier == LicenseTier::Free {
             status.state = LicenseState::Free;
             return status;
@@ -66,7 +74,7 @@ impl LicenseLifecycle {
             .as_deref()
             .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
         {
-            let grace = expiry + Duration::days(14);
+            let grace = expiry + Duration::days(i64::from(status.grace_days.unwrap_or(14).min(14)));
             status.grace_until = Some(grace.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
             if now >= grace {
                 status.state = LicenseState::Free;
@@ -81,21 +89,18 @@ impl LicenseLifecycle {
     pub fn reconcile(&self, now: DateTime<Utc>) -> Result<(), AppError> {
         {
             let mut transitions = self.transitions.lock()?;
-            self.enqueue(&mut transitions, self.status_at(now))?;
+            self.enqueue(&mut transitions, now)?;
         }
         self.drain()
     }
 
-    fn enqueue(
-        &self,
-        transitions: &mut Transitions,
-        status: LicenseStatus,
-    ) -> Result<(), AppError> {
-        if status.build == LicenseBuild::Community {
-            return Ok(());
-        }
+    fn enqueue(&self, transitions: &mut Transitions, now: DateTime<Utc>) -> Result<(), AppError> {
         if let Some(publisher) = self.publisher.lock()?.clone() {
-            transitions.queue.push_back((status, publisher));
+            transitions.queue.push_back(PendingPublication {
+                provider: self.provider.clone(),
+                now,
+                publisher,
+            });
         }
         Ok(())
     }
@@ -122,7 +127,13 @@ impl LicenseLifecycle {
                     }
                 }
             };
-            if let Err(error) = self.publish(&next.0, &next.1) {
+            // Re-read the originating provider at delivery, not enqueue time:
+            // a prior callback may have activated or deactivated it meanwhile.
+            let status = Self::status_at(next.provider.as_ref(), next.now);
+            if status.build == LicenseBuild::Community {
+                continue;
+            }
+            if let Err(error) = self.publish(&status, &next.publisher) {
                 failure.get_or_insert(error);
             }
         }
@@ -181,7 +192,7 @@ impl LicenseLifecycle {
 impl LicenseProvider for LicenseLifecycle {
     fn status(&self) -> LicenseStatus {
         let _guard = self.transitions.lock().unwrap();
-        self.status_at(Utc::now())
+        Self::status_at(self.provider.as_ref(), Utc::now())
     }
 
     fn activate(&self, token: &str) -> Result<LicenseStatus, AppError> {
@@ -189,8 +200,9 @@ impl LicenseProvider for LicenseLifecycle {
         let status = {
             let mut transitions = self.transitions.lock()?;
             self.provider.activate(token)?;
-            let status = self.status_at(Utc::now());
-            self.enqueue(&mut transitions, status.clone())?;
+            let now = Utc::now();
+            let status = Self::status_at(self.provider.as_ref(), now);
+            self.enqueue(&mut transitions, now)?;
             status
         };
         self.drain_or_log();
@@ -201,7 +213,7 @@ impl LicenseProvider for LicenseLifecycle {
         {
             let mut transitions = self.transitions.lock()?;
             self.provider.deactivate()?;
-            self.enqueue(&mut transitions, self.status_at(Utc::now()))?;
+            self.enqueue(&mut transitions, Utc::now())?;
         }
         self.drain_or_log();
         Ok(())
