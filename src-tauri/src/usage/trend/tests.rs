@@ -3,7 +3,7 @@ use rusqlite::params;
 use serde_json::json;
 
 #[test]
-fn guard_deny_is_audit_only_across_usage_queries_and_retention() -> Result<(), AppError> {
+fn guard_decisions_are_audit_only_across_usage_queries_and_retention() -> Result<(), AppError> {
     use crate::usage::aggregation;
     use chrono::TimeZone;
 
@@ -24,11 +24,9 @@ fn guard_deny_is_audit_only_across_usage_queries_and_retention() -> Result<(), A
     let license = pro();
     {
         let conn = lock_conn!(db.conn);
-        // Distinct ordinary, Hold and pre-existing blocked controls. D2 must
-        // preserve all three, including Hold's existing request count.
+        // Nonempty ordinary and pre-existing blocked controls must survive.
         for (id, reason, status, input, output, cost) in [
             ("used", None, 200, 13, 7, "0.25"),
-            ("held", Some("guard_hold"), 429, 0, 0, "0"),
             ("blocked", Some("blocked"), 403, 0, 0, "0"),
         ] {
             conn.execute(
@@ -82,18 +80,32 @@ fn guard_deny_is_audit_only_across_usage_queries_and_retention() -> Result<(), A
             "trends": trends,
             "eventModels": aggregation::aggregate_model_usage(&db, start, end)?,
             "agents": aggregation::aggregate_agent_usage(&db, start, end)?,
-            "eventProviders": aggregation::aggregate_enabled_provider_trend(&db, start, end)?.1
+            "eventProviders": aggregation::aggregate_enabled_provider_trend(&db, start, end)?.1,
+            "hourlyRequestCount": lock_conn!(db.conn).query_row(
+                "SELECT COALESCE(SUM(request_count), 0) FROM usage_hourly_rollups", [], |r| r.get::<_, i64>(0)
+            )?
         }))
     };
     let before = snapshot()?;
-    assert_eq!(before["summary"]["totalRequests"], 3);
+    assert_eq!(before["summary"]["totalRequests"], 2);
+    assert_eq!(before["hourlyRequestCount"], 2);
     assert_eq!(before["summary"]["totalInputTokens"], 13);
     assert_eq!(before["summary"]["totalOutputTokens"], 7);
     assert_eq!(before["limits"]["dailyUsage"], "0.250000");
     let today_before = aggregation::aggregate_provider_account_range(&db, "p", start, end)?;
     assert_eq!(today_before.event_count, 1);
     assert_eq!(today_before.total_cost_usd.as_deref(), Some("0.25"));
-    {
+    let mut audit_count = 0;
+    for (end_reason, message) in [
+        ("guard_deny", "rule"),
+        ("guard_hold", "denied"),
+        ("guard_hold", "timeout"),
+        ("guard_hold", "queue_full"),
+        ("guard_hold", "approval_required"),
+        ("guard_hold_timeout", "legacy"),
+        ("guard_hold_overflow", "legacy"),
+        ("guard_hold_denied", "legacy"),
+    ] {
         let conn = lock_conn!(db.conn);
         // Deliberately nonzero imported data proves exclusion by end_reason,
         // not an accidental zero-cost/token sum or HTTP-error exclusion.
@@ -102,19 +114,27 @@ fn guard_deny_is_audit_only_across_usage_queries_and_retention() -> Result<(), A
                 "INSERT INTO proxy_request_logs (
                      request_id, provider_id, app_type, model, input_tokens,
                      output_tokens, total_cost_usd, latency_ms, status_code,
-                     created_at, end_reason, project_alias, client_tag_id
+                     created_at, end_reason, project_alias, client_tag_id, error_message
                  ) VALUES (?1, 'p', 'claude', 'm', 101, 203, '17.5', 999, ?2, ?3,
-                           'guard_deny', 'project', 'client')",
-                params![format!("denied-{status}"), status, at],
+                           ?4, 'project', 'client', ?5)",
+                params![
+                    format!("audit-{audit_count}-{status}"),
+                    status,
+                    at,
+                    end_reason,
+                    message
+                ],
             )?;
+            audit_count += 1;
         }
         conn.execute(
             "INSERT INTO rollup_dirty_hours (hour_utc) VALUES (?1)",
             [at.div_euclid(3600) * 3600],
         )?;
+        drop(conn);
+        db.rollup_and_prune(36500)?;
+        assert_eq!(snapshot()?, before, "{end_reason}/{message} changed usage");
     }
-    db.rollup_and_prune(36500)?;
-    assert_eq!(snapshot()?, before, "Deny must not change any usage view");
     assert_eq!(
         aggregation::aggregate_provider_account_range(&db, "p", start, end)?,
         today_before,
@@ -122,8 +142,8 @@ fn guard_deny_is_audit_only_across_usage_queries_and_retention() -> Result<(), A
     );
     assert_eq!(
         db.get_request_logs(&Default::default(), 1, 20)?.total,
-        5,
-        "Deny must remain visible in the audit list"
+        2 + audit_count,
+        "Gate decisions must remain visible in the audit list"
     );
     // Move all details into the past, then exercise daily archival and query
     // the same all-time totals: denied counts/tokens/cost must not reappear.
@@ -134,9 +154,9 @@ fn guard_deny_is_audit_only_across_usage_queries_and_retention() -> Result<(), A
             [at - 3 * 86400],
         )?;
     }
-    assert_eq!(db.rollup_and_prune(1)?, 5);
+    assert_eq!(db.rollup_and_prune(1)?, u64::from(2 + audit_count));
     let summary = db.get_usage_summary(None, None, None, None, None)?;
-    assert_eq!(summary.total_requests, 3);
+    assert_eq!(summary.total_requests, 2);
     assert_eq!(summary.total_input_tokens, 13);
     assert_eq!(summary.total_output_tokens, 7);
     assert_eq!(summary.total_cost.parse::<f64>().unwrap(), 0.25);

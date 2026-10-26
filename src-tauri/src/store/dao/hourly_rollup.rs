@@ -483,9 +483,11 @@ fn contribute(
     totals: &mut HashMap<HourKey, HourTotals>,
     delta: &HourlyLogDelta,
 ) -> Result<(), AppError> {
-    // Deny is an audit event, not usage. Apply to live writes and rebuilds.
-    // Hold's existing aggregation behavior is intentionally unchanged.
-    if delta.end_reason.as_deref() == Some("guard_deny") {
+    // Gate decisions are audit-only, including legacy Hold sub-reasons.
+    // Apply to live writes, dirty-hour maintenance and full rebuilds.
+    if delta.end_reason.as_deref().is_some_and(|reason| {
+        reason == "guard_deny" || reason.to_ascii_lowercase().starts_with("guard_hold")
+    }) {
         return Ok(());
     }
     let key = HourKey {

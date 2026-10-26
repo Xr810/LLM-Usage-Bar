@@ -370,7 +370,7 @@ fn read_rows(
         parameters.extend(ids.into_iter().map(|id| Value::Text(id.clone())));
     }
     if raw {
-        filter.push_str(" AND COALESCE(r.end_reason, '') != 'guard_deny'");
+        filter.push_str(" AND COALESCE(r.end_reason, '') != 'guard_deny' AND COALESCE(r.end_reason, '') NOT LIKE 'guard_hold%'");
     }
     let label = if request.group_by == Some(TrendGroupBy::Provider) {
         "COALESCE(

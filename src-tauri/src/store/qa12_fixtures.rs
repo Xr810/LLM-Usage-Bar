@@ -157,14 +157,25 @@ fn hourly_total_matches_proxy_logs_and_ignores_usage_events() -> Result<(), AppE
             params![request_id, cost, billing],
         )?;
     }
-    for status in [200, 451] {
+    for (index, (reason, status)) in [
+        ("guard_deny", 200),
+        ("guard_deny", 451),
+        ("guard_hold", 200),
+        ("guard_hold", 429),
+        ("guard_hold_timeout", 200),
+        ("guard_hold_overflow", 429),
+        ("guard_hold_denied", 429),
+    ]
+    .into_iter()
+    .enumerate()
+    {
         conn.execute(
             "INSERT INTO proxy_request_logs (
                  request_id, provider_id, app_type, model, input_tokens, output_tokens,
                  total_cost_usd, latency_ms, status_code, created_at, end_reason
              ) VALUES (?1, 'anthropic', 'claude', 'claude', 19, 23, '7.5', 99, ?2,
-                       1700000100, 'guard_deny')",
-            params![format!("denied-{status}"), status],
+                       1700000100, ?3)",
+            params![format!("audit-{index}"), status, reason],
         )?;
     }
     rebuild_usage_hourly_rollups(&conn)?;

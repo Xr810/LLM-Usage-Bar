@@ -328,12 +328,12 @@ fn push_provider_model_filters(
 
 pub(crate) fn effective_usage_log_filter(log_alias: &str) -> String {
     format!(
-        "COALESCE({log_alias}.end_reason, '') != 'guard_deny' AND ({})",
+        "COALESCE({log_alias}.end_reason, '') != 'guard_deny' AND COALESCE({log_alias}.end_reason, '') NOT LIKE 'guard_hold%' AND ({})",
         deduplicated_log_filter(log_alias)
     )
 }
 
-// Audit lists retain gate decisions; only usage aggregates exclude Deny.
+// Audit lists retain gate decisions; usage aggregates exclude Deny and Hold.
 fn deduplicated_log_filter(log_alias: &str) -> String {
     let data_source = data_source_expr(log_alias);
     let proxy_data_source = data_source_expr("proxy_dedup");
@@ -345,6 +345,7 @@ fn deduplicated_log_filter(log_alias: &str) -> String {
                 FROM proxy_request_logs proxy_dedup
                 WHERE {proxy_data_source} = 'proxy'
                   AND COALESCE(proxy_dedup.end_reason, '') != 'guard_deny'
+                  AND COALESCE(proxy_dedup.end_reason, '') NOT LIKE 'guard_hold%'
                   AND proxy_dedup.app_type = {log_alias}.app_type
                   AND proxy_dedup.status_code >= 200
                   AND proxy_dedup.status_code < 300
@@ -424,6 +425,7 @@ pub(crate) fn has_matching_proxy_usage_log(
             FROM proxy_request_logs l
             WHERE {l_data_source} = 'proxy'
               AND COALESCE(l.end_reason, '') != 'guard_deny'
+              AND COALESCE(l.end_reason, '') NOT LIKE 'guard_hold%'
               AND l.app_type = ?1
               AND l.status_code >= 200
               AND l.status_code < 300
@@ -1678,6 +1680,7 @@ impl Database {
                     FROM proxy_request_logs
                     WHERE provider_id = ? AND app_type = ?
                       AND COALESCE(end_reason, '') != 'guard_deny'
+                      AND COALESCE(end_reason, '') NOT LIKE 'guard_hold%'
                       AND date(datetime(created_at, 'unixepoch', 'localtime')) = date('now', 'localtime')
                     UNION ALL
                     SELECT CAST(total_cost_usd AS REAL)
@@ -1698,6 +1701,7 @@ impl Database {
                     FROM proxy_request_logs
                     WHERE provider_id = ? AND app_type = ?
                       AND COALESCE(end_reason, '') != 'guard_deny'
+                      AND COALESCE(end_reason, '') NOT LIKE 'guard_hold%'
                       AND strftime('%Y-%m', datetime(created_at, 'unixepoch', 'localtime')) = strftime('%Y-%m', 'now', 'localtime')
                     UNION ALL
                     SELECT CAST(total_cost_usd AS REAL)
@@ -2523,6 +2527,8 @@ mod tests {
             let conn = lock_conn!(db.conn);
             for (id, source, reason) in [
                 ("denied", "proxy", Some("guard_deny")),
+                ("held", "proxy", Some("guard_hold")),
+                ("legacy-held", "proxy", Some("guard_hold_timeout")),
                 ("session", "codex_session", None),
             ] {
                 conn.execute(
