@@ -19,6 +19,16 @@ const loadPack = (file) =>
 const ph = (s) =>
   [...new Set(String(s).match(/\{\{\w+\}\}/g) || [])].sort().join();
 
+const LICENSE_KEYS = [
+  "lub.settings.nav.license",
+  "lub.settings.license.title",
+  "lub.settings.license.build",
+  "lub.settings.license.tier",
+  "lub.settings.license.activate",
+  "lub.settings.license.deactivate",
+  "lub.settings.license.communityNote",
+];
+
 const errs = [];
 const out = [];
 for (const [za, eb, tag] of [
@@ -66,9 +76,46 @@ for (const [localeFile, packFile] of [
     if (!(key in locale)) errs.push(`[locale ${localeFile}] missing ${key}`);
   }
   for (const key of Object.keys(locale)) {
-    if (!(key in pack)) errs.push(`[locale ${localeFile}] extra ${key}`);
-    else if (/\$[0-9]/.test(String(locale[key]))) {
+    if (!(key in pack)) {
+      if (!LICENSE_KEYS.includes(key)) {
+        errs.push(`[locale ${localeFile}] extra ${key}`);
+      }
+    } else if (/\$[0-9]/.test(String(locale[key]))) {
       errs.push(`[locale ${localeFile}] hardcoded amount: ${key}`);
+    }
+  }
+}
+
+const licenseLocales = ["zh.json", "en.json", "zh-TW.json", "ja.json"].map(
+  (file) => [file, localeLub(file)],
+);
+for (const [file, locale] of licenseLocales) {
+  for (const key of LICENSE_KEYS) {
+    if (!(key in locale) || String(locale[key]).trim() === "") {
+      errs.push(`[license ${file}] missing ${key}`);
+    } else if (/\$[0-9]/.test(String(locale[key]))) {
+      errs.push(`[license ${file}] hardcoded amount: ${key}`);
+    }
+  }
+  if (file === "zh-TW.json" || file === "ja.json") {
+    for (const key of Object.keys(locale)) {
+      if (!LICENSE_KEYS.includes(key)) {
+        errs.push(
+          `[license ${file}] unexpected ${key}; other lub keys stay on the English fallback`,
+        );
+      }
+    }
+  }
+}
+const firstLicense = licenseLocales[0]?.[1] ?? {};
+for (const [file, locale] of licenseLocales.slice(1)) {
+  for (const key of LICENSE_KEYS) {
+    if (
+      key in firstLicense &&
+      key in locale &&
+      ph(firstLicense[key]) !== ph(locale[key])
+    ) {
+      errs.push(`[license] placeholder ${key} vs ${file}`);
     }
   }
 }
@@ -86,5 +133,9 @@ for (const [tag, leftFile, rightFile] of [
   }
 }
 
-console.log(errs.length ? errs.join("\n") : "OK " + out.join(" + ") + " keys");
+console.log(
+  errs.length
+    ? errs.join("\n")
+    : `OK ${out.join(" + ")} keys; license ${LICENSE_KEYS.length}`,
+);
 process.exit(errs.length ? 1 : 0);

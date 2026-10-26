@@ -8,17 +8,21 @@ import {
   waitFor,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { http, HttpResponse } from "msw";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import i18n from "i18next";
 import en from "@/i18n/locales/en.json";
 import zh from "@/i18n/locales/zh.json";
 import type { TrayUsageSnapshot } from "@/types/trayUsage";
+import { server } from "../../../tests/msw/server";
 import { commandCalls, emitTauriEvent } from "../../../tests/msw/tauriMocks";
 import { TrayUsagePopover } from "./TrayUsagePopover";
 import { TrayUsagePopoverView } from "./TrayUsagePopoverView";
 
 const NOW = new Date("2026-07-16T12:00:00Z");
 const snapshot: TrayUsageSnapshot = {
+  buildType: "community",
+  sources: [],
   status: "yellow",
   generatedAt: 1_784_199_600,
   lastSuccessAt: 1_784_203_140,
@@ -400,7 +404,7 @@ describe("TrayUsagePopover Provider-only UI", () => {
     expect(screen.queryByText("Stale data")).toBeNull();
   });
 
-  it("takes warn from budget level and ignores pace status", () => {
+  it("ignores pace status and the deprecated warn level", () => {
     const quiet = structuredClone(snapshot);
     quiet.apiBudget.level = "ok";
     quiet.apiBudget.status = "red";
@@ -413,21 +417,21 @@ describe("TrayUsagePopover Provider-only UI", () => {
       "ok",
     );
 
-    const near = structuredClone(snapshot);
-    near.apiBudget.level = "near";
-    near.apiBudget.status = "green";
-    near.apiBudget.budgetConsumedPercent = "10";
-    rerender(<TrayUsagePopoverView {...props({ snapshot: near })} />);
+    const deprecated = structuredClone(snapshot);
+    deprecated.apiBudget.level = "warn";
+    deprecated.apiBudget.status = "green";
+    deprecated.apiBudget.budgetConsumedPercent = "10";
+    rerender(<TrayUsagePopoverView {...props({ snapshot: deprecated })} />);
     expect(screen.getByTestId("lub-tray-panel")).toHaveAttribute(
       "data-state",
-      "warn",
+      "ok",
     );
     expect(screen.queryByText(/Over today/)).toBeNull();
   });
 
-  it("alerts when level is over even if spend is under the cap", () => {
+  it("alerts when level is reached even if spend is under the cap", () => {
     const over = structuredClone(snapshot);
-    over.apiBudget.level = "over";
+    over.apiBudget.level = "reached";
     over.apiBudget.mode = "shared";
     over.apiBudget.todayCostUsd = "3";
     over.apiBudget.dailyBudgetUsd = "10";
@@ -451,10 +455,22 @@ describe("TrayUsagePopover Provider-only UI", () => {
     expect(
       screen.queryByRole("button", { name: "Stop all API spend" }),
     ).toBeNull();
-    expect(screen.queryByRole("button", { name: /Allow/ })).toBeNull();
+    const allow = screen.getAllByRole("button", { name: /Allow/ });
+    expect(allow).toHaveLength(2);
+    for (const button of allow) {
+      expect(button).toHaveAttribute("aria-disabled", "true");
+    }
     expect(screen.queryByText("Paused")).toBeNull();
-    expect(document.querySelector("[data-slot='community-allow']")).toBeNull();
+    const slot = document.querySelector("[data-slot='community-allow']");
+    expect(slot).not.toBeNull();
+    expect(slot?.querySelectorAll("button")).toHaveLength(2);
+    expect(slot?.querySelector("a, [href]")).toBeNull();
     expect(document.querySelector(".lub-meter-overflow")).toBeNull();
+
+    const official = structuredClone(over);
+    official.buildType = "official";
+    rerender(<TrayUsagePopoverView {...props({ snapshot: official })} />);
+    expect(document.querySelector("[data-slot='community-allow']")).toBeNull();
 
     const underTheLevel = structuredClone(over);
     underTheLevel.apiBudget.level = "ok";
@@ -468,6 +484,87 @@ describe("TrayUsagePopover Provider-only UI", () => {
     );
     expect(screen.queryByText(/Over today/)).toBeNull();
     expect(screen.queryByText("Over cap")).toBeNull();
+  });
+
+  it("shows the Free vs Pro line only when upsellEntry is on", () => {
+    const over = structuredClone(snapshot);
+    over.apiBudget.level = "reached";
+    over.apiBudget.mode = "shared";
+    over.apiBudget.todayCostUsd = "12";
+    over.apiBudget.dailyBudgetUsd = "10";
+    over.buildType = "official";
+    const { rerender } = render(
+      <TrayUsagePopoverView
+        {...props({ snapshot: over, upsellEntry: false })}
+      />,
+    );
+    expect(
+      screen.queryByRole("button", { name: "Compare Free vs Pro" }),
+    ).toBeNull();
+    rerender(
+      <TrayUsagePopoverView
+        {...props({ snapshot: over, upsellEntry: true })}
+      />,
+    );
+    expect(
+      screen.getByRole("button", { name: "Compare Free vs Pro" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Want spending to stop at the cap?"),
+    ).toBeInTheDocument();
+  });
+
+  it("reads upsellEntry from get_license_status and keeps the community default off", async () => {
+    const over = structuredClone(snapshot);
+    over.apiBudget.level = "reached";
+    over.apiBudget.mode = "shared";
+    over.apiBudget.todayCostUsd = "12";
+    over.apiBudget.dailyBudgetUsd = "10";
+    over.buildType = "community";
+    server.use(
+      http.post("http://tauri.local/get_tray_usage_snapshot", () =>
+        HttpResponse.json(over),
+      ),
+      http.post("http://tauri.local/refresh_tray_usage", () =>
+        HttpResponse.json(over),
+      ),
+    );
+    const { unmount } = render(<TrayUsagePopover />, { wrapper: wrapper() });
+    expect(await screen.findByText(/Over today/)).toBeInTheDocument();
+    await waitFor(() =>
+      expect(commandCalls("get_license_status").length).toBeGreaterThan(0),
+    );
+    expect(
+      screen.queryByRole("button", { name: "Compare Free vs Pro" }),
+    ).toBeNull();
+    const slot = document.querySelector("[data-slot='community-allow']");
+    expect(slot).not.toBeNull();
+    expect(slot?.querySelectorAll("button")).toHaveLength(2);
+    expect(slot?.querySelector("a, [href]")).toBeNull();
+    unmount();
+
+    server.use(
+      http.post("http://tauri.local/get_tray_usage_snapshot", () =>
+        HttpResponse.json({ ...over, buildType: "official" }),
+      ),
+      http.post("http://tauri.local/refresh_tray_usage", () =>
+        HttpResponse.json({ ...over, buildType: "official" }),
+      ),
+      http.post("http://tauri.local/get_license_status", () =>
+        HttpResponse.json({
+          tier: "pro",
+          build: "official",
+          features: [],
+          uiFlags: { upsellEntry: true },
+          expiresAt: "2026-12-01T00:00:00Z",
+        }),
+      ),
+    );
+    render(<TrayUsagePopover />, { wrapper: wrapper() });
+    expect(
+      await screen.findByRole("button", { name: "Compare Free vs Pro" }),
+    ).toBeInTheDocument();
+    expect(document.querySelector("[data-slot='community-allow']")).toBeNull();
   });
 
   it("does not refresh when quota or guard events arrive without a snapshot change", async () => {

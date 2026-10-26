@@ -1,0 +1,57 @@
+{
+  "request": {
+    "tz": "UTC",
+    "from": "2026-10-24",
+    "to": "2026-10-26",
+    "granularity": "day",
+    "groupBy": "project",
+    "filters": { "providerIds": ["p1"] }
+  },
+  "response": {
+    "series": [
+      {
+        "groupKey": "project-a",
+        "groupLabel": "project-a",
+        "points": [
+          {
+            "dateLocal": "2026-10-24",
+            "requests": 2,
+            "tokens": 22,
+            "costMicroUsd": 1234567
+          },
+          { "dateLocal": "2026-10-25", "requests": 1, "tokens": 11 },
+          {
+            "dateLocal": "2026-10-26",
+            "requests": 0,
+            "tokens": 0,
+            "costMicroUsd": 0
+          }
+        ]
+      },
+      {
+        "groupKey": "unattributed",
+        "groupLabel": "",
+        "points": [
+          {
+            "dateLocal": "2026-10-24",
+            "requests": 1,
+            "tokens": 11,
+            "costMicroUsd": 7
+          },
+          {
+            "dateLocal": "2026-10-25",
+            "requests": 0,
+            "tokens": 0,
+            "costMicroUsd": 0
+          },
+          {
+            "dateLocal": "2026-10-26",
+            "requests": 0,
+            "tokens": 0,
+            "costMicroUsd": 0
+          }
+        ]
+      }
+    ]
+  }
+}

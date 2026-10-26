@@ -44,53 +44,69 @@ static TRAY_SECTION_SUBMENUS: Lazy<
     std::sync::Mutex<std::collections::HashMap<AppType, Submenu<tauri::Wry>>>,
 > = Lazy::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
 
-/// 托盘菜单文本（国际化）
-#[derive(Clone, Copy)]
+/// Tray menu copy from the embedded `native.tray.*` catalog (BE-12).
+#[derive(Clone)]
 pub struct TrayTexts {
-    pub show_main: &'static str,
-    pub open_website: &'static str,
-    pub no_providers_label: &'static str,
-    pub lightweight_mode: &'static str,
-    pub quit: &'static str,
-    pub _auto_label: &'static str,
+    pub show_main: String,
+    pub open_website: String,
+    pub no_providers_label: String,
+    pub lightweight_mode: String,
+    pub quit: String,
 }
 
 impl TrayTexts {
     pub fn from_language(language: &str) -> Self {
-        match language {
-            "en" => Self {
-                show_main: "Open main window",
-                open_website: "Open Official Website",
-                no_providers_label: "(no providers)",
-                lightweight_mode: "Lightweight Mode",
-                quit: "Quit",
-                _auto_label: "Auto (Failover)",
-            },
-            "ja" => Self {
-                show_main: "メインウィンドウを開く",
-                open_website: "公式サイトを開く",
-                no_providers_label: "(プロバイダーなし)",
-                lightweight_mode: "軽量モード",
-                quit: "終了",
-                _auto_label: "自動 (フェイルオーバー)",
-            },
-            "zh-TW" => Self {
-                show_main: "開啟主介面",
-                open_website: "開啟官方網站",
-                no_providers_label: "(無供應商)",
-                lightweight_mode: "輕量模式",
-                quit: "退出",
-                _auto_label: "自動 (故障轉移)",
-            },
-            _ => Self {
-                show_main: "打开主界面",
-                open_website: "打开官方网站",
-                no_providers_label: "(无供应商)",
-                lightweight_mode: "轻量模式",
-                quit: "退出",
-                _auto_label: "自动 (故障转移)",
-            },
+        Self {
+            show_main: crate::i18n::t(language, "native.tray.showMain", &[]),
+            open_website: crate::i18n::t(language, "native.tray.openWebsite", &[]),
+            no_providers_label: crate::i18n::t(language, "native.tray.noProviders", &[]),
+            lightweight_mode: crate::i18n::t(language, "native.tray.lightweightMode", &[]),
+            quit: crate::i18n::t(language, "native.tray.quit", &[]),
         }
+    }
+}
+
+/// Native notification copy, using the same catalog and fallbacks as tray copy.
+pub struct NotificationTexts {
+    pub budget_reached_title: String,
+    budget_reached_body: String,
+    budget_reached_scoped_body: String,
+}
+
+impl NotificationTexts {
+    pub fn from_language(language: &str) -> Self {
+        Self {
+            budget_reached_title: crate::i18n::t(language, "native.notify.budgetReachedTitle", &[]),
+            budget_reached_body: crate::i18n::t(language, "native.notify.budgetReachedBody", &[]),
+            budget_reached_scoped_body: crate::i18n::t(
+                language,
+                "native.notify.budgetReachedScopedBody",
+                &[],
+            ),
+        }
+    }
+
+    pub fn budget_reached_body(
+        &self,
+        scope: Option<&str>,
+        spent: &str,
+        budget: &str,
+        percent: &str,
+    ) -> String {
+        let template = if scope.is_some() {
+            &self.budget_reached_scoped_body
+        } else {
+            &self.budget_reached_body
+        };
+        crate::i18n::interpolate(
+            template,
+            &[
+                ("spent", spent),
+                ("budget", budget),
+                ("percent", percent),
+                ("scope", scope.unwrap_or_default()),
+            ],
+        )
     }
 }
 
@@ -327,7 +343,10 @@ pub fn create_tray_menu(
     app_state: &AppState,
 ) -> Result<Menu<tauri::Wry>, AppError> {
     let app_settings = crate::config::settings::get_settings();
-    let tray_texts = TrayTexts::from_language(app_settings.language.as_deref().unwrap_or("zh"));
+    // Unset language still follows the historical tray default (`zh`).
+    // ADR-019's first-launch OS locale is not applied here; see BE-12.
+    let language = crate::i18n::effective_language(app_settings.language.as_deref());
+    let tray_texts = TrayTexts::from_language(language);
 
     // Get visible apps setting, default to all visible
     let visible_apps = app_settings.visible_apps.unwrap_or_default();

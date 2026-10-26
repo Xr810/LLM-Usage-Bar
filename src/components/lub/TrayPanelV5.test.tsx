@@ -247,7 +247,7 @@ describe("TrayPanelV5 free over cap", () => {
     expect(screen.queryByText("到 $10 自动停")).toBeNull();
   });
 
-  it("leaves an empty slot for the community build and still no actions", () => {
+  it("fills the community slot with disabled allow buttons and no compare link", () => {
     render(
       <TrayPanelV5
         model={overFixture()}
@@ -259,18 +259,19 @@ describe("TrayPanelV5 free over cap", () => {
     );
     const slot = document.querySelector("[data-slot='community-allow']");
     expect(slot).not.toBeNull();
-    expect(slot?.childElementCount).toBe(0);
-    expect(slot?.querySelector("a, button, [href]")).toBeNull();
+    expect(slot?.querySelectorAll("button")).toHaveLength(2);
+    expect(slot?.querySelector("a, [href]")).toBeNull();
+    expect(screen.getByText("社区构建")).toBeInTheDocument();
     expect(screen.queryByText("比较 Free 与 Pro")).toBeNull();
-    expect(screen.queryByRole("button", { name: /放行|停止全部/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /停止全部/ })).toBeNull();
   });
 
-  it("shows the compare line only when the batch switch is on", () => {
+  it("shows the compare line only when upsellEntry is on", () => {
     const { container } = render(
       <TrayPanelV5
         model={overFixture()}
         locale="zh-CN"
-        proCompareEnabled
+        upsellEntry
         onOpenTrends={() => undefined}
         onOpenSettings={() => undefined}
       />,
@@ -330,7 +331,7 @@ describe("TrayPanelV5 free over cap", () => {
 
     const other = designPanelFixture();
     other.sources = other.sources.map((source, index) =>
-      index === 0 ? { ...source, noteCodes: ["something_else"] } : source,
+      index === 0 ? { ...source, noteCodes: ["stale"] } : source,
     );
     const rendered = renderPanel(other);
     expect(screen.queryByText(/Codex 订阅未走代理/)).toBeNull();
