@@ -72,11 +72,12 @@ export function TrendsPage({
 
   const openUpsell = () => setUpsellOpen(true);
 
-  const dimensionOptions: { id: TrendDimension; label: string }[] = [
+  const allDimensions: { id: TrendDimension; label: string }[] = [
     { id: "provider", label: t("lub.settings.providers") },
     { id: "project", label: t("lub.upsell.dim_project", { ns: "pro" }) },
     { id: "client", label: t("lub.upsell.dim_client", { ns: "pro" }) },
-  ].filter(
+  ];
+  const dimensionOptions = allDimensions.filter(
     (item) =>
       item.id === "provider" || loadPerGroupDailySeries(item.id) != null,
   );
