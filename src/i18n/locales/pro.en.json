@@ -1,0 +1,107 @@
+{
+  "lub": {
+    "killed": {
+      "all_api_spend_stopped": "All API spend stopped",
+      "all_spend_stopped_incl_plans": "All spend stopped, incl. plans",
+      "stopped_by_you_at_requests": "Stopped by you at {{time}}. 4 requests blocked",
+      "resume_api_traffic": "Resume API traffic",
+      "resume_all_traffic": "Resume all traffic",
+      "stopped": "Stopped",
+      "stopped_by_you_tap_resume": "Stopped by you. Tap Resume",
+      "running": "Running, {{percent}}",
+      "stopped_by_you_beta": "Stopped by you (Beta)",
+      "stays_stopped_after_restart_until": "Stays stopped after restart until you resume."
+    },
+    "killconfirm": {
+      "stop_all_api_key_spend": "Stop all API key spend?",
+      "stop_all_spend_including_plans": "Stop all spend, including plans?",
+      "new_api_requests_from_claude": "New API requests from Claude Code and Codex are refused now; in-flight ones finish.<br><span class=nb><b>Plan traffic already going through the local proxy is cut too.</b> Unproxied plans keep running.</span><span class=yb><b>Plan cut-off (Beta) is on: plans stop too.</b></span>",
+      "don_t_ask_again": "Don’t ask again",
+      "cancel": "Cancel",
+      "stop_api_spend": "Stop API spend",
+      "stop_all": "Stop all"
+    },
+    "hardstop": {
+      "daily_cap_of_amt_reached": "Daily cap of {{amount}} reached. New API requests paused",
+      "rule": "Rule",
+      "daily_cap": "Daily cap",
+      "waiting_request": "Waiting request",
+      "acme_web_claude_code": "acme-web, Claude Code",
+      "allowed_manually": "Allowed manually",
+      "today_amt_total": "2 today, {{amount}} total",
+      "auto_resumes": "Auto-resumes",
+      "tomorrow": "Tomorrow {{time}}",
+      "allow_this_one": "Allow this one",
+      "keep_paused": "Keep paused",
+      "no_limit_on_allowing_each": "If you don’t choose within 60s, this request is refused (HTTP 429). “Allow more today” lasts until midnight and doesn’t change your cap. No limit on allowing. Unproxied plans aren’t affected.",
+      "change_cap": "Change cap",
+      "auto_denies_in_s": "Auto-denies in {{seconds}}s",
+      "allow_more_today": "Allow {{amount}} more today"
+    },
+    "capped": {
+      "daily_cap_amt_reached_api": "Daily cap {{amount}} reached. API paused",
+      "request_waiting_allowed_manually": "1 request waiting. 2 allowed manually",
+      "allow": "Allow 1",
+      "paused": "Paused",
+      "hit_amt_extra_was_allowed": "Hit {{amount}}. Extra was allowed by you",
+      "red_amt_you_allowed_manually": "Red = {{amount}} you allowed manually",
+      "running": "Running, {{percent}}",
+      "below": "{{percent}}, below {{percent2}}",
+      "auto_resumes_tomorrow": "Auto-resumes tomorrow {{time}}",
+      "allow_more_today": "Allow {{amount}} more today"
+    },
+    "identity": {
+      "acme_web_is_switching_from": "acme-web is switching from your plan to API key billing",
+      "likely_from_the_project_s": "Likely from the project’s <code>.env</code> (ANTHROPIC_API_KEY ···a3f9). This request is paused until you decide.",
+      "deny_recommended": "Deny (recommended)",
+      "allow_once": "Allow once",
+      "always_allow_for_this_project": "Always allow for this project",
+      "auto_allow_from_now_on": "Auto-allow from now on (all projects)",
+      "auto_denies_after_s_undo": "Auto-denies after 60 s. Undo auto-allow in Settings › Caps & stopping."
+    },
+    "export": {
+      "project": "Project",
+      "client": "Client",
+      "spend": "Spend",
+      "preview_of_first_rows_no": "Preview of first 3 rows (no key fingerprints, full paths or prompts)",
+      "date": "Date",
+      "model": "Model",
+      "source": "Source",
+      "basis": "Basis",
+      "metered": "Metered",
+      "total_amt_matches_attribution_api": "Total {{amount}}, matches attribution, API spend only",
+      "export_csv": "Export CSV"
+    },
+    "betaconfirm": {
+      "turn_on_plan_cut_off": "Turn on plan cut-off (Beta)?",
+      "plan_traffic_claude_max_chatgpt": "Plan traffic (Claude Max, ChatGPT…) will be blocked at your limit, and Kill will stop it too.",
+      "before_you_turn_this_on": "Before you turn this on:",
+      "it_may_conflict_with_provider": "① It may conflict with provider terms; account risk is yours",
+      "plan_usage_is_estimated_it": "② Plan usage is estimated — it may stop early or late",
+      "blocked_sessions_break_replies_in": "③ Blocked sessions break; replies in progress get cut off",
+      "plan_limit": "Plan limit",
+      "i_understand_these_risks": "I understand these risks",
+      "turn_on_beta": "Turn on Beta",
+      "turn_off_anytime_in_settings": "Turn off anytime in Settings › Caps & stopping."
+    },
+    "allowmore": {
+      "amount_label": "“Allow more today” amount",
+      "amount_hint": "Used by the one-tap button"
+    },
+    "upsell": {
+      "pro_tag": "PRO",
+      "aria_pro_tag": "{{name}}, Pro feature",
+      "title": "See more with Pro",
+      "body": "View spend by week, month, project or client, plus a weekday × hour heatmap.",
+      "preview_note": "Preview with sample data",
+      "start_trial": "Start 7-day free trial",
+      "trial_note": "No card needed. Cancel anytime",
+      "compare_link": "Compare Free vs Pro",
+      "close": "Not now",
+      "dim_week": "Week",
+      "dim_month": "Month",
+      "dim_project": "Project",
+      "dim_client": "Client"
+    }
+  }
+}

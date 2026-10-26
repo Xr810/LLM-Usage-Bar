@@ -62,6 +62,12 @@ export interface TrayApiBudgetView {
   budgetConsumedPercent: string | null;
   costQuality: TrayCostQuality;
   status: TrayUsageStatus;
+  /**
+   * C10 daily budget level. Only `reached` is over the cap.
+   * Deprecated `warn` must not alert. Pace `status` is display-only.
+   * Omitted payloads use the backend default, `ok`.
+   */
+  level?: "ok" | "warn" | "reached";
   warningReason: string | null;
   burnRateUsdPerHour?: string | null;
   projectedExhaustAt?: string | null;

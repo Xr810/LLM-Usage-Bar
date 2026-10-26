@@ -1,0 +1,106 @@
+/* LLM Usage Bar v5 design tokens (baseline 2026-10-25, frozen).
+ * Target path: src/styles/lub-tokens.css, imported from src/index.css.
+ * The @import has to stay above @config; PostCSS rejects @import after other statements.
+ * Scope: prefixed --lub-* so they do not collide with existing shadcn HSL vars (--primary etc.).
+ * Theme hook: html.dark (repo convention). Platform hook: html.is-mac (exists) / html.is-windows (NEW, assumption).
+ */
+:root {
+  --lub-canvas: #ecedf0;
+  --lub-panel: rgba(246, 246, 248, 0.88);
+  --lub-panel-blur: 30px;
+  --lub-group: #ffffff;
+  --lub-ink: #1d1d1f;
+  --lub-ink-2: #6e6e73;
+  --lub-hairline: rgba(60, 60, 67, 0.13);
+  --lub-track: rgba(120, 120, 128, 0.14);
+  --lub-accent: #0071e3;
+  --lub-on-accent: #ffffff;
+  --lub-ok: #248a3d;
+  /* v5.6: status only (paused dot, warning banner, status-chip text).
+     Not for meter fills, switches, Beta tags, buttons, or cap lines. */
+  --lub-warn: #b86e00;
+  --lub-stop: #d70015;
+  --lub-cap-day: var(--lub-ink);
+  --lub-cap-month: rgba(29, 29, 31, 0.35);
+  /* v5.3: one cap-line style only. Beta plan cut-off and "hit" state reuse --lub-cap-day; no orange/red cap tokens. */
+  --lub-tooltip-bg: #1d1d1f;
+  --lub-tooltip-ink: #ffffff;
+  --lub-focus-ring: color-mix(in srgb, var(--lub-accent) 40%, transparent);
+
+  --lub-radius: 14px;
+  --lub-radius-2: 10px;
+  --lub-font:
+    -apple-system, "SF Pro Text", "PingFang SC", system-ui, sans-serif;
+
+  /* type scale: size / line-height / weight */
+  --lub-fs-hero: 40px;
+  --lub-lh-hero: 44px;
+  --lub-fw-hero: 700;
+  --lub-ls-hero: -0.02em;
+  --lub-fs-title: 17px;
+  --lub-lh-title: 22px;
+  --lub-fw-title: 600;
+  --lub-fs-body: 13px;
+  --lub-lh-body: 18px;
+  --lub-fw-body: 400;
+  --lub-fs-sub: 12px;
+  --lub-lh-sub: 16px;
+  --lub-fs-cap: 11px;
+  --lub-lh-cap: 14px;
+
+  /* spacing (4px grid) */
+  --lub-sp-1: 4px;
+  --lub-sp-2: 8px;
+  --lub-sp-3: 12px;
+  --lub-sp-4: 16px;
+  --lub-sp-5: 20px;
+  --lub-sp-6: 24px;
+  --lub-panel-width: 360px;
+  --lub-bar-h: 8px;
+  --lub-bar-thin-h: 4px;
+  --lub-cap-w: 2px;
+  --lub-cap-hit-area: 28px;
+  --lub-bar-scale: 1.2; /* bar max = cap * 1.2, so cap line sits at 83.3% */
+
+  --lub-shadow-panel:
+    0 0 0 0.5px rgba(0, 0, 0, 0.16), 0 18px 48px -12px rgba(0, 0, 0, 0.3),
+    0 4px 12px rgba(0, 0, 0, 0.06);
+  --lub-motion: 200ms;
+}
+html.dark {
+  --lub-canvas: #141518;
+  --lub-panel: rgba(38, 38, 41, 0.88);
+  --lub-group: rgba(255, 255, 255, 0.06);
+  --lub-ink: #f5f5f7;
+  --lub-ink-2: #a1a1a6;
+  --lub-hairline: rgba(255, 255, 255, 0.1);
+  --lub-track: rgba(255, 255, 255, 0.12);
+  --lub-accent: #0a84ff;
+  --lub-ok: #30d158;
+  --lub-warn: #ffb340;
+  --lub-stop: #ff6961;
+  --lub-cap-month: rgba(245, 245, 247, 0.42);
+  --lub-tooltip-bg: #48484a;
+  --lub-shadow-panel:
+    0 0 0 0.5px rgba(255, 255, 255, 0.14), 0 18px 48px -12px rgba(0, 0, 0, 0.7),
+    0 4px 12px rgba(0, 0, 0, 0.3);
+}
+html.is-windows {
+  --lub-radius: 8px;
+  --lub-radius-2: 6px;
+  --lub-font:
+    "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", system-ui,
+    sans-serif;
+  --lub-accent: #005fb8;
+  --lub-panel: rgba(243, 243, 243, 0.94);
+}
+html.is-windows.dark {
+  --lub-accent: #60cdff;
+  --lub-on-accent: #00263d; /* white on #60cdff is ~1.7:1 */
+  --lub-panel: rgba(36, 36, 36, 0.95);
+}
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --lub-motion: 0ms;
+  }
+}

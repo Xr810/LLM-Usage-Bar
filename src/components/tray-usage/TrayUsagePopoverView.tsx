@@ -1,17 +1,8 @@
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
-import { AlertTriangle } from "lucide-react";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import { TrayPanelV5 } from "@/components/lub/TrayPanelV5";
+import { mapSnapshotToPanel } from "@/components/lub/mapSnapshotToPanel";
 import type { TrayUsageSnapshot } from "@/types/trayUsage";
-import { TrayApiSpendingSection } from "./TrayApiSpendingSection";
-import { TraySubscriptionSection } from "./TraySubscriptionSection";
-import { TrayUsageFooter } from "./TrayUsageFooter";
-import { TrayUsageStatusBadge } from "./TrayUsageProgress";
-import {
-  formatUpdatedTime,
-  type TrayProviderRow,
-  type TrayUsageTranslate,
-} from "./trayUsagePresentation";
 
 export interface TrayUsagePopoverViewProps {
   snapshot: TrayUsageSnapshot | null;
@@ -26,6 +17,8 @@ export interface TrayUsagePopoverViewProps {
   onSelectAgent?: (agentModuleId: "overview" | string) => void;
   focusRequestKey?: number;
   now?: Date;
+  /** C2 `uiFlags.upsellEntry`. Off until get_license_status says otherwise. */
+  upsellEntry?: boolean;
 }
 
 export function TrayUsagePopoverView({
@@ -36,155 +29,56 @@ export function TrayUsagePopoverView({
   onOpenDetails,
   onOpenSettings,
   onQuit,
-  now = new Date(),
+  upsellEntry = false,
 }: TrayUsagePopoverViewProps) {
   const { t, i18n } = useTranslation();
-  const translate = t as TrayUsageTranslate;
-  const locale = i18n.resolvedLanguage || i18n.language || "en-US";
-  const rows = useMemo<TrayProviderRow[]>(
-    () =>
-      (snapshot?.agents ?? []).flatMap((container) =>
-        container.providers.map((provider) => ({
-          agentModuleId: "",
-          agentName: "",
-          provider,
-        })),
-      ),
-    [snapshot],
+  const locale = i18n.resolvedLanguage || i18n.language || "en";
+  const model = useMemo(
+    () => (snapshot ? mapSnapshotToPanel(snapshot, onOpenSettings) : null),
+    [onOpenSettings, snapshot],
   );
-  const subscriptionRows = rows.filter(
-    (row) =>
-      row.provider.billingKind === "subscription" &&
-      row.provider.subscription != null,
-  );
-  const meteredRows = rows.filter(
-    (row) =>
-      row.provider.billingKind === "metered" && row.provider.metered != null,
-  );
-  const renderableRowCount = subscriptionRows.length + meteredRows.length;
-  const status = snapshot?.status ?? "unknown";
-  const title = t("trayUsage.providerMonitoring", {
-    defaultValue: "Provider monitoring",
-  });
-  const updated = snapshot
-    ? formatUpdatedTime(snapshot.lastSuccessAt, now, locale)
-    : null;
-  const freshnessText = updated
-    ? t("trayUsage.updated", {
-        time: updated,
-        defaultValue: "Updated {{time}}",
-      })
-    : t("trayUsage.neverUpdated", {
-        defaultValue: "No usable data yet",
-      });
 
   return (
     <main
       data-testid="tray-usage-popover"
       aria-busy={loading || refreshing}
-      className="tray-popover-frame flex flex-col overflow-hidden"
+      className="tray-popover-frame"
     >
-      <header className="shrink-0 border-b border-border/60 px-4 pb-2.5 pt-3">
-        <div className="flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <h1
-              className="truncate text-[14px] font-semibold tracking-tight"
-              title={title}
-            >
-              {title}
-            </h1>
-            <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
-              <span>{freshnessText}</span>
-              {snapshot?.stale ? (
-                <span className="font-medium text-foreground">
-                  · {t("trayUsage.stale", { defaultValue: "Stale" })}
-                </span>
-              ) : null}
-            </div>
-          </div>
-          <TrayUsageStatusBadge status={status} t={translate} live />
-        </div>
-        {snapshot?.refreshError ? (
-          <p
-            role="alert"
-            className="mt-2 flex items-start gap-1.5 text-[11px] text-muted-foreground"
-          >
-            <AlertTriangle
-              className="mt-px h-3.5 w-3.5 shrink-0 text-[#FFCC00]"
-              aria-hidden="true"
-            />
-            {t("trayUsage.refreshFailed", {
-              defaultValue: "Refresh failed; showing last successful data.",
+      {loading && !snapshot ? (
+        <section className="lub-panel" role="status">
+          <p className="lub-loading">
+            {t("trayUsage.loading", { defaultValue: "Loading usage…" })}
+          </p>
+        </section>
+      ) : model ? (
+        <TrayPanelV5
+          model={model}
+          locale={locale}
+          refreshing={refreshing}
+          showUtilityActions
+          onOpenTrends={onOpenDetails}
+          onOpenSettings={() => onOpenSettings(null)}
+          onRefresh={onRefresh}
+          onQuit={onQuit}
+          build={model.buildType}
+          upsellEntry={upsellEntry}
+          refreshError={
+            snapshot?.refreshError
+              ? t("trayUsage.refreshFailed", {
+                  defaultValue: "Refresh failed; showing last successful data.",
+                })
+              : null
+          }
+        />
+      ) : (
+        <section className="lub-panel">
+          <p className="lub-empty">
+            {t("trayUsage.empty", {
+              defaultValue: "No visible Provider accounts",
             })}
           </p>
-        ) : null}
-      </header>
-
-      <ScrollArea className="min-h-0 flex-1">
-        <div className="space-y-3 px-3 py-3">
-          {loading && !snapshot ? (
-            <div role="status" className="space-y-3 py-5 text-center">
-              <p className="text-sm text-muted-foreground">
-                {t("trayUsage.loading", { defaultValue: "Loading usage…" })}
-              </p>
-              <div aria-hidden="true" className="space-y-2">
-                <div className="h-16 animate-pulse rounded-lg bg-muted" />
-                <div className="h-24 animate-pulse rounded-lg bg-muted" />
-              </div>
-            </div>
-          ) : (
-            <>
-              <TraySubscriptionSection
-                rows={subscriptionRows}
-                now={now}
-                locale={locale}
-                showAgentName={false}
-              />
-              <TrayApiSpendingSection
-                rows={meteredRows}
-                budget={
-                  snapshot?.apiBudget ?? {
-                    mode: "shared",
-                    providerCount: 0,
-                    todayCostUsd: "0",
-                    dailyBudgetUsd: null,
-                    budgetConsumedPercent: null,
-                    costQuality: "complete",
-                    status: "unknown",
-                    warningReason: "daily_budget_missing",
-                  }
-                }
-                locale={locale}
-                showAgentName={false}
-                onOpenDetails={() => onOpenDetails()}
-                onOpenSettings={onOpenSettings}
-              />
-              {renderableRowCount === 0 ? (
-                <div className="py-10 text-center">
-                  <p className="text-sm font-medium">
-                    {t("trayUsage.empty", {
-                      defaultValue: "No visible Provider accounts",
-                    })}
-                  </p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {t("trayUsage.unknown", {
-                      defaultValue: "Data unavailable",
-                    })}
-                  </p>
-                </div>
-              ) : null}
-            </>
-          )}
-        </div>
-      </ScrollArea>
-
-      <TrayUsageFooter
-        refreshing={refreshing}
-        onOpenDetails={onOpenDetails}
-        onRefresh={onRefresh}
-        onOpenSettings={() => onOpenSettings(null)}
-        onQuit={onQuit}
-      />
+        </section>
+      )}
     </main>
   );
 }

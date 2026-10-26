@@ -45,6 +45,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Check i18n keys
+        run: node scripts/check-keys.mjs
+
       - name: TypeScript type check
         run: pnpm typecheck
 

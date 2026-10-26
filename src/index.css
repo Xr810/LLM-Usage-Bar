@@ -1,4 +1,6 @@
 @import "tailwindcss";
+@import "./styles/lub-tokens.css" layer(base);
+@import "./styles/lub-panel.css" layer(components);
 @config "../tailwind.config.cjs";
 
 @layer base {
