@@ -317,4 +317,3 @@ describe("TrayPanelV5 license lapse", () => {
     expect(lift).not.toHaveAttribute("aria-disabled");
   });
 });
-

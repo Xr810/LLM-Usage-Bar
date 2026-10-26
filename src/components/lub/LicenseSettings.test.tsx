@@ -6,6 +6,7 @@ import en from "@/i18n/locales/en.json";
 import zh from "@/i18n/locales/zh.json";
 import { LicenseSettings } from "./LicenseSettings";
 import { activateLicense, communityLicenseStatus } from "./licenseMock";
+import { proCompareEnabled } from "./proCompare";
 
 beforeAll(async () => {
   i18n.addResourceBundle("en", "translation", { lub: en.lub }, true, true);
@@ -25,7 +26,7 @@ describe("community license shell", () => {
     expect(before.emailMasked).toBeNull();
   });
 
-  it("keeps Community build after activate and leaves the compare link inert", async () => {
+  it("keeps Community build after activate and hides the compare link in batch 1", async () => {
     const user = userEvent.setup();
     render(<LicenseSettings />);
     expect(screen.getByTestId("license-tier")).toHaveTextContent(
@@ -43,8 +44,12 @@ describe("community license shell", () => {
     );
     expect(screen.getByTestId("license-expires")).toHaveTextContent("—");
 
-    const compare = screen.getByRole("link", { name: "比较 Free 与 Pro" });
-    await user.click(compare);
-    expect(compare).toHaveAttribute("href", "#free-vs-pro");
+    const compare = screen.queryByRole("link", { name: "比较 Free 与 Pro" });
+    if (proCompareEnabled) {
+      expect(compare).toHaveAttribute("href", "#free-vs-pro");
+    } else {
+      expect(compare).toBeNull();
+      expect(screen.queryByText("比较 Free 与 Pro")).toBeNull();
+    }
   });
 });

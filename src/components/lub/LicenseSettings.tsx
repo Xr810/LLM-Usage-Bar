@@ -5,6 +5,7 @@ import {
   communityLicenseStatus,
   type LicenseStatus,
 } from "./licenseMock";
+import { proCompareEnabled } from "./proCompare";
 
 const SAMPLE_TOKEN = "ULB1.eyJ0aWVyIjoicHJvIi···";
 
@@ -98,14 +99,19 @@ export function LicenseSettings({
         </div>
       </div>
       <p className="lub-muted">
-        {t("lub.license.no_license")}{" "}
-        <a
-          href="#free-vs-pro"
-          className="lub-inline-link"
-          onClick={(event) => event.preventDefault()}
-        >
-          {t("lub.license.compare_free_vs_pro")}
-        </a>
+        {t("lub.license.no_license")}
+        {proCompareEnabled ? (
+          <>
+            {" "}
+            <a
+              href="#free-vs-pro"
+              className="lub-inline-link"
+              onClick={(event) => event.preventDefault()}
+            >
+              {t("lub.license.compare_free_vs_pro")}
+            </a>
+          </>
+        ) : null}
       </p>
     </>
   );
