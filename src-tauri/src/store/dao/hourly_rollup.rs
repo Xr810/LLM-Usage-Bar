@@ -303,6 +303,7 @@ pub struct ProxySettlement {
     pub key_fingerprint: Option<String>,
     pub session_id: Option<String>,
     pub end_reason: String,
+    pub error_message: Option<String>,
 }
 
 pub(crate) fn insert_proxy_settlement(
@@ -318,10 +319,10 @@ pub(crate) fn insert_proxy_settlement(
                  request_id, provider_id, app_type, model,
                  input_tokens, output_tokens, total_cost_usd, latency_ms, status_code,
                  session_id, is_streaming, created_at, data_source,
-                 billing_identity, key_fingerprint, end_reason, cost_source
+                 billing_identity, key_fingerprint, end_reason, cost_source, error_message
              ) VALUES (
                  ?1, ?2, ?3, ?4, ?5, ?6, '0', 0, ?7, ?8, 1, ?9, 'proxy',
-                 ?10, ?11, ?12, 'metered'
+                 ?10, ?11, ?12, 'metered', ?13
              ) ON CONFLICT(request_id) DO NOTHING",
             params![
                 row.request_id,
@@ -336,6 +337,7 @@ pub(crate) fn insert_proxy_settlement(
                 row.billing_identity,
                 row.key_fingerprint,
                 row.end_reason,
+                row.error_message,
             ],
         )
         .map_err(|error| AppError::Database(format!("结算代理请求失败: {error}")))?;
@@ -481,6 +483,11 @@ fn contribute(
     totals: &mut HashMap<HourKey, HourTotals>,
     delta: &HourlyLogDelta,
 ) -> Result<(), AppError> {
+    // Deny is an audit event, not usage. Apply to live writes and rebuilds.
+    // Hold's existing aggregation behavior is intentionally unchanged.
+    if delta.end_reason.as_deref() == Some("guard_deny") {
+        return Ok(());
+    }
     let key = HourKey {
         hour_utc: hour_bucket_utc(delta.created_at),
         app_type: delta.app_type.clone(),

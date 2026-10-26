@@ -684,9 +684,36 @@ async fn handle_proxy_inner(
     });
     match decision {
         crate::policy::Decision::Allow => {}
-        crate::policy::Decision::Deny { status, body, .. } => {
+        crate::policy::Decision::Deny { rule, status, body } => {
             let status = StatusCode::from_u16(status)
                 .map_err(|_| AppError::internal("Policy gate returned an invalid HTTP status."))?;
+            // Deny is audit-only. As with Hold, recording must never replace
+            // the gate response or allow this request to reach upstream.
+            match state.db.conn.lock() {
+                Ok(mut conn) => {
+                    if let Err(error) = insert_proxy_settlement(
+                        &mut conn,
+                        &ProxySettlement {
+                            request_id,
+                            provider_id: String::new(),
+                            app_type: app_type.to_string(),
+                            model: String::new(),
+                            input_tokens: 0,
+                            output_tokens: 0,
+                            status_code: i64::from(status.as_u16()),
+                            created_at: now_millis() / 1000,
+                            billing_identity: identity_label(classified.identity).to_string(),
+                            key_fingerprint: classified.key_fp,
+                            session_id: classified.session_id,
+                            end_reason: "guard_deny".to_string(),
+                            error_message: Some(rule),
+                        },
+                    ) {
+                        log::warn!("guard deny recording failed: {error}");
+                    }
+                }
+                Err(error) => log::warn!("guard deny recording failed: {error}"),
+            }
             return Ok((status, axum::Json(body)).into_response());
         }
         crate::policy::Decision::Hold {
@@ -733,6 +760,7 @@ async fn handle_proxy_inner(
                             key_fingerprint: classified.key_fp,
                             session_id: classified.session_id,
                             end_reason: "guard_hold".to_string(),
+                            error_message: None,
                         },
                     ) {
                         log::warn!("guard hold recording failed: {error}");
@@ -770,6 +798,7 @@ async fn handle_proxy_inner(
                     key_fingerprint: classified.key_fp,
                     session_id: classified.session_id,
                     end_reason: "blocked".to_string(),
+                    error_message: None,
                 },
             )?;
             return Ok(plain_response(
@@ -1270,6 +1299,7 @@ fn stream_upstream_success(
                     } else {
                         "completed".to_string()
                     },
+                    error_message: None,
                 },
             ) {
                 log::warn!("request settlement failed: {error}");
@@ -1692,14 +1722,51 @@ mod tests {
         });
         let mut state = test_state(db.clone(), ok_auth(), sender.clone());
         Arc::get_mut(&mut state).unwrap().gate = gate.clone();
-        let (status, headers, body) =
-            post_json(test_router(state), json_body(json!({"model": MODEL})), &[]).await;
-        assert_eq!(status.as_u16(), 451);
-        assert_eq!(headers[header::CONTENT_TYPE], "application/json");
-        assert_eq!(body.as_ref(), serde_json::to_vec(&expected).unwrap());
+        let request = Request::builder()
+            .method("POST")
+            .uri("/v1/responses")
+            .body(Body::from_stream(futures::stream::pending::<
+                Result<Bytes, std::io::Error>,
+            >()))
+            .unwrap();
+        let response =
+            tokio::time::timeout(Duration::from_secs(1), test_router(state).oneshot(request))
+                .await
+                .expect("Deny must not wait for the body")
+                .unwrap();
+        assert_eq!(response.status().as_u16(), 451);
+        assert_eq!(response.headers()[header::CONTENT_TYPE], "application/json");
+        assert_eq!(
+            to_bytes(response.into_body(), 4096).await.unwrap().as_ref(),
+            serde_json::to_vec(&expected).unwrap()
+        );
         assert!(sender.requests.lock().unwrap().is_empty());
         assert!(attempts(&db).is_empty());
         assert_eq!(gate.settlements.load(Ordering::SeqCst), 0);
+        let conn = db.conn.lock().unwrap();
+        let rows: Vec<(String, String, i64, i64, String)> = conn
+            .prepare(
+                "SELECT end_reason, error_message, status_code,
+                      input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens,
+                      total_cost_usd FROM proxy_request_logs",
+            )
+            .unwrap()
+            .query_map([], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            })
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            rows,
+            vec![("guard_deny".into(), "test-rule".into(), 451, 0, "0".into())]
+        );
+        for table in ["usage_hourly_rollups", "usage_events", "guard_counters"] {
+            let count: i64 = conn
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(count, 0, "Deny must not contribute to {table}");
+        }
     }
 
     #[tokio::test]
@@ -1758,6 +1825,21 @@ mod tests {
                 .unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
                 .unwrap().collect::<Result<_, _>>().unwrap();
             assert_eq!(rows, vec![("guard_hold".into(), 429, 0)]);
+            let conn = db.conn.lock().unwrap();
+            let reason: Option<String> = conn
+                .query_row("SELECT error_message FROM proxy_request_logs", [], |r| {
+                    r.get(0)
+                })
+                .unwrap();
+            assert_eq!(reason, None, "D2 leaves Hold's stored fields unchanged");
+            let requests: i64 = conn
+                .query_row(
+                    "SELECT SUM(request_count) FROM usage_hourly_rollups",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(requests, 1, "D2 preserves Hold's baseline aggregation");
         }
     }
 

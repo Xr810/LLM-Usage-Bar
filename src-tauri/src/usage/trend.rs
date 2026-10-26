@@ -369,6 +369,9 @@ fn read_rows(
         filter = format!(" AND r.provider_id IN ({})", vec!["?"; ids.len()].join(","));
         parameters.extend(ids.into_iter().map(|id| Value::Text(id.clone())));
     }
+    if raw {
+        filter.push_str(" AND COALESCE(r.end_reason, '') != 'guard_deny'");
+    }
     let label = if request.group_by == Some(TrendGroupBy::Provider) {
         "COALESCE(
             NULLIF((SELECT name FROM usage_providers WHERE id = r.provider_id), ''),
