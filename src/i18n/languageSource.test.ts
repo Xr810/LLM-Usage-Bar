@@ -1,9 +1,13 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   LEGACY_LOCAL_STORAGE_KEYS,
   LOCAL_STORAGE_KEYS,
   readMigratedLocalStorage,
 } from "@/lib/localStorageMigration";
+import i18n, {
+  applyLanguageSettingsChange,
+  startLanguageSettingsListener,
+} from "./index";
 import {
   parseAppLanguage,
   resolveInitialLanguage,
@@ -18,9 +22,11 @@ const languageRead = () =>
     parse: parseAppLanguage,
   });
 
-afterEach(() => {
+afterEach(async () => {
   localStorage.clear();
   setBackendLanguage(null);
+  delete (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+  await i18n.changeLanguage("zh");
 });
 
 describe("language source", () => {
@@ -63,6 +69,40 @@ describe("language source", () => {
         stored: null,
         navigatorLang: "fr",
       }),
-    ).toBe("zh");
+    ).toBe("en");
+    expect(
+      resolveInitialLanguage({
+        backend: null,
+        stored: null,
+      }),
+    ).toBe("en");
+    expect(
+      resolveInitialLanguage({
+        backend: null,
+        stored: null,
+        navigatorLang: "de-DE",
+      }),
+    ).toBe("en");
+  });
+
+  it("re-reads language when settings-changed lists language", async () => {
+    setBackendLanguage("en");
+    await applyLanguageSettingsChange({ keys: ["language"] });
+    expect(i18n.language).toBe("en");
+
+    setBackendLanguage("ja");
+    await applyLanguageSettingsChange({ keys: ["theme"] });
+    expect(i18n.language).toBe("en");
+  });
+
+  it("listens for the tauri settings-changed event", async () => {
+    (window as { __TAURI_INTERNALS__?: object }).__TAURI_INTERNALS__ = {};
+    startLanguageSettingsListener();
+    setBackendLanguage("ja");
+    const { emitTauriEvent } = await import("../../tests/msw/tauriMocks");
+    emitTauriEvent("settings-changed", { keys: ["language"] });
+    await vi.waitFor(() => {
+      expect(i18n.language).toBe("ja");
+    });
   });
 });

@@ -43,7 +43,7 @@
       "request_waiting_allowed_manually": "1 request waiting. 2 allowed manually",
       "allow": "Allow 1",
       "paused": "Paused",
-      "hit_amt_extra_was_allowed": "Hit $10. Extra was allowed by you",
+      "hit_amt_extra_was_allowed": "Hit {{amount}}. Extra was allowed by you",
       "red_amt_you_allowed_manually": "Red = {{amount}} you allowed manually",
       "running": "Running, {{percent}}",
       "below": "{{percent}}, below {{percent2}}",
@@ -69,7 +69,7 @@
       "source": "Source",
       "basis": "Basis",
       "metered": "Metered",
-      "total_amt_matches_attribution_api": "Total $86.10, matches attribution, API spend only",
+      "total_amt_matches_attribution_api": "Total {{amount}}, matches attribution, API spend only",
       "export_csv": "Export CSV"
     },
     "betaconfirm": {
@@ -87,6 +87,21 @@
     "allowmore": {
       "amount_label": "“Allow more today” amount",
       "amount_hint": "Used by the one-tap button"
+    },
+    "upsell": {
+      "pro_tag": "PRO",
+      "aria_pro_tag": "{{name}}, Pro feature",
+      "title": "See more with Pro",
+      "body": "View spend by week, month, project or client, plus a weekday × hour heatmap.",
+      "preview_note": "Preview with sample data",
+      "start_trial": "Start 7-day free trial",
+      "trial_note": "No card needed. Cancel anytime",
+      "compare_link": "Compare Free vs Pro",
+      "close": "Not now",
+      "dim_week": "Week",
+      "dim_month": "Month",
+      "dim_project": "Project",
+      "dim_client": "Client"
     }
   }
 }

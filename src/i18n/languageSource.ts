@@ -43,5 +43,6 @@ export function resolveInitialLanguage(input: {
   if (navigatorLang?.startsWith("zh")) return "zh";
   if (navigatorLang?.startsWith("ja")) return "ja";
   if (navigatorLang?.startsWith("en")) return "en";
-  return "zh";
+  // Unmapped tags, and a missing navigator language, fall back to English.
+  return "en";
 }
