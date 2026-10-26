@@ -50,8 +50,12 @@ pub enum Decision {
         status: u16,
         body: Value,
     },
+    /// BE-30 fails closed immediately with HTTP 429 / GUARD_HOLD; no waiting.
+    /// PRO-2 may extend this response with interactive Hold handling later.
     Hold {
         reason: String,
+        /// Optional retry delay in seconds, also emitted as Retry-After.
+        retry_after_seconds: Option<u64>,
     },
 }
 
@@ -65,6 +69,8 @@ pub trait PolicyGate: Send + Sync {
     fn admit(&self, req: &ReqMeta) -> Decision;
 
     /// 用响应里的用量结算 `req_id`。社区实现不落库。
+    /// Record only: the request has already been sent. Settlement must never
+    /// replace or otherwise alter the upstream response.
     fn settle(&self, req_id: &str, usage: &Usage);
 }
 
@@ -132,6 +138,7 @@ mod tests {
         };
         let hold = Decision::Hold {
             reason: "hard_cap".to_string(),
+            retry_after_seconds: None,
         };
         assert_ne!(deny, Decision::Allow);
         assert_ne!(hold, Decision::Allow);
