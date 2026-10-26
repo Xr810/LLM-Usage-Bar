@@ -611,5 +611,11 @@
     "failures": "失敗回数",
     "input": "入力トークン",
     "output": "出力トークン"
+  },
+  "lub": {
+    "onboard": {
+      "terms_risk": "プロバイダの利用規約に抵触する可能性があり、アカウントが制限されることがあります。判断はご自身で行ってください。",
+      "claude_subscription_via_proxy": "プロキシ経由の Claude サブスクリプション"
+    }
   }
 }

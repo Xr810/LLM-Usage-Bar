@@ -31,18 +31,33 @@ function dollarAmounts(value: unknown): string[] {
   return Object.values(value).flatMap((child) => dollarAmounts(child));
 }
 
+const supplementalOnboard = [
+  "onboard.terms_risk",
+  "onboard.claude_subscription_via_proxy",
+] as const;
+
+function withoutSupplemental(keys: string[]): string[] {
+  const extra = new Set<string>(supplementalOnboard);
+  return keys.filter((key) => !extra.has(key));
+}
+
 describe("lub panel copy", () => {
-  it("matches the v5.8 asset pack and has no lub keys outside it", () => {
-    expect(flat(zh.lub).sort()).toEqual(flat(packLub("zh-CN.json")).sort());
-    expect(flat(en.lub).sort()).toEqual(flat(packLub("en.json")).sort());
+  it("matches the v5.8 asset pack aside from the supplemental onboard keys", () => {
+    expect(withoutSupplemental(flat(zh.lub)).sort()).toEqual(
+      flat(packLub("zh-CN.json")).sort(),
+    );
+    expect(withoutSupplemental(flat(en.lub)).sort()).toEqual(
+      flat(packLub("en.json")).sort(),
+    );
     expect(flat(proZh.lub).sort()).toEqual(
       flat(packLub("pro.zh-CN.json")).sort(),
     );
     expect(flat(proEn.lub).sort()).toEqual(flat(packLub("pro.en.json")).sort());
     // The uploaded pack is 203 public keys: the v5.8 set of 199 plus
     // community badge/aria keys and errors.feature_unavailable.
-    expect(flat(zh.lub)).toHaveLength(203);
-    expect(flat(en.lub)).toHaveLength(203);
+    // Two onboard strings sit outside that pack.
+    expect(flat(zh.lub)).toHaveLength(205);
+    expect(flat(en.lub)).toHaveLength(205);
     expect(flat(proZh.lub)).toHaveLength(85);
     expect(flat(proEn.lub)).toHaveLength(85);
   });
@@ -104,9 +119,31 @@ describe("lub panel copy", () => {
     );
   });
 
-  it("leaves zh-TW and ja on the English fallback for lub keys", () => {
-    expect(zhTW).not.toHaveProperty("lub");
-    expect(ja).not.toHaveProperty("lub");
+  it("keeps the onboard strings in zh, en, zh-TW, and ja", () => {
+    const terms = {
+      zh: "可能违反服务商条款，账号可能被限制，由你自行判断。",
+      en: "This may conflict with provider terms. Your account may be restricted. You decide.",
+      "zh-TW": "可能違反服務商條款，帳號可能被限制，由你自行判斷。",
+      ja: "プロバイダの利用規約に抵触する可能性があり、アカウントが制限されることがあります。判断はご自身で行ってください。",
+    };
+    const proxy = {
+      zh: "Claude 订阅经代理",
+      en: "Claude subscription via proxy",
+      "zh-TW": "Claude 訂閱經代理",
+      ja: "プロキシ経由の Claude サブスクリプション",
+    };
+    expect(zh.lub.onboard.terms_risk).toBe(terms.zh);
+    expect(en.lub.onboard.terms_risk).toBe(terms.en);
+    expect(zhTW.lub.onboard.terms_risk).toBe(terms["zh-TW"]);
+    expect(ja.lub.onboard.terms_risk).toBe(terms.ja);
+    expect(zh.lub.onboard.claude_subscription_via_proxy).toBe(proxy.zh);
+    expect(en.lub.onboard.claude_subscription_via_proxy).toBe(proxy.en);
+    expect(zhTW.lub.onboard.claude_subscription_via_proxy).toBe(proxy["zh-TW"]);
+    expect(ja.lub.onboard.claude_subscription_via_proxy).toBe(proxy.ja);
+    expect(flat(zhTW.lub).sort()).toEqual([...supplementalOnboard].sort());
+    expect(flat(ja.lub).sort()).toEqual([...supplementalOnboard].sort());
+    expect(terms["zh-TW"]).not.toBe(terms.en);
+    expect(terms.ja).not.toBe(terms.en);
   });
 
   it("keeps Pro keys in separate files and out of the public bundle", () => {

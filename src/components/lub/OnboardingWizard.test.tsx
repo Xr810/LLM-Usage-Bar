@@ -171,6 +171,7 @@ describe("takeover wizard", () => {
       path.resolve(process.cwd(), "src/components/lub/takeoverMock.ts"),
       "utf8",
     );
+    expect(source).not.toContain("defaultValue");
     expect(source).not.toContain("@tauri-apps");
     expect(source).not.toContain("invoke(");
     expect(source).not.toContain("apply_takeover");

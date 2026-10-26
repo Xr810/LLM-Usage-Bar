@@ -62,21 +62,14 @@ function ToolRow({ tool }: { tool: DetectedTool }) {
 }
 
 export function OnboardingWizard() {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const tools = detectTools();
   const notes = tools.flatMap((tool) => tool.noteCodes);
-  const zh = i18n.language.startsWith("zh");
   const [acked, setAcked] = useState(false);
   const [enabled, setEnabled] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const terms = t("lub.onboard.terms_risk", {
-    defaultValue: zh
-      ? "可能违反服务商条款，账号可能被限制，由你自行判断。"
-      : "This may conflict with provider terms. Your account may be restricted. You decide.",
-  });
-  const proxyLabel = t("lub.onboard.claude_subscription_via_proxy", {
-    defaultValue: zh ? "Claude 订阅经代理" : "Claude subscription via proxy",
-  });
+  const terms = t("lub.onboard.terms_risk");
+  const proxyLabel = t("lub.onboard.claude_subscription_via_proxy");
 
   return (
     <div className="lub-modal" data-testid="onboarding-wizard">

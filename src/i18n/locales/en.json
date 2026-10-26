@@ -673,7 +673,9 @@
       "check_up_found_risk": "Check-up found 1 risk",
       "code_acme_web_env_sets": "~/code/acme-web/.env sets ANTHROPIC_API_KEY, which silently overrides plan billing.",
       "back": "Back",
-      "connect_set_daily_cap": "Connect & set daily cap"
+      "connect_set_daily_cap": "Connect & set daily cap",
+      "terms_risk": "This may conflict with provider terms. Your account may be restricted. You decide.",
+      "claude_subscription_via_proxy": "Claude subscription via proxy"
     },
     "settings": {
       "trends_heatmaps": "Trends & heatmaps",
