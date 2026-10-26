@@ -3,11 +3,7 @@ import {
   buildProviderActivityDays,
   type ProviderActivityDay,
 } from "@/components/usage-dashboard/ProviderActivityHeatmap";
-import type {
-  AgentUsageRow,
-  ProviderUsageView,
-  UsageTrendBucketView,
-} from "@/types/usageDashboard";
+import type { UsageTrendBucketView } from "@/types/usageDashboard";
 
 /** Monday. Heatmap rows and week buckets both start here. */
 export const WEEK_STARTS_ON_MONDAY = 1;
@@ -22,12 +18,6 @@ export interface CostPoint {
   /** Local midnight, unix seconds. */
   startAt: number;
   /** Null when a bucket in the group was never priced. */
-  costUsd: number | null;
-}
-
-export interface TrendSeries {
-  id: string;
-  label: string;
   costUsd: number | null;
 }
 
@@ -219,89 +209,6 @@ export function referenceLines(
 export function chartScale(lines: TrendReferenceLine[]): number {
   const top = lines.reduce((peak, line) => Math.max(peak, line.amountUsd), 0);
   return top > 0 ? top : 1;
-}
-
-/**
- * Positive series weights. Empty means the daily total is drawn as one bar:
- * the dashboard trend is not split, and no series has a known cost.
- */
-export function seriesWeights(series: TrendSeries[]): number[] {
-  const weights = series.map((item) =>
-    item.costUsd != null && item.costUsd > 0 ? item.costUsd : 0,
-  );
-  const total = weights.reduce((sum, weight) => sum + weight, 0);
-  return total > 0 ? weights : [];
-}
-
-function seriesFromCosts(
-  rows: { id: string; label: string; costUsd: string | null }[],
-): TrendSeries[] {
-  return rows
-    .map((row) => ({
-      id: row.id,
-      label: row.label,
-      costUsd: parseUsd(row.costUsd),
-    }))
-    .sort((left, right) => {
-      const cost = (right.costUsd ?? -1) - (left.costUsd ?? -1);
-      return cost === 0 ? left.label.localeCompare(right.label) : cost;
-    });
-}
-
-/** Metered providers only. Subscription plans stay out of the legend. */
-export function providerSeries(providers: ProviderUsageView[]): TrendSeries[] {
-  return seriesFromCosts(
-    providers
-      .filter((usage) => usage.provider.billingKind === "metered")
-      .map((usage) => ({
-        id: usage.provider.id,
-        label: usage.provider.name,
-        costUsd: usage.totalCostUsd,
-      })),
-  );
-}
-
-/** Agents stand in for projects. Archived modules are omitted. */
-export function projectSeries(
-  agents: AgentUsageRow[],
-  unattributedLabel: string,
-): TrendSeries[] {
-  return seriesFromCosts(
-    agents
-      .filter((agent) => !agent.archived)
-      .map((agent) => ({
-        id: agent.agentModuleId ?? "unattributed",
-        label: agent.agentName ?? unattributedLabel,
-        costUsd: agent.totalCostUsd,
-      })),
-  );
-}
-
-/**
- * Clients are the route app recorded on each metered provider (`routeAppType`).
- * Costs add when every member of the group was priced.
- */
-export function clientSeries(
-  providers: ProviderUsageView[],
-  unattributedLabel: string,
-): TrendSeries[] {
-  const groups = new Map<string, TrendSeries>();
-  for (const usage of providers) {
-    if (usage.provider.billingKind !== "metered") continue;
-    const id = usage.provider.routeAppType?.trim() || "unattributed";
-    const label = id === "unattributed" ? unattributedLabel : id;
-    const cost = parseUsd(usage.totalCostUsd);
-    const current = groups.get(id);
-    if (!current) {
-      groups.set(id, { id, label, costUsd: cost });
-      continue;
-    }
-    current.costUsd = addCost(current.costUsd, cost);
-  }
-  return [...groups.values()].sort((left, right) => {
-    const cost = (right.costUsd ?? -1) - (left.costUsd ?? -1);
-    return cost === 0 ? left.label.localeCompare(right.label) : cost;
-  });
 }
 
 function spendLevel(

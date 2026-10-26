@@ -12,6 +12,7 @@ import { HEATMAP_MAX_WEEKS } from "@/lib/constants";
 import { server } from "../../../tests/msw/server";
 import { commandCalls } from "../../../tests/msw/tauriMocks";
 import { TrendsPage } from "./TrendsPage";
+import { QUERY_USAGE_TREND_COMMAND } from "./perGroupDailyTrend";
 import { WEEKDAY_HOUR_FEATURE } from "./trendsModel";
 
 beforeEach(async () => {
@@ -70,15 +71,29 @@ describe("TrendsPage", () => {
       "1",
     );
 
-    expect(await screen.findByText("OpenAI API")).toBeInTheDocument();
-    expect(screen.getByText("Anthropic API")).toBeInTheDocument();
-    expect(screen.getAllByText("OpenRouter").length).toBeGreaterThan(0);
-    expect(screen.queryByText("Claude Team")).toBeNull();
-    expect(screen.queryByText("Official Subscription")).toBeNull();
-    expect(screen.queryByText("$159.04")).toBeNull();
-    expect(screen.getByTestId("lub-trend-total")).toHaveTextContent(
-      formatUsd("0.125000", "zh"),
+    const totalText = formatUsd("0.125000", "zh");
+    await waitFor(() => {
+      expect(screen.getByTestId("lub-trend-total")).toHaveTextContent(
+        totalText,
+      );
+    });
+    expect(screen.queryByText("OpenAI API")).toBeNull();
+    expect(screen.queryByText("Anthropic API")).toBeNull();
+    expect(screen.queryByText("OpenRouter")).toBeNull();
+    expect(screen.queryByText("Claude Code")).toBeNull();
+    expect(screen.queryByText("codex")).toBeNull();
+    expect(screen.queryByText("claude")).toBeNull();
+    const bars = document.querySelectorAll(".lub-trends-chart > span");
+    expect(bars.length).toBeGreaterThan(0);
+    expect(screen.getByTestId("lub-trends")).toHaveAttribute(
+      "data-per-group",
+      "none",
     );
+    for (const bar of bars) {
+      expect(bar).toHaveAttribute("data-series", "total");
+      expect(bar.querySelectorAll("i").length).toBeLessThanOrEqual(1);
+      expect(bar.querySelector("[data-slot='1']")).toBeNull();
+    }
     expect(screen.getByTestId("lub-trend-line-baseline")).toBeInTheDocument();
     expect(screen.getByTestId("lub-trend-line-max")).toHaveTextContent(
       formatUsd("0.125000", "zh"),
@@ -108,6 +123,7 @@ describe("TrendsPage", () => {
     expect(weeks).toBeLessThan(52.5);
     expect(commandCalls("get_agent_usage_breakdown")).toHaveLength(0);
     expect(commandCalls("get_usage_trends")).toHaveLength(0);
+    expect(commandCalls(QUERY_USAGE_TREND_COMMAND)).toHaveLength(0);
   });
 
   it("draws the shared daily cap as a reference line above the peak", async () => {
@@ -180,7 +196,9 @@ describe("TrendsPage", () => {
       within(toolbar).getByRole("button", { name: "客户" }),
     ).toBeInTheDocument();
 
-    await screen.findByText("OpenAI API");
+    await waitFor(() => {
+      expect(screen.getByTestId("lub-trend-total")).not.toHaveTextContent("—");
+    });
     const dayLabels = screen
       .getByTestId("lub-trends-axis")
       .querySelectorAll("time").length;
@@ -197,15 +215,23 @@ describe("TrendsPage", () => {
     });
 
     await user.click(within(toolbar).getByRole("button", { name: "项目" }));
-    expect(await screen.findByText("Claude Code")).toBeInTheDocument();
-    expect(screen.queryByText("OpenAI API")).toBeNull();
-    expect(screen.queryByText("Retired Agent")).toBeNull();
-    expect(commandCalls("get_agent_usage_breakdown").length).toBeGreaterThan(0);
-
+    expect(
+      within(toolbar).getByRole("button", { name: "项目" }),
+    ).toHaveAttribute("aria-pressed", "true");
     await user.click(within(toolbar).getByRole("button", { name: "客户" }));
-    expect(await screen.findByText("codex")).toBeInTheDocument();
-    expect(screen.getByText("claude")).toBeInTheDocument();
+    expect(
+      within(toolbar).getByRole("button", { name: "客户" }),
+    ).toHaveAttribute("aria-pressed", "true");
     expect(screen.queryByText("Claude Code")).toBeNull();
+    expect(screen.queryByText("OpenAI API")).toBeNull();
+    expect(screen.queryByText("codex")).toBeNull();
+    expect(screen.queryByText("claude")).toBeNull();
+    expect(screen.getByTestId("lub-trends")).toHaveAttribute(
+      "data-per-group",
+      "none",
+    );
+    expect(commandCalls("get_agent_usage_breakdown")).toHaveLength(0);
+    expect(commandCalls(QUERY_USAGE_TREND_COMMAND)).toHaveLength(0);
   });
 
   it("uses the English last-30-days and heatmap keys", async () => {

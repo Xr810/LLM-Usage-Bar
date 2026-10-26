@@ -1,18 +1,13 @@
 import { useMemo, useState } from "react";
 import { useProviderUsageActivity } from "@/lib/query/providerUsageActivity";
 import { useApiBudgetConfig } from "@/lib/query/trayUsage";
+import { useProviderUsageDashboard } from "@/lib/query/usageDashboard";
+import { loadPerGroupDailySeries } from "./perGroupDailyTrend";
 import {
-  useAgentUsageBreakdown,
-  useProviderUsageDashboard,
-} from "@/lib/query/usageDashboard";
-import {
-  clientSeries,
   dayPoints,
   heatmapCells,
   heatmapWindow,
   last30DaysRange,
-  projectSeries,
-  providerSeries,
   referenceLines,
   rollupPoints,
   sharedCapUsd,
@@ -23,7 +18,6 @@ import {
   type TrendDimension,
   type TrendGranularity,
   type TrendReferenceLine,
-  type TrendSeries,
 } from "./trendsModel";
 
 export interface TrendsData {
@@ -33,7 +27,6 @@ export interface TrendsData {
   truncated: boolean;
   weekStartsOn: number;
   points: CostPoint[];
-  series: TrendSeries[];
   lines: TrendReferenceLine[];
   totalUsd: number | null;
   averageUsd: number | null;
@@ -41,20 +34,21 @@ export interface TrendsData {
   capUsd: number | null;
   heatmap: HeatCell[];
   ready: boolean;
+  /** BE-16 seam. Null until real per-group daily buckets exist. */
+  perGroupDaily: null;
 }
 
 /**
  * Last 30 days from `get_provider_usage_dashboard` (day buckets: the window is
  * longer than 24h) and a 52-week heatmap from `get_provider_usage_activity`.
  *
- * Week and month are rolled up on the client. Project and client series use
- * each group's share of the range total: the dashboard trend is one series of
- * daily totals, and this batch does not add a per-group trend command.
+ * Week and month roll up those daily totals on the client. Batch 1 does not
+ * paint provider, project, or client series. `loadPerGroupDailySeries` is the
+ * BE-16 seam and returns null without calling `query_usage_trend`.
  */
 export function useTrendsData(
   dimension: TrendDimension,
   granularity: TrendGranularity,
-  unattributedLabel: string,
 ): TrendsData {
   const [nowMs] = useState(() => Date.now());
   const range = useMemo(() => last30DaysRange(nowMs), [nowMs]);
@@ -62,11 +56,9 @@ export function useTrendsData(
   const dashboard = useProviderUsageDashboard(range.startAt, range.endAt);
   const activity = useProviderUsageActivity(heat.startAt, heat.endAt);
   const budget = useApiBudgetConfig();
-  const agents = useAgentUsageBreakdown(
-    range.startAt,
-    range.endAt,
-    dimension === "project",
-  );
+  // TODO(BE-16): plot this once it returns real daily buckets. Null keeps
+  // the chart on totals. Do not pro-rate range shares in its place.
+  const perGroupDaily = loadPerGroupDailySeries(dimension);
 
   return useMemo(() => {
     const buckets = dashboard.data?.trendBuckets ?? [];
@@ -79,13 +71,6 @@ export function useTrendsData(
       budget.data?.mode,
       budget.data?.sharedDailyBudgetUsd,
     );
-    const providers = dashboard.data?.providers ?? [];
-    const series =
-      dimension === "project"
-        ? projectSeries(agents.data?.agents ?? [], unattributedLabel)
-        : dimension === "client"
-          ? clientSeries(providers, unattributedLabel)
-          : providerSeries(providers);
     const heatResult = heatmapCells(
       activity.data ?? [],
       heat.startAt,
@@ -97,7 +82,6 @@ export function useTrendsData(
       truncated: heatResult.truncated,
       weekStartsOn: WEEK_STARTS_ON_MONDAY,
       points,
-      series,
       lines: dashboard.isSuccess
         ? referenceLines(points, granularity === "day" ? capUsd : null)
         : [],
@@ -107,22 +91,20 @@ export function useTrendsData(
       capUsd,
       heatmap: heatResult.cells,
       ready: dashboard.isSuccess,
+      perGroupDaily,
     };
   }, [
     activity.data,
-    agents.data?.agents,
     budget.data?.mode,
     budget.data?.sharedDailyBudgetUsd,
-    dashboard.data?.providers,
     dashboard.data?.trendBuckets,
     dashboard.isSuccess,
-    dimension,
     granularity,
     heat.endAt,
     heat.maxWeeks,
     heat.startAt,
+    perGroupDaily,
     range.endAt,
     range.startAt,
-    unattributedLabel,
   ]);
 }

@@ -8,7 +8,6 @@ import { useTrendsData } from "./useTrendsData";
 import {
   axisLabels,
   chartScale,
-  seriesWeights,
   showsWeekdayHour,
   UPSELL_ENTRY_FEATURE,
   weekdayLabels,
@@ -63,10 +62,8 @@ export function TrendsPage({
     tier === "pro" ? granularity : "day";
   const activeDimension: TrendDimension =
     tier === "pro" ? dimension : "provider";
-  const unattributed = t("lub.panel.group_unattributed");
-  const data = useTrendsData(activeDimension, activeGranularity, unattributed);
+  const data = useTrendsData(activeDimension, activeGranularity);
   const scale = chartScale(data.lines);
-  const weights = seriesWeights(data.series);
   const dates = axisLabels(data.points, locale);
   const weekdays = weekdayLabels(locale, data.weekStartsOn);
   const maxLine = data.lines.find((line) => line.kind === "max");
@@ -88,6 +85,7 @@ export function TrendsPage({
       data-week-start={WEEK_STARTS_ON_MONDAY}
       data-max-weeks={HEATMAP_MAX_WEEKS}
       data-truncated={data.truncated ? "true" : "false"}
+      data-per-group={data.perGroupDaily == null ? "none" : "day"}
     >
       <nav className="lub-trends-nav" aria-label={t("lub.panel.settings")}>
         {NAV.map(([id, key]) => (
@@ -202,14 +200,6 @@ export function TrendsPage({
             <span className="lub-muted">
               {t("lub.trends.api_spend_usd_plans_excluded")}
             </span>
-            <span className="lub-trends-legend">
-              {data.series.map((item, index) => (
-                <span key={item.id}>
-                  <i data-slot={String(index % 3)} />
-                  {item.label}
-                </span>
-              ))}
-            </span>
           </div>
           <div
             className="lub-trends-plot"
@@ -220,27 +210,13 @@ export function TrendsPage({
               {data.points.map((point) => {
                 const height =
                   point.costUsd == null ? 0 : (point.costUsd / scale) * 100;
-                const parts =
-                  weights.length === data.series.length
-                    ? data.series.map((item, index) => ({
-                        id: item.id,
-                        slot: index % 3,
-                        weight: weights[index] ?? 0,
-                      }))
-                    : [{ id: "total", slot: 0, weight: 1 }];
                 return (
-                  <span key={point.startAt} style={{ height: `${height}%` }}>
-                    {height > 0
-                      ? parts
-                          .filter((part) => part.weight > 0)
-                          .map((part) => (
-                            <i
-                              key={part.id}
-                              data-slot={String(part.slot)}
-                              style={{ flex: part.weight }}
-                            />
-                          ))
-                      : null}
+                  <span
+                    key={point.startAt}
+                    data-series="total"
+                    style={{ height: `${height}%` }}
+                  >
+                    {height > 0 ? <i data-slot="0" /> : null}
                   </span>
                 );
               })}

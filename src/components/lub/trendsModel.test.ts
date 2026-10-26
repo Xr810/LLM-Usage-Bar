@@ -1,18 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { HEATMAP_MAX_WEEKS } from "@/lib/constants";
-import type {
-  AgentUsageRow,
-  ProviderUsageView,
-  UsageTrendBucketView,
-} from "@/types/usageDashboard";
+import type { UsageTrendBucketView } from "@/types/usageDashboard";
+import {
+  loadPerGroupDailySeries,
+  QUERY_USAGE_TREND_COMMAND,
+  queryUsageTrendInput,
+} from "./perGroupDailyTrend";
 import {
   chartScale,
-  clientSeries,
   dayPoints,
   heatmapCells,
   heatmapWindow,
   last30DaysRange,
-  projectSeries,
   referenceLines,
   rollupPoints,
   sharedCapUsd,
@@ -86,65 +85,23 @@ describe("trends calendar", () => {
     expect(sharedCapUsd("shared", null)).toBeNull();
   });
 
-  it("groups projects and clients without subscription plans", () => {
-    const agents = [
-      {
-        agentModuleId: "a",
-        agentName: "acme-web",
-        archived: false,
-        totalCostUsd: "3",
-      },
-      {
-        agentModuleId: "b",
-        agentName: "old",
-        archived: true,
-        totalCostUsd: "9",
-      },
-      {
-        agentModuleId: null,
-        agentName: null,
-        archived: false,
-        totalCostUsd: null,
-      },
-    ] as AgentUsageRow[];
-    const projects = projectSeries(agents, "Unattributed");
-    expect(projects.map((item) => item.label)).toEqual([
-      "acme-web",
-      "Unattributed",
-    ]);
-
-    const providers = [
-      {
-        provider: {
-          id: "api",
-          name: "Anthropic API",
-          billingKind: "metered",
-          routeAppType: "claude",
-        },
-        totalCostUsd: "2",
-      },
-      {
-        provider: {
-          id: "plan",
-          name: "Claude Team",
-          billingKind: "subscription",
-          routeAppType: null,
-        },
-        totalCostUsd: "8",
-      },
-      {
-        provider: {
-          id: "oai",
-          name: "OpenAI API",
-          billingKind: "metered",
-          routeAppType: "codex",
-        },
-        totalCostUsd: "1",
-      },
-    ] as unknown as ProviderUsageView[];
-    expect(
-      clientSeries(providers, "Unattributed").map((item) => item.id),
-    ).toEqual(["claude", "codex"]);
+  it("keeps per-group daily series unloaded until BE-16", () => {
+    expect(QUERY_USAGE_TREND_COMMAND).toBe("query_usage_trend");
+    expect(queryUsageTrendInput("provider")).toEqual({
+      granularity: "day",
+      groupBy: "provider",
+    });
+    expect(queryUsageTrendInput("project")).toEqual({
+      granularity: "day",
+      groupBy: "project",
+    });
+    expect(queryUsageTrendInput("client")).toEqual({
+      granularity: "day",
+      groupBy: "client",
+    });
+    expect(loadPerGroupDailySeries("provider")).toBeNull();
+    expect(loadPerGroupDailySeries("project")).toBeNull();
+    expect(loadPerGroupDailySeries("client")).toBeNull();
   });
 
   it("marks the heatmap truncated when a bucket falls outside the window", () => {
