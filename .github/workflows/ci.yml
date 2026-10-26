@@ -144,6 +144,27 @@ jobs:
       - name: Create frontend dist placeholder
         run: mkdir -p dist
 
+      - name: Reject lub-pro in the community dependency tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          tree_file=$(mktemp)
+          trap 'rm -f "$tree_file"' EXIT
+          # Use the same manifest as the community builds, including every
+          # workspace member, optional feature and desktop target dependency.
+          # Resolve separately so Cargo failures cannot look like an absent crate.
+          cargo tree --locked --manifest-path src-tauri/Cargo.toml \
+            --workspace --all-features --target all --edges normal,build \
+            --prefix none --format '{p}' > "$tree_file"
+          awk '
+            $1 == "lub-pro" {
+              print "::error::Community dependency tree contains forbidden package: " $0
+              found = 1
+            }
+            END { exit found ? 1 : 0 }
+          ' "$tree_file"
+          echo "Community dependency tree contains no lub-pro package"
+
       - name: Reject pro on the default feature set
         run: |
           awk '
