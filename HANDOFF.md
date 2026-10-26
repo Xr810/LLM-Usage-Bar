@@ -2149,6 +2149,14 @@ after each reason/legacy import (including nonzero tokens/cost and HTTP 200),
 then exercise daily archival. Full hourly rebuild and session-dedup fixtures
 also cover legacy `guard_hold_timeout` rows. Allow completion still counts.
 
+Upgrade correction: startup/periodic maintenance queues retained Hold-detail
+hours for a one-time dirty-hour repair, atomically committing the repair and
+an existing-settings-table marker. It does not full-rebuild or discard older
+hourly history whose details are gone. A disk-backed startup regression seeds
+pre-v1.7 cached counts without dirty hours, reopens through `Database::init_at`,
+and checks mixed ordinary/Hold hours, Hold-only hours, untouched archived
+history and repeated maintenance. No versioned migration or schema edit.
+
 **Contract blocker / scope boundary:** the public repository has no held
 queue, interactive wait, release, timeout, overflow, shutdown or client-gone
 Hold lifecycle. Injected reason labels exercise the actual immediate gate,
@@ -2157,7 +2165,11 @@ implemented here without adding PRO-2; ordinary Allow is only the normal
 completion control. Do not treat these tests as PRO-2 acceptance. Existing
 §20 native interactive shutdown gaps remain open.
 
-Validation in progress: wrapper-managed local Rust tests plus exact-head PR
-CI (Frontend, Backend, Backend no-pro, macOS, Windows, label). Formatting and
-`git diff --check` pass. Final results belong to the PR/thread; do not infer
-test success from this entry. No merge or release authorized.
+Local wrapper-managed test compilation was killed by the 2 GB orb memory
+limit (exit 137), before executing tests. Production Clippy `-D warnings`
+passes, including after the upgrade correction (19.87s); formatting and
+`git diff --check` pass. Initial-head CI passed 1387 library and 15 integration
+tests, but that does not validate the added upgrade regression. Final exact-head
+CI results (Frontend, Backend, Backend no-pro, macOS, Windows, label) belong
+to the PR/thread; do not infer test success from this entry. No merge or
+release authorized.
