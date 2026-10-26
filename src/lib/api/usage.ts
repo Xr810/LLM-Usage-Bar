@@ -56,7 +56,7 @@ export const usageApi = {
     });
   },
 
-  /** @deprecated Use query_usage_trend for the v7.19 contract. This legacy API remains unclamped. */
+  /** @deprecated Use query_usage_trend. Legacy Free dates silently clamp to 30 local days. */
   getUsageTrends: async (
     startDate?: number,
     endDate?: number,

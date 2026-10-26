@@ -8,6 +8,7 @@ use crate::model::{
     SystemProviderKeyUsageView, UnassignedUsageDiagnostics, UsageDashboardView, UsageEventPage,
     UsageProviderInput, UsageProviderView,
 };
+use crate::policy::{community_license_status, LicenseStatus};
 use crate::providers::{SystemProviderConnectionService, SystemProviderConnectionTestResult};
 use crate::quota::QuotaRefreshResult;
 use crate::secrets::SecretString;
@@ -18,6 +19,7 @@ use crate::usage::session::ProviderSessionSyncResult;
 use crate::usage::status::SubscriptionThresholds;
 use crate::usage::system_providers::{CHATGPT_SUBSCRIPTION_ID, CLAUDE_SUBSCRIPTION_ID};
 use crate::usage::tray_snapshot::TrayUsageSnapshot;
+use crate::usage::trend::{clamp_legacy_usage_query, usage_query_is_limited};
 use chrono::{DateTime, Local};
 use std::collections::{BTreeMap, BTreeSet};
 use tauri::{AppHandle, State};
@@ -324,7 +326,15 @@ pub async fn get_usage_dashboard(
     end_at: i64,
     agent_module_id: String,
 ) -> Result<UsageDashboardView, AppError> {
-    get_usage_dashboard_test_hook(&state, start_at, end_at, &agent_module_id).await
+    legacy_usage_dashboard_at(
+        &state,
+        start_at,
+        end_at,
+        &agent_module_id,
+        &community_license_status(),
+        Local::now(),
+    )
+    .await
 }
 
 #[tauri::command]
@@ -333,7 +343,13 @@ pub fn get_provider_usage_dashboard(
     start_at: i64,
     end_at: i64,
 ) -> Result<ProviderMonitoringDashboardView, AppError> {
-    get_provider_usage_dashboard_test_hook(&state, start_at, end_at)
+    legacy_provider_dashboard_at(
+        &state,
+        start_at,
+        end_at,
+        &community_license_status(),
+        Local::now(),
+    )
 }
 
 #[tauri::command]
@@ -342,7 +358,13 @@ pub fn get_model_usage_dashboard(
     start_at: i64,
     end_at: i64,
 ) -> Result<ModelUsageDashboardView, AppError> {
-    get_model_usage_dashboard_test_hook(&state, start_at, end_at)
+    legacy_model_dashboard_at(
+        &state,
+        start_at,
+        end_at,
+        &community_license_status(),
+        Local::now(),
+    )
 }
 
 #[tauri::command]
@@ -351,7 +373,143 @@ pub fn get_agent_usage_breakdown(
     start_at: i64,
     end_at: i64,
 ) -> Result<AgentUsageBreakdownView, AppError> {
-    get_agent_usage_breakdown_test_hook(&state, start_at, end_at)
+    legacy_agent_breakdown_at(
+        &state,
+        start_at,
+        end_at,
+        &community_license_status(),
+        Local::now(),
+    )
+}
+
+async fn legacy_usage_dashboard_at(
+    state: &AppState,
+    start_at: i64,
+    end_at: i64,
+    agent_module_id: &str,
+    license: &LicenseStatus,
+    now: DateTime<Local>,
+) -> Result<UsageDashboardView, AppError> {
+    require_active_agent(state, agent_module_id)?;
+    let range = clamp_legacy_usage_query(Some(start_at), Some(end_at), false, license, now)?;
+    let (start, end) = (range.start.unwrap(), range.end.unwrap());
+    let mut view = if range.empty {
+        UsageDashboardView {
+            agent_module_id: agent_module_id.into(),
+            start_at: start,
+            end_at: end,
+            product_groups: vec![],
+            warnings: vec![],
+            clamped_from: None,
+        }
+    } else {
+        get_usage_dashboard_test_hook(state, start, end, agent_module_id).await?
+    };
+    view.clamped_from = range.clamped_from;
+    if usage_query_is_limited(license) {
+        for product in &mut view.product_groups {
+            product.subscription_providers.clear();
+            product.metered_providers.clear();
+        }
+        view.warnings.push("PRO_REQUIRED".into());
+    }
+    Ok(view)
+}
+
+fn legacy_provider_dashboard_at(
+    state: &AppState,
+    start_at: i64,
+    end_at: i64,
+    license: &LicenseStatus,
+    now: DateTime<Local>,
+) -> Result<ProviderMonitoringDashboardView, AppError> {
+    let range = clamp_legacy_usage_query(Some(start_at), Some(end_at), false, license, now)?;
+    let (start, end) = (range.start.unwrap(), range.end.unwrap());
+    let mut view = if range.empty {
+        ProviderMonitoringDashboardView {
+            start_at: start,
+            end_at: end,
+            providers: vec![],
+            trend_granularity: crate::model::UsageTrendGranularity::Day,
+            trend_buckets: vec![],
+            warnings: vec![],
+            clamped_from: None,
+        }
+    } else {
+        get_provider_usage_dashboard_test_hook(state, start, end)?
+    };
+    view.clamped_from = range.clamped_from;
+    if usage_query_is_limited(license) {
+        view.providers.clear();
+        view.warnings.push("PRO_REQUIRED".into());
+    }
+    Ok(view)
+}
+
+fn legacy_model_dashboard_at(
+    state: &AppState,
+    start_at: i64,
+    end_at: i64,
+    license: &LicenseStatus,
+    now: DateTime<Local>,
+) -> Result<ModelUsageDashboardView, AppError> {
+    let range = clamp_legacy_usage_query(Some(start_at), Some(end_at), false, license, now)?;
+    let (start, end) = (range.start.unwrap(), range.end.unwrap());
+    let mut view = if range.empty {
+        ModelUsageDashboardView {
+            start_at: start,
+            end_at: end,
+            total_tokens: 0,
+            total_event_count: 0,
+            total_cost_usd: None,
+            product_groups: vec![],
+            models: vec![],
+            warnings: vec![],
+            clamped_from: None,
+        }
+    } else {
+        get_model_usage_dashboard_test_hook(state, start, end)?
+    };
+    view.clamped_from = range.clamped_from;
+    if usage_query_is_limited(license) {
+        view.models.clear();
+        for product in &mut view.product_groups {
+            product.models.clear();
+        }
+        view.warnings.push("PRO_REQUIRED".into());
+    }
+    Ok(view)
+}
+
+fn legacy_agent_breakdown_at(
+    state: &AppState,
+    start_at: i64,
+    end_at: i64,
+    license: &LicenseStatus,
+    now: DateTime<Local>,
+) -> Result<AgentUsageBreakdownView, AppError> {
+    let range = clamp_legacy_usage_query(Some(start_at), Some(end_at), false, license, now)?;
+    let (start, end) = (range.start.unwrap(), range.end.unwrap());
+    let mut view = if range.empty {
+        AgentUsageBreakdownView {
+            start_at: start,
+            end_at: end,
+            total_tokens: 0,
+            total_event_count: 0,
+            total_cost_usd: None,
+            agents: vec![],
+            warnings: vec![],
+            clamped_from: None,
+        }
+    } else {
+        get_agent_usage_breakdown_test_hook(state, start, end)?
+    };
+    view.clamped_from = range.clamped_from;
+    if usage_query_is_limited(license) {
+        view.agents.clear();
+        view.warnings.push("PRO_REQUIRED".into());
+    }
+    Ok(view)
 }
 
 #[tauri::command]
@@ -1643,6 +1801,184 @@ mod tests {
             quota_config: None,
             enabled: true,
         }
+    }
+
+    #[tokio::test]
+    async fn legacy_dashboards_clamp_keep_totals_redact_splits_and_preserve_exemptions() {
+        use crate::policy::{LicenseBuild, LicenseTier};
+        let db = Arc::new(Database::memory().unwrap());
+        db.save_usage_provider(&direct_provider("legacy-clamp"))
+            .unwrap();
+        let state = AppState::new_with_credential_store(
+            db.clone(),
+            Arc::new(MemoryCredentialStore::default()),
+        );
+        let now = Local.with_ymd_and_hms(2026, 10, 26, 12, 0, 0).unwrap();
+        let lower = Local
+            .with_ymd_and_hms(2026, 9, 27, 0, 0, 0)
+            .unwrap()
+            .timestamp();
+        let upper = Local
+            .with_ymd_and_hms(2026, 10, 27, 0, 0, 0)
+            .unwrap()
+            .timestamp();
+        for (id, at, agent, tokens) in [
+            ("old", lower - 1, "codex", 1000),
+            ("first", lower, "codex", 3),
+            ("other-agent", now.timestamp() - 42, "claude-code", 7),
+            ("future", upper, "codex", 13),
+        ] {
+            db.insert_usage_event(&UsageEvent {
+                event_id: id.into(),
+                source: TokenSource::Proxy,
+                provider_id: "legacy-clamp".into(),
+                agent_module_id: Some(agent.into()),
+                product_group_id: "product".into(),
+                occurred_at: at,
+                model: format!("model-{agent}"),
+                input_tokens: tokens,
+                output_tokens: 0,
+                cache_read_tokens: 0,
+                cache_creation_tokens: 0,
+                request_id: None,
+                session_id: None,
+                upstream_correlation_id: None,
+                input_cost_usd: None,
+                output_cost_usd: None,
+                cache_read_cost_usd: None,
+                cache_creation_cost_usd: None,
+                total_cost_usd: Some("0.25".into()),
+                cost_source: CostSource::Upstream,
+                pricing_origin: None,
+                legacy_request_id: None,
+                created_at: at,
+            })
+            .unwrap();
+        }
+        let free = community_license_status();
+        let (start, end) = (lower - 86400, upper + 86400);
+        let models = legacy_model_dashboard_at(&state, start, end, &free, now).unwrap();
+        assert_eq!((models.total_tokens, models.total_event_count), (10, 2));
+        assert_eq!(models.total_cost_usd.as_deref(), Some("0.5"));
+        assert_eq!(models.clamped_from.as_deref(), Some("2026-09-27"));
+        assert!(models.models.is_empty());
+        assert_eq!(models.product_groups[0].total_tokens, 10);
+        assert!(models.product_groups[0].models.is_empty());
+        assert!(models
+            .warnings
+            .iter()
+            .any(|warning| warning == "PRO_REQUIRED"));
+        let agents = legacy_agent_breakdown_at(&state, start, end, &free, now).unwrap();
+        assert_eq!((agents.total_tokens, agents.total_event_count), (10, 2));
+        assert!(agents.agents.is_empty());
+        assert!(agents
+            .warnings
+            .iter()
+            .any(|warning| warning == "PRO_REQUIRED"));
+        let providers = legacy_provider_dashboard_at(&state, start, end, &free, now).unwrap();
+        assert!(providers.providers.is_empty());
+        assert_eq!(
+            providers
+                .trend_buckets
+                .iter()
+                .map(|bucket| bucket.total_tokens)
+                .sum::<u64>(),
+            10
+        );
+        assert!(providers
+            .warnings
+            .iter()
+            .any(|warning| warning == "PRO_REQUIRED"));
+        let filtered = legacy_usage_dashboard_at(&state, start, end, "codex", &free, now)
+            .await
+            .unwrap();
+        let product = filtered
+            .product_groups
+            .iter()
+            .find(|product| product.product_group_id == "product")
+            .unwrap();
+        assert_eq!(product.input_tokens, 3);
+        assert!(filtered
+            .product_groups
+            .iter()
+            .all(|product| product.metered_providers.is_empty()
+                && product.subscription_providers.is_empty()));
+        assert!(filtered
+            .warnings
+            .iter()
+            .any(|warning| warning == "PRO_REQUIRED"));
+
+        for tier in [LicenseTier::Pro, LicenseTier::ProP3] {
+            let mut pro = free.clone();
+            pro.build = LicenseBuild::Official;
+            pro.tier = tier;
+            assert_eq!(
+                legacy_model_dashboard_at(&state, start, end, &pro, now).unwrap(),
+                get_model_usage_dashboard_test_hook(&state, start, end).unwrap()
+            );
+            assert_eq!(
+                legacy_agent_breakdown_at(&state, start, end, &pro, now).unwrap(),
+                get_agent_usage_breakdown_test_hook(&state, start, end).unwrap()
+            );
+            assert_eq!(
+                legacy_provider_dashboard_at(&state, start, end, &pro, now).unwrap(),
+                get_provider_usage_dashboard_test_hook(&state, start, end).unwrap()
+            );
+            assert_eq!(
+                legacy_usage_dashboard_at(&state, start, end, "codex", &pro, now)
+                    .await
+                    .unwrap(),
+                get_usage_dashboard_test_hook(&state, start, end, "codex")
+                    .await
+                    .unwrap()
+            );
+        }
+        // Lists keep historical/future rows. Heatmap and today-hourly readers
+        // deliberately use their existing unlicensed read path.
+        assert_eq!(
+            get_usage_events_test_hook(&state, "codex", None, start, end, 1, 20)
+                .unwrap()
+                .total,
+            3
+        );
+        assert_eq!(
+            get_provider_usage_events_test_hook(&state, "legacy-clamp", start, end, 1, 20)
+                .unwrap()
+                .total,
+            4
+        );
+        let (_, heatmap) =
+            crate::usage::aggregation::aggregate_enabled_provider_trend(&db, start, end).unwrap();
+        assert_eq!(
+            heatmap
+                .iter()
+                .map(|bucket| bucket.total_tokens)
+                .sum::<u64>(),
+            1023
+        );
+        let today = legacy_provider_dashboard_at(
+            &state,
+            now.timestamp() - 3600,
+            now.timestamp(),
+            &free,
+            now,
+        )
+        .unwrap();
+        assert_eq!(
+            today.trend_granularity,
+            crate::model::UsageTrendGranularity::Hour
+        );
+        assert_eq!(today.trend_buckets.len(), 1);
+        assert_eq!(today.trend_buckets[0].total_tokens, 7);
+        assert!(!serde_json::to_value(today)
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .contains_key("clampedFrom"));
+        let empty =
+            legacy_model_dashboard_at(&state, lower - 86400, lower - 1, &free, now).unwrap();
+        assert_eq!(empty.total_event_count, 0);
+        assert!(empty.product_groups.is_empty());
     }
 
     const COMMAND_QUOTA_CONFIG_SENTINEL: &str =

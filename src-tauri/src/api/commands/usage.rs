@@ -2,7 +2,11 @@
 
 use crate::app_state::AppState;
 use crate::error::AppError;
+use crate::policy::{community_license_status, LicenseStatus};
+use crate::store::Database;
+use crate::usage::trend::{clamp_legacy_usage_query, require_usage_split};
 use crate::usage::usage_stats::*;
+use chrono::{DateTime, Local};
 use rust_decimal::Decimal;
 use std::str::FromStr;
 use tauri::State;
@@ -40,13 +44,34 @@ pub fn get_usage_summary(
     provider_name: Option<String>,
     model: Option<String>,
 ) -> Result<UsageSummary, AppError> {
-    state.db.get_usage_summary(
+    legacy_usage_summary_at(
+        &state.db,
         start_date,
         end_date,
         app_type.as_deref(),
         provider_name.as_deref(),
         model.as_deref(),
+        &community_license_status(),
+        Local::now(),
     )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn legacy_usage_summary_at(
+    db: &Database,
+    start_date: Option<i64>,
+    end_date: Option<i64>,
+    app_type: Option<&str>,
+    provider_name: Option<&str>,
+    model: Option<&str>,
+    license: &LicenseStatus,
+    now: DateTime<Local>,
+) -> Result<UsageSummary, AppError> {
+    let range = clamp_legacy_usage_query(start_date, end_date, true, license, now)?;
+    let mut summary =
+        db.get_usage_summary(range.start, range.end, app_type, provider_name, model)?;
+    summary.clamped_from = range.clamped_from;
+    Ok(summary)
 }
 
 /// 获取按 app_type 拆分的使用量汇总
@@ -58,6 +83,8 @@ pub fn get_usage_summary_by_app(
     provider_name: Option<String>,
     model: Option<String>,
 ) -> Result<Vec<UsageSummaryByApp>, AppError> {
+    // app_type is the legacy agent/application breakdown, not an agent filter.
+    require_usage_split(&community_license_status())?;
     state.db.get_usage_summary_by_app(
         start_date,
         end_date,
@@ -89,7 +116,7 @@ pub fn query_usage_trend(
 }
 
 /// Deprecated: legacy trend API. Use `query_usage_trend` for the v7.19 contract.
-/// Kept unchanged: returns `Vec<DailyStats>` with string costs and no range clamp.
+/// Keeps `Vec<DailyStats>` and decimal-string costs; Free silently clamps dates.
 #[tauri::command]
 pub fn get_usage_trends(
     state: State<'_, AppState>,
@@ -99,13 +126,38 @@ pub fn get_usage_trends(
     provider_name: Option<String>,
     model: Option<String>,
 ) -> Result<Vec<DailyStats>, AppError> {
-    state.db.get_daily_trends(
+    legacy_usage_trends_at(
+        &state.db,
         start_date,
         end_date,
         app_type.as_deref(),
         provider_name.as_deref(),
         model.as_deref(),
+        &community_license_status(),
+        Local::now(),
     )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn legacy_usage_trends_at(
+    db: &Database,
+    start_date: Option<i64>,
+    end_date: Option<i64>,
+    app_type: Option<&str>,
+    provider_name: Option<&str>,
+    model: Option<&str>,
+    license: &LicenseStatus,
+    now: DateTime<Local>,
+) -> Result<Vec<DailyStats>, AppError> {
+    let range = clamp_legacy_usage_query(start_date, end_date, true, license, now)?;
+    // The store's equal/reversed-range fallback expands to 24h. Do not let an
+    // empty Free intersection expand backwards outside the permitted window.
+    if range.empty
+        || (crate::usage::trend::usage_query_is_limited(license) && range.start == range.end)
+    {
+        return Ok(Vec::new());
+    }
+    db.get_daily_trends(range.start, range.end, app_type, provider_name, model)
 }
 
 /// 获取 Provider 统计
@@ -118,6 +170,7 @@ pub fn get_provider_stats(
     provider_name: Option<String>,
     model: Option<String>,
 ) -> Result<Vec<ProviderStats>, AppError> {
+    require_usage_split(&community_license_status())?;
     state.db.get_provider_stats(
         start_date,
         end_date,
@@ -137,6 +190,7 @@ pub fn get_model_stats(
     provider_name: Option<String>,
     model: Option<String>,
 ) -> Result<Vec<ModelStats>, AppError> {
+    require_usage_split(&community_license_status())?;
     state.db.get_model_stats(
         start_date,
         end_date,
@@ -428,4 +482,194 @@ pub struct ModelPricingInfo {
     pub output_cost_per_million: String,
     pub cache_read_cost_per_million: Option<String>,
     pub cache_creation_cost_per_million: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::policy::{LicenseBuild, LicenseTier};
+    use chrono::TimeZone;
+
+    #[test]
+    fn legacy_summary_free_bounds_metadata_filters_and_pro_passthrough() {
+        let db = Database::memory().unwrap();
+        let now = Local.with_ymd_and_hms(2026, 10, 26, 12, 0, 0).unwrap();
+        let lower = Local
+            .with_ymd_and_hms(2026, 9, 27, 0, 0, 0)
+            .unwrap()
+            .timestamp();
+        let upper = Local
+            .with_ymd_and_hms(2026, 10, 27, 0, 0, 0)
+            .unwrap()
+            .timestamp();
+        for (id, at, tokens) in [
+            ("old", lower - 1, 100),
+            ("first", lower, 7),
+            ("last", upper - 1, 13),
+            ("future", upper, 1000),
+        ] {
+            db.conn
+                .lock()
+                .unwrap()
+                .execute(
+                    "INSERT INTO proxy_request_logs
+                 (request_id, provider_id, app_type, model, created_at, input_tokens,
+                  total_cost_usd, latency_ms, status_code)
+                 VALUES (?1, 'p', 'claude', 'm', ?2, ?3, '0.25', 0, 200)",
+                    rusqlite::params![id, at, tokens],
+                )
+                .unwrap();
+        }
+        let free = community_license_status();
+        for start in [None, Some(lower - 1), Some(lower), Some(lower + 1)] {
+            let summary = legacy_usage_summary_at(
+                &db,
+                start,
+                None,
+                Some("claude"),
+                None,
+                Some("m"),
+                &free,
+                now,
+            )
+            .unwrap();
+            let json = serde_json::to_value(&summary).unwrap();
+            assert_eq!(
+                summary.real_total_tokens,
+                if start == Some(lower + 1) { 13 } else { 20 }
+            );
+            assert_eq!(
+                json.get("clampedFrom").and_then(|v| v.as_str()),
+                if start.is_none() || start == Some(lower - 1) {
+                    Some("2026-09-27")
+                } else {
+                    None
+                }
+            );
+        }
+        // An upper-only clamp must not invent lower-bound metadata.
+        let end_only = legacy_usage_summary_at(
+            &db,
+            Some(lower),
+            Some(upper + 1),
+            None,
+            None,
+            None,
+            &free,
+            now,
+        )
+        .unwrap();
+        assert_eq!(end_only.total_requests, 2);
+        assert!(end_only.clamped_from.is_none());
+        // Request-log filters are exempt, including historical model filters.
+        let logs = db.get_request_logs(&LogFilters::default(), 0, 20).unwrap();
+        assert_eq!(logs.total, 4);
+        let logs = db
+            .get_request_logs(
+                &LogFilters {
+                    model: Some("m".into()),
+                    end_date: Some(lower - 1),
+                    ..Default::default()
+                },
+                0,
+                20,
+            )
+            .unwrap();
+        assert_eq!(logs.total, 1);
+        let mut pro = free.clone();
+        pro.build = LicenseBuild::Official;
+        pro.tier = LicenseTier::Pro;
+        let summary =
+            legacy_usage_summary_at(&db, None, None, None, None, None, &pro, now).unwrap();
+        assert_eq!(summary.total_requests, 4);
+        assert_eq!(summary.real_total_tokens, 1120);
+        assert!(!serde_json::to_value(summary)
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .contains_key("clampedFrom"));
+    }
+
+    #[test]
+    fn legacy_trends_keep_vec_costs_hourly_and_empty_intersections() {
+        let db = Database::memory().unwrap();
+        let now = Local.with_ymd_and_hms(2026, 10, 26, 12, 0, 0).unwrap();
+        let lower = Local
+            .with_ymd_and_hms(2026, 9, 27, 0, 0, 0)
+            .unwrap()
+            .timestamp();
+        for (id, at, tokens) in [("before", lower - 1, 100), ("inside", lower + 1, 7)] {
+            db.conn
+                .lock()
+                .unwrap()
+                .execute(
+                    "INSERT INTO proxy_request_logs
+                 (request_id, provider_id, app_type, model, created_at, input_tokens,
+                  total_cost_usd, latency_ms, status_code)
+                 VALUES (?1, 'p', 'claude', 'm', ?2, ?3, '0.25', 0, 200)",
+                    rusqlite::params![id, at, tokens],
+                )
+                .unwrap();
+        }
+        let free = community_license_status();
+        let daily = legacy_usage_trends_at(&db, None, None, None, None, None, &free, now).unwrap();
+        assert_eq!(daily.len(), 30);
+        assert!(daily[0].date.starts_with("2026-09-27"));
+        assert!(serde_json::to_value(&daily).unwrap().is_array());
+        assert_eq!(daily.iter().map(|day| day.total_tokens).sum::<u64>(), 7);
+        assert!(daily
+            .iter()
+            .all(|day| day.total_cost.parse::<f64>().is_ok()));
+        let hourly = legacy_usage_trends_at(
+            &db,
+            Some(now.timestamp() - 7200),
+            Some(now.timestamp()),
+            None,
+            None,
+            None,
+            &free,
+            now,
+        )
+        .unwrap();
+        assert_eq!(hourly.len(), 2);
+        for (start, end) in [
+            (lower - 86400, lower - 1),
+            (lower, lower),
+            (now.timestamp() + 172800, now.timestamp() + 259200),
+        ] {
+            assert!(legacy_usage_trends_at(
+                &db,
+                Some(start),
+                Some(end),
+                None,
+                None,
+                None,
+                &free,
+                now
+            )
+            .unwrap()
+            .is_empty());
+        }
+        let mut pro = free;
+        pro.build = LicenseBuild::Official;
+        pro.tier = LicenseTier::ProP3;
+        let actual = legacy_usage_trends_at(
+            &db,
+            Some(lower - 86400),
+            Some(lower - 1),
+            None,
+            None,
+            None,
+            &pro,
+            now,
+        )
+        .unwrap();
+        let old = db
+            .get_daily_trends(Some(lower - 86400), Some(lower - 1), None, None, None)
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(actual).unwrap(),
+            serde_json::to_value(old).unwrap()
+        );
+    }
 }
