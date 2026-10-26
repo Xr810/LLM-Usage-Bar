@@ -15,7 +15,13 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
-import { getUsageRangePresetLabel, resolveUsageRange } from "@/lib/usageRange";
+import {
+  FREE_PRESETS,
+  clampToFreeWindow,
+  getUsageRangePresetLabel,
+  isBeforeFreeWindow,
+  resolveUsageRange,
+} from "@/lib/usageRange";
 import { getLocaleFromLanguage } from "./format";
 import type { UsageRangePreset, UsageRangeSelection } from "@/types/usage";
 
@@ -27,6 +33,8 @@ interface UsageDateRangePickerProps {
   selection: UsageRangeSelection;
   onApply: (selection: UsageRangeSelection) => void;
   triggerLabel: string;
+  /** Restrict presets and the calendar to the last 30 local days. */
+  limited?: boolean;
 }
 
 /* ── helpers ── */
@@ -108,6 +116,7 @@ export function UsageDateRangePicker({
   selection,
   onApply,
   triggerLabel,
+  limited = false,
 }: UsageDateRangePickerProps) {
   const { t, i18n } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -227,16 +236,32 @@ export function UsageDateRangePicker({
 
   const handleApply = () => {
     setError(null);
-    if (draftStart >= draftEnd) {
+    const next = limited
+      ? clampToFreeWindow(
+          {
+            preset: "custom",
+            customStartDate: draftStart,
+            customEndDate: draftEnd,
+            liveEndTime: draftLiveEnd,
+          },
+          Date.now(),
+        )
+      : {
+          preset: "custom" as const,
+          customStartDate: draftStart,
+          customEndDate: draftEnd,
+          liveEndTime: draftLiveEnd,
+        };
+    if (
+      next.preset === "custom" &&
+      next.customStartDate != null &&
+      next.customEndDate != null &&
+      next.customStartDate >= next.customEndDate
+    ) {
       setError(t("usage.invalidTimeRangeOrder", "开始时间必须早于结束时间"));
       return;
     }
-    onApply({
-      preset: "custom",
-      customStartDate: draftStart,
-      customEndDate: draftEnd,
-      liveEndTime: draftLiveEnd,
-    });
+    onApply(next);
     setOpen(false);
   };
 
@@ -336,7 +361,7 @@ export function UsageDateRangePicker({
       >
         {/* Preset shortcuts */}
         <div className="flex flex-wrap gap-1.5 pb-2 border-b border-border/40">
-          {PRESETS.map((preset) => (
+          {(limited ? FREE_PRESETS : PRESETS).map((preset) => (
             <Button
               key={preset}
               type="button"
@@ -344,7 +369,8 @@ export function UsageDateRangePicker({
               variant={selection.preset === preset ? "default" : "outline"}
               className="h-7 px-2.5 text-xs"
               onClick={() => {
-                onApply({ preset });
+                const next = { preset };
+                onApply(limited ? clampToFreeWindow(next, Date.now()) : next);
                 setOpen(false);
               }}
             >
@@ -478,10 +504,12 @@ export function UsageDateRangePicker({
                 const isStart = isSameDay(day, startDay);
                 const isEnd = isSameDay(day, endDay);
                 const dayStart = startOfDay(day);
+                const blocked = limited && isBeforeFreeWindow(day, Date.now());
                 const inRange =
+                  !blocked &&
                   dayStart >= startOfDay(startDay) &&
                   dayStart <= startOfDay(endDay);
-                const isEndpoint = isStart || isEnd;
+                const isEndpoint = !blocked && (isStart || isEnd);
 
                 return (
                   <button
@@ -490,16 +518,24 @@ export function UsageDateRangePicker({
                     aria-label={day.toLocaleDateString(locale)}
                     aria-current={isToday ? "date" : undefined}
                     aria-pressed={isEndpoint}
+                    aria-disabled={blocked || undefined}
                     className={cn(
                       "relative h-7 rounded text-xs transition-colors",
-                      !isCurrentMonth && "text-muted-foreground/30",
-                      isCurrentMonth && !inRange && "hover:bg-muted",
+                      blocked && "cursor-not-allowed opacity-40",
+                      !blocked && !isCurrentMonth && "text-muted-foreground/30",
+                      !blocked &&
+                        isCurrentMonth &&
+                        !inRange &&
+                        "hover:bg-muted",
                       inRange && !isEndpoint && "bg-primary/10 text-primary",
                       isEndpoint &&
                         "bg-primary text-primary-foreground font-medium",
                       isToday && !isEndpoint && "ring-1 ring-primary/40",
                     )}
-                    onClick={() => handleDatePick(day)}
+                    onClick={() => {
+                      if (blocked) return;
+                      handleDatePick(day);
+                    }}
                   >
                     {day.getDate()}
                   </button>

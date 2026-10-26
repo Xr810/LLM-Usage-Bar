@@ -1,13 +1,8 @@
 /** C2 / C20 shell. Community builds never activate and never write license state. */
 
-export interface LicenseStatus {
-  tier: "free" | "pro" | "pro_p3";
-  expiresAt: string | null;
-  graceUntil: string | null;
-  build: "community" | "official";
-  features: string[];
-  emailMasked: string | null;
-}
+import type { LicenseStatus } from "@/types/license";
+
+export type { LicenseStatus };
 
 export interface CodedError {
   code: string;
@@ -17,11 +12,9 @@ export interface CodedError {
 export function communityLicenseStatus(): LicenseStatus {
   return {
     tier: "free",
-    expiresAt: null,
-    graceUntil: null,
     build: "community",
     features: [],
-    emailMasked: null,
+    uiFlags: { upsellEntry: false },
   };
 }
 

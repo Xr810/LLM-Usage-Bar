@@ -13,12 +13,17 @@ import { http, HttpResponse } from "msw";
 import { server } from "../../../tests/msw/server";
 import { usageDashboardApi } from "@/lib/api/usageDashboard";
 import { commandCalls } from "../../../tests/msw/tauriMocks";
+import { primeOfficialProLicense } from "../../../tests/licenseStatus";
 import { UsageDashboardPage } from "./UsageDashboardPage";
 
 function renderPage() {
   const client = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    defaultOptions: {
+      queries: { retry: false, refetchOnWindowFocus: false },
+      mutations: { retry: false },
+    },
   });
+  primeOfficialProLicense(client);
   return render(
     <QueryClientProvider client={client}>
       <UsageDashboardPage />
@@ -53,9 +58,11 @@ describe("UsageDashboardPage Provider-only contract", () => {
         await screen.findByRole("button", { name: "Why this colour?" }),
       );
       await user.click(screen.getByRole("button", { name: "Custom range" }));
+      await screen.findByRole("dialog");
       const endTime = document.querySelectorAll(
         'input[type="time"]',
       )[1] as HTMLInputElement;
+      expect(endTime).toBeInstanceOf(HTMLInputElement);
       fireEvent.change(endTime, { target: { value: "10:30" } });
       server.use(
         http.post(
@@ -186,11 +193,12 @@ describe("UsageDashboardPage Provider-only contract", () => {
         commandCalls("get_provider_usage_dashboard").length,
       ).toBeGreaterThan(3),
     );
+    const beforeYear = commandCalls("get_provider_usage_dashboard").length;
     await user.click(screen.getByRole("button", { name: "1 year" }));
     await waitFor(() =>
       expect(
         commandCalls("get_provider_usage_dashboard").length,
-      ).toBeGreaterThan(4),
+      ).toBeGreaterThan(beforeYear),
     );
     expect(screen.getByTestId("usage-trend-range")).toHaveTextContent("1 year");
 
@@ -200,7 +208,13 @@ describe("UsageDashboardPage Provider-only contract", () => {
       expect(Number(args.endAt)).toBeGreaterThan(Number(args.startAt));
     }
 
-    const oneYearCall = commandCalls("get_provider_usage_dashboard").at(-1);
+    const oneYearCall = commandCalls("get_provider_usage_dashboard")
+      .slice(beforeYear)
+      .find((call) => {
+        const args = call[1] ?? {};
+        const duration = Number(args.endAt) - Number(args.startAt);
+        return duration > 364 * 24 * 60 * 60 && duration < 366 * 24 * 60 * 60;
+      });
     const oneYearArgs = oneYearCall?.[1] ?? {};
     const oneYearDuration =
       Number(oneYearArgs.endAt) - Number(oneYearArgs.startAt);

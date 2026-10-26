@@ -14,6 +14,11 @@ import { SegmentedControl } from "@/components/common/SegmentedControl";
 import { UsageDateRangePicker } from "@/components/usage/UsageDateRangePicker";
 import { useUsageEventBridge } from "@/hooks/useUsageEventBridge";
 import {
+  communityFollowsFreeLimits,
+  isDashboardLimited,
+  useLicenseStatus,
+} from "@/hooks/useLicenseStatus";
+import {
   useAgentUsageBreakdown,
   useModelUsageDashboard,
   useProviderUsageDashboard,
@@ -23,6 +28,7 @@ import {
 import { useProviderUsageActivity } from "@/lib/query/providerUsageActivity";
 import { useSettingsQuery } from "@/lib/query";
 import {
+  clampToFreeWindow,
   getUsageRangePresetLabel,
   resolveProviderActivityRange,
   resolveUsageRange,
@@ -71,10 +77,25 @@ export function UsageDashboardPage({
     return () => globalThis.clearInterval(interval);
   }, [advanceRangeClock]);
 
+  const license = useLicenseStatus();
+  const limited = isDashboardLimited(
+    license.isPending || license.isError ? undefined : license.data,
+    communityFollowsFreeLimits(),
+  );
   const [dimension, setDimension] = useState<UsageDimension>("provider");
-  const [selection, setSelection] = useState<UsageRangeSelection>({
+  const activeDimension: UsageDimension = limited ? "provider" : dimension;
+  const [selectionState, setSelectionState] = useState<UsageRangeSelection>({
     preset: "30d",
   });
+  const selection = limited
+    ? clampToFreeWindow(selectionState, rangeClockMs)
+    : selectionState;
+  const setSelection = useCallback(
+    (next: UsageRangeSelection) => {
+      setSelectionState(limited ? clampToFreeWindow(next, rangeClockMs) : next);
+    },
+    [limited, rangeClockMs],
+  );
   const [warnings, setWarnings] = useState<string[]>([]);
   const [errors, setErrors] = useState<string[]>([]);
   const range = useMemo(
@@ -103,12 +124,12 @@ export function UsageDashboardPage({
   const modelDashboard = useModelUsageDashboard(
     range.startDate,
     range.endDate,
-    dimension === "model",
+    activeDimension === "model",
   );
   const agentBreakdown = useAgentUsageBreakdown(
     range.startDate,
     range.endDate,
-    dimension === "agent",
+    activeDimension === "agent",
   );
   const activity = useProviderUsageActivity(
     activityRange.startDate,
@@ -152,40 +173,42 @@ export function UsageDashboardPage({
   };
 
   const breakdownQuery =
-    dimension === "model"
+    activeDimension === "model"
       ? modelDashboard
-      : dimension === "agent"
+      : activeDimension === "agent"
         ? agentBreakdown
         : null;
   const renderedErrors = [
-    ...(dimension === "provider" && dashboard.error
+    ...(activeDimension === "provider" && dashboard.error
       ? [errorText(dashboard.error)]
       : []),
-    ...(dimension === "provider" && activity.error
+    ...(activeDimension === "provider" && activity.error
       ? [errorText(activity.error)]
       : []),
-    ...(dimension === "model" && modelDashboard.error
+    ...(activeDimension === "model" && modelDashboard.error
       ? [errorText(modelDashboard.error)]
       : []),
-    ...(dimension === "agent" && agentBreakdown.error
+    ...(activeDimension === "agent" && agentBreakdown.error
       ? [errorText(agentBreakdown.error)]
       : []),
     ...errors,
   ].filter((message, index, messages) => messages.indexOf(message) === index);
 
-  const presetOptions = (["today", "7d", "30d", "1y"] as const).map(
-    (preset) => ({
-      value: preset as RangePreset,
-      label:
-        preset === "today"
-          ? t("usageDashboard.today", { defaultValue: "Today" })
-          : preset === "7d"
-            ? t("usageDashboard.sevenDays", { defaultValue: "7 days" })
-            : preset === "30d"
-              ? t("usageDashboard.thirtyDays", { defaultValue: "30 days" })
-              : t("usageDashboard.oneYear", { defaultValue: "1 year" }),
-    }),
-  );
+  const presetOptions = (
+    limited
+      ? (["today", "7d", "30d"] as const)
+      : (["today", "7d", "30d", "1y"] as const)
+  ).map((preset) => ({
+    value: preset as RangePreset,
+    label:
+      preset === "today"
+        ? t("usageDashboard.today", { defaultValue: "Today" })
+        : preset === "7d"
+          ? t("usageDashboard.sevenDays", { defaultValue: "7 days" })
+          : preset === "30d"
+            ? t("usageDashboard.thirtyDays", { defaultValue: "30 days" })
+            : t("usageDashboard.oneYear", { defaultValue: "1 year" }),
+  }));
 
   const rangeControls = (
     <div
@@ -196,14 +219,18 @@ export function UsageDashboardPage({
       <SegmentedControl
         options={presetOptions}
         value={
-          selection.preset === "custom"
-            ? ("" as RangePreset)
-            : (selection.preset as RangePreset)
+          selection.preset === "today" ||
+          selection.preset === "7d" ||
+          selection.preset === "30d" ||
+          (!limited && selection.preset === "1y")
+            ? selection.preset
+            : ("" as RangePreset)
         }
         onChange={(preset) => setSelection({ preset })}
       />
       <UsageDateRangePicker
         selection={selection}
+        limited={limited}
         onApply={setSelection}
         triggerLabel={t("usageDashboard.customRange", {
           defaultValue: "Custom range",
@@ -213,7 +240,7 @@ export function UsageDashboardPage({
   );
 
   const heading =
-    dimension === "model"
+    activeDimension === "model"
       ? {
           title: t("usageBreakdown.modelTitle", { defaultValue: "By model" }),
           description: t("usageBreakdown.modelDescription", {
@@ -221,7 +248,7 @@ export function UsageDashboardPage({
               "Roll usage up to a subscription or API plan, then drill into the models it served.",
           }),
         }
-      : dimension === "agent"
+      : activeDimension === "agent"
         ? {
             title: t("usageBreakdown.agentTitle", { defaultValue: "By agent" }),
             description: t("usageBreakdown.agentDescription", {
@@ -264,7 +291,13 @@ export function UsageDashboardPage({
   );
 
   return (
-    <div className="usage-dashboard-shell space-y-5 pb-8">
+    <div
+      className="usage-dashboard-shell space-y-5 pb-8"
+      data-license-state={
+        license.isPending ? "pending" : license.isError ? "error" : "ready"
+      }
+      data-dashboard-limited={limited ? "true" : "false"}
+    >
       <div className="usage-dashboard-toolbar flex flex-wrap items-start justify-between gap-x-4 gap-y-3">
         <div className="min-w-0">
           <h2 className="text-lg font-semibold tracking-tight">
@@ -274,28 +307,33 @@ export function UsageDashboardPage({
             {heading.description}
           </p>
         </div>
-        <Tabs
-          value={dimension}
-          onValueChange={(value) => setDimension(value as UsageDimension)}
-        >
-          <TabsList
-            aria-label={t("usageBreakdown.dimensionNavigation", {
-              defaultValue: "Usage breakdown",
-            })}
+        {/* Dimension tabs only. Request-log provider/model filters stay. */}
+        {limited ? null : (
+          <Tabs
+            value={dimension}
+            onValueChange={(value) => setDimension(value as UsageDimension)}
           >
-            {dimensionOptions.map((option) => (
-              <TabsTrigger key={option.value} value={option.value}>
-                {option.label}
-              </TabsTrigger>
-            ))}
-          </TabsList>
-        </Tabs>
+            <TabsList
+              aria-label={t("usageBreakdown.dimensionNavigation", {
+                defaultValue: "Usage breakdown",
+              })}
+            >
+              {dimensionOptions.map((option) => (
+                <TabsTrigger key={option.value} value={option.value}>
+                  {option.label}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </Tabs>
+        )}
       </div>
 
       {rangeControls}
 
       {[
-        ...(dimension === "provider" ? (dashboard.data?.warnings ?? []) : []),
+        ...(activeDimension === "provider"
+          ? (dashboard.data?.warnings ?? [])
+          : []),
         ...warnings,
       ].map((warning) => (
         <Alert key={warning}>
@@ -321,7 +359,7 @@ export function UsageDashboardPage({
       ))}
 
       {(breakdownQuery ?? dashboard).isLoading &&
-        (dimension === "provider" ? (
+        (activeDimension === "provider" ? (
           <div className="space-y-4" aria-hidden="true">
             <div className="grid gap-4 min-[900px]:grid-cols-[300px_minmax(0,1fr)]">
               <div className="h-[28rem] animate-pulse rounded-xl bg-muted/60" />
@@ -335,8 +373,8 @@ export function UsageDashboardPage({
         ) : (
           breakdownSkeleton
         ))}
-      <RangeContent key={dimension}>
-        {dimension === "provider" ? (
+      <RangeContent key={activeDimension}>
+        {activeDimension === "provider" ? (
           projection ? (
             <ProviderUsagePage
               projection={projection}
@@ -357,7 +395,7 @@ export function UsageDashboardPage({
               remainingThresholds={remainingThresholds}
             />
           ) : null
-        ) : dimension === "model" ? (
+        ) : activeDimension === "model" ? (
           modelDashboard.data ? (
             <ModelUsagePage
               dashboard={modelDashboard.data}
