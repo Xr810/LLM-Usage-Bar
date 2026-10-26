@@ -5,12 +5,16 @@
 
 mod gate;
 mod license;
+mod lifecycle;
 mod receipt;
+
+pub use crate::store::{activation_retryable, RetentionStore};
+pub use lifecycle::{LicenseLifecycle, LicensePublisher};
 
 pub use gate::{AllowAllGate, BillingIdentity, Decision, PolicyGate, ReqMeta, Usage};
 pub use license::{
     activate_community_license, community_license_status, deactivate_community_license,
-    CommunityLicenseProvider, LicenseBuild, LicenseChangedPayload, LicenseProvider, LicenseStatus,
-    LicenseTier, LicenseUiFlags, LICENSE_CHANGED_EVENT, LICENSE_TOKEN_MAX_BYTES,
+    CommunityLicenseProvider, LicenseBuild, LicenseChangedPayload, LicenseProvider, LicenseState,
+    LicenseStatus, LicenseTier, LicenseUiFlags, LICENSE_CHANGED_EVENT, LICENSE_TOKEN_MAX_BYTES,
 };
 pub use receipt::{CommunityReceiptExporter, ExportFilter, ExportRange, ReceiptExporter};

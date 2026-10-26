@@ -60,10 +60,13 @@ impl LicenseUiFlags {
 #[serde(rename_all = "camelCase")]
 pub struct LicenseStatus {
     pub tier: LicenseTier,
+    pub state: LicenseState,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub grace_until: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grace_days: Option<u32>,
     pub build: LicenseBuild,
     pub features: Vec<String>,
     pub ui_flags: LicenseUiFlags,
@@ -76,14 +79,24 @@ impl LicenseStatus {
     pub fn community_free() -> Self {
         Self {
             tier: LicenseTier::Free,
+            state: LicenseState::Free,
             expires_at: None,
             grace_until: None,
+            grace_days: None,
             build: LicenseBuild::Community,
             features: Vec::new(),
             ui_flags: LicenseUiFlags::for_build(LicenseBuild::Community),
             email_masked: None,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LicenseState {
+    Active,
+    Grace,
+    Free,
 }
 
 /// License 状态来源（契约 C1）。
@@ -97,11 +110,12 @@ pub trait LicenseProvider: Send + Sync {
     /// 社区实现返回 [`crate::error::CODE_COMMUNITY_BUILD`]，并且不保存 token。
     ///
     /// Official activation must persist any higher retention via
-    /// [`crate::Database::raise_retention_high_water_days`] BEFORE the new tier
-    /// takes effect. On persistence failure, keep the current tier, log the
-    /// error, return a retryable frontend error, and retry on next startup or
-    /// activation. Never interrupt the proxy or existing features. This is the
-    /// BE-31/PRO-1 implementation contract, not community activation wiring.
+    /// [`super::RetentionStore::set_pending_target`] BEFORE the new tier
+    /// takes effect. This uses BE-30's raise-only operation and durably records
+    /// a failed target for the core's tier-independent startup retry. On error,
+    /// keep the current tier and propagate LICENSE_ACTIVATION_RETRYABLE unchanged.
+    /// Never interrupt proxy traffic or existing features. Token verification
+    /// and tier publication remain the injected provider's responsibility.
     fn activate(&self, token: &str) -> Result<LicenseStatus, AppError>;
 
     /// 停用当前 License。社区实现返回 [`crate::error::CODE_COMMUNITY_BUILD`]，不改状态。
@@ -171,7 +185,7 @@ mod tests {
         assert_eq!(status, LicenseStatus::community_free());
         assert_eq!(
             serde_json::to_string(&status).expect("json"),
-            r#"{"tier":"free","build":"community","features":[],"uiFlags":{"upsellEntry":false}}"#
+            r#"{"tier":"free","state":"free","build":"community","features":[],"uiFlags":{"upsellEntry":false}}"#
         );
         let payload: LicenseChangedPayload = status;
         assert_eq!(payload.tier, LicenseTier::Free);
@@ -182,8 +196,10 @@ mod tests {
     fn official_status_fields_use_camel_case() {
         let status = LicenseStatus {
             tier: LicenseTier::ProP3,
+            state: LicenseState::Active,
             expires_at: Some("2026-12-01T00:00:00Z".to_string()),
             grace_until: Some("2026-12-15T00:00:00Z".to_string()),
+            grace_days: Some(14),
             build: LicenseBuild::Official,
             features: vec!["heatmap_12m".to_string()],
             ui_flags: LicenseUiFlags::for_build(LicenseBuild::Official),
@@ -194,8 +210,10 @@ mod tests {
             serde_json::to_value(&status).expect("json"),
             serde_json::json!({
                 "tier": "pro_p3",
+                "state": "active",
                 "expiresAt": "2026-12-01T00:00:00Z",
                 "graceUntil": "2026-12-15T00:00:00Z",
+                "graceDays": 14,
                 "build": "official",
                 "features": ["heatmap_12m"],
                 "uiFlags": { "upsellEntry": upsell_entry },
@@ -207,6 +225,11 @@ mod tests {
                 .expect("round trip"),
             status
         );
+        let mut legacy = serde_json::to_value(&status).unwrap();
+        legacy.as_object_mut().unwrap().remove("graceDays");
+        let decoded = serde_json::from_value::<LicenseStatus>(legacy.clone()).unwrap();
+        assert_eq!(decoded.grace_days, None);
+        assert_eq!(serde_json::to_value(decoded).unwrap(), legacy);
     }
 
     #[test]

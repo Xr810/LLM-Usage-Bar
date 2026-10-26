@@ -2015,6 +2015,70 @@ Follow-up verification (same offline Rust wrapper/environment as above):
 Native interaction and §20 shutdown acceptance gaps remain unchanged;
 no release or merge authorized.
 
+#### 2026-10-26 BE-31: public license lifecycle (C20 v1.6, final event option 1)
+
+Baseline: `a9b53743795e29f8c32be36decbcdcfbf1daa502`. Public core owns
+`LicenseLifecycle`; commands and tray share its effective license provider.
+The getter remains `get_license_status`. Activation/deactivation dispatch to
+the injected provider; community returns `COMMUNITY_BUILD` and emits nothing.
+Token verification and publishing an activated tier remain the
+build provider's responsibility; this change contains no official verifier.
+
+Only `license-changed` is emitted, with full `LicenseStatus`, now including
+`state: active | grace | free`. The superseded `license_state_changed` event
+is not implemented. Core computes a 14-day grace from `expiresAt`; grace keeps
+the paid tier, and the grace deadline changes effective tier to Free without
+deleting data or changing proxy admission. Startup reconciliation and an
+application-managed hourly task compare tier/state/expiry/grace against the
+persisted `license_last_emitted_state`. A mutex plus transactional CAS selects
+the delivery order; failed delivery leaves the acknowledgement unchanged, not
+the license. The emitter runs callbacks outside database and transition locks,
+then rechecks the persisted acknowledgement in a short CAS transaction.
+Delivery is at-least-once across emit/commit failures, not exactly-once transport.
+
+Providers call public `RetentionStore::set_pending_target(days)` before
+publishing a higher tier. Pending target and BE-30's raise-only high-water write
+share a settings transaction; a savepoint preserves pending on a recoverable
+high-water failure. Success clears pending atomically. Errors retain the full
+AppError envelope with code `LICENSE_ACTIVATION_RETRYABLE` and details
+`{stage: "pending_record" | "retention_high_water", retryable: true}`. If the
+pending record cannot commit, activation fails and the user must reactivate.
+Core retries pending at database startup, regardless of tier/build, before
+pruning. Failed retry does not abort startup; pruning also refuses to run while
+a pending target exists. No license token is persisted by this mechanism.
+
+Validation: local `pnpm rust -- fmt --manifest-path src-tauri/Cargo.toml --check`,
+`git diff --check`, `pnpm typecheck`, and `pnpm rust -- clippy --locked
+--manifest-path src-tauri/Cargo.toml -- -D warnings` passed (clippy: 3m43s).
+The targeted `pnpm rust -- test --locked
+--manifest-path src-tauri/Cargo.toml --lib policy:: -- --nocapture` build and
+the corresponding `check --tests` both exited 137 under the 2 GB orb limit,
+even with single-job/no-debug/no-incremental settings; no test execution is
+claimed. Final-head PR CI must execute the new Tauri event, grace boundary,
+concurrent CAS, retry and disk-reopen regressions.
+Native interactive acceptance and existing §20 shutdown gaps remain open.
+No frontend `src/**`, private code, dependencies or release configuration changed.
+
+BE-31 callback-lock follow-up: old PR head `f6ba4e26` passed all six checks.
+Backend job `121662187522` in run `40348604698` completed successfully at
+15:52:04Z after 30m1s; dependency installation occupied 22m14s, including
+`Fetched 23.4 MB in 19min 33s (20.0 kB/s)`. The library tests took 48.70s
+(1391 passed, zero failures, two ignored). This was not a hung test job,
+and nothing was cancelled. Independently, invoking the publisher under the
+database mutex/transaction and transition mutex could deadlock a synchronous
+listener that read the database or reentered the lifecycle.
+
+The follow-up shares a FIFO dispatcher between wrappers of the same database
+handle. Commands serialize provider mutation and enqueue snapshots, then drop
+their locks. One emitter drains the queue without holding locks across the
+callback; reentrant changes enqueue and return rather than recursively emit.
+Acknowledgement CAS refuses to overwrite a marker changed or deleted during
+delivery. New bounded regressions call database reads/writes and lifecycle
+status/activate/deactivate from actual publisher callbacks; the concurrent
+reconciliation test also has a failing timeout rather than an unbounded join.
+No local Rust compile/test/clippy rerun: fmt and diff checks only, with runtime
+validation delegated to the new-head CI jobs (not to another agent or orb).
+
 #### 2026-10-26 BE-30: build injections and retention high-water (plan v1.1)
 
 Baseline: `380ca25a5c14477a4d3b6927d9967ab722aae478`. Community startup now
@@ -2198,3 +2262,29 @@ focused Rust test is being attempted; actual execution results and the six
 exact-head CI checks are recorded in the PR/thread, not inferred here.
 Existing §20 native interactive shutdown acceptance gaps remain open.
 No merge or release authorized.
+
+#### 2026-10-26 BE-31 architect review: grace duration and fresh delivery
+
+PR #114 review follow-up starts from `f7713cde4cec6b3f87f28c7d2765375a349767c5`,
+with `949012ce` already merged. `LicenseStatus.grace_days` is optional (wire
+`graceDays`, omitted when absent); lifecycle derives grace from expiry plus
+`min(grace_days.unwrap_or(14), 14)` days, ignoring provider `graceUntil`.
+Queued delivery re-reads its originating provider instead of retaining a status
+snapshot. The queue carries a clock callable, not a timestamp; send and post-send
+validation each sample it afresh (production uses `Utc::now`). `reconcile()` no
+longer accepts a caller timestamp. After the publisher returns, the ack
+transaction re-reads the provider and only writes if the fresh lifecycle key
+equals the sent key and the stored acknowledgement has not changed.
+Regressions cover 7/30/default/zero days and exact free boundaries, reentrant
+queue changes across two providers sharing one database, grace expiring while
+queued, and callback changes to expiry/tier/grace or time that must leave no
+stale acknowledgement and emit the new state exactly once on the next round.
+The existing acknowledgement-CAS regression covers replacement and deletion
+during send, preservation of the competing value, and next-round resend.
+
+Local wrapper `fmt --check` and `git diff --check` pass. Full-crate focused
+policy test compilation was killed by the 2 GB orb limit (137); production
+Clippy passed. The first pushed revision passed all six checks, but that does
+not validate the subsequent clock/provider-ack correction. Final exact-head
+CI and local check results belong to the PR/thread, not inferred here.
+No frontend/private code, merge, or release. §20 native shutdown gaps remain.

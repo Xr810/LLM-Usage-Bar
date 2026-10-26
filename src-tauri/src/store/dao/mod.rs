@@ -7,6 +7,7 @@ pub mod agent_provider_bindings;
 pub(crate) mod binding_credentials;
 pub mod dashboard_modules;
 pub(crate) mod hourly_rollup;
+pub(crate) mod license_retention;
 pub(crate) mod provider_api_keys;
 pub(crate) mod provider_credentials;
 pub(crate) mod provider_key_usage;

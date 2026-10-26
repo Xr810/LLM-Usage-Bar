@@ -87,6 +87,16 @@ impl Database {
         // Never erase history on downgrade. Query visibility follows the current
         // license independently; a failed persistence operation aborts pruning.
         let conn = lock_conn!(self.conn);
+        let pending: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM settings WHERE key='retention_pending_target')",
+            [],
+            |row| row.get(0),
+        )?;
+        if pending {
+            return Err(super::license_retention::activation_retryable(
+                "retention_high_water",
+            ));
+        }
         policy.hourly_days = Self::raise_retention_high_water_on_conn(&conn, policy.hourly_days)?;
         let cutoff = compute_local_midnight_cutoff(Local::now(), policy.detail_days)?;
         // Repair pre-v1.7 cached Hold counts once, before pruning their details.
