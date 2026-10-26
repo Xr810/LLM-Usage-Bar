@@ -34,7 +34,7 @@ export function TrayUsagePopoverView({
 }: TrayUsagePopoverViewProps) {
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage || i18n.language || "en";
-  const edition = useLubEdition(snapshot?.buildType);
+  const edition = useLubEdition();
   const model = useMemo(
     () => (snapshot ? mapSnapshotToPanel(snapshot, onOpenSettings) : null),
     [onOpenSettings, snapshot],

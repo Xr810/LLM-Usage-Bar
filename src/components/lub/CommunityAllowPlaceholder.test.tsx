@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { beforeAll, describe, expect, it, vi } from "vitest";
@@ -10,7 +10,7 @@ import zh from "@/i18n/locales/zh.json";
 import { formatUsd } from "@/components/tray-usage/trayUsagePresentation";
 import { AboutSection } from "@/components/settings/AboutSection";
 import { server } from "../../../tests/msw/server";
-import { tauriInvoke } from "../../../tests/msw/tauriMocks";
+import { emitTauriEvent, tauriInvoke } from "../../../tests/msw/tauriMocks";
 import { CommunityAllowPlaceholder } from "./CommunityAllowPlaceholder";
 import {
   communityChromeVisible,
@@ -210,6 +210,7 @@ describe("community build detection", () => {
       resolveLubBuild({
         license: {
           tier: "free",
+          state: "free",
           build: "community",
           features: [],
           uiFlags: { upsellEntry: false },
@@ -227,12 +228,6 @@ describe("community build detection", () => {
     );
     await expect(detectLubBuild()).resolves.toEqual({
       build: "community",
-      upsellEntry: false,
-    });
-    await expect(
-      detectLubBuild({ snapshotBuildType: "official" }),
-    ).resolves.toEqual({
-      build: "official",
       upsellEntry: false,
     });
 
@@ -255,11 +250,12 @@ describe("community build detection", () => {
     expect(badge).not.toMatch(/<a[\s>/]|href/);
   });
 
-  it("reads get_license_status and prefers snapshot buildType", async () => {
+  it("trusts get_license_status.build and uiFlags", async () => {
     server.use(
       http.post("http://tauri.local/get_license_status", () =>
         HttpResponse.json({
           tier: "free",
+          state: "free",
           build: "official",
           features: [],
           uiFlags: { upsellEntry: true },
@@ -270,24 +266,94 @@ describe("community build detection", () => {
       build: "official",
       upsellEntry: true,
     });
-    await expect(
-      detectLubBuild({ snapshotBuildType: "community" }),
-    ).resolves.toEqual({
-      build: "community",
-      upsellEntry: true,
-    });
     expect(
       resolveLubBuild({
-        snapshotBuildType: "community",
         pending: true,
         license: {
           tier: "pro",
+          state: "active",
           build: "official",
           features: [],
           uiFlags: { upsellEntry: false },
         },
       }),
     ).toBe("community");
+  });
+
+  it("treats an unknown or missing build as community", async () => {
+    expect(
+      resolveLubBuild({
+        license: {
+          tier: "pro",
+          state: "active",
+          build: "internal" as "official",
+          features: [],
+          uiFlags: { upsellEntry: true },
+        },
+      }),
+    ).toBe("community");
+
+    server.use(
+      http.post("http://tauri.local/get_license_status", () =>
+        HttpResponse.json({
+          tier: "pro",
+          state: "active",
+          build: "nightly",
+          features: [],
+          uiFlags: { upsellEntry: true },
+        }),
+      ),
+    );
+    await expect(detectLubBuild()).resolves.toEqual({
+      build: "community",
+      upsellEntry: false,
+    });
+
+    server.use(
+      http.post("http://tauri.local/get_license_status", () =>
+        HttpResponse.json({
+          tier: "pro",
+          state: "active",
+          features: [],
+          uiFlags: { upsellEntry: true },
+        }),
+      ),
+    );
+    await expect(detectLubBuild()).resolves.toEqual({
+      build: "community",
+      upsellEntry: false,
+    });
+  });
+
+  it("drops the community badge when license-changed reports official", async () => {
+    let build: "community" | "official" = "community";
+    server.use(
+      http.post("http://tauri.local/get_license_status", () =>
+        HttpResponse.json({
+          tier: build === "official" ? "pro" : "free",
+          state: build === "official" ? "active" : "free",
+          build,
+          features: [],
+          uiFlags: { upsellEntry: false },
+        }),
+      ),
+    );
+    render(<AboutSection />);
+    expect(await screen.findByText(zh.lub.community.badge)).toBeInTheDocument();
+    build = "official";
+    act(() => {
+      emitTauriEvent("license-changed", {
+        tier: "pro",
+        state: "active",
+        graceUntil: "2026-12-15T00:00:00Z",
+        build: "official",
+        features: [],
+        uiFlags: { upsellEntry: true },
+      });
+    });
+    await waitFor(() => {
+      expect(screen.queryByText(zh.lub.community.badge)).toBeNull();
+    });
   });
 
   it("keeps the community badge until license status says official", async () => {

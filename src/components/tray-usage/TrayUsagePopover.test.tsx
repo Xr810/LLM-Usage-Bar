@@ -470,7 +470,9 @@ describe("TrayUsagePopover Provider-only UI", () => {
     const official = structuredClone(over);
     official.buildType = "official";
     rerender(<TrayUsagePopoverView {...props({ snapshot: official })} />);
-    expect(document.querySelector("[data-slot='community-allow']")).toBeNull();
+    expect(
+      document.querySelector("[data-slot='community-allow']"),
+    ).not.toBeNull();
 
     const underTheLevel = structuredClone(over);
     underTheLevel.apiBudget.level = "ok";
@@ -486,7 +488,18 @@ describe("TrayUsagePopover Provider-only UI", () => {
     expect(screen.queryByText("Over cap")).toBeNull();
   });
 
-  it("shows the Free vs Pro line only when upsellEntry is on", () => {
+  it("shows the Free vs Pro line only when upsellEntry is on", async () => {
+    server.use(
+      http.post("http://tauri.local/get_license_status", () =>
+        HttpResponse.json({
+          tier: "free",
+          state: "free",
+          build: "official",
+          features: [],
+          uiFlags: { upsellEntry: false },
+        }),
+      ),
+    );
     const over = structuredClone(snapshot);
     over.apiBudget.level = "reached";
     over.apiBudget.mode = "shared";
@@ -498,6 +511,11 @@ describe("TrayUsagePopover Provider-only UI", () => {
         {...props({ snapshot: over, upsellEntry: false })}
       />,
     );
+    await waitFor(() => {
+      expect(
+        document.querySelector("[data-slot='community-allow']"),
+      ).toBeNull();
+    });
     expect(
       screen.queryByRole("button", { name: "Compare Free vs Pro" }),
     ).toBeNull();
