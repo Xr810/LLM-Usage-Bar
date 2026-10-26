@@ -451,9 +451,15 @@ describe("TrayUsagePopover Provider-only UI", () => {
     expect(
       screen.queryByRole("button", { name: "Stop all API spend" }),
     ).toBeNull();
-    expect(screen.queryByRole("button", { name: /Allow/ })).toBeNull();
+    const allow = screen.getAllByRole("button", { name: /Allow/ });
+    expect(allow).toHaveLength(2);
+    for (const button of allow) {
+      expect(button).toHaveAttribute("aria-disabled", "true");
+    }
     expect(screen.queryByText("Paused")).toBeNull();
-    expect(document.querySelector("[data-slot='community-allow']")).toBeNull();
+    expect(
+      document.querySelector("[data-slot='community-allow']"),
+    ).not.toBeNull();
     expect(document.querySelector(".lub-meter-overflow")).toBeNull();
 
     const underTheLevel = structuredClone(over);

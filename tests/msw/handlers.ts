@@ -1130,6 +1130,13 @@ const agentUsageBreakdownFixture = (startAt: number, endAt: number) => {
 };
 
 export const handlers = [
+  http.post(`${TAURI_ENDPOINT}/get_license_status`, () =>
+    HttpResponse.json({
+      tier: "free",
+      build: "community",
+      features: [],
+    }),
+  ),
   http.post(`${TAURI_ENDPOINT}/get_tray_usage_snapshot`, () =>
     success(trayUsageSnapshotFixture),
   ),

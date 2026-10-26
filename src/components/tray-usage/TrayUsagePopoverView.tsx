@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
-import { detectLubBuild } from "@/components/lub/detectLubBuild";
+import { useLubEdition } from "@/components/lub/detectLubBuild";
 import { TrayPanelV5 } from "@/components/lub/TrayPanelV5";
 import { mapSnapshotToPanel } from "@/components/lub/mapSnapshotToPanel";
 import type { TrayUsageSnapshot } from "@/types/trayUsage";
@@ -31,6 +31,7 @@ export function TrayUsagePopoverView({
 }: TrayUsagePopoverViewProps) {
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage || i18n.language || "en";
+  const edition = useLubEdition(snapshot?.buildType);
   const model = useMemo(
     () => (snapshot ? mapSnapshotToPanel(snapshot, onOpenSettings) : null),
     [onOpenSettings, snapshot],
@@ -52,7 +53,8 @@ export function TrayUsagePopoverView({
         <TrayPanelV5
           model={model}
           locale={locale}
-          build={detectLubBuild()}
+          build={edition.build}
+          upsellEntry={edition.upsellEntry}
           refreshing={refreshing}
           showUtilityActions
           onOpenTrends={onOpenDetails}

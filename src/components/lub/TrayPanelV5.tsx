@@ -25,11 +25,14 @@ interface TrayPanelV5Props {
   openDayTip?: boolean;
   scrollMaxPx?: number;
   refreshError?: string | null;
-  /** C2 build. Defaults to official until get_license_state is wired. */
+  /**
+   * C2 build. Fixture renders may omit it. Live detection stays community
+   * while `get_license_status` is loading or has failed.
+   */
   build?: LubBuild;
   /**
-   * C2 tier and upsell_entry. Accepted so callers can pass them through.
-   * Neither one shows community chrome or a compare link.
+   * C2 tier and BE-1b `uiFlags.upsellEntry`. Neither one shows community
+   * chrome. A community build does not show a purchase entry.
    */
   tier?: LubTier;
   upsellEntry?: boolean;
@@ -231,7 +234,7 @@ export function TrayPanelV5({
           <StatusBanner
             capUsd={model.dailyCapUsd}
             locale={locale}
-            proCompareEnabled={proCompareEnabled}
+            proCompareEnabled={build !== "community" && proCompareEnabled}
           />
           {community ? <CommunityAllowPlaceholder locale={locale} /> : null}
         </>

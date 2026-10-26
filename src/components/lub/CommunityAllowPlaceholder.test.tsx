@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { http, HttpResponse } from "msw";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import i18n from "i18next";
 import { toast } from "sonner";
@@ -8,9 +9,15 @@ import en from "@/i18n/locales/en.json";
 import zh from "@/i18n/locales/zh.json";
 import { formatUsd } from "@/components/tray-usage/trayUsagePresentation";
 import { AboutSection } from "@/components/settings/AboutSection";
+import { server } from "../../../tests/msw/server";
 import { tauriInvoke } from "../../../tests/msw/tauriMocks";
 import { CommunityAllowPlaceholder } from "./CommunityAllowPlaceholder";
-import { communityChromeVisible, detectLubBuild } from "./detectLubBuild";
+import {
+  communityChromeVisible,
+  detectLubBuild,
+  readUpsellEntry,
+  resolveLubBuild,
+} from "./detectLubBuild";
 import { presentLubCommandError } from "./lubErrors";
 import { displayUsd } from "./money";
 import { designPanelFixture } from "./panelFixture";
@@ -191,13 +198,39 @@ describe("community allow placeholder", () => {
 });
 
 describe("community build detection", () => {
-  it("stays official because the snapshot has no build field and no compile flag", () => {
-    expect(detectLubBuild()).toBe("official");
-    type SnapshotHasBuild = "build" extends keyof TrayUsageSnapshot
+  it("stays community while license status is loading, missing, or failed", async () => {
+    expect(resolveLubBuild({ pending: true })).toBe("community");
+    expect(resolveLubBuild({ license: null })).toBe("community");
+    expect(resolveLubBuild({ license: { tier: "free", features: [] } })).toBe(
+      "community",
+    );
+    expect(readUpsellEntry(undefined)).toBe(false);
+    expect(readUpsellEntry(null)).toBe(false);
+    expect(readUpsellEntry({ upsellEntry: null })).toBe(false);
+    expect(readUpsellEntry({})).toBe(false);
+    expect(readUpsellEntry({ upsellEntry: true })).toBe(true);
+
+    server.use(
+      http.post("http://tauri.local/get_license_status", () =>
+        HttpResponse.json({ message: "missing" }, { status: 500 }),
+      ),
+    );
+    await expect(detectLubBuild()).resolves.toEqual({
+      build: "community",
+      upsellEntry: false,
+    });
+    await expect(
+      detectLubBuild({ snapshotBuildType: "official" }),
+    ).resolves.toEqual({
+      build: "official",
+      upsellEntry: false,
+    });
+
+    type SnapshotHasBuildType = "buildType" extends keyof TrayUsageSnapshot
       ? true
       : false;
-    const snapshotHasBuild: SnapshotHasBuild = false;
-    expect(snapshotHasBuild).toBe(false);
+    const snapshotHasBuildType: SnapshotHasBuildType = true;
+    expect(snapshotHasBuildType).toBe(true);
 
     const placeholder = readFileSync(
       "src/components/lub/CommunityAllowPlaceholder.tsx",
@@ -210,6 +243,78 @@ describe("community build detection", () => {
       "utf8",
     );
     expect(badge).not.toMatch(/<a[\s>/]|href/);
+  });
+
+  it("reads get_license_status and prefers snapshot buildType", async () => {
+    server.use(
+      http.post("http://tauri.local/get_license_status", () =>
+        HttpResponse.json({
+          tier: "free",
+          build: "official",
+          features: [],
+          uiFlags: { upsellEntry: true },
+        }),
+      ),
+    );
+    await expect(detectLubBuild()).resolves.toEqual({
+      build: "official",
+      upsellEntry: true,
+    });
+    await expect(
+      detectLubBuild({ snapshotBuildType: "community" }),
+    ).resolves.toEqual({
+      build: "community",
+      upsellEntry: true,
+    });
+    expect(
+      resolveLubBuild({
+        snapshotBuildType: "community",
+        pending: true,
+        license: { tier: "pro", build: "official", features: [] },
+      }),
+    ).toBe("community");
+  });
+
+  it("keeps the community badge until license status says official", async () => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    server.use(
+      http.post("http://tauri.local/get_license_status", async () => {
+        await gate;
+        return HttpResponse.json({
+          tier: "free",
+          build: "official",
+          features: [],
+        });
+      }),
+    );
+    render(<AboutSection />);
+    expect(screen.getByText(zh.lub.community.badge)).toBeInTheDocument();
+    expect(screen.queryByRole("link")).toBeNull();
+    release();
+    await waitFor(() => {
+      expect(screen.queryByText(zh.lub.community.badge)).toBeNull();
+    });
+  });
+
+  it("hides the compare link on a community build even when the switch is on", () => {
+    renderPanel({ build: "community", upsellEntry: true });
+    expect(screen.queryByText(zh.lub.overcap.compare_link)).toBeNull();
+    const { unmount } = render(
+      <TrayPanelV5
+        model={overFixture()}
+        locale="zh-CN"
+        build="community"
+        proCompareEnabled
+        upsellEntry
+        onOpenTrends={() => undefined}
+        onOpenSettings={() => undefined}
+      />,
+    );
+    expect(screen.queryByText(zh.lub.overcap.compare_link)).toBeNull();
+    unmount();
   });
 });
 

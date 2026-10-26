@@ -683,6 +683,17 @@
       "failure_policy": "故障策略",
       "clients_export": "客户与导出",
       "about": "关于",
+      "nav": {
+        "license": "许可证"
+      },
+      "license": {
+        "title": "许可证",
+        "build": "构建",
+        "tier": "方案",
+        "activate": "激活",
+        "deactivate": "停用",
+        "communityNote": "社区构建没有购买入口。激活和停用只在官方构建里可用。"
+      },
       "what_does_the_line_on": "进度条上的竖线 | 是什么？",
       "dark_line_spending_stops_here": "<b>深色竖线：到这里会自动停。</b>画在托盘的合计进度条上，代表 API Key 花费的日上限。",
       "light_line_monthly_cap_drawn": "<b>浅色竖线：月上限。</b>画在合计下方的月度细条上。",

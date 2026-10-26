@@ -1,14 +1,117 @@
+import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import type { LubBuild, LubTier } from "./panelModel";
 
 /**
- * C2 `get_license_state.build` is the license edition. The tray snapshot does
- * not carry it, and this tree has no community compile switch: Cargo features
- * are only `test-hooks`, Vite has no edition env, and `tauri.conf.json` names
- * one product. Reading a new snapshot field would change the backend contract.
- * Production stays official until C2 is wired. Tests pass `build` in directly.
+ * `get_license_status` (src-tauri/src/api/commands/license.rs).
+ * camelCase matches the serde rename. `uiFlags` is BE-1b and may be absent.
  */
-export function detectLubBuild(): LubBuild {
-  return "official";
+export interface LicenseStatus {
+  tier: "free" | "pro" | "pro_p3";
+  expiresAt?: string | null;
+  graceUntil?: string | null;
+  build?: LubBuild | null;
+  features?: string[] | null;
+  emailMasked?: string | null;
+  uiFlags?: {
+    upsellEntry?: boolean | null;
+  } | null;
+}
+
+export interface LubEdition {
+  build: LubBuild;
+  /** BE-1b. False when `uiFlags.upsellEntry` is missing or not true. */
+  upsellEntry: boolean;
+}
+
+const BUILDS = new Set<string>(["community", "official"]);
+
+export function readLubBuild(
+  value: string | null | undefined,
+): LubBuild | null {
+  return value != null && BUILDS.has(value) ? (value as LubBuild) : null;
+}
+
+/** Missing, null, or any value other than true stays false. */
+export function readUpsellEntry(flags: LicenseStatus["uiFlags"]): boolean {
+  return flags?.upsellEntry === true;
+}
+
+export interface DetectLubBuildInput {
+  snapshotBuildType?: string | null;
+  license?: LicenseStatus | null;
+  /** True while `get_license_status` has not settled, including after a failure. */
+  pending?: boolean;
+}
+
+/**
+ * Snapshot `buildType` wins when it is `community` or `official`.
+ * Otherwise the build is `get_license_status.build`. Loading, a failed
+ * command, or a missing build stays `community`, so a community install
+ * never shows a purchase entry.
+ */
+export function resolveLubBuild(input: DetectLubBuildInput = {}): LubBuild {
+  const fromSnapshot = readLubBuild(input.snapshotBuildType);
+  if (fromSnapshot) return fromSnapshot;
+  if (input.pending || input.license == null) return "community";
+  return readLubBuild(input.license.build) ?? "community";
+}
+
+/** Reads `get_license_status`. Does not change the command contract. */
+export async function detectLubBuild(input?: {
+  snapshotBuildType?: string | null;
+}): Promise<LubEdition> {
+  const fromSnapshot = readLubBuild(input?.snapshotBuildType);
+  try {
+    const license = await invoke<LicenseStatus | null>("get_license_status");
+    return {
+      build:
+        fromSnapshot ??
+        resolveLubBuild({ license, pending: false, snapshotBuildType: null }),
+      upsellEntry: readUpsellEntry(license?.uiFlags),
+    };
+  } catch {
+    return {
+      build: fromSnapshot ?? "community",
+      upsellEntry: false,
+    };
+  }
+}
+
+/**
+ * Community until `get_license_status` settles, unless the snapshot already
+ * carries `buildType`. `upsellEntry` stays false until the payload says true.
+ */
+export function useLubEdition(snapshotBuildType?: string | null): LubEdition {
+  const [edition, setEdition] = useState<LubEdition>({
+    build: readLubBuild(snapshotBuildType) ?? "community",
+    upsellEntry: false,
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+    setEdition({
+      build: readLubBuild(snapshotBuildType) ?? "community",
+      upsellEntry: false,
+    });
+    detectLubBuild({ snapshotBuildType })
+      .then((next) => {
+        if (!cancelled) setEdition(next);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setEdition({
+            build: readLubBuild(snapshotBuildType) ?? "community",
+            upsellEntry: false,
+          });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [snapshotBuildType]);
+
+  return edition;
 }
 
 /**
