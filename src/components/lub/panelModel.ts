@@ -8,6 +8,9 @@ export type LubPanelState = "ok" | "warn" | "over" | "capped" | "killed";
 /** Official and community builds both alert only when the budget level is `reached`. */
 export type LubBuild = "official" | "community";
 
+/** C2 tier. Not on the tray snapshot. Does not gate community chrome. */
+export type LubTier = "free" | "pro" | "pro_p3";
+
 export type LubSubtitleKey =
   "api_key" | "plan_hour_window" | "plan_codex" | "not_proxied";
 

@@ -613,6 +613,21 @@
     "input": "輸入 token",
     "output": "輸出 token"
   },
+  "lub": {
+    "settings": {
+      "nav": {
+        "license": "授權"
+      },
+      "license": {
+        "title": "授權",
+        "build": "組建",
+        "tier": "方案",
+        "activate": "啟用",
+        "deactivate": "停用",
+        "communityNote": "社群組建沒有購買入口。啟用和停用只在官方組建裡可用。"
+      }
+    }
+  },
   "native": {
     "notify": {
       "budgetReachedTitle": "已達每日 API 預算",

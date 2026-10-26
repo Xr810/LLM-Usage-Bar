@@ -455,12 +455,16 @@ describe("TrayUsagePopover Provider-only UI", () => {
     expect(
       screen.queryByRole("button", { name: "Stop all API spend" }),
     ).toBeNull();
-    expect(screen.queryByRole("button", { name: /Allow/ })).toBeNull();
+    const allow = screen.getAllByRole("button", { name: /Allow/ });
+    expect(allow).toHaveLength(2);
+    for (const button of allow) {
+      expect(button).toHaveAttribute("aria-disabled", "true");
+    }
     expect(screen.queryByText("Paused")).toBeNull();
     const slot = document.querySelector("[data-slot='community-allow']");
     expect(slot).not.toBeNull();
-    expect(slot?.childElementCount).toBe(0);
-    expect(slot?.querySelector("a, button, [href]")).toBeNull();
+    expect(slot?.querySelectorAll("button")).toHaveLength(2);
+    expect(slot?.querySelector("a, [href]")).toBeNull();
     expect(document.querySelector(".lub-meter-overflow")).toBeNull();
 
     const official = structuredClone(over);
@@ -535,7 +539,8 @@ describe("TrayUsagePopover Provider-only UI", () => {
     ).toBeNull();
     const slot = document.querySelector("[data-slot='community-allow']");
     expect(slot).not.toBeNull();
-    expect(slot?.querySelector("a, button, [href]")).toBeNull();
+    expect(slot?.querySelectorAll("button")).toHaveLength(2);
+    expect(slot?.querySelector("a, [href]")).toBeNull();
     unmount();
 
     server.use(

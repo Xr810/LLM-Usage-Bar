@@ -529,6 +529,55 @@ body.lub-gallery {
   gap: var(--lub-sp-4);
 }
 
+.lub-foot-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--lub-sp-2);
+  margin-left: auto;
+}
+
+.lub-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: var(--lub-track);
+  color: var(--lub-ink-2);
+  font-size: var(--lub-fs-cap);
+  font-weight: 600;
+  line-height: var(--lub-lh-cap);
+  white-space: nowrap;
+}
+
+.lub-allow-placeholder,
+.lub-allow-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--lub-sp-2);
+}
+
+.lub-allow-button {
+  min-height: 32px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--lub-hairline);
+  border-radius: 8px;
+  background: var(--lub-group);
+  color: var(--lub-ink-2);
+  font: inherit;
+  font-size: var(--lub-fs-sub);
+  font-weight: 500;
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.lub-allow-note {
+  margin: 0;
+  color: var(--lub-ink-2);
+  font-size: var(--lub-fs-cap);
+  line-height: var(--lub-lh-cap);
+}
+
 .lub-utility {
   display: inline-flex;
   gap: var(--lub-sp-1);
