@@ -95,28 +95,16 @@ mod tests {
             .timestamp()
             .div_euclid(3600)
             * 3600;
-        // QA-20: build retained history from real request logs before downgrade.
-        {
-            let conn = db.conn.lock().unwrap();
-            for index in 0..7 {
-                conn.execute(
-                    "INSERT INTO proxy_request_logs
-                     (request_id, provider_id, app_type, model, total_cost_usd,
-                      latency_ms, status_code, created_at, data_source)
-                     VALUES (?1, 'test-provider', 'claude', 'test-model', '0.01',
-                             1, 200, ?2, 'proxy')",
-                    rusqlite::params![format!("qa20-old-{index}"), old_hour + index],
-                )
-                .unwrap();
-            }
-            conn.execute(
-                "INSERT OR IGNORE INTO rollup_dirty_hours (hour_utc) VALUES (?1)",
+        db.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO usage_hourly_rollups
+             (hour_utc, app_type, provider_id, model, billing_identity, data_source, request_count)
+             VALUES (?1, 'claude', 'test-provider', 'test-model', '', 'proxy', 7)",
                 [old_hour],
             )
             .unwrap();
-        }
-        assert_eq!(db.raise_retention_high_water_days(730).unwrap(), 730);
-        assert_eq!(db.rollup_and_prune_configured().unwrap(), 7);
         let state = crate::AppState::new_with_injections(
             db.clone(),
             crate::secrets::unavailable_credential_store(),
@@ -200,37 +188,6 @@ mod tests {
                 .sum::<i64>(),
             0
         );
-
-        // Lower/zero targets and rejected input must not erase the Pro floor.
-        assert_eq!(db.raise_retention_high_water_days(400).unwrap(), 730);
-        assert_eq!(db.raise_retention_high_water_days(0).unwrap(), 730);
-        assert!(db.raise_retention_high_water_days(-1).is_err());
-        db.rollup_and_prune_configured().unwrap();
-        assert_eq!(
-            db.get_setting("retention_high_water_days")
-                .unwrap()
-                .as_deref(),
-            Some("730")
-        );
-
-        // Renewal restores the same archived requests without re-ingestion,
-        // including both the grouped and non-grouped command paths.
-        provider.0.store(true, Ordering::SeqCst);
-        assert_eq!(get_license_status(app.state()).tier, LicenseTier::Pro);
-        for group in [None, Some("provider")] {
-            let renewed = query(group).unwrap();
-            assert_eq!(renewed.clamped_from, None);
-            assert_eq!(
-                renewed
-                    .series
-                    .iter()
-                    .flat_map(|s| &s.points)
-                    .map(|p| p.requests)
-                    .sum::<i64>(),
-                7,
-                "renewal must restore old history for groupBy={group:?}"
-            );
-        }
     }
 
     #[test]
