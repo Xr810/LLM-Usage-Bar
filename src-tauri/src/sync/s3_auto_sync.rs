@@ -41,6 +41,8 @@ pub(crate) fn is_auto_sync_suppressed() -> bool {
 }
 
 pub fn should_trigger_for_table(table: &str) -> bool {
+    // Same sqlite trigger as WebDAV. C18 `failureModes` stay in settings.json;
+    // see `webdav_auto_sync::should_trigger_for_table`.
     let normalized = table.trim().to_ascii_lowercase();
     matches!(
         normalized.as_str(),

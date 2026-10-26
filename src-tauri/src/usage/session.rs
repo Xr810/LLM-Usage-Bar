@@ -1,4 +1,5 @@
 use crate::error::AppError;
+// BE-22's read-only list lives in `session_list` so ingestion stays unchanged.
 use crate::model::{session_agent_module_id, TokenSource};
 use crate::store::Database;
 use crate::usage::ingestion::{LegacyLogInput, UsageIngestionInput, UsageIngestionService};

@@ -41,6 +41,11 @@ pub(crate) fn is_auto_sync_suppressed() -> bool {
 }
 
 pub fn should_trigger_for_table(table: &str) -> bool {
+    // The sqlite `settings` table is included in the WebDAV database snapshot.
+    // C18 UI prefs, and `failureModes` in particular, live only in device-local
+    // `settings.json`. Do not copy them into this table: another device must
+    // not be able to change this machine's failure policy. S3 uses the same
+    // table trigger and the same snapshot.
     let normalized = table.trim().to_ascii_lowercase();
     matches!(
         normalized.as_str(),
