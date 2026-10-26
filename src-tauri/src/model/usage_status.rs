@@ -18,6 +18,28 @@ pub enum UsageStatus {
     Unknown,
 }
 
+/// Daily budget level shared by classification and C10 tray views.
+///
+/// `reached` means today's known cost is at or over the daily budget. That
+/// is the only firing level. `warn` stays so older payloads still decode;
+/// emitters must not produce it, and alerts must not treat it as reached.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum BudgetLevel {
+    #[default]
+    Ok,
+    #[deprecated(note = "ADR v7.11: warn is not a budget level; use ok or reached")]
+    Warn,
+    Reached,
+}
+
+impl BudgetLevel {
+    /// True only for `reached`. Deprecated `warn` does not fire an alert.
+    pub fn is_reached(self) -> bool {
+        matches!(self, Self::Reached)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum PaceBasis {
@@ -35,6 +57,8 @@ pub enum PaceBasis {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceClassification {
     pub status: UsageStatus,
+    /// Daily budget level. Subscription classifications stay `ok`.
+    pub level: BudgetLevel,
     pub used_percent: Option<String>,
     pub remaining_percent: Option<String>,
     pub consumed_percent: Option<String>,
@@ -100,12 +124,31 @@ mod tests {
         }
         assert_eq!(UsageStatus::default(), UsageStatus::Unknown);
         assert_eq!(PaceBasis::default(), PaceBasis::Static);
+        assert_eq!(BudgetLevel::default(), BudgetLevel::Ok);
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn budget_level_wire_keeps_deprecated_warn_but_only_reached_fires() {
+        for (value, wire) in [
+            (BudgetLevel::Ok, "ok"),
+            (BudgetLevel::Warn, "warn"),
+            (BudgetLevel::Reached, "reached"),
+        ] {
+            let json = serde_json::Value::String(wire.into());
+            assert_eq!(serde_json::to_value(value).unwrap(), json);
+            assert_eq!(serde_json::from_value::<BudgetLevel>(json).unwrap(), value);
+        }
+        assert!(!BudgetLevel::Ok.is_reached());
+        assert!(!BudgetLevel::Warn.is_reached());
+        assert!(BudgetLevel::Reached.is_reached());
     }
 
     #[test]
     fn classification_formats_units_without_losing_absence_or_overflow() {
         let mut classification = SourceClassification {
             status: UsageStatus::Yellow,
+            level: BudgetLevel::Ok,
             used_percent: None,
             remaining_percent: None,
             consumed_percent: None,

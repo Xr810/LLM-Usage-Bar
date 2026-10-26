@@ -1,9 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
-import {
-  communityLicenseStatus,
-  type LicenseStatus,
-} from "@/components/lub/licenseMock";
+import { communityLicenseStatus } from "@/components/lub/licenseMock";
+import type { LicenseStatus } from "@/types/license";
 
 // Decided (Q-RX-4): community follows Free limits.
 export const COMMUNITY_FOLLOWS_FREE_LIMITS = true;

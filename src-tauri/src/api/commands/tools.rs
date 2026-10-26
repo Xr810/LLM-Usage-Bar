@@ -1,4 +1,5 @@
 //! Tauri transport adapters. Tool probing and lifecycle policy live in cli.
+//! BE-17 takeover commands (C3 / C22) live in `takeover.rs`.
 pub use crate::cli::{
     ToolInstallation, ToolInstallationReport, ToolVersion, WslShellPreferenceInput,
 };

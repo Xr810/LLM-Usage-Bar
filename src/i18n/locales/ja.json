@@ -82,6 +82,7 @@
     "customPricingRowSummary": "入力 {{input}} · 出力 {{output}} · キャッシュ読取 {{cacheRead}} · キャッシュ書込 {{cacheWrite}}（100万トークンあたり）",
     "customPricingNoOfficialRate": "公式料金なし",
     "customPricingInheritedRate": "公式料金",
+    "cacheEstimatedAtInputPrice": "入力料金で推定（${{input}}）",
     "customPricingModelId": "モデル ID",
     "customPricingModelIdHint": "claude-sonnet-5 のようなファミリー ID を入力すると、日付付きのバリアントも対象になります。",
     "customPricingInputLabel": "入力（USD / 100万トークン）",
@@ -616,6 +617,37 @@
     "license": {
       "community_build": "コミュニティビルド",
       "official_build_required": "公式ビルドが必要です"
+    },
+    "onboard": {
+      "terms_risk": "プロバイダの利用規約に抵触する可能性があり、アカウントが制限されることがあります。判断はご自身で行ってください。",
+      "claude_subscription_via_proxy": "プロキシ経由の Claude サブスクリプション"
+    },
+    "settings": {
+      "nav": {
+        "license": "ライセンス"
+      },
+      "license": {
+        "title": "ライセンス",
+        "build": "ビルド",
+        "tier": "プラン",
+        "activate": "有効化",
+        "deactivate": "無効化",
+        "communityNote": "コミュニティビルドに購入導線はありません。有効化と無効化は公式ビルドでのみ使えます。"
+      }
+    }
+  },
+  "native": {
+    "notify": {
+      "budgetReachedTitle": "1日のAPI予算に到達しました",
+      "budgetReachedBody": "本日のAPI利用額は1日の予算 ${{budget}} のうち ${{spent}} です（{{percent}}%）。",
+      "budgetReachedScopedBody": "{{scope}} は1日の予算 ${{budget}} のうち ${{spent}} を使用しました（{{percent}}%）。"
+    },
+    "tray": {
+      "showMain": "メインウィンドウを開く",
+      "openWebsite": "公式サイトを開く",
+      "noProviders": "(プロバイダーなし)",
+      "lightweightMode": "軽量モード",
+      "quit": "終了"
     }
   }
 }

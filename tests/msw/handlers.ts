@@ -9,6 +9,7 @@ import type {
   UsageProviderInput,
   UsageProviderView,
 } from "@/types/usageDashboard";
+import type { LicenseStatus } from "@/types/license";
 import type {
   ApiBudgetConfig,
   MainWindowDestination,
@@ -17,6 +18,8 @@ import type {
 const TAURI_ENDPOINT = "http://tauri.local";
 
 export const trayUsageSnapshotFixture: TrayUsageSnapshot = {
+  buildType: "community",
+  sources: [],
   status: "green",
   generatedAt: 1_000,
   lastSuccessAt: 1_000,
@@ -1129,19 +1132,24 @@ const agentUsageBreakdownFixture = (startAt: number, endAt: number) => {
   };
 };
 
-/** Default C2 fixture. Existing dashboard tests keep the unrestricted Pro path. */
-export const officialProLicenseStatus = {
-  tier: "pro" as const,
-  expiresAt: null,
-  graceUntil: null,
-  build: "official" as const,
-  features: [] as string[],
-  emailMasked: null,
+/** Unrestricted official Pro. Dashboard tests prime this so they do not flash the Free gate. */
+export const officialProLicenseStatus: LicenseStatus = {
+  tier: "pro",
+  build: "official",
+  features: [],
+  uiFlags: { upsellEntry: false },
+};
+
+export const communityLicenseStatus: LicenseStatus = {
+  tier: "free",
+  build: "community",
+  features: [],
+  uiFlags: { upsellEntry: false },
 };
 
 export const handlers = [
   http.post(`${TAURI_ENDPOINT}/get_license_status`, () =>
-    success(officialProLicenseStatus),
+    success(communityLicenseStatus),
   ),
   http.post(`${TAURI_ENDPOINT}/get_tray_usage_snapshot`, () =>
     success(trayUsageSnapshotFixture),

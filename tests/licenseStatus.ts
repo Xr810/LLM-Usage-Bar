@@ -1,5 +1,5 @@
 import type { QueryClient } from "@tanstack/react-query";
-import type { LicenseStatus } from "@/components/lub/licenseMock";
+import type { LicenseStatus } from "@/types/license";
 import { licenseStatusQueryKey } from "@/hooks/useLicenseStatus";
 import { officialProLicenseStatus } from "./msw/handlers";
 
@@ -9,11 +9,9 @@ export function licenseStatus(
 ): LicenseStatus {
   return {
     tier,
-    expiresAt: null,
-    graceUntil: null,
     build,
     features: [],
-    emailMasked: null,
+    uiFlags: { upsellEntry: false },
   };
 }
 

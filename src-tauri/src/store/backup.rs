@@ -1671,7 +1671,7 @@ impl Database {
 
         // Periodic maintenance is always enabled, regardless of auto-backup settings.
         let mut reclaimed_rows = 0u64;
-        match self.rollup_and_prune(30) {
+        match self.rollup_and_prune_configured() {
             Ok(deleted) => {
                 reclaimed_rows += deleted;
             }
@@ -4040,7 +4040,7 @@ mod tests {
 
         let db = Database::memory()?;
         let now = chrono::Utc::now().timestamp();
-        let old_ts = now - 40 * 86400;
+        let old_ts = now - 120 * 86400;
 
         {
             let conn = crate::store::lock_conn!(db.conn);

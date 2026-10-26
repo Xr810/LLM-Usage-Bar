@@ -8,7 +8,8 @@ import en from "@/i18n/locales/en.json";
 import zh from "@/i18n/locales/zh.json";
 import { LicenseSettings } from "./LicenseSettings";
 import { activateLicense, communityLicenseStatus } from "./licenseMock";
-import { proCompareEnabled } from "./proCompare";
+/** Matches the shell: batch 1 does not render the compare link. */
+const proCompareEnabled = false;
 
 beforeAll(async () => {
   i18n.addResourceBundle("en", "translation", { lub: en.lub }, true, true);
@@ -25,7 +26,11 @@ describe("community license shell", () => {
     });
     expect(communityLicenseStatus()).toEqual(before);
     expect(before.tier).toBe("free");
-    expect(before.emailMasked).toBeNull();
+    expect(before.build).toBe("community");
+    expect(before.uiFlags.upsellEntry).toBe(false);
+    expect(before.expiresAt).toBeUndefined();
+    expect(before.graceUntil).toBeUndefined();
+    expect(before.emailMasked).toBeUndefined();
   });
 
   it("keeps the community-build label after activate and hides the compare link in batch 1", async () => {

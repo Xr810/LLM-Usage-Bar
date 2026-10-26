@@ -88,6 +88,7 @@ fn wire_api_from_input(raw: &str) -> Result<WireApi, AppError> {
     match raw {
         "responses" => Ok(WireApi::Responses),
         "chat_completions" => Ok(WireApi::ChatCompletions),
+        "messages" => Ok(WireApi::Messages),
         other => Err(AppError::InvalidInput(format!("非法 wire_api: {other}"))),
     }
 }

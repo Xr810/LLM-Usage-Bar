@@ -275,6 +275,8 @@ fn all_public_usage_commands_are_registered_once() {
         "list_usage_providers",
         "save_usage_provider",
         "set_usage_provider_enabled",
+        "query_usage_trend",
+        "get_usage_trends",
         "get_usage_dashboard",
         "get_usage_events",
         "list_system_provider_models",
