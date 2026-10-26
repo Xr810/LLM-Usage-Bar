@@ -105,12 +105,16 @@ impl SourceRowView {
         {
             self.note_codes.push(SourceNoteCode::NotProxied);
         }
-        if self.provider_id == "codex"
-            && self.billing_kind == SourceBillingKind::Subscription
-            && detected
+        if self.provider_id == "codex" && self.billing_kind == SourceBillingKind::Subscription {
+            if detected
                 .is_some_and(|tool| tool.note_codes.iter().any(|code| code == "codex_websocket"))
-        {
-            self.note_codes.push(SourceNoteCode::CodexWebsocket);
+            {
+                self.note_codes.push(SourceNoteCode::CodexWebsocket);
+            }
+            // The final Codex contract places WebSocket before not_proxied.
+            if detected.is_some_and(|tool| !tool.proxied) {
+                self.note_codes.push(SourceNoteCode::NotProxied);
+            }
         }
         if build != LicenseBuild::Community
             && self.beta_truncate.is_some_and(|view| {
@@ -343,6 +347,20 @@ mod tests {
             BillingKind::Subscription,
         ))
         .unwrap();
+        let now = chrono::Utc::now().timestamp();
+        db.append_quota_success(&QuotaSnapshot {
+            snapshot_id: "codex-fixture".to_string(),
+            provider_id: "codex".to_string(),
+            fetched_at: now,
+            five_hour_utilization_percent: None,
+            five_hour_resets_at: None,
+            seven_day_utilization_percent: None,
+            seven_day_resets_at: None,
+            manual_resets_remaining: None,
+            raw_payload: serde_json::json!({}),
+            created_at: now,
+        })
+        .unwrap();
         let state = crate::app_state::AppState::new(db);
         let tools: Vec<ToolDetectRow> =
             serde_json::from_value(fixture["codexWebSocket"]["detection"].clone()).unwrap();
@@ -376,8 +394,9 @@ mod tests {
             .iter()
             .find(|row| row.provider_id == "codex")
             .unwrap();
-        assert!(
-            !row.note_codes.contains(&SourceNoteCode::CodexWebsocket),
+        assert_eq!(
+            row.note_codes,
+            vec![SourceNoteCode::NotProxied],
             "unproxied subscription alone is not WebSocket evidence"
         );
 
@@ -394,7 +413,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             serde_json::to_value(&row.note_codes).unwrap(),
-            serde_json::json!(["stale"])
+            serde_json::json!([])
         );
     }
 
@@ -425,8 +444,19 @@ mod tests {
                 "not_installed".to_string(),
             ],
         };
-        // Subscription not_proxied semantics are isolated in the shared fixture pending clarification.
         for (billing, state, build, proxied, expected) in [
+            (
+                BillingKind::Subscription,
+                QuotaReadState::Stale,
+                LicenseBuild::Official,
+                false,
+                vec![
+                    "stale",
+                    "codex_websocket",
+                    "not_proxied",
+                    "license_required",
+                ],
+            ),
             (
                 BillingKind::Subscription,
                 QuotaReadState::Stale,
@@ -514,6 +544,7 @@ mod tests {
             "display name must not bind cached detection"
         );
         provider.billing_kind = BillingKind::Subscription;
+        tool.tool = provider.id.clone();
         let row = source_row_for_provider(&provider, None, None, LicenseBuild::Community, &[tool]);
         assert_eq!(row.note_codes, vec![SourceNoteCode::Stale]);
         assert!(serde_json::from_str::<SourceNoteCode>("\"not_installed\"").is_err());

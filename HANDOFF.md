@@ -1678,7 +1678,7 @@ CARGO_INCREMENTAL=0` and temporary 2 GiB swap.
 Merged `origin/main` `e17c6418` normally into PR #105's existing branch,
 preserving BE-1b and both HANDOFF entries. No published history was rewritten.
 The owner relayed the v7.19 note-code rules: closed set `stale`, `error`,
-`not_proxied`, `codex_websocket`, `license_required`, emitted in that order;
+`not_proxied`, `codex_websocket`, `license_required`;
 stale/error are mutually exclusive. Community builds never emit the license
 note, and other builds require the row's truncation unavailable reason to be
 `license_required`. Rust and TypeScript now represent the closed set explicitly.
@@ -1692,12 +1692,14 @@ bind detection evidence; provider display names/presets never supply it. Only
 `providerId=codex` plus subscription billing and a cached `codex_websocket` note
 produce that note; other detection codes are not copied to source rows.
 
-**Pending architect clarification:** rule 1 restricts `not_proxied` to metered
-rows, but rule 2 says Codex subscription rows usually also carry it. The local
-implementation provisionally uses `billingKind=metered`; this is not accepted
-final behavior. The disputed subscription expectation is isolated in
-`tests/fixtures/tray-source-contract.json` for correction after clarification.
-Do not remove PR #105's blocked status until this is resolved.
+**Final architect clarification received:** emit `not_proxied` for cached
+`proxied=false` metered rows and Codex subscription rows (`providerId=codex`,
+`billingKind=subscription`), never other subscriptions. For Codex, the final
+order overrides the original generic order: `codex_websocket` precedes
+`not_proxied`. State notes still lead and any eligible license note follows.
+The shared fixture now seeds a fresh stored quota read and expects exactly
+`["codex_websocket", "not_proxied"]`; a matched non-Codex subscription is a
+negative control. No additional WebSocket classification is inferred.
 
 The new cache fixture exercises the real AppState/tray service with cached
 Codex evidence, then removes the WebSocket note and finally clears the cache.
@@ -1706,7 +1708,7 @@ stale/error distinction, community/official license-note behavior, known versus
 unknown proxy state, and same-name/different-ID providers. Build/reset behavior
 from the initial delivery is retained.
 
-Current Linux orb validation before push, after the main merge:
+Earlier Linux orb validation after the BE-1b merge, before final clarification:
 
 - `pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml` with
   `LLM_USAGE_BAR_UPSELL_ENTRY` unset: **1366 library + 15 integration passed**.
@@ -1728,4 +1730,26 @@ Current Linux orb validation before push, after the main merge:
   `pnpm rust -- fmt --manifest-path src-tauri/Cargo.toml --check`,
   `git diff --check`, and §17 conflict-marker scan: **passed**.
 - Native Windows/macOS acceptance has not been performed in this orb.
-  Passing tests do not resolve the pending subscription `not_proxied` contract.
+  These earlier checks do not validate the final contract adjustment below.
+
+Latest `origin/main` `a94dccf0` (BE-24) was merged normally without conflicts;
+BE-24 files are unchanged relative to main. An overlapping frontend run during the cold Rust build
+had one existing dashboard test hit its 5-second timeout (371 passed); the
+standalone rerun passed without changing test timeouts.
+
+Final-contract validation after that merge, with the same Rust environment
+and command lines listed above:
+
+- Full Rust tests, default/display flag unset: **1369 library + 15 integration
+  passed**, 3 existing ignored tests; no failures.
+- Full Rust tests, `--no-default-features` and display flag `true`: **1369
+  library + 15 integration passed**, 3 existing ignored tests; no failures.
+- Both Clippy configurations with `-D warnings`: **passed**.
+- Standalone `pnpm test:unit --maxWorkers=1`: **55 files / 372 tests passed**.
+- `pnpm typecheck`, `pnpm format:check`, targeted fixture Prettier,
+  wrapper-managed Rust `fmt --check`, `git diff --check`, and §17 conflict scan:
+  **passed**. Three existing test compilation warnings remain.
+- Final fresh fetch confirmed main is included. Temporary swap was removed.
+  No native Windows/macOS interactive acceptance was performed in this orb.
+  No official provider/build selector was invented; private official provider
+  integration remains outside this public repository's validation.

@@ -39,8 +39,8 @@
       "enforceable": false,
       "progress": 0,
       "stopped": false,
-      "sourceState": "stale",
-      "noteCodes": ["stale", "codex_websocket"],
+      "sourceState": "ok",
+      "noteCodes": ["codex_websocket", "not_proxied"],
       "nextResetAt": null,
       "betaTruncate": {
         "enabled": false,
