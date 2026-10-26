@@ -6,6 +6,7 @@ import { providerDisplayName } from "@/components/tray-usage/trayUsagePresentati
 import { parseNonNegative } from "./capMath";
 import {
   DEFAULT_ALERT_THRESHOLD_PCT,
+  type LubBuild,
   type LubPanelModel,
   type LubSourceModel,
   type LubSubtitleKey,
@@ -14,6 +15,31 @@ import {
 function monogram(name: string): string {
   const letter = name.trim().charAt(0);
   return letter ? letter.toUpperCase() : "?";
+}
+
+function rowContract(provider: TrayProviderUsageView): {
+  noteCodes: string[] | null;
+  nextResetAt: string | null;
+} {
+  const rawCodes = provider.noteCodes;
+  const noteCodes = Array.isArray(rawCodes)
+    ? rawCodes.filter((code) => code.trim() !== "")
+    : [];
+  const rawReset = provider.nextResetAt;
+  const nextResetAt =
+    rawReset == null ||
+    rawReset.trim() === "" ||
+    !Number.isFinite(Date.parse(rawReset))
+      ? null
+      : rawReset;
+  return {
+    noteCodes: noteCodes.length > 0 ? noteCodes : null,
+    nextResetAt,
+  };
+}
+
+function snapshotBuild(value: TrayUsageSnapshot["buildType"]): LubBuild | null {
+  return value === "community" || value === "official" ? value : null;
 }
 
 function subtitleKey(provider: TrayProviderUsageView): LubSubtitleKey {
@@ -92,6 +118,7 @@ function sourceFromProvider(
             ? "error"
             : "stale"
           : null,
+      ...rowContract(provider),
     };
   }
 
@@ -115,6 +142,7 @@ function sourceFromProvider(
     onSetBudget: missingBudget
       ? () => onOpenSettings(provider.providerId)
       : undefined,
+    ...rowContract(provider),
   };
 }
 
@@ -164,6 +192,7 @@ export function mapSnapshotToPanel(
     sources,
     sessions: null,
     invalidCostRows: 0,
+    buildType: snapshotBuild(snapshot.buildType),
     sample: false,
     stale: snapshot.stale,
     betaOn: false,
