@@ -723,7 +723,9 @@
       "day_grace": "(+14-day grace)",
       "email": "Email",
       "no_license": "No license?",
-      "compare_free_vs_pro": "Compare Free vs Pro"
+      "compare_free_vs_pro": "Compare Free vs Pro",
+      "community_build": "Community build",
+      "official_build_required": "Official build required"
     },
     "trends": {
       "day": "Day",

@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -26,12 +28,10 @@ describe("community license shell", () => {
     expect(before.emailMasked).toBeNull();
   });
 
-  it("keeps Community build after activate and hides the compare link in batch 1", async () => {
+  it("keeps the community-build label after activate and hides the compare link in batch 1", async () => {
     const user = userEvent.setup();
     render(<LicenseSettings />);
-    expect(screen.getByTestId("license-tier")).toHaveTextContent(
-      "Community build",
-    );
+    expect(screen.getByTestId("license-tier")).toHaveTextContent("社区构建");
     expect(screen.getByTestId("license-expires")).toHaveTextContent("—");
     expect(screen.getByTestId("license-email")).toHaveTextContent("—");
 
@@ -39,9 +39,7 @@ describe("community license shell", () => {
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("COMMUNITY_BUILD");
     expect(alert).toHaveTextContent("需官方构建");
-    expect(screen.getByTestId("license-tier")).toHaveTextContent(
-      "Community build",
-    );
+    expect(screen.getByTestId("license-tier")).toHaveTextContent("社区构建");
     expect(screen.getByTestId("license-expires")).toHaveTextContent("—");
 
     const compare = screen.queryByRole("link", { name: "比较 Free 与 Pro" });
@@ -51,5 +49,14 @@ describe("community license shell", () => {
       expect(compare).toBeNull();
       expect(screen.queryByText("比较 Free 与 Pro")).toBeNull();
     }
+
+    const source = readFileSync(
+      path.resolve(process.cwd(), "src/components/lub/LicenseSettings.tsx"),
+      "utf8",
+    );
+    expect(source).toContain('t("lub.license.community_build")');
+    expect(source).toContain('t("lub.license.official_build_required")');
+    expect(source).not.toContain('lub.license.community_build",');
+    expect(source).not.toContain('lub.license.official_build_required",');
   });
 });

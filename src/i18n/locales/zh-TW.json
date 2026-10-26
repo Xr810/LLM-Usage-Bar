@@ -611,5 +611,11 @@
     "failures": "失敗",
     "input": "輸入 token",
     "output": "輸出 token"
+  },
+  "lub": {
+    "license": {
+      "community_build": "社群組建",
+      "official_build_required": "需官方組建"
+    }
   }
 }

@@ -611,5 +611,11 @@
     "failures": "失敗回数",
     "input": "入力トークン",
     "output": "出力トークン"
+  },
+  "lub": {
+    "license": {
+      "community_build": "コミュニティビルド",
+      "official_build_required": "公式ビルドが必要です"
+    }
   }
 }

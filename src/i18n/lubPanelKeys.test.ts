@@ -31,18 +31,33 @@ function dollarAmounts(value: unknown): string[] {
   return Object.values(value).flatMap((child) => dollarAmounts(child));
 }
 
+const supplementalLicense = [
+  "license.community_build",
+  "license.official_build_required",
+] as const;
+
+function withoutSupplemental(keys: string[]): string[] {
+  const extra = new Set<string>(supplementalLicense);
+  return keys.filter((key) => !extra.has(key));
+}
+
 describe("lub panel copy", () => {
-  it("matches the v5.8 asset pack and has no lub keys outside it", () => {
-    expect(flat(zh.lub).sort()).toEqual(flat(packLub("zh-CN.json")).sort());
-    expect(flat(en.lub).sort()).toEqual(flat(packLub("en.json")).sort());
+  it("matches the v5.8 asset pack aside from the supplemental license keys", () => {
+    expect(withoutSupplemental(flat(zh.lub)).sort()).toEqual(
+      flat(packLub("zh-CN.json")).sort(),
+    );
+    expect(withoutSupplemental(flat(en.lub)).sort()).toEqual(
+      flat(packLub("en.json")).sort(),
+    );
     expect(flat(proZh.lub).sort()).toEqual(
       flat(packLub("pro.zh-CN.json")).sort(),
     );
     expect(flat(proEn.lub).sort()).toEqual(flat(packLub("pro.en.json")).sort());
     // The uploaded pack is 203 public keys: the v5.8 set of 199 plus
     // community badge/aria keys and errors.feature_unavailable.
-    expect(flat(zh.lub)).toHaveLength(203);
-    expect(flat(en.lub)).toHaveLength(203);
+    // Two license strings sit outside that pack.
+    expect(flat(zh.lub)).toHaveLength(205);
+    expect(flat(en.lub)).toHaveLength(205);
     expect(flat(proZh.lub)).toHaveLength(85);
     expect(flat(proEn.lub)).toHaveLength(85);
   });
@@ -104,9 +119,27 @@ describe("lub panel copy", () => {
     );
   });
 
-  it("leaves zh-TW and ja on the English fallback for lub keys", () => {
-    expect(zhTW).not.toHaveProperty("lub");
-    expect(ja).not.toHaveProperty("lub");
+  it("keeps the license strings in zh, en, zh-TW, and ja", () => {
+    expect(zh.lub.license.community_build).toBe(zh.lub.community.badge);
+    expect(en.lub.license.community_build).toBe(en.lub.community.badge);
+    expect(zh.lub.license.community_build).toBe("社区构建");
+    expect(en.lub.license.community_build).toBe("Community build");
+    expect(zhTW.lub.license.community_build).toBe("社群組建");
+    expect(ja.lub.license.community_build).toBe("コミュニティビルド");
+    expect(zh.lub.license.official_build_required).toBe("需官方构建");
+    expect(en.lub.license.official_build_required).toBe(
+      "Official build required",
+    );
+    expect(zhTW.lub.license.official_build_required).toBe("需官方組建");
+    expect(ja.lub.license.official_build_required).toBe("公式ビルドが必要です");
+    expect(flat(zhTW.lub).sort()).toEqual([...supplementalLicense].sort());
+    expect(flat(ja.lub).sort()).toEqual([...supplementalLicense].sort());
+    expect(zhTW.lub.license.community_build).not.toBe(
+      en.lub.license.community_build,
+    );
+    expect(ja.lub.license.official_build_required).not.toBe(
+      en.lub.license.official_build_required,
+    );
   });
 
   it("keeps Pro keys in separate files and out of the public bundle", () => {

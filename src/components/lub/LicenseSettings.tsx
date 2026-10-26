@@ -28,7 +28,7 @@ function StatusValue({ status }: { status: LicenseStatus }) {
   const { t } = useTranslation();
   const label =
     status.build === "community"
-      ? t("lub.license.community_build", { defaultValue: "Community build" })
+      ? t("lub.license.community_build")
       : status.tier;
   return <span data-testid="license-tier">{label}</span>;
 }
@@ -42,13 +42,7 @@ export function LicenseSettings({
   const [status] = useState(communityLicenseStatus);
   const [token, setToken] = useState(SAMPLE_TOKEN);
   const [notice, setNotice] = useState<string | null>(null);
-  const prompt = t("lub.license.official_build_required", {
-    defaultValue: localizedDefault(
-      i18n.language,
-      "需官方构建",
-      "Official build required",
-    ),
-  });
+  const prompt = t("lub.license.official_build_required");
 
   const form = (
     <>
