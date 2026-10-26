@@ -168,16 +168,14 @@ describe("lub panel copy", () => {
     );
   });
 
-  it("covers the license keys in all four locales and keeps the other lub fallback", async () => {
-    expect(flat(zhTW.lub).sort()).toEqual(
-      [...LICENSE_KEYS, ...supplementalLicense, ...supplementalOnboard].sort(),
-    );
-    expect(flat(ja.lub).sort()).toEqual(
-      [...LICENSE_KEYS, ...supplementalLicense, ...supplementalOnboard].sort(),
-    );
+  it("covers the lub copy in zh-TW and ja instead of falling back to English", async () => {
+    expect(flat(zhTW.lub).sort()).toEqual(flat(en.lub).sort());
+    expect(flat(ja.lub).sort()).toEqual(flat(en.lub).sort());
     for (const key of LICENSE_KEYS) {
       expect(flat(zh.lub)).toContain(key);
       expect(flat(en.lub)).toContain(key);
+      expect(flat(zhTW.lub)).toContain(key);
+      expect(flat(ja.lub)).toContain(key);
     }
     expect(zh.lub.settings.nav.license).toBe("许可证");
     expect(zh.lub.settings.license.title).toBe("许可证");
@@ -209,12 +207,18 @@ describe("lub panel copy", () => {
       },
       interpolation: { escapeValue: false },
     });
-    expect(local.t("lub.settings.about")).toBe(en.lub.settings.about);
+    expect(local.t("lub.settings.about")).toBe(zhTW.lub.settings.about);
+    expect(local.t("lub.panel.trends")).toBe(zhTW.lub.panel.trends);
+    expect(zhTW.lub.settings.about).not.toBe(en.lub.settings.about);
+    expect(zhTW.lub.panel.trends).not.toBe(en.lub.panel.trends);
     expect(local.t("lub.settings.nav.license")).toBe(
       zhTW.lub.settings.nav.license,
     );
     await local.changeLanguage("ja");
-    expect(local.t("lub.settings.about")).toBe(en.lub.settings.about);
+    expect(local.t("lub.settings.about")).toBe(ja.lub.settings.about);
+    expect(local.t("lub.panel.trends")).toBe(ja.lub.panel.trends);
+    expect(ja.lub.settings.about).not.toBe(en.lub.settings.about);
+    expect(ja.lub.panel.trends).not.toBe(en.lub.panel.trends);
     expect(local.t("lub.settings.license.communityNote")).toBe(
       ja.lub.settings.license.communityNote,
     );
