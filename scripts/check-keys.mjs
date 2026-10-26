@@ -1,6 +1,7 @@
 // node scripts/check-keys.mjs
 // Exits 1 when the v5.8 asset pack disagrees with itself, or when src locales
-// gain or drop a lub key. Amounts must be {{amount}} in the merged copy.
+// gain or drop a lub key. zh, zh-TW, and ja must match en's lub key set.
+// Amounts must be {{amount}} in the merged copy.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -105,14 +106,20 @@ for (const [file, locale] of licenseLocales) {
       errs.push(`[license ${file}] hardcoded amount: ${key}`);
     }
   }
-  if (file === "zh-TW.json" || file === "ja.json") {
-    for (const key of Object.keys(locale)) {
-      if (!allowedExtra.has(key)) {
-        errs.push(
-          `[license ${file}] unexpected ${key}; other lub keys stay on the English fallback`,
-        );
-      }
+}
+const lubByFile = Object.fromEntries(licenseLocales);
+const enLub = lubByFile["en.json"] ?? {};
+for (const file of ["zh.json", "zh-TW.json", "ja.json"]) {
+  const locale = lubByFile[file] ?? {};
+  for (const key of Object.keys(enLub)) {
+    if (!(key in locale) || String(locale[key]).trim() === "") {
+      errs.push(`[locale ${file}] missing ${key}`);
+    } else if (/\$[0-9]/.test(String(locale[key]))) {
+      errs.push(`[locale ${file}] hardcoded amount: ${key}`);
     }
+  }
+  for (const key of Object.keys(locale)) {
+    if (!(key in enLub)) errs.push(`[locale ${file}] extra ${key}`);
   }
 }
 const firstLicense = licenseLocales[0]?.[1] ?? {};
@@ -158,6 +165,8 @@ for (const key of supplementalLub) {
 for (const [tag, leftFile, rightFile] of [
   ["free", "zh.json", "en.json"],
   ["pro", "pro.zh-CN.json", "pro.en.json"],
+  ["zh-TW", "zh-TW.json", "en.json"],
+  ["ja", "ja.json", "en.json"],
 ]) {
   const left = localeLub(leftFile);
   const right = localeLub(rightFile);

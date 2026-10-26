@@ -677,6 +677,8 @@ pub struct UsageDashboardView {
     pub end_at: i64,
     pub product_groups: Vec<ProductUsageView>,
     pub warnings: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clamped_from: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -688,6 +690,8 @@ pub struct ProviderMonitoringDashboardView {
     pub trend_granularity: UsageTrendGranularity,
     pub trend_buckets: Vec<UsageTrendBucketView>,
     pub warnings: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clamped_from: Option<String>,
 }
 
 /// One concrete model, scoped to a single Provider account.
@@ -759,6 +763,8 @@ pub struct ModelUsageDashboardView {
     pub product_groups: Vec<ModelProductGroupView>,
     pub models: Vec<ModelTotalsRow>,
     pub warnings: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clamped_from: Option<String>,
 }
 
 /// One Provider account's contribution inside a single Agent.
@@ -812,6 +818,8 @@ pub struct AgentUsageBreakdownView {
     pub total_cost_usd: Option<String>,
     pub agents: Vec<AgentUsageRow>,
     pub warnings: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clamped_from: Option<String>,
 }
 
 #[cfg(test)]

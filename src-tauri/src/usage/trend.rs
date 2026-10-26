@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
 
-use chrono::{DateTime, Days, NaiveDate, Utc};
+use chrono::{DateTime, Days, NaiveDate, TimeZone, Utc};
 use chrono_tz::Tz;
 use rusqlite::{params_from_iter, types::Value};
 use rust_decimal::{prelude::ToPrimitive, Decimal, RoundingStrategy};
@@ -83,8 +83,19 @@ fn parse_date(value: &str, field: &str) -> Result<NaiveDate, AppError> {
         .ok_or_else(|| AppError::invalid_argument("Expected YYYY-MM-DD.", field))
 }
 
-/// The only range/entitlement policy for the new command. Legacy dashboards,
-/// heatmaps, hourly views, and request-log filters deliberately do not use it.
+pub(crate) fn usage_query_is_limited(license: &LicenseStatus) -> bool {
+    license.build == LicenseBuild::Community || license.tier == LicenseTier::Free
+}
+
+pub(crate) fn require_usage_split(license: &LicenseStatus) -> Result<(), AppError> {
+    if usage_query_is_limited(license) {
+        return Err(AppError::pro_required("Grouped usage requires Pro."));
+    }
+    Ok(())
+}
+
+/// Shared daily range policy. Legacy timestamp adapters also pass through here;
+/// heatmaps, today-hourly views, and event/request-log lists remain exempt.
 fn clamp_usage_query(
     request: &UsageTrendRequest,
     license: &LicenseStatus,
@@ -108,7 +119,7 @@ fn clamp_usage_query(
             "from",
         ));
     }
-    let limited = license.build == LicenseBuild::Community || license.tier == LicenseTier::Free;
+    let limited = usage_query_is_limited(license);
     if limited && request.group_by.is_some() {
         return Err(AppError::pro_required("Grouped usage trends require Pro."));
     }
@@ -125,7 +136,82 @@ fn clamp_usage_query(
         tz,
         from: effective_from,
         to: effective_to,
-        clamped_from: (effective_from != from || effective_to != to).then(|| request.from.clone()),
+        // ADR v7.19.3 option (b): effective lower date, only for a start clamp.
+        clamped_from: (effective_from != from).then(|| effective_from.to_string()),
+    })
+}
+
+/// ADR v7.19.2 adapter for legacy local-time timestamp contracts. Keep partial
+/// days and the caller's inclusive/half-open endpoint convention unchanged.
+pub(crate) struct LegacyUsageRange {
+    pub start: Option<i64>,
+    pub end: Option<i64>,
+    pub clamped_from: Option<String>,
+    pub empty: bool,
+}
+
+pub(crate) fn clamp_legacy_usage_query<T: TimeZone>(
+    start: Option<i64>,
+    end: Option<i64>,
+    inclusive_end: bool,
+    license: &LicenseStatus,
+    now: DateTime<T>,
+) -> Result<LegacyUsageRange, AppError> {
+    if !usage_query_is_limited(license) {
+        return Ok(LegacyUsageRange {
+            start,
+            end,
+            clamped_from: None,
+            empty: false,
+        });
+    }
+    let tz = now.timezone();
+    let today = now.date_naive();
+    // UTC here carries local calendar dates only, not actual event instants.
+    // This reuses BE-16's policy without requiring a new timezone argument on
+    // legacy commands, whose existing contract uses the machine's local zone.
+    let request = UsageTrendRequest {
+        tz: "UTC".into(),
+        from: "0001-01-01".into(),
+        to: today.to_string(),
+        granularity: "day".into(),
+        group_by: None,
+        filters: None,
+    };
+    let range = clamp_usage_query(&request, license, now.naive_local().and_utc())?;
+    let midnight = |day: NaiveDate| {
+        let start = day.and_hms_opt(0, 0, 0).unwrap();
+        // Some zones advance clocks at midnight (or skip a whole date).
+        // Usually the first candidate succeeds; in a gap find the first real
+        // instant rather than rejecting an otherwise valid calendar window.
+        (0..=86_400)
+            .find_map(|seconds| {
+                tz.from_local_datetime(&(start + chrono::Duration::seconds(seconds)))
+                    .earliest()
+            })
+            .map(|date| date.timestamp())
+            .ok_or_else(|| AppError::internal("Could not determine the local day boundary."))
+    };
+    let lower = range.from;
+    let lower_ts = midnight(lower)?;
+    let upper_ts = midnight(
+        today
+            .succ_opt()
+            .ok_or_else(|| AppError::internal("Invalid usage day."))?,
+    )? - i64::from(inclusive_end);
+    let effective_start = start.map_or(lower_ts, |value| value.max(lower_ts));
+    let effective_end = end.map_or(upper_ts, |value| value.min(upper_ts));
+    Ok(LegacyUsageRange {
+        start: Some(effective_start),
+        end: Some(effective_end),
+        // Explicit BE-16b refinement: effective lower date, not original from.
+        clamped_from: (start.is_none() || start.is_some_and(|value| value < lower_ts))
+            .then(|| lower.to_string()),
+        empty: if inclusive_end {
+            effective_start > effective_end
+        } else {
+            effective_start >= effective_end
+        },
     })
 }
 

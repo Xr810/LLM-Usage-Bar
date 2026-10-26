@@ -22,7 +22,7 @@ pub(crate) fn initial_language(read_locale: impl FnOnce() -> Option<String>) -> 
         .unwrap_or_default()
         .replace('_', "-")
         .to_ascii_lowercase();
-    if locale.starts_with("zh") {
+    if locale == "zh" || locale.starts_with("zh-") || locale == "zhtw" {
         if locale == "zhtw"
             || locale
                 .split('-')
@@ -32,14 +32,22 @@ pub(crate) fn initial_language(read_locale: impl FnOnce() -> Option<String>) -> 
         } else {
             "zh"
         }
+    } else if locale == "ja" || locale.starts_with("ja-") {
+        "ja"
     } else {
         "en"
     }
 }
 
 pub fn effective_language(stored: Option<&str>) -> &str {
-    match stored {
-        Some(language @ ("en" | "zh" | "zh-TW" | "ja")) => language,
+    match stored.map(|language| language.trim().to_ascii_lowercase()) {
+        Some(language) => match language.as_str() {
+            "en" => "en",
+            "zh" => "zh",
+            "zh-tw" => "zh-TW",
+            "ja" => "ja",
+            _ => UNSET_LANGUAGE,
+        },
         _ => UNSET_LANGUAGE,
     }
 }
@@ -218,6 +226,22 @@ mod tests {
             lookup(&catalogs, "ja", "native.tray.missing", &[]),
             "native.tray.missing"
         );
+    }
+
+    #[test]
+    fn stored_language_is_normalized_before_matching_supported_codes() {
+        for (stored, expected) in [
+            (" zh ", "zh"),
+            ("ZH", "zh"),
+            ("En ", "en"),
+            (" ZH-tw ", "zh-TW"),
+            (" JA ", "ja"),
+            ("garbage", "en"),
+            (" \t ", "en"),
+        ] {
+            assert_eq!(effective_language(Some(stored)), expected, "{stored:?}");
+        }
+        assert_eq!(effective_language(None), "en");
     }
 
     #[test]
