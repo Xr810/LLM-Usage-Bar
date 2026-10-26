@@ -34,6 +34,24 @@ pub enum LicenseBuild {
     Official,
 }
 
+/// Display hints only; never use these flags to authorize a Pro operation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LicenseUiFlags {
+    pub upsell_entry: bool,
+}
+
+impl LicenseUiFlags {
+    /// Official providers use build-time configuration, not process/runtime settings.
+    /// Community remains false even when the official build variable is enabled.
+    pub fn for_build(build: LicenseBuild) -> Self {
+        Self {
+            upsell_entry: build == LicenseBuild::Official
+                && matches!(option_env!("LLM_USAGE_BAR_UPSELL_ENTRY"), Some("true")),
+        }
+    }
+}
+
 /// `get_license_status` / `activate_license` 的成功载荷（契约 C2、C20）。
 ///
 /// 残留在契约正文里的 snake_case 字段按 R-2 收成 camelCase：
@@ -48,6 +66,7 @@ pub struct LicenseStatus {
     pub grace_until: Option<String>,
     pub build: LicenseBuild,
     pub features: Vec<String>,
+    pub ui_flags: LicenseUiFlags,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub email_masked: Option<String>,
 }
@@ -61,6 +80,7 @@ impl LicenseStatus {
             grace_until: None,
             build: LicenseBuild::Community,
             features: Vec::new(),
+            ui_flags: LicenseUiFlags::for_build(LicenseBuild::Community),
             email_masked: None,
         }
     }
@@ -144,7 +164,7 @@ mod tests {
         assert_eq!(status, LicenseStatus::community_free());
         assert_eq!(
             serde_json::to_string(&status).expect("json"),
-            r#"{"tier":"free","build":"community","features":[]}"#
+            r#"{"tier":"free","build":"community","features":[],"uiFlags":{"upsellEntry":false}}"#
         );
         let payload: LicenseChangedPayload = status;
         assert_eq!(payload.tier, LicenseTier::Free);
@@ -159,8 +179,10 @@ mod tests {
             grace_until: Some("2026-12-15T00:00:00Z".to_string()),
             build: LicenseBuild::Official,
             features: vec!["heatmap_12m".to_string()],
+            ui_flags: LicenseUiFlags::for_build(LicenseBuild::Official),
             email_masked: Some("a***@example.com".to_string()),
         };
+        let upsell_entry = option_env!("LLM_USAGE_BAR_UPSELL_ENTRY") == Some("true");
         assert_eq!(
             serde_json::to_value(&status).expect("json"),
             serde_json::json!({
@@ -169,8 +191,14 @@ mod tests {
                 "graceUntil": "2026-12-15T00:00:00Z",
                 "build": "official",
                 "features": ["heatmap_12m"],
+                "uiFlags": { "upsellEntry": upsell_entry },
                 "emailMasked": "a***@example.com"
             })
+        );
+        assert_eq!(
+            serde_json::from_value::<LicenseStatus>(serde_json::to_value(&status).unwrap())
+                .expect("round trip"),
+            status
         );
     }
 
