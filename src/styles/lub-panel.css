@@ -87,8 +87,13 @@
   background: var(--lub-ok);
 }
 
-.lub-dot-warn {
+.lub-dot-warn,
+.lub-dot-over {
   background: var(--lub-warn);
+}
+
+.lub-status-warn {
+  color: var(--lub-warn);
 }
 
 .lub-dot-capped,
@@ -223,6 +228,18 @@
   display: block;
   font-size: var(--lub-fs-body);
   line-height: var(--lub-lh-body);
+}
+
+.lub-banner-warn {
+  background: color-mix(in srgb, var(--lub-warn) 11%, var(--lub-group));
+}
+
+.lub-banner-warn b {
+  color: var(--lub-warn);
+}
+
+.lub-note {
+  margin: var(--lub-sp-2) 0 0;
 }
 
 .lub-resume {
@@ -510,6 +527,55 @@ body.lub-gallery {
 .lub-foot-links {
   display: flex;
   gap: var(--lub-sp-4);
+}
+
+.lub-foot-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--lub-sp-2);
+  margin-left: auto;
+}
+
+.lub-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: var(--lub-track);
+  color: var(--lub-ink-2);
+  font-size: var(--lub-fs-cap);
+  font-weight: 600;
+  line-height: var(--lub-lh-cap);
+  white-space: nowrap;
+}
+
+.lub-allow-placeholder,
+.lub-allow-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--lub-sp-2);
+}
+
+.lub-allow-button {
+  min-height: 32px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--lub-hairline);
+  border-radius: 8px;
+  background: var(--lub-group);
+  color: var(--lub-ink-2);
+  font: inherit;
+  font-size: var(--lub-fs-sub);
+  font-weight: 500;
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.lub-allow-note {
+  margin: 0;
+  color: var(--lub-ink-2);
+  font-size: var(--lub-fs-cap);
+  line-height: var(--lub-lh-cap);
 }
 
 .lub-utility {

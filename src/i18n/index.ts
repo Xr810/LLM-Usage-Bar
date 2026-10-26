@@ -1,5 +1,6 @@
 import i18n from "i18next";
 import { initReactI18next } from "react-i18next";
+import { listen } from "@tauri-apps/api/event";
 
 import en from "./locales/en.json";
 import ja from "./locales/ja.json";
@@ -10,65 +11,46 @@ import {
   LOCAL_STORAGE_KEYS,
   readMigratedLocalStorage,
 } from "@/lib/localStorageMigration";
+import { isTauriRuntime } from "@/lib/platform";
+import {
+  parseAppLanguage,
+  readBackendLanguage,
+  resolveInitialLanguage,
+  type AppLanguage,
+} from "./languageSource";
 
-type Language = "zh" | "zh-TW" | "en" | "ja";
+export interface SettingsChangedPayload {
+  keys?: readonly string[];
+}
 
-const DEFAULT_LANGUAGE: Language = "zh";
-
-const getInitialLanguage = (): Language => {
-  if (typeof window !== "undefined") {
-    try {
-      const stored = readMigratedLocalStorage<Language | null>({
-        currentKey: LOCAL_STORAGE_KEYS.language,
-        legacyKeys: LEGACY_LOCAL_STORAGE_KEYS.language,
-        defaultValue: null,
-        parse: (value) =>
-          value === "zh" ||
-          value === "zh-TW" ||
-          value === "en" ||
-          value === "ja"
-            ? value
-            : null,
-      });
-      if (stored) return stored;
-    } catch (error) {
-      console.warn("[i18n] Failed to read stored language preference", error);
-    }
+function readStoredLanguage(): AppLanguage | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return readMigratedLocalStorage({
+      currentKey: LOCAL_STORAGE_KEYS.language,
+      legacyKeys: LEGACY_LOCAL_STORAGE_KEYS.language,
+      defaultValue: null,
+      parse: parseAppLanguage,
+    });
+  } catch (error) {
+    console.warn("[i18n] Failed to read stored language preference", error);
+    return null;
   }
+}
 
-  const navigatorLang =
-    typeof navigator !== "undefined"
-      ? (navigator.language?.toLowerCase() ??
-        navigator.languages?.[0]?.toLowerCase())
-      : undefined;
+function navigatorLanguage(): string | undefined {
+  if (typeof navigator === "undefined") return undefined;
+  return navigator.language ?? navigator.languages?.[0];
+}
 
-  if (navigatorLang === "zh") {
-    return "zh";
-  }
-
-  if (
-    navigatorLang?.startsWith("zh-tw") ||
-    navigatorLang?.startsWith("zh-hk") ||
-    navigatorLang?.startsWith("zh-mo") ||
-    navigatorLang?.startsWith("zh-hant")
-  ) {
-    return "zh-TW";
-  }
-
-  if (navigatorLang?.startsWith("zh")) {
-    return "zh";
-  }
-
-  if (navigatorLang?.startsWith("ja")) {
-    return "ja";
-  }
-
-  if (navigatorLang?.startsWith("en")) {
-    return "en";
-  }
-
-  return DEFAULT_LANGUAGE;
-};
+/** Backend mock, then a one-time localStorage migration, then the browser language. */
+export function resolveCurrentLanguage(): AppLanguage {
+  return resolveInitialLanguage({
+    backend: readBackendLanguage(),
+    stored: readStoredLanguage(),
+    navigatorLang: navigatorLanguage(),
+  });
+}
 
 const resources = {
   en: {
@@ -87,15 +69,43 @@ const resources = {
 
 i18n.use(initReactI18next).init({
   resources,
-  lng: getInitialLanguage(), // 根据本地存储或系统语言选择默认语言
-  fallbackLng: "en", // 如果缺少中文翻译则退回英文
+  lng: resolveCurrentLanguage(),
+  fallbackLng: "en",
 
   interpolation: {
-    escapeValue: false, // React 已经默认转义
+    escapeValue: false,
   },
 
-  // 开发模式下显示调试信息
   debug: false,
 });
+
+/**
+ * C18 `settings-changed`. A payload of `{ keys: ["language"] }` re-reads the
+ * language mock. This does not call `get_language`.
+ */
+export function applyLanguageSettingsChange(
+  payload: SettingsChangedPayload | null | undefined,
+): Promise<void> {
+  if (!payload?.keys?.includes("language")) return Promise.resolve();
+  return Promise.resolve(i18n.changeLanguage(resolveCurrentLanguage())).then(
+    () => undefined,
+  );
+}
+
+let languageListenerStarted = false;
+
+/** Subscribes once inside the Tauri runtime. Tests can call this after mocking. */
+export function startLanguageSettingsListener(): void {
+  if (languageListenerStarted || !isTauriRuntime()) return;
+  languageListenerStarted = true;
+  void listen<SettingsChangedPayload>("settings-changed", (event) => {
+    void applyLanguageSettingsChange(event.payload);
+  }).catch((error) => {
+    languageListenerStarted = false;
+    console.warn("[i18n] Failed to listen for settings-changed", error);
+  });
+}
+
+startLanguageSettingsListener();
 
 export default i18n;

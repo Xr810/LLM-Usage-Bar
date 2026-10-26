@@ -45,6 +45,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Check i18n keys
+        run: node scripts/check-keys.mjs
+
       - name: TypeScript type check
         run: pnpm typecheck
 
@@ -92,11 +95,85 @@ jobs:
       - name: Check Rust formatting
         run: cargo fmt --check --manifest-path src-tauri/Cargo.toml
 
+      # Community build. Cargo.toml default features are empty and there is
+      # no `pro` feature. Do not pass `--features pro` here. The explicit
+      # gate is the backend-no-pro job below.
       - name: Clippy
         run: cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
 
       - name: Run tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
+
+  # QA-1: build and test without a `pro` feature. The public crate does not
+  # define `pro`, and `default = []`, so this matches the backend job except
+  # that clippy and tests pass `--no-default-features`. A future change that
+  # adds `pro` to default features fails the guard below. This job does not
+  # modify the desktop matrix (macos-14 and windows-latest stay as they are).
+  backend-no-pro:
+    name: Backend (no pro feature)
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Install Linux system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libssl-dev \
+            libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev \
+            || sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.0-dev
+          sudo apt-get install -y --no-install-recommends libsoup-3.0-dev \
+            || sudo apt-get install -y --no-install-recommends libsoup2.4-dev
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-registry-v1-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-registry-v1-
+
+      - name: Create frontend dist placeholder
+        run: mkdir -p dist
+
+      - name: Reject pro on the default feature set
+        run: |
+          awk '
+            /^\[features\]/ { in_features = 1; next }
+            /^\[/ { in_features = 0 }
+            in_features && /^default[[:space:]]*=/ {
+              if ($0 ~ /(^|[^[:alnum:]_])pro([^[:alnum:]_]|$)/) {
+                print "default features must not include pro: " $0 > "/dev/stderr"
+                exit 1
+              }
+              print "community default features: " $0
+              found = 1
+            }
+            END {
+              if (!found) {
+                print "missing [features] default" > "/dev/stderr"
+                exit 1
+              }
+            }
+          ' src-tauri/Cargo.toml
+
+      - name: Clippy without pro
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --no-default-features -- -D warnings
+
+      - name: Test without pro
+        # Exercise official DTO display configuration as well as the community
+        # override. This does not select an official provider or enable Pro.
+        env:
+          LLM_USAGE_BAR_UPSELL_ENTRY: "true"
+        run: cargo test --manifest-path src-tauri/Cargo.toml --no-default-features
 
   desktop:
     name: Desktop (${{ matrix.os }})

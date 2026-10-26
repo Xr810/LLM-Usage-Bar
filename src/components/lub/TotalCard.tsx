@@ -32,23 +32,42 @@ export function TotalCard({
   const dailyCapValue = parseNonNegative(model.dailyCapUsd);
   const monthValue = parseNonNegative(model.monthUsd) ?? 0;
   const monthCapValue = parseNonNegative(model.monthlyCapUsd);
+  const over = model.state === "over";
+  const todayText = displayUsd(today.text);
   const statusLabel = stopped
     ? stoppedLabel
-    : model.state === "capped" && dailyCapText !== "—"
-      ? t("lub.panel.stops_at_amt", { amount: dailyCapText })
-      : t("lub.panel.protected");
+    : over
+      ? t("lub.overcap.status_over_cap")
+      : model.state === "capped" && dailyCapText !== "—"
+        ? t("lub.panel.stops_at_amt", { amount: dailyCapText })
+        : t("lub.panel.protected");
   const dayLabel = stopped
     ? `${stoppedLabel}. ${stoppedTip}`
-    : t("lub.panel.aria_cap_line_day", { amount: dailyCapText });
+    : over
+      ? t("lub.overcap.aria_total_over", {
+          amount: todayText,
+          amount2: dailyCapText,
+        })
+      : t("lub.panel.aria_cap_line_day", { amount: dailyCapText });
   const dayTip = stopped
     ? stoppedTip
-    : t("lub.panel.stops_at_amt", { amount: dailyCapText });
+    : over
+      ? t("lub.overcap.tip_cap_alert_only", { amount: dailyCapText })
+      : t("lub.panel.stops_at_amt", { amount: dailyCapText });
 
   return (
     <div className="lub-hero">
       <div className="lub-row-between">
         <span className="lub-label">{t("lub.panel.today_s_api_spend")}</span>
-        <span className={stopped ? "lub-status lub-status-stop" : "lub-status"}>
+        <span
+          className={
+            stopped
+              ? "lub-status lub-status-stop"
+              : over
+                ? "lub-status lub-status-warn"
+                : "lub-status"
+          }
+        >
           <i className={`lub-dot lub-dot-${model.state}`} aria-hidden="true" />
           <span>{statusLabel}</span>
         </span>
@@ -69,6 +88,7 @@ export function TotalCard({
         scale="cap"
         variant="day"
         tone={stopped ? "muted" : "accent"}
+        overflow={over ? "accent" : "stop"}
         label={dayLabel}
         valueText={t("lub.panel.today_s_api_spend")}
         marker={
@@ -116,9 +136,15 @@ export function TotalCard({
               label={t("lub.panel.aria_cap_line_month", {
                 amount: monthCapText,
               })}
-              tooltip={t("lub.panel.stops_at_amt_this_month", {
-                amount: monthCapText,
-              })}
+              tooltip={
+                over
+                  ? t("lub.overcap.tip_month_alert_only", {
+                      amount: monthCapText,
+                    })
+                  : t("lub.panel.stops_at_amt_this_month", {
+                      amount: monthCapText,
+                    })
+              }
             />
           ) : null
         }

@@ -7,6 +7,7 @@ use crate::providers::{
     ClaudeCliAuthService, SystemProviderConnectionService,
 };
 use crate::quota::{QuotaCycleCallback, QuotaSchedulerHandle, QuotaService};
+use crate::route::takeover::ToolDetectionCache;
 use crate::secrets::{unavailable_credential_store, BindingCredentialService, CredentialStore};
 use crate::store::Database;
 use crate::usage::session::SessionUsageService;
@@ -30,6 +31,7 @@ pub struct AppState {
     pub quota_service: Arc<QuotaService>,
     pub session_usage_service: Arc<SessionUsageService>,
     pub tray_usage_service: Arc<TrayUsageService>,
+    pub tool_detection_cache: Arc<ToolDetectionCache>,
     background: BackgroundTasks,
 }
 
@@ -96,10 +98,12 @@ impl AppState {
                 binding_credential_service.clone(),
             ));
         let session_usage_service = Arc::new(SessionUsageService::new(db.clone()));
+        let tool_detection_cache = Arc::new(ToolDetectionCache::default());
         let tray_usage_service = Arc::new(TrayUsageService::new(
             db.clone(),
             quota_service.clone(),
             session_usage_service.clone(),
+            tool_detection_cache.clone(),
         ));
 
         Self {
@@ -112,6 +116,7 @@ impl AppState {
             quota_service,
             session_usage_service,
             tray_usage_service,
+            tool_detection_cache,
             background: BackgroundTasks::default(),
         }
     }

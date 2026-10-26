@@ -53,19 +53,11 @@ impl RouterUpstreamAuth {
             })?;
         match provider.auth_kind {
             RouterAuthKind::None => Ok(Vec::new()),
-            RouterAuthKind::ChatgptOauth => {
-                // 只走既有入口:它自己知道读钥匙串还是回落读文件,不在这里
-                // 直接碰 ~/.codex/auth.json。message 字段不带进错误信息。
-                let (token, _, _, _) =
-                    crate::providers::codex::subscription::read_codex_credentials();
-                match token {
-                    Some(token) => Ok(vec![(
-                        "Authorization".to_string(),
-                        format!("Bearer {token}"),
-                    )]),
-                    None => Err(AppError::Message("chatgpt_oauth 凭据不可用".to_string())),
-                }
-            }
+            // Batch 1 is classify/meter-only. Never turn an API-key request
+            // into subscription passthrough by injecting a stored Codex token.
+            RouterAuthKind::ChatgptOauth => Err(AppError::Message(
+                "Codex subscription passthrough is disabled".to_string(),
+            )),
             RouterAuthKind::BearerKey => {
                 let key_id = provider.credential_key_id.ok_or_else(|| {
                     AppError::Message("bearer_key 认证缺少 credential_key_id".to_string())
@@ -272,6 +264,14 @@ mod tests {
     }
 
     // 7. 往返:三个枚举值存进去读出来是同一个。
+    #[tokio::test]
+    async fn stored_codex_oauth_cannot_be_injected_into_a_model_route() {
+        let db = memory_db();
+        upsert_provider(&db, "relay", RouterAuthKind::ChatgptOauth, None);
+        let error = auth(db).headers_for("relay").await.unwrap_err();
+        assert!(error.to_string().contains("passthrough is disabled"));
+    }
+
     #[test]
     fn auth_kind_round_trips_through_storage_for_all_variants() {
         let db = memory_db();

@@ -44,6 +44,17 @@ fn merge_settings_for_save(
     // 前端表单不携带该字段，按 incoming 透传会在任意一次保存设置时把冷却清掉，
     // 于是被拒绝过的系统对话框又会重新弹出来。
     incoming.claude_oauth_denied_until = existing.claude_oauth_denied_until;
+    // BE-20: the month cap is written only by `set_monthly_budget`. A full
+    // `save_settings` payload from an older client omits the field, and serde
+    // would turn that omission into null. Keep the stored cap.
+    incoming.monthly_budget_usd = existing.monthly_budget_usd.clone();
+    // BE-23: UI prefs are written only by `set_ui_prefs`. An older full save
+    // omits them, and serde would reset them to the defaults. Language is
+    // still taken from the payload: the frontend already saves it here.
+    incoming.alert_threshold_pct = existing.alert_threshold_pct;
+    incoming.subscription_warn_pct = existing.subscription_warn_pct;
+    incoming.on_identity_switch = existing.on_identity_switch;
+    incoming.failure_modes = existing.failure_modes;
     incoming
 }
 
@@ -56,6 +67,7 @@ pub async fn get_settings() -> Result<crate::config::settings::AppSettings, Stri
 /// 保存设置
 #[tauri::command]
 pub async fn save_settings(
+    app: AppHandle,
     state: tauri::State<'_, crate::app_state::AppState>,
     settings: crate::config::settings::AppSettings,
 ) -> Result<bool, String> {
@@ -64,6 +76,15 @@ pub async fn save_settings(
     let consent_changed = merged.claude_oauth_quota_enabled != existing.claude_oauth_quota_enabled
         || merged.claude_oauth_prompt_mode != existing.claude_oauth_prompt_mode;
     crate::config::settings::update_settings(merged).map_err(|e| e.to_string())?;
+    let saved = crate::config::settings::get_settings();
+    // C8: language changes share the C18 event. One event per save.
+    super::ui_prefs::emit_settings_changed(
+        &app,
+        &super::ui_prefs::language_changed_keys(
+            existing.language.as_deref(),
+            saved.language.as_deref(),
+        ),
+    );
 
     // 同意门控刚改过：手动刷新的 60 秒结果缓存里存的是按旧设置得到的结论
     // （多半是 consent_required），不清掉的话用户开完开关立刻点刷新还会看到
@@ -458,6 +479,59 @@ mod tests {
         let merged = merge_settings_for_save(incoming, &existing);
 
         assert!(merged.local_migrations.is_none());
+    }
+
+    #[test]
+    fn save_settings_keeps_the_monthly_budget_when_the_payload_omits_it() {
+        let existing = AppSettings {
+            monthly_budget_usd: Some("40".to_string()),
+            shared_api_daily_budget_usd: Some("10".to_string()),
+            ..AppSettings::default()
+        };
+        let incoming = AppSettings {
+            shared_api_daily_budget_usd: Some("12".to_string()),
+            monthly_budget_usd: None,
+            ..AppSettings::default()
+        };
+
+        let merged = merge_settings_for_save(incoming, &existing);
+
+        assert_eq!(merged.monthly_budget_usd.as_deref(), Some("40"));
+        assert_eq!(merged.shared_api_daily_budget_usd.as_deref(), Some("12"));
+    }
+
+    #[test]
+    fn save_settings_keeps_ui_prefs_and_still_accepts_language() {
+        use crate::config::settings::{FailureMode, FailureModes, IdentitySwitchPolicy};
+
+        let existing = AppSettings {
+            alert_threshold_pct: 91,
+            subscription_warn_pct: 64,
+            on_identity_switch: IdentitySwitchPolicy::AutoAllow,
+            failure_modes: FailureModes {
+                proxy: FailureMode::Open,
+                license: FailureMode::Closed,
+            },
+            language: Some("zh".to_string()),
+            ..AppSettings::default()
+        };
+        let incoming = AppSettings {
+            language: Some("en".to_string()),
+            ..AppSettings::default()
+        };
+
+        let merged = merge_settings_for_save(incoming, &existing);
+
+        assert_eq!(merged.language.as_deref(), Some("en"));
+        assert_eq!(merged.alert_threshold_pct, 91);
+        assert_eq!(merged.subscription_warn_pct, 64);
+        assert_eq!(merged.on_identity_switch, IdentitySwitchPolicy::AutoAllow);
+        assert_eq!(merged.failure_modes.proxy, FailureMode::Open);
+        assert_eq!(
+            super::super::ui_prefs::language_changed_keys(Some("zh"), Some("en")),
+            vec!["language".to_string()]
+        );
+        assert!(super::super::ui_prefs::language_changed_keys(Some("en"), Some("en")).is_empty());
     }
 }
 

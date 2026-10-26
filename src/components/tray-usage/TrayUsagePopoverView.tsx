@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
+import { useLubEdition } from "@/components/lub/detectLubBuild";
 import { TrayPanelV5 } from "@/components/lub/TrayPanelV5";
 import { mapSnapshotToPanel } from "@/components/lub/mapSnapshotToPanel";
 import type { TrayUsageSnapshot } from "@/types/trayUsage";
@@ -17,6 +18,8 @@ export interface TrayUsagePopoverViewProps {
   onSelectAgent?: (agentModuleId: "overview" | string) => void;
   focusRequestKey?: number;
   now?: Date;
+  /** C2 `uiFlags.upsellEntry`. Off until get_license_status says otherwise. */
+  upsellEntry?: boolean;
 }
 
 export function TrayUsagePopoverView({
@@ -27,9 +30,11 @@ export function TrayUsagePopoverView({
   onOpenDetails,
   onOpenSettings,
   onQuit,
+  upsellEntry = false,
 }: TrayUsagePopoverViewProps) {
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage || i18n.language || "en";
+  const edition = useLubEdition(snapshot?.buildType);
   const model = useMemo(
     () => (snapshot ? mapSnapshotToPanel(snapshot, onOpenSettings) : null),
     [onOpenSettings, snapshot],
@@ -51,6 +56,8 @@ export function TrayUsagePopoverView({
         <TrayPanelV5
           model={model}
           locale={locale}
+          build={edition.build}
+          upsellEntry={upsellEntry || edition.upsellEntry}
           refreshing={refreshing}
           showUtilityActions
           onOpenTrends={onOpenDetails}

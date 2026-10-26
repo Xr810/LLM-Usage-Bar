@@ -1,6 +1,6 @@
 use super::rhythm::RhythmProfile;
 // Keep the existing feature-level import path while model owns shared values.
-pub use crate::model::{PaceBasis, SourceClassification, UsageStatus};
+pub use crate::model::{BudgetLevel, PaceBasis, SourceClassification, UsageStatus};
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -77,6 +77,7 @@ impl SourceClassification {
     fn unknown(reason: &'static str) -> Self {
         Self {
             status: UsageStatus::Unknown,
+            level: BudgetLevel::Ok,
             used_percent: None,
             remaining_percent: None,
             consumed_percent: None,
@@ -146,6 +147,7 @@ pub fn classify_subscription_with_thresholds(
 
     SourceClassification {
         status,
+        level: BudgetLevel::Ok,
         used_percent: Some(used.normalize().to_string()),
         remaining_percent: Some(remaining.normalize().to_string()),
         consumed_percent: None,
@@ -224,6 +226,15 @@ pub fn classify_metered(
         .and_then(|ratio| ratio.checked_mul(Decimal::ONE_HUNDRED))
         .map(|value| value.normalize().to_string());
 
+    // Single source for the C10 `level` field and for budget alerts.
+    // Pace-red and the 80% static band stay on `status`; they are not
+    // `reached`. Deprecated `warn` is never emitted.
+    let level = if cost >= budget {
+        BudgetLevel::Reached
+    } else {
+        BudgetLevel::Ok
+    };
+
     let (threshold_status, decision) = if cost >= budget {
         (UsageStatus::Red, None)
     } else {
@@ -263,6 +274,7 @@ pub fn classify_metered(
 
     SourceClassification {
         status,
+        level,
         used_percent: None,
         remaining_percent: None,
         consumed_percent,
@@ -982,6 +994,7 @@ mod tests {
                 thresholds,
             );
             assert_eq!(classification.status, expected, "hour={hour}");
+            assert_eq!(classification.level, BudgetLevel::Ok, "hour={hour}");
             assert_eq!(classification.pace_basis, PaceBasis::Measured);
         }
 
@@ -993,6 +1006,7 @@ mod tests {
             thresholds,
         );
         assert_eq!(hard_cap.status, UsageStatus::Red);
+        assert_eq!(hard_cap.level, BudgetLevel::Reached);
     }
 
     #[test]
@@ -1006,6 +1020,7 @@ mod tests {
         );
 
         assert_eq!(classification.status, UsageStatus::Unknown);
+        assert_eq!(classification.level, BudgetLevel::Ok);
         assert_eq!(classification.reason, Some("partial_cost"));
         assert_eq!(classification.pace_basis, PaceBasis::Measured);
     }
@@ -1015,6 +1030,7 @@ mod tests {
         let classification = static_metered(Some("8"), Some("10"), CostQuality::Estimated);
 
         assert_eq!(classification.status, UsageStatus::Red);
+        assert_eq!(classification.level, BudgetLevel::Ok);
         assert_eq!(classification.consumed_percent.as_deref(), Some("80"));
         assert_eq!(classification.reason, None);
     }
@@ -1028,7 +1044,50 @@ mod tests {
         );
 
         assert_eq!(classification.status, UsageStatus::Red);
+        assert_eq!(classification.level, BudgetLevel::Reached);
         assert_eq!(classification.reason, None);
+    }
+
+    #[test]
+    fn metered_level_reaches_only_when_cost_meets_the_budget() {
+        for (cost, expected_status) in [
+            ("4.999", UsageStatus::Green),
+            ("5", UsageStatus::Yellow),
+            ("8", UsageStatus::Red),
+            ("9.999", UsageStatus::Red),
+        ] {
+            let classification = static_metered(Some(cost), Some("10"), CostQuality::Complete);
+            assert_eq!(classification.status, expected_status, "{cost}");
+            assert_eq!(classification.level, BudgetLevel::Ok, "{cost}");
+        }
+
+        for (cost, quality) in [
+            ("10", CostQuality::Complete),
+            ("10.001", CostQuality::Complete),
+            ("12", CostQuality::Partial),
+            ("12", CostQuality::Estimated),
+        ] {
+            let classification = static_metered(Some(cost), Some("10"), quality);
+            assert_eq!(
+                classification.status,
+                UsageStatus::Red,
+                "{cost} {quality:?}"
+            );
+            assert_eq!(
+                classification.level,
+                BudgetLevel::Reached,
+                "{cost} {quality:?}"
+            );
+        }
+
+        assert_eq!(
+            static_metered(None, Some("10"), CostQuality::Complete).level,
+            BudgetLevel::Ok
+        );
+        assert_eq!(
+            static_metered(Some("10"), None, CostQuality::Complete).level,
+            BudgetLevel::Ok
+        );
     }
 
     #[test]
