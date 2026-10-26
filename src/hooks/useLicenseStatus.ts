@@ -5,7 +5,7 @@ import {
   type LicenseStatus,
 } from "@/components/lub/licenseMock";
 
-// PENDING R X (Q-RX-4)
+// Decided (Q-RX-4): community follows Free limits.
 export const COMMUNITY_FOLLOWS_FREE_LIMITS = true;
 
 export const licenseStatusQueryKey = ["license-status"] as const;
