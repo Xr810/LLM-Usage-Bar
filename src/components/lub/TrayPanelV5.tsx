@@ -5,7 +5,7 @@ import { ensureProCopy } from "@/i18n/proCopy";
 import { CommunityAllowPlaceholder } from "./CommunityAllowPlaceholder";
 import { CommunityBuildBadge } from "./CommunityBuildBadge";
 import { communityChromeVisible } from "./detectLubBuild";
-import { formatLocalMidnight } from "./money";
+import { formatResetInstant, sharedNextResetAt } from "./money";
 import { proCompareEnabled as proCompareDefault } from "./proCompare";
 import { SessionList } from "./SessionList";
 import { SourceList } from "./SourceList";
@@ -76,12 +76,10 @@ function LegendCaption({
 }) {
   const { t } = useTranslation();
   if (model.state === "over") {
+    const time = formatResetInstant(sharedNextResetAt(model.sources), locale);
+    if (time == null) return null;
     return (
-      <p className="lub-legend">
-        {t("lub.overcap.caption_resets", {
-          time: formatLocalMidnight(locale),
-        })}
-      </p>
+      <p className="lub-legend">{t("lub.overcap.caption_resets", { time })}</p>
     );
   }
   if (model.betaOn && model.betaPercent != null) {
