@@ -9,6 +9,7 @@ import type {
 import {
   projectAgentDashboard,
   projectProviderDashboard,
+  summarizeTrendBuckets,
 } from "./usageDashboardProjection";
 
 const agent: AgentModuleView = {
@@ -343,6 +344,56 @@ describe("projectProviderDashboard", () => {
       overallCostStatus: "partial",
       trendGranularity: "hour",
       trendBuckets: [{ eventCount: 5, totalTokens: 123 }],
+    });
+  });
+});
+
+describe("summarizeTrendBuckets", () => {
+  const bucket = (
+    totalTokens: number,
+    eventCount: number,
+    totalCostUsd: string | null,
+    unavailable = 0,
+    estimated = 0,
+  ) => ({
+    startAt: 1,
+    endAt: 2,
+    eventCount,
+    inputTokens: totalTokens,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheCreationTokens: 0,
+    totalTokens,
+    totalCostUsd,
+    costSourceCounts: { upstream: eventCount, estimated, unavailable },
+  });
+
+  it("sums ungrouped buckets when account rows are withheld", () => {
+    expect(
+      summarizeTrendBuckets([bucket(3, 1, "0.25"), bucket(7, 1, "0.25")]),
+    ).toEqual({
+      totalTokens: 10,
+      eventCount: 2,
+      totalCostUsd: "0.5",
+      costStatus: "complete",
+    });
+  });
+
+  it("keeps a zero total when the clamped window has no events", () => {
+    expect(summarizeTrendBuckets([bucket(0, 0, "0")])).toMatchObject({
+      totalTokens: 0,
+      eventCount: 0,
+      totalCostUsd: "0",
+      costStatus: "complete",
+    });
+  });
+
+  it("does not turn an unpriced bucket into a zero cost", () => {
+    expect(summarizeTrendBuckets([bucket(4, 1, null, 1)])).toMatchObject({
+      totalTokens: 4,
+      eventCount: 1,
+      totalCostUsd: null,
+      costStatus: "unavailable",
     });
   });
 });

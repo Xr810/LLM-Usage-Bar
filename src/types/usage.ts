@@ -96,7 +96,7 @@ export interface OfficialPricingRefreshOutcome {
 }
 
 export interface UsageSummary {
-  /** Effective Free lower date when startDate was omitted or too early. */
+  /** clampedFrom = actual start date after clamping */
   clampedFrom?: string;
   totalRequests: number;
   totalCost: string;
@@ -140,7 +140,7 @@ export interface UsageTrendResponse {
     groupLabel: string;
     points: UsageTrendPoint[];
   }[];
-  /** Original from date, present only when the Free/community window clamps. */
+  /** clampedFrom = actual start date after clamping */
   clampedFrom?: string;
 }
 

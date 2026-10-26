@@ -17,6 +17,7 @@ import {
 import { UsageBreakdownHeader, UsageBreakdownRow } from "./UsageBreakdownRow";
 import { BreakdownSummary } from "./BreakdownSummary";
 import { BreakdownEmpty } from "./BreakdownEmpty";
+import { visibleUsageWarnings } from "./proRequiredBreakdown";
 import { dashboardProviderIcon } from "./usagePresentation";
 
 interface AgentBreakdownPageProps {
@@ -40,6 +41,14 @@ export function AgentBreakdownPage({
   const { t } = useTranslation();
   const empty =
     breakdown.agents.length === 0 || breakdown.totalEventCount === 0;
+  const emptyText =
+    breakdown.agents.length === 0 && breakdown.totalEventCount > 0
+      ? t("usageBreakdown.agentListUnavailable", {
+          defaultValue: "Per-agent breakdown isn't available for this range.",
+        })
+      : t("usageBreakdown.agentEmpty", {
+          defaultValue: "No Agent usage was recorded in this range.",
+        });
 
   return (
     <div className="space-y-4">
@@ -55,18 +64,14 @@ export function AgentBreakdownPage({
         })}
       />
 
-      {breakdown.warnings.map((warning) => (
+      {visibleUsageWarnings(breakdown.warnings).map((warning) => (
         <p key={warning} className="text-xs text-muted-foreground">
           {warning}
         </p>
       ))}
 
       {empty ? (
-        <BreakdownEmpty
-          text={t("usageBreakdown.agentEmpty", {
-            defaultValue: "No Agent usage was recorded in this range.",
-          })}
-        />
+        <BreakdownEmpty text={emptyText} />
       ) : (
         <Card className="overflow-hidden">
           <div className="px-3 py-3">

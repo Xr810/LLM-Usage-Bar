@@ -274,22 +274,24 @@ export interface ProductUsageView {
 }
 
 export interface UsageDashboardView {
-  clampedFrom?: string;
   agentModuleId: string;
   startAt: number;
   endAt: number;
   productGroups: ProductUsageView[];
   warnings: string[];
+  /** clampedFrom = actual start date after clamping */
+  clampedFrom?: string;
 }
 
 export interface ProviderMonitoringDashboardView {
-  clampedFrom?: string;
   startAt: number;
   endAt: number;
   providers: ProviderUsageView[];
   trendGranularity: UsageTrendGranularity;
   trendBuckets: UsageTrendBucketView[];
   warnings: string[];
+  /** clampedFrom = actual start date after clamping */
+  clampedFrom?: string;
 }
 
 /** One concrete model, scoped to a single Provider account. */
@@ -345,7 +347,6 @@ export interface ModelProductGroupView {
 }
 
 export interface ModelUsageDashboardView {
-  clampedFrom?: string;
   startAt: number;
   endAt: number;
   totalTokens: number;
@@ -354,6 +355,8 @@ export interface ModelUsageDashboardView {
   productGroups: ModelProductGroupView[];
   models: ModelTotalsRow[];
   warnings: string[];
+  /** clampedFrom = actual start date after clamping */
+  clampedFrom?: string;
 }
 
 /** One Provider account's contribution inside a single Agent. */
@@ -394,7 +397,6 @@ export interface AgentUsageRow {
 }
 
 export interface AgentUsageBreakdownView {
-  clampedFrom?: string;
   startAt: number;
   endAt: number;
   totalTokens: number;
@@ -402,6 +404,8 @@ export interface AgentUsageBreakdownView {
   totalCostUsd: string | null;
   agents: AgentUsageRow[];
   warnings: string[];
+  /** clampedFrom = actual start date after clamping */
+  clampedFrom?: string;
 }
 
 export interface UsageEvent {

@@ -38,6 +38,7 @@ import type { AgentModuleView } from "@/types/usageDashboard";
 import { ProviderUsagePage } from "./ProviderUsagePage";
 import { ModelUsagePage } from "./ModelUsagePage";
 import { AgentBreakdownPage } from "./AgentBreakdownPage";
+import { visibleUsageWarnings } from "./proRequiredBreakdown";
 import { projectProviderDashboard } from "./usageDashboardProjection";
 import { DEFAULT_REMAINING_THRESHOLDS } from "./usagePresentation";
 
@@ -330,12 +331,12 @@ export function UsageDashboardPage({
 
       {rangeControls}
 
-      {[
+      {visibleUsageWarnings([
         ...(activeDimension === "provider"
           ? (dashboard.data?.warnings ?? [])
           : []),
         ...warnings,
-      ].map((warning) => (
+      ]).map((warning) => (
         <Alert key={warning}>
           <AlertDescription>{warning}</AlertDescription>
         </Alert>
@@ -393,6 +394,7 @@ export function UsageDashboardPage({
               isRefreshingQuota={refreshQuota.isPending}
               isSyncingSessions={syncSession.isPending}
               remainingThresholds={remainingThresholds}
+              warnings={dashboard.data?.warnings ?? []}
             />
           ) : null
         ) : activeDimension === "model" ? (

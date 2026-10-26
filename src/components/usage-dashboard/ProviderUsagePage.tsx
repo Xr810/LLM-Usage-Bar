@@ -5,11 +5,15 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import type { UsageTrendBucketView } from "@/types/usageDashboard";
+import { formatUsd } from "../tray-usage/trayUsagePresentation";
+import { BreakdownEmpty } from "./BreakdownEmpty";
 import type { ProviderDashboardProjection } from "./usageDashboardProjection";
+import { summarizeTrendBuckets } from "./usageDashboardProjection";
 import { MeteredProviderCard } from "./MeteredProviderCard";
 import { ProviderActivityHeatmap } from "./ProviderActivityHeatmap";
 import { SubscriptionProviderCard } from "./SubscriptionProviderCard";
 import { ProviderUsageTrendChart } from "./ProviderUsageTrendChart";
+import { hasProRequiredWarning } from "./proRequiredBreakdown";
 import { formatTokensCompact } from "./usagePresentation";
 import type { RemainingThresholds } from "./usagePresentation";
 
@@ -29,6 +33,8 @@ interface ProviderUsagePageProps {
   isRefreshingQuota?: boolean;
   isSyncingSessions?: boolean;
   remainingThresholds?: RemainingThresholds;
+  /** Dashboard warnings. `PRO_REQUIRED` withholds the account breakdown only. */
+  warnings?: readonly string[];
 }
 
 export function ProviderUsagePage({
@@ -47,8 +53,21 @@ export function ProviderUsagePage({
   isRefreshingQuota = false,
   isSyncingSessions = false,
   remainingThresholds,
+  warnings = [],
 }: ProviderUsagePageProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const locale = i18n.resolvedLanguage || i18n.language || "en";
+  const breakdownWithheld = hasProRequiredWarning(warnings);
+  const bucketSummary = summarizeTrendBuckets(projection.trendBuckets);
+  const trendTokens = breakdownWithheld
+    ? bucketSummary.totalTokens
+    : projection.overallTotalTokens;
+  const trendCost = breakdownWithheld
+    ? bucketSummary.totalCostUsd
+    : projection.overallTotalCostUsd;
+  const trendCostStatus = breakdownWithheld
+    ? bucketSummary.costStatus
+    : projection.overallCostStatus;
   const costText =
     projection.meteredTotalCostUsd == null
       ? t("usageDashboard.costUnavailableSummary", {
@@ -73,7 +92,10 @@ export function ProviderUsagePage({
             })
           : null;
 
+  // PRO_REQUIRED empties the account breakdown only. The heatmap and trend
+  // stay. This return is the genuine "nothing configured" page.
   if (
+    !breakdownWithheld &&
     projection.subscriptionProviders.length === 0 &&
     projection.meteredProviders.length === 0
   ) {
@@ -98,18 +120,6 @@ export function ProviderUsagePage({
     );
   }
 
-  const sectionHeading = (id: string, text: string, count: number) => (
-    <div className="flex items-baseline gap-2">
-      <h2
-        id={id}
-        className="text-xs font-semibold uppercase tracking-wider text-muted-foreground"
-      >
-        {text}
-      </h2>
-      <span className="text-xs metric text-muted-foreground/70">{count}</span>
-    </div>
-  );
-
   return (
     <div className="space-y-7">
       {/* Activity first: it carries the range control, and every figure below
@@ -124,14 +134,124 @@ export function ProviderUsagePage({
         <ProviderUsageTrendChart
           granularity={projection.trendGranularity}
           buckets={projection.trendBuckets}
-          totalTokens={projection.overallTotalTokens}
-          totalCostUsd={projection.overallTotalCostUsd}
-          costStatus={projection.overallCostStatus}
+          totalTokens={trendTokens}
+          totalCostUsd={trendCost}
+          costStatus={trendCostStatus}
           rangeLabel={rangeLabel}
           rangeControls={rangeControls}
         />
       </div>
 
+      {breakdownWithheld ? (
+        <section className="space-y-3" data-testid="provider-breakdown-empty">
+          <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+            <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              {t("usageBreakdown.accounts", { defaultValue: "Accounts" })}
+            </h2>
+            <dl className="flex items-baseline gap-5 text-xs text-muted-foreground">
+              <div className="flex items-baseline gap-1.5">
+                <dt>
+                  {t("usageDashboard.selectedRangeTokens", {
+                    defaultValue: "Tokens",
+                  })}
+                </dt>
+                <dd
+                  className="font-semibold text-foreground metric"
+                  data-testid="provider-total-tokens"
+                  title={bucketSummary.totalTokens.toLocaleString()}
+                >
+                  {formatTokensCompact(bucketSummary.totalTokens)}
+                </dd>
+              </div>
+              <div className="flex items-baseline gap-1.5">
+                <dt>
+                  {t("usageDashboard.records", { defaultValue: "Calls" })}
+                </dt>
+                <dd
+                  className="font-semibold text-foreground metric"
+                  data-testid="provider-total-requests"
+                >
+                  {bucketSummary.eventCount.toLocaleString()}
+                </dd>
+              </div>
+              <div className="flex items-baseline gap-1.5">
+                <dt>USD</dt>
+                <dd
+                  className="font-semibold text-foreground metric"
+                  data-testid="provider-total-cost"
+                >
+                  {bucketSummary.totalCostUsd == null
+                    ? t("usageDashboard.costUnavailableSummary", {
+                        defaultValue: "Cost unavailable",
+                      })
+                    : formatUsd(bucketSummary.totalCostUsd, locale)}
+                </dd>
+              </div>
+            </dl>
+          </div>
+          <BreakdownEmpty
+            text={t("usageDashboard.accountBreakdownUnavailable", {
+              defaultValue:
+                "Per-account breakdown isn't available for this range.",
+            })}
+          />
+        </section>
+      ) : (
+        <ProviderAccountSections
+          projection={projection}
+          startAt={startAt}
+          endAt={endAt}
+          costText={costText}
+          costStatusText={costStatusText}
+          onRefreshQuota={onRefreshQuota}
+          onSyncSessions={onSyncSessions}
+          isRefreshingQuota={isRefreshingQuota}
+          isSyncingSessions={isSyncingSessions}
+          remainingThresholds={remainingThresholds}
+        />
+      )}
+    </div>
+  );
+}
+
+function ProviderAccountSections({
+  projection,
+  startAt,
+  endAt,
+  costText,
+  costStatusText,
+  onRefreshQuota,
+  onSyncSessions,
+  isRefreshingQuota,
+  isSyncingSessions,
+  remainingThresholds,
+}: {
+  projection: ProviderDashboardProjection;
+  startAt: number;
+  endAt: number;
+  costText: string;
+  costStatusText: string | null;
+  onRefreshQuota: (providerId: string) => Promise<unknown>;
+  onSyncSessions: (providerId: string) => Promise<void>;
+  isRefreshingQuota: boolean;
+  isSyncingSessions: boolean;
+  remainingThresholds?: RemainingThresholds;
+}) {
+  const { t } = useTranslation();
+  const sectionHeading = (id: string, text: string, count: number) => (
+    <div className="flex items-baseline gap-2">
+      <h2
+        id={id}
+        className="text-xs font-semibold uppercase tracking-wider text-muted-foreground"
+      >
+        {text}
+      </h2>
+      <span className="text-xs metric text-muted-foreground/70">{count}</span>
+    </div>
+  );
+
+  return (
+    <>
       <section className="space-y-3" aria-labelledby="subscription-heading">
         <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
           {sectionHeading(
@@ -275,6 +395,6 @@ export function ProviderUsagePage({
           </div>
         )}
       </section>
-    </div>
+    </>
   );
 }

@@ -307,3 +307,43 @@ export function projectProviderDashboard(
     trendBuckets: dashboard.trendBuckets,
   };
 }
+
+/** Ungrouped range totals. Used when provider rows are withheld. */
+export function summarizeTrendBuckets(
+  buckets: readonly UsageTrendBucketView[],
+): {
+  totalTokens: number;
+  eventCount: number;
+  totalCostUsd: string | null;
+  costStatus: MeteredCostStatus;
+} {
+  const totalTokens = buckets.reduce(
+    (sum, bucket) => sum + bucket.totalTokens,
+    0,
+  );
+  const eventCount = buckets.reduce(
+    (sum, bucket) => sum + bucket.eventCount,
+    0,
+  );
+  const knownCosts = buckets
+    .map((bucket) => bucket.totalCostUsd)
+    .filter((value): value is string => value != null);
+  const totalCostUsd = eventCount > 0 ? addDecimalStrings(knownCosts) : "0";
+  const hasUnavailable = buckets.some(
+    (bucket) =>
+      bucket.eventCount > 0 &&
+      (bucket.totalCostUsd == null || bucket.costSourceCounts.unavailable > 0),
+  );
+  const hasEstimated = buckets.some(
+    (bucket) => bucket.costSourceCounts.estimated > 0,
+  );
+  const costStatus: MeteredCostStatus =
+    totalCostUsd == null
+      ? "unavailable"
+      : hasUnavailable
+        ? "partial"
+        : hasEstimated
+          ? "estimated"
+          : "complete";
+  return { totalTokens, eventCount, totalCostUsd, costStatus };
+}
