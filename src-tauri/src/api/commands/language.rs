@@ -1,7 +1,8 @@
 //! BE-12 language commands (C8).
 //!
 //! `settings.language` is the only stored language. `get_language` returns
-//! the effective language and does not persist a default. `set_language`
+//! the effective language after settings initialize an absent value: `zh` for
+//! existing installs, OS locale only for fresh installs. `set_language`
 //! persists a supported language and emits one `settings-changed` event with
 //! `keys: ["language"]` when the stored value changes. There is no
 //! `language-changed` event.
@@ -12,7 +13,7 @@
 //!
 //! Budget alerts read C10 `TrayApiBudgetView.level`. This module does not
 //! add C12 `get_guard_state`; that command is not on main. Notification
-//! copy in `budget_alert.rs` stays hardcoded.
+//! copy uses the embedded native catalog through `NotificationTexts`.
 
 use tauri::{AppHandle, State};
 
