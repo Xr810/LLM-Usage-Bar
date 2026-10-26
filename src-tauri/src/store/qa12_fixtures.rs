@@ -157,6 +157,16 @@ fn hourly_total_matches_proxy_logs_and_ignores_usage_events() -> Result<(), AppE
             params![request_id, cost, billing],
         )?;
     }
+    for status in [200, 451] {
+        conn.execute(
+            "INSERT INTO proxy_request_logs (
+                 request_id, provider_id, app_type, model, input_tokens, output_tokens,
+                 total_cost_usd, latency_ms, status_code, created_at, end_reason
+             ) VALUES (?1, 'anthropic', 'claude', 'claude', 19, 23, '7.5', 99, ?2,
+                       1700000100, 'guard_deny')",
+            params![format!("denied-{status}"), status],
+        )?;
+    }
     rebuild_usage_hourly_rollups(&conn)?;
 
     let (rows, requests, micro): (i64, i64, i64) = conn.query_row(

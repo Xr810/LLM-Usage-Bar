@@ -2,6 +2,147 @@ use super::*;
 use rusqlite::params;
 use serde_json::json;
 
+#[test]
+fn guard_deny_is_audit_only_across_usage_queries_and_retention() -> Result<(), AppError> {
+    use crate::usage::aggregation;
+    use chrono::TimeZone;
+
+    let db = Database::memory()?;
+    let now = chrono::Utc::now();
+    let at = chrono::Local
+        .from_local_datetime(
+            &chrono::Local::now()
+                .date_naive()
+                .and_hms_opt(12, 0, 0)
+                .unwrap(),
+        )
+        .earliest()
+        .unwrap()
+        .timestamp();
+    let start = at - 86400;
+    let end = at + 86400;
+    let license = pro();
+    {
+        let conn = lock_conn!(db.conn);
+        // Distinct ordinary, Hold and pre-existing blocked controls. D2 must
+        // preserve all three, including Hold's existing request count.
+        for (id, reason, status, input, output, cost) in [
+            ("used", None, 200, 13, 7, "0.25"),
+            ("held", Some("guard_hold"), 429, 0, 0, "0"),
+            ("blocked", Some("blocked"), 403, 0, 0, "0"),
+        ] {
+            conn.execute(
+                "INSERT INTO proxy_request_logs (
+                     request_id, provider_id, app_type, model, input_tokens,
+                     output_tokens, total_cost_usd, latency_ms, status_code,
+                     created_at, end_reason, project_alias, client_tag_id
+                 ) VALUES (?1, 'p', 'claude', 'm', ?2, ?3, ?4, 11, ?5, ?6, ?7, 'project', 'client')",
+                params![id, input, output, cost, status, at, reason],
+            )?;
+        }
+        conn.execute_batch(
+            "INSERT INTO usage_providers (id, name, billing_kind, product_group_id,
+                 token_sources, enabled, needs_review, created_at, updated_at)
+             VALUES ('p', 'Provider', 'metered', 'product', '[\"proxy\"]', 1, 0, 1, 1);",
+        )?;
+        conn.execute(
+            "INSERT INTO usage_events (event_id, source, provider_id, product_group_id,
+                 occurred_at, model, input_tokens, output_tokens, total_cost_usd,
+                 cost_source, created_at)
+             VALUES ('event', 'proxy', 'p', 'product', ?1, 'm', 13, 7, '0.25', 'upstream', ?1)",
+            [at],
+        )?;
+        conn.execute(
+            "INSERT INTO rollup_dirty_hours (hour_utc) VALUES (?1)",
+            [at.div_euclid(3600) * 3600],
+        )?;
+    }
+    db.rollup_and_prune(36500)?;
+    let snapshot = || -> Result<serde_json::Value, AppError> {
+        let mut trends = Vec::new();
+        for group in [None, Some("provider"), Some("project"), Some("client")] {
+            trends.push(query_usage_trend_at(&db, json!({
+                "tz": "Asia/Hong_Kong",
+                "from": chrono::DateTime::from_timestamp(start, 0).unwrap().with_timezone(&chrono_tz::Asia::Hong_Kong).format("%Y-%m-%d").to_string(),
+                "to": chrono::DateTime::from_timestamp(end, 0).unwrap().with_timezone(&chrono_tz::Asia::Hong_Kong).format("%Y-%m-%d").to_string(),
+                "granularity": "day", "groupBy": group
+            }), &license, now)?);
+        }
+        Ok(json!({
+            "summary": db.get_usage_summary(None, None, None, None, None)?,
+            "today": db.get_usage_summary(Some(at - 3600), Some(end), None, None, None)?,
+            "byApp": db.get_usage_summary_by_app(None, None, None, None)?,
+            "hourly": db.get_daily_trends(Some(at - 3600), Some(at + 3600), None, None, None)?,
+            "daily": db.get_daily_trends(Some(start), Some(end), None, None, None)?,
+            "providers": db.get_provider_stats(None, None, None, None, None)?,
+            "models": db.get_model_stats(None, None, None, None, None)?,
+            "sources": crate::store::usage_stats::get_data_source_breakdown(&db)?,
+            "limits": db.check_provider_limits("p", "claude")?,
+            "sessions": crate::usage::session_list::list_sessions_at(&db, at, false, None, None)?,
+            "trends": trends,
+            "eventModels": aggregation::aggregate_model_usage(&db, start, end)?,
+            "agents": aggregation::aggregate_agent_usage(&db, start, end)?,
+            "eventProviders": aggregation::aggregate_enabled_provider_trend(&db, start, end)?.1
+        }))
+    };
+    let before = snapshot()?;
+    assert_eq!(before["summary"]["totalRequests"], 3);
+    assert_eq!(before["summary"]["totalInputTokens"], 13);
+    assert_eq!(before["summary"]["totalOutputTokens"], 7);
+    assert_eq!(before["limits"]["dailyUsage"], "0.250000");
+    let today_before = aggregation::aggregate_provider_account_range(&db, "p", start, end)?;
+    assert_eq!(today_before.event_count, 1);
+    assert_eq!(today_before.total_cost_usd.as_deref(), Some("0.25"));
+    {
+        let conn = lock_conn!(db.conn);
+        // Deliberately nonzero imported data proves exclusion by end_reason,
+        // not an accidental zero-cost/token sum or HTTP-error exclusion.
+        for status in [200, 451] {
+            conn.execute(
+                "INSERT INTO proxy_request_logs (
+                     request_id, provider_id, app_type, model, input_tokens,
+                     output_tokens, total_cost_usd, latency_ms, status_code,
+                     created_at, end_reason, project_alias, client_tag_id
+                 ) VALUES (?1, 'p', 'claude', 'm', 101, 203, '17.5', 999, ?2, ?3,
+                           'guard_deny', 'project', 'client')",
+                params![format!("denied-{status}"), status, at],
+            )?;
+        }
+        conn.execute(
+            "INSERT INTO rollup_dirty_hours (hour_utc) VALUES (?1)",
+            [at.div_euclid(3600) * 3600],
+        )?;
+    }
+    db.rollup_and_prune(36500)?;
+    assert_eq!(snapshot()?, before, "Deny must not change any usage view");
+    assert_eq!(
+        aggregation::aggregate_provider_account_range(&db, "p", start, end)?,
+        today_before,
+        "tray today totals and guard spend consume the event ledger, not audit rows"
+    );
+    assert_eq!(
+        db.get_request_logs(&Default::default(), 1, 20)?.total,
+        5,
+        "Deny must remain visible in the audit list"
+    );
+    // Move all details into the past, then exercise daily archival and query
+    // the same all-time totals: denied counts/tokens/cost must not reappear.
+    {
+        let conn = lock_conn!(db.conn);
+        conn.execute(
+            "UPDATE proxy_request_logs SET created_at = ?1",
+            [at - 3 * 86400],
+        )?;
+    }
+    assert_eq!(db.rollup_and_prune(1)?, 5);
+    let summary = db.get_usage_summary(None, None, None, None, None)?;
+    assert_eq!(summary.total_requests, 3);
+    assert_eq!(summary.total_input_tokens, 13);
+    assert_eq!(summary.total_output_tokens, 7);
+    assert_eq!(summary.total_cost.parse::<f64>().unwrap(), 0.25);
+    Ok(())
+}
+
 fn instant(value: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(value)
         .unwrap()

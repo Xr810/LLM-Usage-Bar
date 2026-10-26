@@ -2076,3 +2076,55 @@ local clippy `-D warnings` passed in 19.24s; fmt/diff checks passed. No further
 local full-test retries after exit 137: the new targeted tests require the same
 unbuilt library test executable. New-head CI, not the prior green run, must
 validate this enforcement change. No frontend changes or merge authorized.
+
+#### 2026-10-26 QA-20 D2: Deny audit logging (contract v1.4)
+
+Based on BE-30 `a9b53743` (#111). `Decision::Deny` records one idempotent
+`proxy_request_logs` settlement with `end_reason=guard_deny`, zero tokens and
+cost, and the gate's `rule` in the existing nullable `error_message` column.
+No body read, upstream attempt, gate settlement, usage event or guard counter
+is produced. The gate's HTTP status and JSON value remain unchanged, including
+when audit insertion fails. No schema, public gate contract or provider calls
+are added.
+
+Deny-only exclusions cover the shared detail/daily-archive usage filter,
+live/rebuilt/dirty hourly rollups, raw project/client trends, provider daily
+and monthly limits, session spend and session deduplication. Audit list/detail access remains
+available. Agent/model/provider event-ledger aggregates and tray today/budget
+spend do not ingest these audit settlements; the community guard getter still
+projects zero counters. Fixtures compare the nonempty usage views before and
+after Deny, including deliberately nonzero imported Deny rows and HTTP 200,
+then check archival cannot reintroduce denied usage.
+
+**Hold baseline gap, deliberately NOT fixed in D2:** at `a9b53743`,
+`route/server.rs:719–738` records `guard_hold` but not the Hold reason;
+`store/dao/hourly_rollup.rs:317–338` does not write `error_message`.
+`store/usage_stats.rs:329–363` only excludes duplicate session rows, not Hold;
+`store/dao/hourly_rollup.rs:480–515` counts Hold as a request. Daily archival
+uses that same detail filter (`store/dao/usage_rollup.rs:174–215`). D2 preserves
+Hold's 429 envelope, Retry-After, stored NULL reason and aggregate count; tests
+pin those existing semantics. Because Hold has no stored reason column to
+mirror, Deny uses `error_message` for `rule` explicitly, without changing Hold.
+Any Hold reason/exclusion change requires a separate user decision.
+
+Local validation: `pnpm rust -- fmt --manifest-path src-tauri/Cargo.toml` and
+`git diff --check` pass. Low-memory `pnpm rust -- test --locked --manifest-path
+src-tauri/Cargo.toml --lib guard_deny -- --nocapture` was killed (exit 137)
+before executing tests, with the same three existing test warnings as BE-30.
+The corresponding low-memory `check --tests` was also killed (exit 137).
+Neither is a passing result. Exact-head PR CI must validate the new
+router assertions and aggregate/session-dedup fixtures. No merge or release
+is authorized; the existing §20 native interactive shutdown gaps remain open.
+
+PR #113 initial-head CI (`91c494d7`, run `40341707394`) passed all 1387 library
+tests in each backend mode, including the Deny/Hold/aggregate/session cases,
+but both backend jobs failed the dependency guard: the cross-layer fixture
+under `store/qa12_fixtures.rs` imported `usage`. The correction moves that
+fixture to `usage/trend/tests.rs`, exercises dirty-hour maintenance through
+`Database::rollup_and_prune`, and extends the existing store-only full-rebuild
+fixture with Deny rows. No runtime change or guard exception was needed.
+The unmodified dependency-guard source passed locally, 2/2 tests, through a
+temporary dependency-free Cargo harness pointing at the actual repository
+source/root; the normal app-linked guard build also hit exit 137. Production
+Clippy `-D warnings` passed (2m27s). New-head CI must verify the moved fixture;
+the initial run's frontend and both desktop passes are not new-head evidence.
