@@ -222,7 +222,8 @@
     "sevenDayWindow": "Weekly allowance",
     "addBuiltInProvider": "Add a built-in Provider",
     "noPickedProviders": "No built-in Providers picked yet. Add the ones you use.",
-    "removeProvider": "Remove {{name}}"
+    "removeProvider": "Remove {{name}}",
+    "cacheEstimatedAtInputPrice": "estimated at input price (${{input}})"
   },
   "usageBreakdown": {
     "dimensionNavigation": "Usage breakdown",

@@ -1,4 +1,6 @@
 import type {
+  SourceNoteCode,
+  SourceRowView,
   TrayProviderUsageView,
   TrayUsageSnapshot,
 } from "@/types/trayUsage";
@@ -14,6 +16,24 @@ import {
 function monogram(name: string): string {
   const letter = name.trim().charAt(0);
   return letter ? letter.toUpperCase() : "?";
+}
+
+function knownReset(value: string | null | undefined): string | null {
+  if (value == null || value.trim() === "") return null;
+  return Number.isFinite(Date.parse(value)) ? value : null;
+}
+
+/** BE-21b fields live on `snapshot.sources`, matched by provider id. */
+function rowContract(
+  providerId: string,
+  sources: readonly SourceRowView[],
+): { noteCodes: SourceNoteCode[] | null; nextResetAt: string | null } {
+  const row = sources.find((source) => source.providerId === providerId);
+  if (!row) return { noteCodes: null, nextResetAt: null };
+  return {
+    noteCodes: row.noteCodes.length > 0 ? row.noteCodes : null,
+    nextResetAt: knownReset(row.nextResetAt),
+  };
 }
 
 function subtitleKey(provider: TrayProviderUsageView): LubSubtitleKey {
@@ -43,21 +63,15 @@ function primaryUsedPercent(provider: TrayProviderUsageView): number | null {
 
 function panelState(
   budget: TrayUsageSnapshot["apiBudget"],
-  alertThresholdPct: number,
 ): LubPanelModel["state"] {
-  const consumed = parseNonNegative(budget.budgetConsumedPercent);
-  if (budget.level != null) {
-    // C10 / C12: warn follows level. Pace status stays on the dot only.
-    return budget.level === "ok" ? "ok" : "warn";
-  }
-  // TODO(BE-20): drop this once `level` is always on the snapshot.
-  const capped = budget.status === "red" && consumed != null && consumed >= 100;
-  const warn = !capped && consumed != null && consumed >= alertThresholdPct;
-  return capped ? "capped" : warn ? "warn" : "ok";
+  // C10: `reached` is the only over-cap level. Deprecated `warn` does not
+  // alert, and pace status or the consumed percent must not choose it.
+  return budget.level === "reached" ? "over" : "ok";
 }
 
 function sourceFromProvider(
   provider: TrayProviderUsageView,
+  sources: readonly SourceRowView[],
   sharedCapUsd: string | null,
   onOpenSettings: (providerId: string | null) => void,
   readFailed: boolean,
@@ -68,6 +82,9 @@ function sourceFromProvider(
   );
   if (provider.billingKind === "subscription") {
     const usedPercent = primaryUsedPercent(provider);
+    const windowFailed = (provider.subscription?.windows ?? []).some(
+      (window) => (window.unavailableReason ?? "").trim() !== "",
+    );
     return {
       id: provider.providerId,
       name,
@@ -78,8 +95,15 @@ function sourceFromProvider(
       usedPercent,
       scaleCapUsd: null,
       costQuality: provider.recentUsage.costQuality,
-      // C13 omits usedPct when the provider has no quota window.
-      quotaGap: usedPercent == null ? (readFailed ? "error" : "stale") : null,
+      // C13 omits usedPct. C4 empty windows are stale; a read error is
+      // refreshError or a window unavailableReason (there is no `state` field).
+      quotaGap:
+        usedPercent == null
+          ? readFailed || windowFailed
+            ? "error"
+            : "stale"
+          : null,
+      ...rowContract(provider.providerId, sources),
     };
   }
 
@@ -103,6 +127,7 @@ function sourceFromProvider(
     onSetBudget: missingBudget
       ? () => onOpenSettings(provider.providerId)
       : undefined,
+    ...rowContract(provider.providerId, sources),
   };
 }
 
@@ -134,12 +159,18 @@ export function mapSnapshotToPanel(
           (provider.billingKind === "metered" && provider.metered != null),
       )
       .map((provider) =>
-        sourceFromProvider(provider, sharedCap, onOpenSettings, readFailed),
+        sourceFromProvider(
+          provider,
+          snapshot.sources,
+          sharedCap,
+          onOpenSettings,
+          readFailed,
+        ),
       ),
   );
 
   return {
-    state: panelState(budget, alertThresholdPct),
+    state: panelState(budget),
     todayUsd: budget.todayCostUsd,
     todayQuality: budget.costQuality,
     dailyCapUsd: budget.dailyBudgetUsd,
@@ -152,6 +183,7 @@ export function mapSnapshotToPanel(
     sources,
     sessions: null,
     invalidCostRows: 0,
+    buildType: snapshot.buildType,
     sample: false,
     stale: snapshot.stale,
     betaOn: false,

@@ -2,10 +2,12 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { RefreshCw } from "lucide-react";
 import { ensureProCopy } from "@/i18n/proCopy";
+import { formatResetInstant, sharedNextResetAt } from "./money";
 import { SessionList } from "./SessionList";
 import { SourceList } from "./SourceList";
+import { StatusBanner } from "./StatusBanner";
 import { TotalCard } from "./TotalCard";
-import type { LubPanelModel } from "./panelModel";
+import type { LubBuild, LubPanelModel } from "./panelModel";
 
 interface TrayPanelV5Props {
   model: LubPanelModel;
@@ -19,6 +21,13 @@ interface TrayPanelV5Props {
   openDayTip?: boolean;
   scrollMaxPx?: number;
   refreshError?: string | null;
+  /** Snapshot `buildType`. Design samples that omit it stay official. */
+  build?: LubBuild;
+  /**
+   * C2 `uiFlags.upsellEntry`. Gates the Free vs Pro line. Default off.
+   * Community status is `{ upsellEntry: false }`.
+   */
+  upsellEntry?: boolean;
 }
 
 function PowerIcon() {
@@ -51,8 +60,21 @@ function KilledBanner({ model }: { model: LubPanelModel }) {
   );
 }
 
-function LegendCaption({ model }: { model: LubPanelModel }) {
+function LegendCaption({
+  model,
+  locale,
+}: {
+  model: LubPanelModel;
+  locale: string;
+}) {
   const { t } = useTranslation();
+  if (model.state === "over") {
+    const time = formatResetInstant(sharedNextResetAt(model.sources), locale);
+    if (time == null) return null;
+    return (
+      <p className="lub-legend">{t("lub.overcap.caption_resets", { time })}</p>
+    );
+  }
   if (model.betaOn && model.betaPercent != null) {
     return (
       <p className="lub-legend">
@@ -120,6 +142,8 @@ export function TrayPanelV5({
   openDayTip = false,
   scrollMaxPx,
   refreshError,
+  build = "official",
+  upsellEntry = false,
 }: TrayPanelV5Props) {
   ensureProCopy();
   const { t } = useTranslation();
@@ -192,6 +216,16 @@ export function TrayPanelV5({
           {refreshError}
         </p>
       ) : null}
+      {model.state === "over" ? (
+        <>
+          <StatusBanner
+            capUsd={model.dailyCapUsd}
+            locale={locale}
+            upsellEntry={upsellEntry}
+          />
+          {build === "community" ? <div data-slot="community-allow" /> : null}
+        </>
+      ) : null}
       <TotalCard model={model} locale={locale} openDayTip={openDayTip} />
       <SparkGroup model={model} onOpenTrends={onOpenTrends} />
       <div
@@ -233,16 +267,18 @@ export function TrayPanelV5({
           })}
         </p>
       ) : null}
-      <button
-        type="button"
-        className="lub-kill"
-        aria-disabled="true"
-        onClick={(event) => event.preventDefault()}
-      >
-        <PowerIcon />
-        {stopLabel}
-      </button>
-      <LegendCaption model={model} />
+      {model.state === "over" ? null : (
+        <button
+          type="button"
+          className="lub-kill"
+          aria-disabled="true"
+          onClick={(event) => event.preventDefault()}
+        >
+          <PowerIcon />
+          {stopLabel}
+        </button>
+      )}
+      <LegendCaption model={model} locale={locale} />
       <footer className="lub-foot">
         <span className="lub-foot-links">
           <button type="button" className="lub-link" onClick={onOpenSettings}>

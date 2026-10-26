@@ -222,7 +222,8 @@
     "sevenDayWindow": "周额度",
     "addBuiltInProvider": "添加内置 Provider",
     "noPickedProviders": "还没有选择内置 Provider，把你用的加进来。",
-    "removeProvider": "移除 {{name}}"
+    "removeProvider": "移除 {{name}}",
+    "cacheEstimatedAtInputPrice": "按输入价估算（${{input}}）"
   },
   "usageBreakdown": {
     "dimensionNavigation": "用量分类",

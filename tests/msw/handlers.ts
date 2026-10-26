@@ -9,6 +9,7 @@ import type {
   UsageProviderInput,
   UsageProviderView,
 } from "@/types/usageDashboard";
+import type { LicenseStatus } from "@/types/license";
 import type {
   ApiBudgetConfig,
   MainWindowDestination,
@@ -1131,7 +1132,17 @@ const agentUsageBreakdownFixture = (startAt: number, endAt: number) => {
   };
 };
 
+export const communityLicenseStatus: LicenseStatus = {
+  tier: "free",
+  build: "community",
+  features: [],
+  uiFlags: { upsellEntry: false },
+};
+
 export const handlers = [
+  http.post(`${TAURI_ENDPOINT}/get_license_status`, () =>
+    success(communityLicenseStatus),
+  ),
   http.post(`${TAURI_ENDPOINT}/get_tray_usage_snapshot`, () =>
     success(trayUsageSnapshotFixture),
   ),
