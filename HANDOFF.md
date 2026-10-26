@@ -2031,7 +2031,9 @@ the paid tier, and the grace deadline changes effective tier to Free without
 deleting data or changing proxy admission. Startup reconciliation and an
 application-managed hourly task compare tier/state/expiry/grace against the
 persisted `license_last_emitted_state`. A mutex plus transactional CAS selects
-the emitter; failed delivery rolls back the acknowledgement, not the license.
+the delivery order; failed delivery leaves the acknowledgement unchanged, not
+the license. The emitter runs callbacks outside database and transition locks,
+then rechecks the persisted acknowledgement in a short CAS transaction.
 Delivery is at-least-once across emit/commit failures, not exactly-once transport.
 
 Providers call public `RetentionStore::set_pending_target(days)` before
@@ -2056,6 +2058,26 @@ claimed. Final-head PR CI must execute the new Tauri event, grace boundary,
 concurrent CAS, retry and disk-reopen regressions.
 Native interactive acceptance and existing §20 shutdown gaps remain open.
 No frontend `src/**`, private code, dependencies or release configuration changed.
+
+BE-31 callback-lock follow-up: old PR head `f6ba4e26` passed all six checks.
+Backend job `121662187522` in run `40348604698` completed successfully at
+15:52:04Z after 30m1s; dependency installation occupied 22m14s, including
+`Fetched 23.4 MB in 19min 33s (20.0 kB/s)`. The library tests took 48.70s
+(1391 passed, zero failures, two ignored). This was not a hung test job,
+and nothing was cancelled. Independently, invoking the publisher under the
+database mutex/transaction and transition mutex could deadlock a synchronous
+listener that read the database or reentered the lifecycle.
+
+The follow-up shares a FIFO dispatcher between wrappers of the same database
+handle. Commands serialize provider mutation and enqueue snapshots, then drop
+their locks. One emitter drains the queue without holding locks across the
+callback; reentrant changes enqueue and return rather than recursively emit.
+Acknowledgement CAS refuses to overwrite a marker changed or deleted during
+delivery. New bounded regressions call database reads/writes and lifecycle
+status/activate/deactivate from actual publisher callbacks; the concurrent
+reconciliation test also has a failing timeout rather than an unbounded join.
+No local Rust compile/test/clippy rerun: fmt and diff checks only, with runtime
+validation delegated to the new-head CI jobs (not to another agent or orb).
 
 #### 2026-10-26 BE-30: build injections and retention high-water (plan v1.1)
 

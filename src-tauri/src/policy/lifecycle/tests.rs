@@ -49,6 +49,113 @@ fn at(s: &str) -> DateTime<Utc> {
     s.parse().unwrap()
 }
 
+// A regression must fail promptly even if a callback blocks on a mutex. The
+// timeout is a test failure, not a production escape hatch or skipped assertion.
+fn bounded(work: impl FnOnce() + Send + 'static) {
+    let (done, completed) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        work();
+        done.send(()).unwrap();
+    });
+    completed
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("license operation deadlocked or panicked");
+    worker.join().unwrap();
+}
+
+#[test]
+fn publisher_can_read_database_and_reenter_status_activate_and_deactivate() {
+    bounded(|| {
+        let db = Arc::new(Database::memory().unwrap());
+        let provider = Arc::new(TestProvider::new(db.clone()));
+        let lifecycle = Arc::new(LicenseLifecycle::new(provider.clone(), db.clone()));
+        let competing = Arc::new(LicenseLifecycle::new(provider, db.clone()));
+        let current = Arc::downgrade(&lifecycle);
+        let other = Arc::downgrade(&competing);
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let recorded = events.clone();
+        let publish: LicensePublisher = Arc::new(move |status| {
+            assert_eq!(
+                db.get_setting("retention_high_water_days")?.as_deref(),
+                Some("730")
+            );
+            let lifecycle = current.upgrade().unwrap();
+            let competing = other.upgrade().unwrap();
+            assert_eq!(lifecycle.status().tier, status.tier);
+            assert_eq!(competing.status().tier, status.tier);
+            let count = {
+                let mut recorded = recorded.lock().unwrap();
+                recorded.push(status.state);
+                recorded.len()
+            };
+            match count {
+                1 => competing.deactivate()?,
+                2 => {
+                    lifecycle.activate("test")?;
+                }
+                _ => {}
+            }
+            Ok(())
+        });
+        lifecycle.set_publisher(publish.clone());
+        competing.set_publisher(publish);
+        lifecycle.activate("test").unwrap();
+        lifecycle.reconcile(Utc::now()).unwrap();
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec![
+                LicenseState::Active,
+                LicenseState::Free,
+                LicenseState::Active
+            ]
+        );
+        assert_eq!(lifecycle.status().tier, LicenseTier::Pro);
+    });
+}
+
+#[test]
+fn callback_cannot_overwrite_an_acknowledgement_changed_during_delivery() {
+    bounded(|| {
+        for erase in [false, true] {
+            let db = Arc::new(Database::memory().unwrap());
+            let provider = Arc::new(TestProvider::new(db.clone()));
+            let lifecycle = LicenseLifecycle::new(provider, db.clone());
+            let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let calls = attempts.clone();
+            let callback_db = db.clone();
+            if erase {
+                db.set_setting("license_last_emitted_state", "previous")
+                    .unwrap();
+            }
+            lifecycle.set_publisher(Arc::new(move |_| {
+                if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                    if erase {
+                        callback_db.conn.lock()?.execute(
+                            "DELETE FROM settings WHERE key='license_last_emitted_state'",
+                            [],
+                        )?;
+                    } else {
+                        callback_db
+                            .set_setting("license_last_emitted_state", "changed-during-emit")?;
+                    }
+                }
+                Ok(())
+            }));
+            lifecycle.activate("test").unwrap();
+            assert_eq!(
+                db.get_setting("license_last_emitted_state")
+                    .unwrap()
+                    .as_deref(),
+                (!erase).then_some("changed-during-emit")
+            );
+            lifecycle.reconcile(Utc::now()).unwrap();
+            lifecycle.reconcile(Utc::now()).unwrap();
+            assert_eq!(attempts.load(Ordering::SeqCst), 2);
+            assert_eq!(lifecycle.status().tier, LicenseTier::Pro);
+        }
+    });
+}
+
 #[test]
 fn commands_emit_full_tauri_payload_once_per_transition_and_community_never_emits() {
     for community in [false, true] {
@@ -124,65 +231,67 @@ fn commands_emit_full_tauri_payload_once_per_transition_and_community_never_emit
 
 #[test]
 fn grace_boundaries_concurrent_ticks_key_changes_and_restart_deduplicate() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("license.db");
-    let db = Arc::new(Database::init_at(&path).unwrap());
-    let provider = Arc::new(TestProvider::new(db.clone()));
-    provider.activate("test").unwrap();
-    let lifecycle = LicenseLifecycle::new(provider.clone(), db.clone());
-    let events = Arc::new(Mutex::new(Vec::new()));
-    let recorded = events.clone();
-    let publish: LicensePublisher = Arc::new(move |s| {
-        recorded.lock().unwrap().push(s.clone());
-        Ok(())
-    });
-    lifecycle.set_publisher(publish.clone());
-    lifecycle.reconcile(at("2089-12-31T23:59:59Z")).unwrap();
-    let competing = LicenseLifecycle::new(provider.clone(), db.clone());
-    competing.set_publisher(publish.clone());
-    std::thread::scope(|scope| {
-        for _ in 0..8 {
-            scope.spawn(|| lifecycle.reconcile(at("2090-01-01T00:00:00Z")).unwrap());
-            scope.spawn(|| competing.reconcile(at("2090-01-01T00:00:00Z")).unwrap());
+    bounded(|| {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("license.db");
+        let db = Arc::new(Database::init_at(&path).unwrap());
+        let provider = Arc::new(TestProvider::new(db.clone()));
+        provider.activate("test").unwrap();
+        let lifecycle = LicenseLifecycle::new(provider.clone(), db.clone());
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let recorded = events.clone();
+        let publish: LicensePublisher = Arc::new(move |s| {
+            recorded.lock().unwrap().push(s.clone());
+            Ok(())
+        });
+        lifecycle.set_publisher(publish.clone());
+        lifecycle.reconcile(at("2089-12-31T23:59:59Z")).unwrap();
+        let competing = LicenseLifecycle::new(provider.clone(), db.clone());
+        competing.set_publisher(publish.clone());
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                scope.spawn(|| lifecycle.reconcile(at("2090-01-01T00:00:00Z")).unwrap());
+                scope.spawn(|| competing.reconcile(at("2090-01-01T00:00:00Z")).unwrap());
+            }
+        });
+        lifecycle.reconcile(at("2090-01-14T23:59:59Z")).unwrap();
+        lifecycle.reconcile(at("2090-01-15T00:00:00Z")).unwrap();
+        lifecycle.reconcile(at("2090-01-15T00:00:01Z")).unwrap();
+        {
+            let events = events.lock().unwrap();
+            assert_eq!(
+                events.iter().map(|s| s.state).collect::<Vec<_>>(),
+                vec![
+                    LicenseState::Active,
+                    LicenseState::Grace,
+                    LicenseState::Free
+                ]
+            );
+            assert_eq!(events[1].tier, LicenseTier::Pro);
+            assert_eq!(events[2].tier, LicenseTier::Free);
         }
-    });
-    lifecycle.reconcile(at("2090-01-14T23:59:59Z")).unwrap();
-    lifecycle.reconcile(at("2090-01-15T00:00:00Z")).unwrap();
-    lifecycle.reconcile(at("2090-01-15T00:00:01Z")).unwrap();
-    {
-        let events = events.lock().unwrap();
+        drop(competing);
+        drop(lifecycle);
+        drop(provider);
+        drop(db);
+        let db = Arc::new(Database::init_at(&path).unwrap());
+        let provider = Arc::new(TestProvider::new(db.clone()));
+        provider.activate("test").unwrap();
+        let restarted = LicenseLifecycle::new(provider.clone(), db.clone());
+        restarted.set_publisher(publish);
+        restarted.reconcile(at("2090-01-15T00:00:01Z")).unwrap();
+        assert_eq!(events.lock().unwrap().len(), 3);
+        // Same lifecycle state but a renewed expiry is a new event.
+        provider.current.lock().unwrap().expires_at = Some("2090-02-01T00:00:00Z".into());
+        restarted.reconcile(at("2090-03-01T00:00:00Z")).unwrap();
+        assert_eq!(events.lock().unwrap().len(), 4);
         assert_eq!(
-            events.iter().map(|s| s.state).collect::<Vec<_>>(),
-            vec![
-                LicenseState::Active,
-                LicenseState::Grace,
-                LicenseState::Free
-            ]
+            db.get_setting("retention_high_water_days")
+                .unwrap()
+                .as_deref(),
+            Some("730")
         );
-        assert_eq!(events[1].tier, LicenseTier::Pro);
-        assert_eq!(events[2].tier, LicenseTier::Free);
-    }
-    drop(competing);
-    drop(lifecycle);
-    drop(provider);
-    drop(db);
-    let db = Arc::new(Database::init_at(&path).unwrap());
-    let provider = Arc::new(TestProvider::new(db.clone()));
-    provider.activate("test").unwrap();
-    let restarted = LicenseLifecycle::new(provider.clone(), db.clone());
-    restarted.set_publisher(publish);
-    restarted.reconcile(at("2090-01-15T00:00:01Z")).unwrap();
-    assert_eq!(events.lock().unwrap().len(), 3);
-    // Same lifecycle state but a renewed expiry is a new event.
-    provider.current.lock().unwrap().expires_at = Some("2090-02-01T00:00:00Z".into());
-    restarted.reconcile(at("2090-03-01T00:00:00Z")).unwrap();
-    assert_eq!(events.lock().unwrap().len(), 4);
-    assert_eq!(
-        db.get_setting("retention_high_water_days")
-            .unwrap()
-            .as_deref(),
-        Some("730")
-    );
+    });
 }
 
 #[test]
