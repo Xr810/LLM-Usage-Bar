@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
+import { detectLubBuild } from "@/components/lub/detectLubBuild";
 import { TrayPanelV5 } from "@/components/lub/TrayPanelV5";
 import { mapSnapshotToPanel } from "@/components/lub/mapSnapshotToPanel";
 import type { TrayUsageSnapshot } from "@/types/trayUsage";
@@ -51,6 +52,7 @@ export function TrayUsagePopoverView({
         <TrayPanelV5
           model={model}
           locale={locale}
+          build={detectLubBuild()}
           refreshing={refreshing}
           showUtilityActions
           onOpenTrends={onOpenDetails}

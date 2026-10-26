@@ -77,6 +77,11 @@ describe("lub panel copy", () => {
     expect(keys.has("log.pro_note")).toBe(true);
     expect(keys.has("log.cleared_before")).toBe(true);
     expect(keys.has("community.allow_this_one")).toBe(true);
+    expect(keys.has("community.badge")).toBe(true);
+    expect(keys.has("community.aria_badge")).toBe(true);
+    expect(keys.has("community.aria_allow_disabled")).toBe(true);
+    expect(keys.has("community.placeholder_note")).toBe(true);
+    expect(keys.has("errors.feature_unavailable")).toBe(true);
     expect(keys.has("panel.group_unattributed")).toBe(true);
     expect(keys.has("panel.invalid_cost_rows")).toBe(true);
     expect(keys.has("panel.quota_stale")).toBe(true);
@@ -90,6 +95,20 @@ describe("lub panel copy", () => {
     expect(en.lub.overcap.caption_resets).toContain("{{time}}");
     expect(zh.lub.community.allow_more_today).toContain("{{amount}}");
     expect(en.lub.community.allow_more_today).toContain("{{amount}}");
+    expect(zh.lub.community.aria_allow_disabled).toContain("{{action}}");
+    expect(en.lub.community.aria_allow_disabled).toContain("{{action}}");
+    expect(Object.keys(zh.lub.community).sort()).toEqual(
+      Object.keys(en.lub.community).sort(),
+    );
+    expect(Object.keys(zh.lub.errors).sort()).toEqual(
+      Object.keys(en.lub.errors).sort(),
+    );
+    expect(zh.lub.community.badge).toBe("社区构建");
+    expect(en.lub.community.badge).toBe("Community build");
+    expect(zh.lub.errors.feature_unavailable).toBe("社区构建不包含此功能");
+    expect(en.lub.errors.feature_unavailable).toBe(
+      "Not included in the community build",
+    );
     expect(dollarAmounts(zh.lub)).toEqual([]);
     expect(dollarAmounts(en.lub)).toEqual([]);
     expect(dollarAmounts(proZh.lub)).toEqual([]);
