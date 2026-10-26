@@ -327,6 +327,14 @@ fn push_provider_model_filters(
 }
 
 pub(crate) fn effective_usage_log_filter(log_alias: &str) -> String {
+    format!(
+        "COALESCE({log_alias}.end_reason, '') != 'guard_deny' AND COALESCE({log_alias}.end_reason, '') NOT LIKE 'guard_hold%' AND ({})",
+        deduplicated_log_filter(log_alias)
+    )
+}
+
+// Audit lists retain gate decisions; usage aggregates exclude Deny and Hold.
+fn deduplicated_log_filter(log_alias: &str) -> String {
     let data_source = data_source_expr(log_alias);
     let proxy_data_source = data_source_expr("proxy_dedup");
     format!(
@@ -336,6 +344,8 @@ pub(crate) fn effective_usage_log_filter(log_alias: &str) -> String {
                 SELECT 1
                 FROM proxy_request_logs proxy_dedup
                 WHERE {proxy_data_source} = 'proxy'
+                  AND COALESCE(proxy_dedup.end_reason, '') != 'guard_deny'
+                  AND COALESCE(proxy_dedup.end_reason, '') NOT LIKE 'guard_hold%'
                   AND proxy_dedup.app_type = {log_alias}.app_type
                   AND proxy_dedup.status_code >= 200
                   AND proxy_dedup.status_code < 300
@@ -414,6 +424,8 @@ pub(crate) fn has_matching_proxy_usage_log(
             SELECT 1
             FROM proxy_request_logs l
             WHERE {l_data_source} = 'proxy'
+              AND COALESCE(l.end_reason, '') != 'guard_deny'
+              AND COALESCE(l.end_reason, '') NOT LIKE 'guard_hold%'
               AND l.app_type = ?1
               AND l.status_code >= 200
               AND l.status_code < 300
@@ -1505,7 +1517,7 @@ impl Database {
     ) -> Result<PaginatedLogs, AppError> {
         let conn = lock_conn!(self.conn);
 
-        let mut conditions = vec![effective_usage_log_filter("l")];
+        let mut conditions = vec![deduplicated_log_filter("l")];
         let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
 
         if let Some(ref app_type) = filters.app_type {
@@ -1667,6 +1679,8 @@ impl Database {
                     SELECT CAST(total_cost_usd AS REAL) as cost
                     FROM proxy_request_logs
                     WHERE provider_id = ? AND app_type = ?
+                      AND COALESCE(end_reason, '') != 'guard_deny'
+                      AND COALESCE(end_reason, '') NOT LIKE 'guard_hold%'
                       AND date(datetime(created_at, 'unixepoch', 'localtime')) = date('now', 'localtime')
                     UNION ALL
                     SELECT CAST(total_cost_usd AS REAL)
@@ -1686,6 +1700,8 @@ impl Database {
                     SELECT CAST(total_cost_usd AS REAL) as cost
                     FROM proxy_request_logs
                     WHERE provider_id = ? AND app_type = ?
+                      AND COALESCE(end_reason, '') != 'guard_deny'
+                      AND COALESCE(end_reason, '') NOT LIKE 'guard_hold%'
                       AND strftime('%Y-%m', datetime(created_at, 'unixepoch', 'localtime')) = strftime('%Y-%m', 'now', 'localtime')
                     UNION ALL
                     SELECT CAST(total_cost_usd AS REAL)
@@ -2476,7 +2492,8 @@ mod tests {
                 cache_creation_tokens INTEGER NOT NULL,
                 status_code INTEGER NOT NULL,
                 created_at INTEGER NOT NULL,
-                data_source TEXT
+                data_source TEXT,
+                end_reason TEXT
             )",
             [],
         )?;
@@ -2500,6 +2517,47 @@ mod tests {
         let count: i64 = conn.query_row(&sql, [], |row| row.get(0))?;
         assert_eq!(count, 1);
 
+        Ok(())
+    }
+
+    #[test]
+    fn guard_deny_does_not_suppress_matching_session_usage() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        {
+            let conn = lock_conn!(db.conn);
+            for (id, source, reason) in [
+                ("denied", "proxy", Some("guard_deny")),
+                ("held", "proxy", Some("guard_hold")),
+                ("legacy-held", "proxy", Some("guard_hold_timeout")),
+                ("session", "codex_session", None),
+            ] {
+                conn.execute(
+                    "INSERT INTO proxy_request_logs (request_id, provider_id, app_type,
+                         model, input_tokens, output_tokens, total_cost_usd, latency_ms,
+                         status_code, created_at, data_source, end_reason)
+                     VALUES (?1, 'p', 'codex', 'm', 11, 3, '0.25', 0, 200, 1000, ?2, ?3)",
+                    params![id, source, reason],
+                )?;
+            }
+            assert!(!should_skip_session_insert(
+                &conn,
+                "new-session",
+                &DedupKey {
+                    app_type: "codex",
+                    model: "m",
+                    input_tokens: 11,
+                    output_tokens: 3,
+                    cache_read_tokens: 0,
+                    cache_creation_tokens: 0,
+                    created_at: 1000,
+                }
+            )?);
+        }
+        let summary = db.get_usage_summary(None, None, None, None, None)?;
+        assert_eq!(summary.total_requests, 1);
+        assert_eq!(summary.total_input_tokens, 11);
+        assert_eq!(summary.total_output_tokens, 3);
+        assert_eq!(summary.total_cost.parse::<f64>().unwrap(), 0.25);
         Ok(())
     }
 

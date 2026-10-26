@@ -99,7 +99,33 @@ impl Database {
         }
         policy.hourly_days = Self::raise_retention_high_water_on_conn(&conn, policy.hourly_days)?;
         let cutoff = compute_local_midnight_cutoff(Local::now(), policy.detail_days)?;
-        backfill_dirty_hours(&conn)?;
+        // Repair pre-v1.7 cached Hold counts once, before pruning their details.
+        // Never full-rebuild: older hourly history may no longer have details.
+        // Commit the marker with the repair so a failure retries next time.
+        let transaction = conn.unchecked_transaction()?;
+        let repaired: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM settings
+             WHERE key = 'guard_hold_hourly_repaired_v1' AND value = '1')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !repaired {
+            transaction.execute(
+                "INSERT OR IGNORE INTO rollup_dirty_hours (hour_utc)
+                 SELECT DISTINCT created_at - ((created_at % 3600 + 3600) % 3600)
+                 FROM proxy_request_logs WHERE end_reason LIKE 'guard_hold%'",
+                [],
+            )?;
+        }
+        backfill_dirty_hours(&transaction)?;
+        if !repaired {
+            transaction.execute(
+                "INSERT OR REPLACE INTO settings (key, value)
+                 VALUES ('guard_hold_hourly_repaired_v1', '1')",
+                [],
+            )?;
+        }
+        transaction.commit()?;
 
         let prediction_cutoff = Local::now()
             .timestamp()

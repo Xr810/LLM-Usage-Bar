@@ -174,7 +174,9 @@ fn load_rows(db: &Database) -> Result<Vec<RawRow>, AppError> {
     let mut statement = conn
         .prepare(
             "SELECT request_id, COALESCE(data_source, 'proxy'), session_id, total_cost_usd, created_at
-             FROM proxy_request_logs",
+             FROM proxy_request_logs
+             WHERE COALESCE(end_reason, '') != 'guard_deny'
+               AND COALESCE(end_reason, '') NOT LIKE 'guard_hold%'",
         )
         .map_err(|_| AppError::internal("Could not list sessions."))?;
     let mut rows = statement

@@ -2140,3 +2140,100 @@ local clippy `-D warnings` passed in 19.24s; fmt/diff checks passed. No further
 local full-test retries after exit 137: the new targeted tests require the same
 unbuilt library test executable. New-head CI, not the prior green run, must
 validate this enforcement change. No frontend changes or merge authorized.
+
+#### 2026-10-26 QA-20 D2: Deny audit logging (contract v1.4)
+
+Based on BE-30 `a9b53743` (#111). `Decision::Deny` records one idempotent
+`proxy_request_logs` settlement with `end_reason=guard_deny`, zero tokens and
+cost, and the gate's `rule` in the existing nullable `error_message` column.
+No body read, upstream attempt, gate settlement, usage event or guard counter
+is produced. The gate's HTTP status and JSON value remain unchanged, including
+when audit insertion fails. No schema, public gate contract or provider calls
+are added.
+
+Deny-only exclusions cover the shared detail/daily-archive usage filter,
+live/rebuilt/dirty hourly rollups, raw project/client trends, provider daily
+and monthly limits, session spend and session deduplication. Audit list/detail access remains
+available. Agent/model/provider event-ledger aggregates and tray today/budget
+spend do not ingest these audit settlements; the community guard getter still
+projects zero counters. Fixtures compare the nonempty usage views before and
+after Deny, including deliberately nonzero imported Deny rows and HTTP 200,
+then check archival cannot reintroduce denied usage.
+
+**Hold baseline gap, deliberately NOT fixed in D2:** at `a9b53743`,
+`route/server.rs:719–738` records `guard_hold` but not the Hold reason;
+`store/dao/hourly_rollup.rs:317–338` does not write `error_message`.
+`store/usage_stats.rs:329–363` only excludes duplicate session rows, not Hold;
+`store/dao/hourly_rollup.rs:480–515` counts Hold as a request. Daily archival
+uses that same detail filter (`store/dao/usage_rollup.rs:174–215`). D2 preserves
+Hold's 429 envelope, Retry-After, stored NULL reason and aggregate count; tests
+pin those existing semantics. Because Hold has no stored reason column to
+mirror, Deny uses `error_message` for `rule` explicitly, without changing Hold.
+Any Hold reason/exclusion change requires a separate user decision.
+
+Local validation: `pnpm rust -- fmt --manifest-path src-tauri/Cargo.toml` and
+`git diff --check` pass. Low-memory `pnpm rust -- test --locked --manifest-path
+src-tauri/Cargo.toml --lib guard_deny -- --nocapture` was killed (exit 137)
+before executing tests, with the same three existing test warnings as BE-30.
+The corresponding low-memory `check --tests` was also killed (exit 137).
+Neither is a passing result. Exact-head PR CI must validate the new
+router assertions and aggregate/session-dedup fixtures. No merge or release
+is authorized; the existing §20 native interactive shutdown gaps remain open.
+
+PR #113 initial-head CI (`91c494d7`, run `40341707394`) passed all 1387 library
+tests in each backend mode, including the Deny/Hold/aggregate/session cases,
+but both backend jobs failed the dependency guard: the cross-layer fixture
+under `store/qa12_fixtures.rs` imported `usage`. The correction moves that
+fixture to `usage/trend/tests.rs`, exercises dirty-hour maintenance through
+`Database::rollup_and_prune`, and extends the existing store-only full-rebuild
+fixture with Deny rows. No runtime change or guard exception was needed.
+The unmodified dependency-guard source passed locally, 2/2 tests, through a
+temporary dependency-free Cargo harness pointing at the actual repository
+source/root; the normal app-linked guard build also hit exit 137. Production
+Clippy `-D warnings` passed (2m27s). New-head CI must verify the moved fixture;
+the initial run's frontend and both desktop passes are not new-head evidence.
+
+#### 2026-10-26 Contract v1.7: Hold audit reason and usage exclusions
+
+Baseline: `d849ac55a946f481c6d4a59cf31e2732b5a59870`, verified as both
+#113's merge commit and current `origin/main` before branching. The BE-30
+immediate Hold now writes the gate-supplied reason to `error_message` on its
+single `guard_hold` settlement; its 429 body and Retry-After are unchanged.
+No new Hold sub-reason is written. Usage SQL excludes `guard_hold%` alongside
+`guard_deny`, and hourly contributions exclude the same legacy prefix for
+live settlement, dirty-hour maintenance and full rebuild. Daily archival,
+summaries, trends, provider limits, session spend and session deduplication
+use these exclusions. Audit list access remains available. No schema or
+migration change, frontend edit, BE-31 activation or private PRO-1 work.
+
+Existing router tests inject `approval_required`, `denied`, `timeout` and
+`queue_full` reasons and assert one row, exact stored message, no forwarding,
+and zero hourly requests. Aggregate fixtures compare nonempty usage views
+after each reason/legacy import (including nonzero tokens/cost and HTTP 200),
+then exercise daily archival. Full hourly rebuild and session-dedup fixtures
+also cover legacy `guard_hold_timeout` rows. Allow completion still counts.
+
+Upgrade correction: startup/periodic maintenance queues retained Hold-detail
+hours for a one-time dirty-hour repair, atomically committing the repair and
+an existing-settings-table marker. It does not full-rebuild or discard older
+hourly history whose details are gone. A disk-backed startup regression seeds
+pre-v1.7 cached counts without dirty hours, reopens through `Database::init_at`,
+and checks mixed ordinary/Hold hours, Hold-only hours, untouched archived
+history and repeated maintenance. No versioned migration or schema edit.
+
+**Contract blocker / scope boundary:** the public repository has no held
+queue, interactive wait, release, timeout, overflow, shutdown or client-gone
+Hold lifecycle. Injected reason labels exercise the actual immediate gate,
+not those absent lifecycle paths. A released-Hold integration test cannot be
+implemented here without adding PRO-2; ordinary Allow is only the normal
+completion control. Do not treat these tests as PRO-2 acceptance. Existing
+§20 native interactive shutdown gaps remain open.
+
+Local wrapper-managed test compilation was killed by the 2 GB orb memory
+limit (exit 137), before executing tests. Production Clippy `-D warnings`
+passes, including after the upgrade correction (19.87s); formatting and
+`git diff --check` pass. Initial-head CI passed 1387 library and 15 integration
+tests, but that does not validate the added upgrade regression. Final exact-head
+CI results (Frontend, Backend, Backend no-pro, macOS, Windows, label) belong
+to the PR/thread; do not infer test success from this entry. No merge or
+release authorized.
