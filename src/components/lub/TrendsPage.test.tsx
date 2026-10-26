@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import i18n from "i18next";
 import en from "@/i18n/locales/en.json";
 import zh from "@/i18n/locales/zh.json";
@@ -12,10 +12,30 @@ import { HEATMAP_MAX_WEEKS } from "@/lib/constants";
 import { server } from "../../../tests/msw/server";
 import { commandCalls } from "../../../tests/msw/tauriMocks";
 import { TrendsPage } from "./TrendsPage";
-import { QUERY_USAGE_TREND_COMMAND } from "./perGroupDailyTrend";
-import { WEEKDAY_HOUR_FEATURE } from "./trendsModel";
+import {
+  QUERY_USAGE_TREND_COMMAND,
+  type PerGroupDailySeries,
+} from "./perGroupDailyTrend";
+import { WEEKDAY_HOUR_FEATURE, type TrendDimension } from "./trendsModel";
+
+const perGroupDaily = vi.hoisted(() => ({
+  impl: null as
+    ((groupBy: TrendDimension) => PerGroupDailySeries | null) | null,
+}));
+
+vi.mock("./perGroupDailyTrend", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./perGroupDailyTrend")>();
+  return {
+    ...actual,
+    loadPerGroupDailySeries: (groupBy: TrendDimension) =>
+      perGroupDaily.impl
+        ? perGroupDaily.impl(groupBy)
+        : actual.loadPerGroupDailySeries(groupBy),
+  };
+});
 
 beforeEach(async () => {
+  perGroupDaily.impl = null;
   i18n.addResourceBundle("zh", "translation", zh, true, true);
   i18n.addResourceBundle("en", "translation", en, true, true);
   await i18n.changeLanguage("zh");
@@ -141,11 +161,13 @@ describe("TrendsPage", () => {
     );
   });
 
-  it("keeps week, month, project, and client behind upsell and opens one panel", async () => {
+  it("keeps week and month behind upsell and hides project and client", async () => {
     const user = userEvent.setup();
     renderPage(<TrendsPage features={["upsell_entry"]} />);
     expect(screen.getByTestId("lub-weekday-hour")).toBeInTheDocument();
     expect(screen.getAllByText("PRO").length).toBeGreaterThan(0);
+    expect(buttonNamed("项目")).toBeNull();
+    expect(buttonNamed("客户")).toBeNull();
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.queryByText("比较 Free 与 Pro")).toBeNull();
 
@@ -174,7 +196,7 @@ describe("TrendsPage", () => {
     expect(screen.queryByTestId("lub-trends-toolbar")).toBeNull();
   });
 
-  it("lets Pro switch week and group by project or client", async () => {
+  it("lets Pro switch week while project and client stay hidden", async () => {
     const user = userEvent.setup();
     renderPage(<TrendsPage tier="pro" />);
     expect(screen.queryByText("PRO")).toBeNull();
@@ -189,12 +211,8 @@ describe("TrendsPage", () => {
     expect(
       within(toolbar).getByRole("button", { name: "月" }),
     ).toBeInTheDocument();
-    expect(
-      within(toolbar).getByRole("button", { name: "项目" }),
-    ).toBeInTheDocument();
-    expect(
-      within(toolbar).getByRole("button", { name: "客户" }),
-    ).toBeInTheDocument();
+    expect(within(toolbar).queryByRole("button", { name: "项目" })).toBeNull();
+    expect(within(toolbar).queryByRole("button", { name: "客户" })).toBeNull();
 
     await waitFor(() => {
       expect(screen.getByTestId("lub-trend-total")).not.toHaveTextContent("—");
@@ -214,14 +232,6 @@ describe("TrendsPage", () => {
       ).toBeLessThan(dayLabels);
     });
 
-    await user.click(within(toolbar).getByRole("button", { name: "项目" }));
-    expect(
-      within(toolbar).getByRole("button", { name: "项目" }),
-    ).toHaveAttribute("aria-pressed", "true");
-    await user.click(within(toolbar).getByRole("button", { name: "客户" }));
-    expect(
-      within(toolbar).getByRole("button", { name: "客户" }),
-    ).toHaveAttribute("aria-pressed", "true");
     expect(screen.queryByText("Claude Code")).toBeNull();
     expect(screen.queryByText("OpenAI API")).toBeNull();
     expect(screen.queryByText("codex")).toBeNull();
@@ -231,6 +241,69 @@ describe("TrendsPage", () => {
       "none",
     );
     expect(commandCalls("get_agent_usage_breakdown")).toHaveLength(0);
+    expect(commandCalls(QUERY_USAGE_TREND_COMMAND)).toHaveLength(0);
+  });
+
+  it("shows a project toggle only after that dimension's series exists", async () => {
+    const user = userEvent.setup();
+    perGroupDaily.impl = (groupBy) =>
+      groupBy === "project" ? { groupBy } : null;
+    renderPage(<TrendsPage tier="pro" />);
+    const toolbar = screen.getByTestId("lub-trends-toolbar");
+    expect(within(toolbar).queryByRole("button", { name: "客户" })).toBeNull();
+    expect(screen.getByTestId("lub-trends")).toHaveAttribute(
+      "data-per-group",
+      "none",
+    );
+    await user.click(within(toolbar).getByRole("button", { name: "项目" }));
+    expect(
+      within(toolbar).getByRole("button", { name: "项目" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("lub-trends")).toHaveAttribute(
+      "data-per-group",
+      "day",
+    );
+    expect(commandCalls(QUERY_USAGE_TREND_COMMAND)).toHaveLength(0);
+  });
+
+  it("lets Pro switch project and client when both series exist", async () => {
+    const user = userEvent.setup();
+    perGroupDaily.impl = (groupBy) =>
+      groupBy === "provider" ? null : { groupBy };
+    renderPage(<TrendsPage tier="pro" />);
+    const toolbar = screen.getByTestId("lub-trends-toolbar");
+    await user.click(within(toolbar).getByRole("button", { name: "客户" }));
+    expect(
+      within(toolbar).getByRole("button", { name: "客户" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("lub-trends")).toHaveAttribute(
+      "data-per-group",
+      "day",
+    );
+    await user.click(within(toolbar).getByRole("button", { name: "项目" }));
+    expect(
+      within(toolbar).getByRole("button", { name: "项目" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByText("PRO")).toBeNull();
+    expect(commandCalls(QUERY_USAGE_TREND_COMMAND)).toHaveLength(0);
+  });
+
+  it("locks project and client behind upsell when their series exist", async () => {
+    const user = userEvent.setup();
+    perGroupDaily.impl = (groupBy) =>
+      groupBy === "provider" ? null : { groupBy };
+    renderPage(<TrendsPage features={["upsell_entry"]} />);
+    const project = screen.getByRole("button", { name: "项目，Pro 功能" });
+    expect(
+      screen.getByRole("button", { name: "客户，Pro 功能" }),
+    ).toBeInTheDocument();
+    await user.click(project);
+    expect(screen.getByRole("dialog")).toHaveTextContent("用 Pro 看更多维度");
+    expect(screen.getByRole("button", { name: "日" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(project).toHaveAttribute("aria-pressed", "false");
     expect(commandCalls(QUERY_USAGE_TREND_COMMAND)).toHaveLength(0);
   });
 

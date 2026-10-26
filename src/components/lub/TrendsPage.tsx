@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { formatUsd } from "@/components/tray-usage/trayUsagePresentation";
 import { ensureProCopy } from "@/i18n/proCopy";
 import { HEATMAP_MAX_WEEKS } from "@/lib/constants";
+import { loadPerGroupDailySeries } from "./perGroupDailyTrend";
 import { UpsellPanel } from "./UpsellPanel";
 import { useTrendsData } from "./useTrendsData";
 import {
@@ -75,7 +76,10 @@ export function TrendsPage({
     { id: "provider", label: t("lub.settings.providers") },
     { id: "project", label: t("lub.upsell.dim_project", { ns: "pro" }) },
     { id: "client", label: t("lub.upsell.dim_client", { ns: "pro" }) },
-  ];
+  ].filter(
+    (item) =>
+      item.id === "provider" || loadPerGroupDailySeries(item.id) != null,
+  );
 
   return (
     <div

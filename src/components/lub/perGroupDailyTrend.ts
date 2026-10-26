@@ -19,6 +19,16 @@ export function queryUsageTrendInput(
 }
 
 /**
+ * Real per-group daily buckets. Batch 1 never builds one.
+ * Project and client toggles render only when `loadPerGroupDailySeries`
+ * returns a series, so they appear with the BE-16 payload and need no
+ * second flag.
+ */
+export interface PerGroupDailySeries {
+  groupBy: TrendDimension;
+}
+
+/**
  * Batch-2 seam (BE-16).
  *
  * Real per-group daily bars come from
@@ -31,6 +41,8 @@ export function queryUsageTrendInput(
  * `queryUsageTrendInput(groupBy)` and map the buckets into daily
  * series. Do not call the command until that payload exists.
  */
-export function loadPerGroupDailySeries(_groupBy: TrendDimension): null {
+export function loadPerGroupDailySeries(
+  _groupBy: TrendDimension,
+): PerGroupDailySeries | null {
   return null;
 }

@@ -2,7 +2,10 @@ import { useMemo, useState } from "react";
 import { useProviderUsageActivity } from "@/lib/query/providerUsageActivity";
 import { useApiBudgetConfig } from "@/lib/query/trayUsage";
 import { useProviderUsageDashboard } from "@/lib/query/usageDashboard";
-import { loadPerGroupDailySeries } from "./perGroupDailyTrend";
+import {
+  loadPerGroupDailySeries,
+  type PerGroupDailySeries,
+} from "./perGroupDailyTrend";
 import {
   dayPoints,
   heatmapCells,
@@ -35,7 +38,7 @@ export interface TrendsData {
   heatmap: HeatCell[];
   ready: boolean;
   /** BE-16 seam. Null until real per-group daily buckets exist. */
-  perGroupDaily: null;
+  perGroupDaily: PerGroupDailySeries | null;
 }
 
 /**
