@@ -9,6 +9,7 @@ import { LicenseSettings } from "@/components/lub/LicenseSettings";
 import { OnboardingWizard } from "@/components/lub/OnboardingWizard";
 import { TrayPanelV5 } from "@/components/lub/TrayPanelV5";
 import { TrendsPage } from "@/components/lub/TrendsPage";
+import { UpgradePanel } from "@/components/lub/UpgradePanel";
 import { splitUsd } from "@/components/lub/money";
 import {
   betaPanelFixture,
@@ -123,6 +124,10 @@ function Gallery({
         ) : screen === "onboard" ? (
           <div className="lub-stage lub-stage-window">
             <OnboardingWizard />
+          </div>
+        ) : screen === "compare" ? (
+          <div className="lub-stage lub-stage-window">
+            <UpgradePanel upsellEntry onClose={() => undefined} />
           </div>
         ) : screen === "trends" ? (
           <div className="lub-stage">

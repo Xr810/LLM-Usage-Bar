@@ -33,7 +33,7 @@
       "tomorrow": "Tomorrow {{time}}",
       "allow_this_one": "Allow this one",
       "keep_paused": "Keep paused",
-      "no_limit_on_allowing_each": "If you don’t choose within 60s, this request is refused (HTTP 429). “Allow more today” lasts until midnight and doesn’t change your cap. No limit on allowing. Unproxied plans aren’t affected.",
+      "no_limit_on_allowing_each": "If you don’t choose within {{seconds}}s, this request is refused (HTTP 429). “Allow more today” lasts until midnight and doesn’t change your cap. No limit on allowing. Unproxied plans aren’t affected.",
       "change_cap": "Change cap",
       "auto_denies_in_s": "Auto-denies in {{seconds}}s",
       "allow_more_today": "Allow {{amount}} more today"
@@ -57,7 +57,7 @@
       "allow_once": "Allow once",
       "always_allow_for_this_project": "Always allow for this project",
       "auto_allow_from_now_on": "Auto-allow from now on (all projects)",
-      "auto_denies_after_s_undo": "Auto-denies after 60 s. Undo auto-allow in Settings › Caps & stopping."
+      "auto_denies_after_s_undo": "Auto-denies after {{seconds}} s. Undo auto-allow in Settings › Caps & stopping."
     },
     "export": {
       "project": "Project",

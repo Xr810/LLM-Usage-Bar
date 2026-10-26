@@ -4,7 +4,10 @@ import { formatUsd } from "@/components/tray-usage/trayUsagePresentation";
 import { ensureProCopy } from "@/i18n/proCopy";
 import { HEATMAP_MAX_WEEKS } from "@/lib/constants";
 import { loadPerGroupDailySeries } from "./perGroupDailyTrend";
-import { UpsellPanel } from "./UpsellPanel";
+import type { LubBuild, LubTier } from "./panelModel";
+import { ProTag } from "./ProTag";
+import { proTagVisible } from "./upgradeEntry";
+import { UpgradePanel } from "./UpgradePanel";
 import { useTrendsData } from "./useTrendsData";
 import {
   axisLabels,
@@ -45,15 +48,26 @@ function usdText(amount: number | null, locale: string): string {
 
 export function TrendsPage({
   tier = "free",
+  build = "official",
   features = [],
+  upsellEntry,
 }: {
-  tier?: "free" | "pro";
+  tier?: LubTier;
+  /** Design samples stay official. Live detection passes community while loading. */
+  build?: LubBuild;
   features?: readonly string[];
+  /** C2 `uiFlags.upsellEntry`. The gallery feature flag fills in when omitted. */
+  upsellEntry?: boolean;
 }) {
   ensureProCopy();
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage || i18n.language || "en";
-  const phase2Locks = tier !== "pro" && features.includes(UPSELL_ENTRY_FEATURE);
+  const resolvedUpsell = upsellEntry ?? features.includes(UPSELL_ENTRY_FEATURE);
+  const phase2Locks = proTagVisible({
+    build,
+    tier,
+    upsellEntry: resolvedUpsell,
+  });
   const showControls = tier === "pro" || phase2Locks;
   const showWeekday = showsWeekdayHour(features);
   const [granularity, setGranularity] = useState<TrendGranularity>("day");
@@ -136,11 +150,7 @@ export function TrendsPage({
                     }}
                   >
                     {label}
-                    {locked ? (
-                      <span className="lub-pro-tag">
-                        {t("lub.upsell.pro_tag", { ns: "pro" })}
-                      </span>
-                    ) : null}
+                    {locked ? <ProTag /> : null}
                   </button>
                 );
               })}
@@ -171,11 +181,7 @@ export function TrendsPage({
                     }}
                   >
                     {item.label}
-                    {locked ? (
-                      <span className="lub-pro-tag">
-                        {t("lub.upsell.pro_tag", { ns: "pro" })}
-                      </span>
-                    ) : null}
+                    {locked ? <ProTag /> : null}
                   </button>
                 );
               })}
@@ -319,7 +325,10 @@ export function TrendsPage({
           </section>
         ) : null}
         {phase2Locks && upsellOpen ? (
-          <UpsellPanel onClose={() => setUpsellOpen(false)} />
+          <UpgradePanel
+            upsellEntry={resolvedUpsell}
+            onClose={() => setUpsellOpen(false)}
+          />
         ) : null}
       </div>
     </div>

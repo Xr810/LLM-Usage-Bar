@@ -743,7 +743,9 @@
       "no_license": "No license?",
       "compare_free_vs_pro": "Compare Free vs Pro",
       "community_build": "Community build",
-      "official_build_required": "Official build required"
+      "official_build_required": "Official build required",
+      "pro_expired": "Pro expired",
+      "renew": "Renew Pro"
     },
     "trends": {
       "day": "Day",
@@ -859,6 +861,14 @@
     },
     "errors": {
       "feature_unavailable": "Not included in the community build"
+    },
+    "upgrade": {
+      "close": "Not now",
+      "aria_table": "Free and Pro feature comparison"
+    },
+    "purchase": {
+      "trial": "Start a {{days}}-day trial",
+      "buy": "Buy Pro"
     }
   },
   "native": {

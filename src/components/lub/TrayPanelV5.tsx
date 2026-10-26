@@ -5,6 +5,8 @@ import { ensureProCopy } from "@/i18n/proCopy";
 import { CommunityAllowPlaceholder } from "./CommunityAllowPlaceholder";
 import { CommunityBuildBadge } from "./CommunityBuildBadge";
 import { communityChromeVisible } from "./detectLubBuild";
+import { proTagVisible, upgradeAffordanceVisible } from "./upgradeEntry";
+import { UpgradePanel } from "./UpgradePanel";
 import { formatResetInstant, sharedNextResetAt } from "./money";
 import { SessionList } from "./SessionList";
 import { SourceList } from "./SourceList";
@@ -184,6 +186,10 @@ export function TrayPanelV5({
   const { t, i18n } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
   const [hiddenRows, setHiddenRows] = useState(0);
+  const [upgradeOpen, setUpgradeOpen] = useState(false);
+  const gate = { build, tier, upsellEntry };
+  const showUpgrade = upgradeAffordanceVisible(gate);
+  const showProTag = proTagVisible(gate);
 
   useLayoutEffect(() => {
     const node = scrollRef.current;
@@ -259,8 +265,16 @@ export function TrayPanelV5({
           <StatusBanner
             capUsd={model.dailyCapUsd}
             locale={locale}
-            upsellEntry={build !== "community" && upsellEntry}
+            upsellEntry={showUpgrade}
+            showProTag={showProTag}
+            onCompare={() => setUpgradeOpen(true)}
           />
+          {showUpgrade && upgradeOpen ? (
+            <UpgradePanel
+              upsellEntry={upsellEntry}
+              onClose={() => setUpgradeOpen(false)}
+            />
+          ) : null}
           {community ? <CommunityAllowPlaceholder locale={locale} /> : null}
         </>
       ) : null}

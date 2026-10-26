@@ -743,7 +743,9 @@
       "no_license": "还没有？",
       "compare_free_vs_pro": "比较 Free 与 Pro",
       "community_build": "社区构建",
-      "official_build_required": "需官方构建"
+      "official_build_required": "需官方构建",
+      "pro_expired": "Pro 已过期",
+      "renew": "续订 Pro"
     },
     "trends": {
       "day": "日",
@@ -859,6 +861,14 @@
     },
     "errors": {
       "feature_unavailable": "社区构建不包含此功能"
+    },
+    "upgrade": {
+      "close": "以后再说",
+      "aria_table": "Free 与 Pro 功能对照"
+    },
+    "purchase": {
+      "trial": "开始 {{days}} 天试用",
+      "buy": "购买 Pro"
     }
   },
   "native": {

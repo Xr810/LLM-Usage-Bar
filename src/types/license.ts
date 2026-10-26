@@ -6,6 +6,7 @@ export interface LicenseUiFlags {
 /**
  * `active | grace | free`. Same snake_case values as `LicenseState` in
  * `src-tauri/src/policy/license.rs` (BE-31 / #114).
+ * Expired Pro stays `free`; there is no extra state value.
  */
 export type LicenseState = "active" | "grace" | "free";
 
@@ -18,6 +19,7 @@ export type LicenseState = "active" | "grace" | "free";
  * full status (including `state` and `graceUntil` when grace applies) and
  * omits `emailMasked` when the provider has none.
  * Community: `{tier:'free',state:'free',build:'community',features:[],uiFlags:{upsellEntry:false}}`.
+ * `state: 'free'` with a non-empty `expiresAt` is an expired Pro.
  */
 export interface LicenseStatus {
   tier: "free" | "pro" | "pro_p3";
