@@ -16,6 +16,8 @@ import { TrayUsagePopoverView } from "./TrayUsagePopoverView";
 
 const NOW = new Date("2026-07-16T12:00:00Z");
 const snapshot: TrayUsageSnapshot = {
+  buildType: "community",
+  sources: [],
   status: "yellow",
   generatedAt: 1_784_199_600,
   lastSuccessAt: 1_784_203_140,

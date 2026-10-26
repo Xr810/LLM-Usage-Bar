@@ -442,6 +442,7 @@ mod tests {
 
     fn snapshot(status: UsageStatus, generated_at: i64, row: &str) -> TrayUsageSnapshot {
         TrayUsageSnapshot {
+            build_type: crate::policy::LicenseBuild::Community,
             status,
             generated_at,
             last_success_at: Some(generated_at),

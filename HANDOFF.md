@@ -1565,3 +1565,58 @@ name and confirms the JSON-string version contract above:
 - PR #89 exact head `29d2fa2fd7ad9154baf0c1c69635c9f79af123cc`: all six checks
   passed, including both backend modes and macOS/Windows desktop builds:
   https://github.com/Xr810/LLM-Usage-Bar/actions/runs/40202713551.
+
+### 2026-10-26 BE-21b tray contract (partial; C17 mapping blocked)
+
+Based on `a7954917`, `TrayUsageSnapshot.buildType` reuses `LicenseBuild` and
+`community_license_status().build`, the same source as the license command.
+The public repository has no official provider selection or `pro` feature;
+private official-build integration remains unverified. No new build selector
+or Cargo feature is introduced.
+
+`SourceRowView.nextResetAt` is the earliest parseable RFC3339 instant in its
+published windows, serialized as UTC ISO-8601. Missing windows, invalid values,
+and timezone-free timestamps yield `null` when no known instant remains. No
+local midnight or timezone is invented. The shared fixture deliberately orders
+offset timestamps differently lexically and chronologically.
+
+`noteCodes: string[]` is present but currently empty. ADR v7.18 / the C17
+`reasonCode` enumeration and emission rules are unavailable in this checkout.
+BE-17's `ToolDetectRow` emits `codex_websocket` for an unproxied Codex
+subscription, but `UsageProviderView` has no equivalent transport evidence or
+approved tool-to-provider mapping. Do not infer it from provider names, quota
+sources, or all Codex subscriptions. **C17 mapping and the Codex WebSocket
+source-row acceptance fixture remain blocked**, not completed by the empty
+array. Obtain the authoritative contract before implementing that mapping.
+
+This is an explicitly requested wire-format addition, not completion of §20's
+broader refactor or native-platform exit acceptance gates. BE-24 locale and
+notification text work, trusted subscription relay settings, official host
+allowlists, and the other orb's license UI flags are unchanged.
+
+Linux orb verification before push:
+
+- `pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml` and
+  `pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml --no-default-features`:
+  **each 1364 library + 15 integration tests passed**, including the new shared
+  contract fixture and both dependency guards. Three existing ignored tests and
+  three existing test-compilation warnings remain. These are the actual public
+  manifest/CI configurations, not an invented `pro` configuration.
+- `pnpm rust -- clippy --locked --manifest-path src-tauri/Cargo.toml -- -D warnings`
+  and `pnpm rust -- clippy --locked --manifest-path src-tauri/Cargo.toml --no-default-features -- -D warnings`:
+  **both passed**.
+- Rust environment: `CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0
+  CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0`. The initial focused build
+  exited 137 under memory pressure; the successful runs used temporary 2 GiB
+  swap. A subsequent test compile exposed the existing large `json!` fixture's
+  recursion limit when adding a field; adding the expected field separately
+  fixed it without changing the crate's recursion limit.
+- `pnpm test:unit --maxWorkers=1`: **55 files / 371 tests passed standalone**.
+  The first run concurrent with compilation had three timeouts; the unchanged
+  timed-out tests passed in the standalone rerun. No timeouts were increased.
+- `pnpm typecheck`, `pnpm format:check`,
+  `pnpm exec prettier --check src/types/trayUsage.ts src/lib/query/trayUsage.test.tsx src/components/tray-usage/TrayUsagePopover.test.tsx tests/msw/handlers.ts tests/fixtures/tray-source-contract.json`,
+  `pnpm rust -- fmt --manifest-path src-tauri/Cargo.toml --check`,
+  `git diff --check`, and §17 conflict-marker scan: **passed**.
+- No UI appearance/interaction changed; no native Windows/macOS run performed.
+  C17/Codex acceptance remains blocked as described above despite these passes.

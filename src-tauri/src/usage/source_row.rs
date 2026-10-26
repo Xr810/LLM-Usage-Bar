@@ -68,6 +68,12 @@ pub struct SourceRowView {
     /// Community build never stops traffic.
     pub stopped: bool,
     pub source_state: QuotaReadState,
+    /// C17 reason codes. No classifications are inferred from provider names.
+    /// Emission awaits the C17 mapping and provider-scoped transport evidence.
+    #[serde(default)]
+    pub note_codes: Vec<String>,
+    /// Earliest known window reset; never a synthetic local-day boundary.
+    pub next_reset_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub beta_truncate: Option<BetaTruncateView>,
 }
@@ -117,6 +123,8 @@ pub fn source_row_for_provider(
             progress: 0.0,
             stopped: false,
             source_state: QuotaReadState::Ok,
+            note_codes: Vec::new(),
+            next_reset_at: None,
             beta_truncate: None,
         };
     }
@@ -138,10 +146,22 @@ pub fn source_row_for_provider(
             enforceable: false,
             value_usd: None,
             used_pct,
+            next_reset_at: windows
+                .iter()
+                .flatten()
+                .filter_map(|window| window.resets_at.as_deref())
+                .filter_map(|value| chrono::DateTime::parse_from_rfc3339(value.trim()).ok())
+                .min()
+                .map(|value| {
+                    value
+                        .with_timezone(&chrono::Utc)
+                        .to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
+                }),
             windows,
             progress: progress_from_used_pct(used_pct),
             stopped: false,
             source_state,
+            note_codes: Vec::new(),
             beta_truncate: Some(BetaTruncateView::community_unavailable()),
         };
     }
@@ -162,6 +182,8 @@ pub fn source_row_for_provider(
         progress: 0.0,
         stopped: false,
         source_state: QuotaReadState::Ok,
+        note_codes: Vec::new(),
+        next_reset_at: None,
         beta_truncate: None,
     }
 }
@@ -249,6 +271,62 @@ mod tests {
     }
 
     #[test]
+    fn source_reset_contract_uses_earliest_instant_or_explicit_null() {
+        use crate::quota::source_status::{QuotaOrigin, QuotaWindowKind};
+        use crate::usage::tray_snapshot::{TrayUsageProjector, TrayUsageSnapshot};
+        use chrono::TimeZone;
+        use std::sync::Arc;
+
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/tray-source-contract.json"
+        ))
+        .unwrap();
+        let db = Arc::new(Database::memory().unwrap());
+        db.save_usage_provider(&provider("sub", "Claude", BillingKind::Subscription))
+            .unwrap();
+        let provider = db
+            .list_usage_providers()
+            .unwrap()
+            .into_iter()
+            .find(|provider| provider.id == "sub")
+            .unwrap();
+        for case in fixture["cases"].as_array().unwrap() {
+            let quota = ProviderQuotaStatus {
+                provider_id: provider.id.clone(),
+                windows: case["resetsAt"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|reset| QuotaWindowStatus {
+                        kind: QuotaWindowKind::FiveHour,
+                        used_pct: 40.0,
+                        resets_at: reset.as_str().map(str::to_owned),
+                    })
+                    .collect(),
+                used_pct: Some(40.0),
+                source: QuotaOrigin::BestEffort,
+                state: QuotaReadState::Ok,
+                last_success_at: Some(100),
+            };
+            let row = source_row_for_provider(&provider, Some(&quota), None);
+            let json = serde_json::to_value(row).unwrap();
+            assert!(json.get("nextResetAt").is_some(), "{}", case["id"]);
+            assert_eq!(json["nextResetAt"], case["nextResetAt"], "{}", case["id"]);
+            assert!(json["noteCodes"].is_array());
+        }
+        let now = chrono::Local.timestamp_opt(100, 0).single().unwrap();
+        for snapshot in [
+            TrayUsageSnapshot::unknown(100),
+            TrayUsageProjector::new(db).project_at(now).unwrap(),
+        ] {
+            assert_eq!(
+                serde_json::to_value(snapshot).unwrap()["buildType"],
+                fixture["buildType"]
+            );
+        }
+    }
+
+    #[test]
     fn cursor_is_untracked_and_a_stale_subscription_stays_subscription() {
         let db = Database::memory().unwrap();
         db.save_usage_provider(&provider("cursor", "Cursor", BillingKind::Metered))
@@ -320,6 +398,10 @@ mod tests {
         assert!(row.windows.is_none());
         assert_eq!(row.progress, 0.0);
         assert!(serde_json::to_value(row).unwrap().get("usedPct").is_none());
+        assert_eq!(
+            serde_json::to_value(row).unwrap().get("nextResetAt"),
+            Some(&serde_json::Value::Null)
+        );
     }
 
     #[test]
