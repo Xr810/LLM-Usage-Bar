@@ -685,7 +685,7 @@ html[data-window-surface="tray-popover"] .lub-scroll {
 }
 
 .lub-stale {
-  color: var(--lub-warn);
+  color: var(--lub-ink-2);
   font-size: var(--lub-fs-cap);
   font-weight: 500;
   line-height: var(--lub-lh-cap);
