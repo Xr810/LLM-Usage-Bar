@@ -30,6 +30,8 @@ const LICENSE_KEYS = [
 ];
 
 const supplementalLub = [
+  "lub.license.community_build",
+  "lub.license.official_build_required",
   "lub.onboard.terms_risk",
   "lub.onboard.claude_subscription_via_proxy",
 ];

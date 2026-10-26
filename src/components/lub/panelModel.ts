@@ -81,5 +81,7 @@ export interface LubPanelModel {
   alertThresholdPct: number;
   /** Sample clock for the stopped banner. Production has no kill command yet. */
   stoppedAt?: string | null;
+  /** Gray tray bar. The lift control stays enabled and does not call Tauri. */
+  licenseLapsed?: boolean;
   onSetSharedBudget?: () => void;
 }

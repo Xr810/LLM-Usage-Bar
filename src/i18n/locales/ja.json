@@ -615,6 +615,10 @@
     "output": "出力トークン"
   },
   "lub": {
+    "license": {
+      "community_build": "コミュニティビルド",
+      "official_build_required": "公式ビルドが必要です"
+    },
     "onboard": {
       "terms_risk": "プロバイダの利用規約に抵触する可能性があり、アカウントが制限されることがあります。判断はご自身で行ってください。",
       "claude_subscription_via_proxy": "プロキシ経由の Claude サブスクリプション"

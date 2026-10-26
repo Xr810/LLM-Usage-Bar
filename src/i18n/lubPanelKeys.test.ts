@@ -42,13 +42,22 @@ const LICENSE_KEYS = [
   "settings.license.communityNote",
 ];
 
+const supplementalLicense = [
+  "license.community_build",
+  "license.official_build_required",
+] as const;
+
 const supplementalOnboard = [
   "onboard.terms_risk",
   "onboard.claude_subscription_via_proxy",
 ] as const;
 
 function withoutLicense(keys: string[]): string[] {
-  const extra = new Set<string>([...LICENSE_KEYS, ...supplementalOnboard]);
+  const extra = new Set<string>([
+    ...LICENSE_KEYS,
+    ...supplementalLicense,
+    ...supplementalOnboard,
+  ]);
   return keys.filter((key) => !extra.has(key));
 }
 
@@ -68,10 +77,16 @@ describe("lub panel copy", () => {
     // community badge/aria keys and errors.feature_unavailable.
     // FE-1a adds the seven license settings keys on top of that pack.
     expect(flat(zh.lub)).toHaveLength(
-      203 + LICENSE_KEYS.length + supplementalOnboard.length,
+      203 +
+        LICENSE_KEYS.length +
+        supplementalLicense.length +
+        supplementalOnboard.length,
     );
     expect(flat(en.lub)).toHaveLength(
-      203 + LICENSE_KEYS.length + supplementalOnboard.length,
+      203 +
+        LICENSE_KEYS.length +
+        supplementalLicense.length +
+        supplementalOnboard.length,
     );
     expect(flat(proZh.lub)).toHaveLength(85);
     expect(flat(proEn.lub)).toHaveLength(85);
@@ -155,10 +170,10 @@ describe("lub panel copy", () => {
 
   it("covers the license keys in all four locales and keeps the other lub fallback", async () => {
     expect(flat(zhTW.lub).sort()).toEqual(
-      [...LICENSE_KEYS, ...supplementalOnboard].sort(),
+      [...LICENSE_KEYS, ...supplementalLicense, ...supplementalOnboard].sort(),
     );
     expect(flat(ja.lub).sort()).toEqual(
-      [...LICENSE_KEYS, ...supplementalOnboard].sort(),
+      [...LICENSE_KEYS, ...supplementalLicense, ...supplementalOnboard].sort(),
     );
     for (const key of LICENSE_KEYS) {
       expect(flat(zh.lub)).toContain(key);
@@ -202,6 +217,27 @@ describe("lub panel copy", () => {
     expect(local.t("lub.settings.about")).toBe(en.lub.settings.about);
     expect(local.t("lub.settings.license.communityNote")).toBe(
       ja.lub.settings.license.communityNote,
+    );
+  });
+
+  it("keeps the license strings in zh, en, zh-TW, and ja", () => {
+    expect(zh.lub.license.community_build).toBe(zh.lub.community.badge);
+    expect(en.lub.license.community_build).toBe(en.lub.community.badge);
+    expect(zh.lub.license.community_build).toBe("社区构建");
+    expect(en.lub.license.community_build).toBe("Community build");
+    expect(zhTW.lub.license.community_build).toBe("社群組建");
+    expect(ja.lub.license.community_build).toBe("コミュニティビルド");
+    expect(zh.lub.license.official_build_required).toBe("需官方构建");
+    expect(en.lub.license.official_build_required).toBe(
+      "Official build required",
+    );
+    expect(zhTW.lub.license.official_build_required).toBe("需官方組建");
+    expect(ja.lub.license.official_build_required).toBe("公式ビルドが必要です");
+    expect(zhTW.lub.license.community_build).not.toBe(
+      en.lub.license.community_build,
+    );
+    expect(ja.lub.license.official_build_required).not.toBe(
+      en.lub.license.official_build_required,
     );
   });
 
