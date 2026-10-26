@@ -859,6 +859,14 @@
     },
     "errors": {
       "feature_unavailable": "社区构建不包含此功能"
+    },
+    "upgrade": {
+      "close": "以后再说",
+      "aria_table": "Free 与 Pro 功能对照"
+    },
+    "purchase": {
+      "trial": "开始 {{days}} 天试用",
+      "buy": "购买 Pro"
     }
   },
   "native": {

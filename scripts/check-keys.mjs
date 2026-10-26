@@ -35,6 +35,10 @@ const supplementalLub = [
   "lub.license.official_build_required",
   "lub.onboard.terms_risk",
   "lub.onboard.claude_subscription_via_proxy",
+  "lub.upgrade.close",
+  "lub.upgrade.aria_table",
+  "lub.purchase.trial",
+  "lub.purchase.buy",
 ];
 const allowedExtra = new Set([...LICENSE_KEYS, ...supplementalLub]);
 

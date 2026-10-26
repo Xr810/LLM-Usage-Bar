@@ -33,7 +33,7 @@
       "tomorrow": "明天 {{time}}",
       "allow_this_one": "放行这 1 笔",
       "keep_paused": "保持暂停",
-      "no_limit_on_allowing_each": "60 秒内不选，这笔会被拒绝（HTTP 429）。「今日再放行」只在今天有效，不改上限。放行不限次数；不经代理的订阅不受影响。",
+      "no_limit_on_allowing_each": "{{seconds}} 秒内不选，这笔会被拒绝（HTTP 429）。「今日再放行」只在今天有效，不改上限。放行不限次数；不经代理的订阅不受影响。",
       "change_cap": "修改上限",
       "auto_denies_in_s": "{{seconds}} 秒后自动拒绝",
       "allow_more_today": "今日再放行 {{amount}}"
@@ -57,7 +57,7 @@
       "allow_once": "仅允许这一次",
       "always_allow_for_this_project": "此项目永久允许",
       "auto_allow_from_now_on": "以后自动放行（所有项目）",
-      "auto_denies_after_s_undo": "60 秒内不选将自动拒绝。自动放行可在 设置 › 限额与停止 中撤销。"
+      "auto_denies_after_s_undo": "{{seconds}} 秒内不选将自动拒绝。自动放行可在 设置 › 限额与停止 中撤销。"
     },
     "export": {
       "project": "项目",

@@ -909,6 +909,50 @@ html[data-window-surface="tray-popover"] .lub-scroll {
   color: var(--lub-on-accent);
 }
 
+.lub-upgrade {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: min(70vh, 560px);
+  overflow: auto;
+  padding: 16px;
+  border-radius: var(--lub-radius);
+  background: var(--lub-panel);
+  box-shadow: var(--lub-shadow-panel);
+}
+
+.lub-compare {
+  overflow-x: auto;
+}
+
+.lub-compare table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--lub-fs-cap);
+}
+
+.lub-compare th,
+.lub-compare td {
+  padding: 4px 6px;
+  text-align: start;
+  vertical-align: top;
+}
+
+.lub-compare-group th {
+  padding-top: 10px;
+  color: var(--lub-ink-2);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.lub-check {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+}
+
 .lub-trends-chart > span {
   display: flex;
   flex: 1;

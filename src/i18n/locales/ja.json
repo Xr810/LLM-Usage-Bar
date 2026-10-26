@@ -859,6 +859,14 @@
     },
     "errors": {
       "feature_unavailable": "コミュニティビルドには含まれません"
+    },
+    "upgrade": {
+      "close": "後で",
+      "aria_table": "Free と Pro の機能比較"
+    },
+    "purchase": {
+      "trial": "{{days}} 日間の試用を開始",
+      "buy": "Pro を購入"
     }
   },
   "native": {

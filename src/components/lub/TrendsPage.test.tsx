@@ -173,9 +173,22 @@ describe("TrendsPage", () => {
 
     await user.click(screen.getByRole("button", { name: "周，Pro 功能" }));
     const dialog = screen.getByRole("dialog");
-    expect(dialog).toHaveTextContent("用 Pro 看更多维度");
-    expect(within(dialog).getByText("比较 Free 与 Pro")).toBeInTheDocument();
-    expect(within(dialog).getByText("开始 7 天免费试用")).toBeInTheDocument();
+    expect(dialog).toHaveTextContent(zh.lub.procompare.title);
+    expect(
+      within(dialog).getByRole("table", { name: zh.lub.upgrade.aria_table }),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByText(zh.lub.procompare.group_stop),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).queryByText(zh.lub.procompare.start_trial),
+    ).toBeNull();
+    expect(within(dialog).queryByText(zh.lub.procompare.trial)).toBeNull();
+    expect(within(dialog).queryByText(zh.lub.procompare.beta_free)).toBeNull();
+    expect(within(dialog).queryByText(zh.lub.purchase.buy)).toBeNull();
+    expect(dialog.querySelector("[data-slot='purchase']")).toHaveTextContent(
+      "",
+    );
     expect(dialog.querySelector("a, [href]")).toBeNull();
     expect(screen.getByRole("button", { name: "日" })).toHaveAttribute(
       "aria-pressed",
@@ -298,7 +311,11 @@ describe("TrendsPage", () => {
       screen.getByRole("button", { name: "客户，Pro 功能" }),
     ).toBeInTheDocument();
     await user.click(project);
-    expect(screen.getByRole("dialog")).toHaveTextContent("用 Pro 看更多维度");
+    expect(screen.getByRole("dialog")).toHaveTextContent(
+      zh.lub.procompare.title,
+    );
+    expect(screen.queryByText(zh.lub.procompare.start_trial)).toBeNull();
+    expect(screen.queryByText(zh.lub.purchase.buy)).toBeNull();
     expect(screen.getByRole("button", { name: "日" })).toHaveAttribute(
       "aria-pressed",
       "true",

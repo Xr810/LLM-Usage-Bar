@@ -859,6 +859,14 @@
     },
     "errors": {
       "feature_unavailable": "Not included in the community build"
+    },
+    "upgrade": {
+      "close": "Not now",
+      "aria_table": "Free and Pro feature comparison"
+    },
+    "purchase": {
+      "trial": "Start a {{days}}-day trial",
+      "buy": "Buy Pro"
     }
   },
   "native": {

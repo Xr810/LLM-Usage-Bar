@@ -52,11 +52,19 @@ const supplementalOnboard = [
   "onboard.claude_subscription_via_proxy",
 ] as const;
 
+const supplementalUpgrade = [
+  "upgrade.close",
+  "upgrade.aria_table",
+  "purchase.trial",
+  "purchase.buy",
+] as const;
+
 function withoutLicense(keys: string[]): string[] {
   const extra = new Set<string>([
     ...LICENSE_KEYS,
     ...supplementalLicense,
     ...supplementalOnboard,
+    ...supplementalUpgrade,
   ]);
   return keys.filter((key) => !extra.has(key));
 }
@@ -80,13 +88,15 @@ describe("lub panel copy", () => {
       203 +
         LICENSE_KEYS.length +
         supplementalLicense.length +
-        supplementalOnboard.length,
+        supplementalOnboard.length +
+        supplementalUpgrade.length,
     );
     expect(flat(en.lub)).toHaveLength(
       203 +
         LICENSE_KEYS.length +
         supplementalLicense.length +
-        supplementalOnboard.length,
+        supplementalOnboard.length +
+        supplementalUpgrade.length,
     );
     expect(flat(proZh.lub)).toHaveLength(85);
     expect(flat(proEn.lub)).toHaveLength(85);
@@ -166,6 +176,28 @@ describe("lub panel copy", () => {
     expect(proEn.lub.export.total_amt_matches_attribution_api).toContain(
       "{{amount}}",
     );
+    expect(proZh.lub.hardstop.no_limit_on_allowing_each).toContain(
+      "{{seconds}}",
+    );
+    expect(proEn.lub.hardstop.no_limit_on_allowing_each).toContain(
+      "{{seconds}}",
+    );
+    expect(proZh.lub.identity.auto_denies_after_s_undo).toContain(
+      "{{seconds}}",
+    );
+    expect(proEn.lub.identity.auto_denies_after_s_undo).toContain(
+      "{{seconds}}",
+    );
+    expect(proZh.lub.hardstop.no_limit_on_allowing_each).not.toMatch(/60\s*秒/);
+    expect(proEn.lub.hardstop.no_limit_on_allowing_each).not.toMatch(/60s/);
+    expect(proZh.lub.identity.auto_denies_after_s_undo).not.toMatch(/60\s*秒/);
+    expect(proEn.lub.identity.auto_denies_after_s_undo).not.toMatch(/60 s/);
+    expect(zhTW.usageDashboard.invalidQuotaInterval).toContain("60 秒");
+    expect(ja.usageDashboard.invalidQuotaInterval).toContain("60 秒");
+    expect(zh.lub.purchase.trial).toContain("{{days}}");
+    expect(en.lub.purchase.trial).toContain("{{days}}");
+    expect(zhTW.lub.upgrade.close).not.toBe(en.lub.upgrade.close);
+    expect(ja.lub.purchase.buy).not.toBe(en.lub.purchase.buy);
   });
 
   it("covers the lub copy in zh-TW and ja instead of falling back to English", async () => {
