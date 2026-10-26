@@ -1,4 +1,4 @@
-import type { TrayCostQuality } from "@/types/trayUsage";
+import type { TrayBuildType, TrayCostQuality } from "@/types/trayUsage";
 
 /** C18 default until get_ui_prefs is wired. FE-3 reads this from mock prefs. */
 export const DEFAULT_ALERT_THRESHOLD_PCT = 80;
@@ -30,6 +30,14 @@ export interface LubSourceModel {
   betaCapPercent?: number | null;
   /** Existing affordance when a metered row has no daily budget yet. */
   onSetBudget?: () => void;
+  /**
+   * BE-21b. Codes such as `codex_websocket`. Null or absent shows no note.
+   */
+  noteCodes?: string[] | null;
+  /**
+   * BE-21b. Reset instant for this row. Null or absent shows no caption.
+   */
+  nextResetAt?: string | null;
 }
 
 export type LubSessionGroup = "session" | "proxy_traffic" | "unattributed";
@@ -61,11 +69,8 @@ export interface LubPanelModel {
   sessions: LubSessionModel[] | null;
   /** C14. Rows whose amount could not be parsed. 0 hides the hint. */
   invalidCostRows?: number;
-  /**
-   * C4 note codes such as `codex_websocket`. The tray snapshot does not
-   * publish these yet, so the mapper leaves this unset.
-   */
-  noteCodes?: string[];
+  /** BE-21b. Null when the snapshot omits `buildType`. */
+  buildType?: TrayBuildType | null;
   sample: boolean;
   stale: boolean;
   betaOn: boolean;
