@@ -9,6 +9,40 @@ use rusqlite::params;
 impl Database {
     const LEGACY_COMMON_CONFIG_MIGRATED_KEY: &'static str = "common_config_legacy_migrated_v1";
 
+    /// Atomically persist the greatest hourly retention ever activated.
+    ///
+    /// Activation MUST successfully call this before publishing a higher tier.
+    /// On failure keep the current tier, log the error, and return a retryable
+    /// error to the frontend. Retry on next startup/activation; never disrupt
+    /// proxy traffic or existing features. Activation wiring belongs to BE-31/PRO-1.
+    pub fn raise_retention_high_water_days(&self, days: i64) -> Result<i64, AppError> {
+        let conn = lock_conn!(self.conn);
+        Self::raise_retention_high_water_on_conn(&conn, days)
+    }
+
+    pub(crate) fn raise_retention_high_water_on_conn(
+        conn: &rusqlite::Connection,
+        days: i64,
+    ) -> Result<i64, AppError> {
+        if days < 0 {
+            return Err(AppError::invalid_argument(
+                "Retention must be nonnegative.",
+                "retentionDays",
+            ));
+        }
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES ('retention_high_water_days', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = ?1
+             WHERE CAST(settings.value AS INTEGER) < ?1",
+            [days],
+        )?;
+        Ok(conn.query_row(
+            "SELECT CAST(value AS INTEGER) FROM settings WHERE key = 'retention_high_water_days'",
+            [],
+            |row| row.get(0),
+        )?)
+    }
+
     fn config_snippet_cleared_key(app_type: &str) -> String {
         format!("common_config_{app_type}_cleared")
     }

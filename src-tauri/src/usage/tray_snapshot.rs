@@ -60,8 +60,15 @@ fn display_plan_label(plan_type: &str) -> String {
 
 impl TrayUsageSnapshot {
     pub fn unknown(generated_at: i64) -> Self {
+        Self::unknown_with_license(generated_at, &crate::policy::CommunityLicenseProvider)
+    }
+
+    pub fn unknown_with_license(
+        generated_at: i64,
+        license: &dyn crate::policy::LicenseProvider,
+    ) -> Self {
         Self {
-            build_type: crate::policy::community_license_status().build,
+            build_type: license.status().build,
             status: UsageStatus::Unknown,
             generated_at,
             last_success_at: None,
@@ -382,6 +389,7 @@ where
 pub struct TrayUsageProjector {
     db: Arc<Database>,
     tool_detection_cache: Arc<crate::route::takeover::ToolDetectionCache>,
+    license: Arc<dyn crate::policy::LicenseProvider>,
 }
 
 impl TrayUsageProjector {
@@ -393,9 +401,22 @@ impl TrayUsageProjector {
         db: Arc<Database>,
         tool_detection_cache: Arc<crate::route::takeover::ToolDetectionCache>,
     ) -> Self {
+        Self::with_license(
+            db,
+            tool_detection_cache,
+            Arc::new(crate::policy::CommunityLicenseProvider),
+        )
+    }
+
+    pub fn with_license(
+        db: Arc<Database>,
+        tool_detection_cache: Arc<crate::route::takeover::ToolDetectionCache>,
+        license: Arc<dyn crate::policy::LicenseProvider>,
+    ) -> Self {
         Self {
             db,
             tool_detection_cache,
+            license,
         }
     }
 
@@ -501,7 +522,7 @@ impl TrayUsageProjector {
                 }
             }
         }
-        let build_type = crate::policy::community_license_status().build;
+        let build_type = self.license.status().build;
         let detected_tools = self.tool_detection_cache.snapshot();
         let sources = crate::usage::source_row::source_rows_at(
             self.db.as_ref(),

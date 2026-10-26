@@ -74,15 +74,21 @@ impl Database {
 
     /// Same as [`Self::rollup_and_prune`], but the hourly cutoff comes from
     /// `policy.hourly_days` instead of a hard-coded retention.
-    pub fn rollup_and_prune_with_policy(&self, policy: RetentionPolicy) -> Result<u64, AppError> {
+    pub fn rollup_and_prune_with_policy(
+        &self,
+        mut policy: RetentionPolicy,
+    ) -> Result<u64, AppError> {
         if policy.hourly_days < 0 {
             return Err(AppError::invalid_argument(
                 "Hourly retention days must be zero or greater.".to_string(),
                 "hourlyRetentionDays",
             ));
         }
-        let cutoff = compute_local_midnight_cutoff(Local::now(), policy.detail_days)?;
+        // Never erase history on downgrade. Query visibility follows the current
+        // license independently; a failed persistence operation aborts pruning.
         let conn = lock_conn!(self.conn);
+        policy.hourly_days = Self::raise_retention_high_water_on_conn(&conn, policy.hourly_days)?;
+        let cutoff = compute_local_midnight_cutoff(Local::now(), policy.detail_days)?;
         backfill_dirty_hours(&conn)?;
 
         let prediction_cutoff = Local::now()

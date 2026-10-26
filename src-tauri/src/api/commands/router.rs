@@ -104,7 +104,7 @@ pub async fn recent_router_attempts(
         &RouterApi::new(state.db.clone()),
         start_at,
         end_at,
-        &crate::policy::community_license_status(),
+        &state.license.status(),
         chrono::Local::now(),
     )
     .map_err(|error| error.to_string())

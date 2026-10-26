@@ -8,7 +8,9 @@ use crate::model::{
     SystemProviderKeyUsageView, UnassignedUsageDiagnostics, UsageDashboardView, UsageEventPage,
     UsageProviderInput, UsageProviderView,
 };
-use crate::policy::{community_license_status, LicenseStatus};
+#[cfg(test)]
+use crate::policy::community_license_status;
+use crate::policy::LicenseStatus;
 use crate::providers::{SystemProviderConnectionService, SystemProviderConnectionTestResult};
 use crate::quota::QuotaRefreshResult;
 use crate::secrets::SecretString;
@@ -331,7 +333,7 @@ pub async fn get_usage_dashboard(
         start_at,
         end_at,
         &agent_module_id,
-        &community_license_status(),
+        &state.license.status(),
         Local::now(),
     )
     .await
@@ -347,7 +349,7 @@ pub fn get_provider_usage_dashboard(
         &state,
         start_at,
         end_at,
-        &community_license_status(),
+        &state.license.status(),
         Local::now(),
     )
 }
@@ -362,7 +364,7 @@ pub fn get_model_usage_dashboard(
         &state,
         start_at,
         end_at,
-        &community_license_status(),
+        &state.license.status(),
         Local::now(),
     )
 }
@@ -377,7 +379,7 @@ pub fn get_agent_usage_breakdown(
         &state,
         start_at,
         end_at,
-        &community_license_status(),
+        &state.license.status(),
         Local::now(),
     )
 }

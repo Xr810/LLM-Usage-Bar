@@ -51,9 +51,17 @@ fn injected_retention_survives_startup_and_periodic_maintenance() -> Result<(), 
             )?)
         };
     assert_eq!(count(&db)?, 2);
+    assert_eq!(db.raise_retention_high_water_days(400)?, 730);
     drop(db);
     let community = Database::init_at(&path)?;
-    assert_eq!(count(&community)?, 1);
+    community.rollup_and_prune_configured()?;
+    assert_eq!(count(&community)?, 2);
+    assert_eq!(
+        community
+            .get_setting("retention_high_water_days")?
+            .as_deref(),
+        Some("730")
+    );
     Ok(())
 }
 

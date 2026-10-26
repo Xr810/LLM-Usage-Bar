@@ -52,8 +52,18 @@ pub struct RetentionPolicy {
 }
 
 /// Build-provided policy used by both startup and scheduled maintenance.
+/// This is a requested retention floor, not the final pruning window. The store
+/// persists and applies max(retention_high_water_days, hourly_days), including
+/// after a downgrade or reopening with the community provider. Providers must
+/// not use the current tier alone to decide what persisted history to delete.
 pub trait RetentionPolicyProvider: Send + Sync {
     fn retention_policy(&self, detail_days: i64) -> RetentionPolicy;
+}
+
+impl<T: RetentionPolicyProvider + ?Sized> RetentionPolicyProvider for std::sync::Arc<T> {
+    fn retention_policy(&self, detail_days: i64) -> RetentionPolicy {
+        (**self).retention_policy(detail_days)
+    }
 }
 
 pub struct CommunityRetentionPolicy;

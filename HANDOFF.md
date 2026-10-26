@@ -2014,3 +2014,65 @@ Follow-up verification (same offline Rust wrapper/environment as above):
 
 Native interaction and §20 shutdown acceptance gaps remain unchanged;
 no release or merge authorized.
+
+#### 2026-10-26 BE-30: build injections and retention high-water (plan v1.1)
+
+Baseline: `380ca25a5c14477a4d3b6927d9967ab722aae478`. Community startup now
+uses `Injections::community()`; `run_with_injections` selects retention before
+opening the database, shares the license provider with commands and tray, and
+passes the policy gate to router admission/settlement. The specified files had
+14 production community-license calls, plus two gate calls (16 sites total).
+
+Hourly pruning uses max(persisted `retention_high_water_days`, requested
+retention), never lowers the setting, and keeps the DB connection locked from
+high-water selection through pruning. Detail retention stays unchanged. A
+failed high-water write aborts pruning; unchanged floors do not write settings.
+The documented BE-31/PRO-1 contract requires persistence before a higher tier
+becomes effective; failure preserves the current tier, logs an error, returns
+a retryable frontend error and retries on next startup/activation without
+affecting proxy traffic or existing features. Activation wiring is not included.
+
+Regression coverage includes the actual query command with a test-only Pro
+provider (grouping allowed, 30-day clamp lifted), initial/refreshed official
+tray snapshots, a recording router gate, and test (d): Pro730d with a 500-day
+row, downgrade to Free400d, configured prune, row survives while queries stay
+clamped. The disk fixture also reopens under the community provider and checks
+the 730-day setting survives; its 800-day control row is still removed.
+
+Local Linux x64 orb verification (2 GB RAM, no swap):
+
+- `pnpm rust -- fmt --manifest-path src-tauri/Cargo.toml --check` and
+  `git diff --check`: passed; zero frontend changes.
+- `pnpm rust -- clippy --locked --manifest-path src-tauri/Cargo.toml -- -D warnings`:
+  passed during implementation (1m58s).
+- `pnpm rust -- check --locked --manifest-path src-tauri/Cargo.toml --tests`
+  and `pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml`:
+  both killed by the orb memory limit (exit 137), not passing tests. Both used
+  `CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
+  CARGO_INCREMENTAL=0`, as did clippy. Final PR CI is the execution evidence;
+  do not infer success from local compilation or these added assertions.
+
+No frontend, dependency-version, private-feature, activation/event or release
+changes. Existing Tauri's test feature is dev-only for managed command tests.
+Native Windows/macOS interactive acceptance and §20 shutdown gaps remain open.
+
+BE-30 architect option 1 follow-up (review `r4377650059`): Deny now stops before
+reading the body or forwarding, returning the supplied HTTP status and JSON
+value unchanged. Hold fails closed immediately with HTTP 429 and the existing
+`code/message/details` envelope: `GUARD_HOLD`, `details.reason`, and optional
+`details.retryAfter` seconds plus `Retry-After`. It records `end_reason=guard_hold`
+with zero tokens; a recording failure is logged without replacing the 429.
+There is no interactive wait; PRO-2 may extend this response later. Settlement
+remains record-only and cannot change the response. New router regressions
+cover Deny passthrough/no forwarding, Hold with a never-arriving request body
+and absent/zero/positive retry delays, and identical upstream responses with
+injected Allow versus community AllowAllGate.
+
+Initial PR #111 head `09a8cf04b0156dea26879b921a0437c6ac50240a` passed all five
+CI jobs (run `40329344314`): each Linux backend mode passed 1382 library + 15
+integration tests, zero failures, three ignored; frontend passed 502 tests;
+macOS and Windows builds plus 29 targeted tests each passed. The follow-up's
+local clippy `-D warnings` passed in 19.24s; fmt/diff checks passed. No further
+local full-test retries after exit 137: the new targeted tests require the same
+unbuilt library test executable. New-head CI, not the prior green run, must
+validate this enforcement change. No frontend changes or merge authorized.

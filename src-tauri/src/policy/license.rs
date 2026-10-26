@@ -95,6 +95,13 @@ pub trait LicenseProvider: Send + Sync {
 
     /// 激活 token。实现不得把 token 写进日志。
     /// 社区实现返回 [`crate::error::CODE_COMMUNITY_BUILD`]，并且不保存 token。
+    ///
+    /// Official activation must persist any higher retention via
+    /// [`crate::Database::raise_retention_high_water_days`] BEFORE the new tier
+    /// takes effect. On persistence failure, keep the current tier, log the
+    /// error, return a retryable frontend error, and retry on next startup or
+    /// activation. Never interrupt the proxy or existing features. This is the
+    /// BE-31/PRO-1 implementation contract, not community activation wiring.
     fn activate(&self, token: &str) -> Result<LicenseStatus, AppError>;
 
     /// 停用当前 License。社区实现返回 [`crate::error::CODE_COMMUNITY_BUILD`]，不改状态。

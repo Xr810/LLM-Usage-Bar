@@ -43,7 +43,7 @@ mod usage_events;
 
 use api::commands;
 pub use api::commands::*;
-pub use app_state::AppState;
+pub use app_state::{AppState, Injections};
 pub use config::app_config::{AppType, MultiAppConfig};
 pub use config::settings::{update_settings, AppSettings};
 pub use config::{get_claude_account_path, get_claude_settings_path, read_json_file};
@@ -482,6 +482,11 @@ fn start_main_window_visibility_monitor(app: tauri::AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    run_with_injections(Injections::community());
+}
+
+/// Select build dependencies before any startup database cleanup can run.
+pub fn run_with_injections(injections: Injections) {
     // 设置 panic hook，在应用崩溃时记录日志到 <app_config_dir>/crash.log（默认 ~/.llm-usage-bar/crash.log）
     panic_hook::setup_panic_hook();
 
@@ -601,7 +606,7 @@ pub fn run() {
                 .with_denylist(&[tray_popover::TRAY_POPOVER_LABEL])
                 .build(),
         )
-        .setup(|app| {
+        .setup(move |app| {
             let _ = rustls::crypto::ring::default_provider().install_default();
 
             // 预先刷新 Store 覆盖配置，确保后续路径读取正确（日志/数据库等）
@@ -773,7 +778,9 @@ pub fn run() {
             };
 
             let db = loop {
-                match ready_database.open() {
+                match ready_database.open_with(|path| {
+                    Database::init_at_with_retention_policy(path, Box::new(injections.retention.clone()))
+                }) {
                     Ok(db) => break Arc::new(db),
                     Err(e) => {
                         log::error!("Failed to init database: {e}");
@@ -858,10 +865,11 @@ pub fn run() {
                 }
             }));
             let credential_store = crate::secrets::production_credential_store();
-            let app_state = AppState::new_with_credential_store_and_quota_service(
+            let app_state = AppState::new_with_injections(
                 db,
                 credential_store,
                 quota_service,
+                &injections,
             );
 
             // —— T24:启动早期先把已保存的代理配置廉价记录到 http_client ——
@@ -883,9 +891,10 @@ pub fn run() {
                     app_state.binding_credential_service.clone(),
                 ));
             let router_db = app_state.db.clone();
+            let router_gate = app_state.gate.clone();
             tauri::async_runtime::spawn(async move {
                 if let Err(error) =
-                    crate::route::server::start(router_db, router_port, router_auth).await
+                    crate::route::server::start_with_gate(router_db, router_port, router_auth, router_gate).await
                 {
                     log::error!("[ROUTER] 启动失败: {error}");
                 }
