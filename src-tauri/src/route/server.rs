@@ -2194,8 +2194,12 @@ mod tests {
         let (db, registry, sender, router) = held_router(1, vec![]);
         let publications = Arc::new(Mutex::new(Vec::new()));
         let published = publications.clone();
-        registry.set_publisher(Arc::new(move |pending| {
-            published.lock().unwrap().push(pending.len());
+        let observed_registry = Arc::downgrade(&registry);
+        registry.set_notifier(crate::policy::GuardStateNotifier::new(move || {
+            published
+                .lock()
+                .unwrap()
+                .push(observed_registry.upgrade().unwrap().view().len());
         }));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();

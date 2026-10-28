@@ -919,10 +919,9 @@ pub fn run_with_injections(ctx: tauri::Context<tauri::Wry>, injections: Injectio
             let router_db = app_state.db.clone();
             let router_gate = app_state.gate.clone();
             let router_registry = app_state.pending_registry.clone();
-            let guard_app = app.handle().clone();
-            router_registry.set_publisher(Arc::new(move |pending| {
-                commands::publish_pending_state_if_changed(&guard_app, pending);
-            }));
+            let guard_notifier = commands::guard_state_notifier(app.handle(), &app_state);
+            router_registry.set_notifier(guard_notifier.clone());
+            app_state.guard_state.set_notifier(guard_notifier);
             tauri::async_runtime::spawn(async move {
                 if let Err(error) =
                     crate::route::server::start_with_registry(router_db, router_port, router_auth, router_gate, router_registry).await
@@ -1782,7 +1781,12 @@ pub async fn cleanup_before_exit(app_handle: &tauri::AppHandle) {
             state.pending_registry.drain(),
         )
         .await;
-        state.pending_registry.set_publisher(Arc::new(|_| {}));
+        state
+            .pending_registry
+            .set_notifier(crate::policy::GuardStateNotifier::new(|| {}));
+        state
+            .guard_state
+            .set_notifier(crate::policy::GuardStateNotifier::new(|| {}));
     }
     let cleanup_resources = app_handle
         .try_state::<app_state::AppState>()
