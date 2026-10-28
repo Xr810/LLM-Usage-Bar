@@ -29,6 +29,7 @@ type DatabaseFactory<T> = Box<dyn FnOnce(Arc<Database>) -> Result<Arc<T>, crate:
 pub struct Injections {
     pub license: DatabaseFactory<dyn crate::policy::LicenseProvider>,
     pub pending_registry: DatabaseFactory<dyn crate::policy::PendingRegistry>,
+    pub guard_state: DatabaseFactory<dyn crate::policy::GuardStateProvider>,
     pub gate: Arc<dyn crate::policy::PolicyGate>,
     pub retention: DatabaseFactory<dyn crate::store::RetentionPolicyProvider>,
 }
@@ -38,6 +39,11 @@ impl Injections {
         Self {
             license: Box::new(|_| Ok(Arc::new(crate::policy::CommunityLicenseProvider))),
             pending_registry: Box::new(|_| Ok(Arc::new(crate::policy::DefaultNoopRegistry))),
+            guard_state: Box::new(|_| {
+                Ok(Arc::new(
+                    crate::policy::CommunityGuardStateProvider::default(),
+                ))
+            }),
             gate: Arc::new(crate::policy::AllowAllGate),
             retention: Box::new(|_| Ok(Arc::new(crate::store::CommunityRetentionPolicy))),
         }
@@ -65,6 +71,9 @@ pub struct AppState {
     pub license_lifecycle: Arc<crate::policy::LicenseLifecycle>,
     pub gate: Arc<dyn crate::policy::PolicyGate>,
     pub pending_registry: Arc<dyn crate::policy::PendingRegistry>,
+    pub guard_state: Arc<dyn crate::policy::GuardStateProvider>,
+    pub(crate) last_published_guard:
+        Arc<std::sync::Mutex<Option<crate::api::commands::GuardStateView>>>,
     // Keep retention alive without a Database -> provider -> Database cycle.
     _retention: Option<Arc<dyn crate::store::RetentionPolicyProvider>>,
     pub credential_store: Arc<dyn CredentialStore>,
@@ -151,6 +160,10 @@ impl AppState {
             );
             Arc::new(crate::policy::DefaultNoopRegistry)
         });
+        let guard_state = (injections.guard_state)(db.clone()).unwrap_or_else(|_| {
+            log::error!("Build dependency initialization failed; community guard state enabled.");
+            Arc::new(crate::policy::CommunityGuardStateProvider::default())
+        });
         let resolved = (injections.license)(db.clone()).and_then(|license| {
             let retention = (injections.retention)(db.clone())?;
             // An injected Pro entitlement must survive a downgrade before the
@@ -200,6 +213,8 @@ impl AppState {
             license_lifecycle,
             gate,
             pending_registry,
+            guard_state,
+            last_published_guard: Arc::new(std::sync::Mutex::new(None)),
             _retention: retention,
             credential_store,
             binding_credential_service,
@@ -351,6 +366,7 @@ mod tests {
             "license-error",
             "retention-error",
             "pending-error",
+            "guard-error",
         ] {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("authoritative.db");
@@ -370,6 +386,23 @@ mod tests {
             let license_db = weak.clone();
             let retention_db = weak.clone();
             let mut injections = Injections::community();
+            let guard_db = weak.clone();
+            injections.guard_state = Box::new(move |db| {
+                assert!(Arc::ptr_eq(&db, &guard_db.upgrade().unwrap()));
+                assert_eq!(
+                    Database::get_user_version(&db.conn.lock().unwrap()).unwrap(),
+                    crate::store::SCHEMA_VERSION
+                );
+                if mode == "guard-error" {
+                    Err(crate::AppError::internal(
+                        "private guard factory token /secret/path",
+                    ))
+                } else {
+                    Ok(Arc::new(
+                        crate::policy::CommunityGuardStateProvider::default(),
+                    ))
+                }
+            });
             let pending_db = weak.clone();
             injections.pending_registry = Box::new(move |db| {
                 assert!(Arc::ptr_eq(&db, &pending_db.upgrade().unwrap()));
@@ -385,7 +418,7 @@ mod tests {
                     Ok(Arc::new(crate::policy::DefaultNoopRegistry))
                 }
             });
-            if !matches!(mode, "community" | "pending-error") {
+            if !matches!(mode, "community" | "pending-error" | "guard-error") {
                 injections.license = Box::new(move |db| {
                     assert!(Arc::ptr_eq(&db, &license_db.upgrade().unwrap()));
                     let conn = db.conn.lock().unwrap();
@@ -446,6 +479,41 @@ mod tests {
             let failed = matches!(mode, "license-error" | "retention-error");
             assert!(state.pending_registry.view().is_empty());
             assert!(!state.pending_registry.release(None).released);
+            for (status, expected) in [
+                (
+                    crate::model::UsageStatus::Unknown,
+                    crate::policy::GuardLevel::Ok,
+                ),
+                (
+                    crate::model::UsageStatus::Green,
+                    crate::policy::GuardLevel::Ok,
+                ),
+                (
+                    crate::model::UsageStatus::Yellow,
+                    crate::policy::GuardLevel::Warn,
+                ),
+                (
+                    crate::model::UsageStatus::Red,
+                    crate::policy::GuardLevel::Warn,
+                ),
+            ] {
+                state.guard_state.update_budget(status);
+                let view = crate::api::commands::assemble_guard_state(
+                    state.guard_state.as_ref(),
+                    state.pending_registry.as_ref(),
+                );
+                assert_eq!(view.state, expected);
+                assert_eq!(view.blocked_today, 0);
+                assert_eq!(
+                    view.allowed_today,
+                    crate::policy::AllowedToday {
+                        count: 0,
+                        usd: "0".into()
+                    }
+                );
+                assert_eq!(view.pending_count, 0);
+                assert!(view.pending.is_empty());
+            }
             let request = crate::policy::ReqMeta {
                 req_id: "factory-test".into(),
                 app_type: "claude".into(),
@@ -481,7 +549,7 @@ mod tests {
                 total,
                 match mode {
                     "success" => 500,
-                    "community" | "pending-error" => 0,
+                    "community" | "pending-error" | "guard-error" => 0,
                     _ => 1300,
                 },
                 "{mode}"
@@ -495,6 +563,12 @@ mod tests {
             assert!(logs
                 .iter()
                 .all(|line| !line.contains("private factory failure detail")));
+            if mode == "guard-error" {
+                assert_eq!(
+                    logs.as_slice(),
+                    &["Build dependency initialization failed; community guard state enabled."]
+                );
+            }
             drop(logs);
             drop(state);
             // Scheduled cleanup must not silently revert to community after teardown.

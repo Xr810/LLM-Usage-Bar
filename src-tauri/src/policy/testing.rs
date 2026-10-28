@@ -10,13 +10,12 @@ struct Entry {
     deadline: Instant,
     sender: oneshot::Sender<HoldOutcome>,
 }
-type Publisher = Arc<dyn Fn(Vec<PendingMeta>) + Send + Sync>;
 #[derive(Default)]
 struct Inner {
     queue: Vec<Entry>,
     allowance: u32,
     active: usize,
-    publisher: Option<Publisher>,
+    notifier: Option<GuardStateNotifier>,
 }
 
 #[derive(Clone)]
@@ -35,9 +34,9 @@ impl TestRegistry {
         }
     }
     fn publish(&self) {
-        let publisher = self.inner.lock().unwrap().publisher.clone();
-        if let Some(publisher) = publisher {
-            publisher(self.view());
+        let notifier = self.inner.lock().unwrap().notifier.clone();
+        if let Some(notifier) = notifier {
+            notifier.notify();
         }
         self.changed.notify_waiters();
     }
@@ -169,8 +168,8 @@ impl PendingRegistry for TestRegistry {
             }
         })
     }
-    fn set_publisher(&self, publisher: Publisher) {
-        self.inner.lock().unwrap().publisher = Some(publisher);
+    fn set_notifier(&self, notifier: GuardStateNotifier) {
+        self.inner.lock().unwrap().notifier = Some(notifier);
     }
     fn view(&self) -> Vec<PendingMeta> {
         self.inner

@@ -150,9 +150,9 @@ pub trait PendingRegistry: Send + Sync {
     /// Resolve all waiters with Shutdown, then await their dequeue acknowledgments.
     /// The host bounds this future to two seconds on exit.
     fn drain(&self) -> futures::future::BoxFuture<'_, ()>;
-    /// Publish after each queue mutation, outside queue locks. The host filters
-    /// unchanged snapshots. Installing a publisher must not enqueue anything.
-    fn set_publisher(&self, publisher: std::sync::Arc<dyn Fn(Vec<PendingMeta>) + Send + Sync>);
+    /// Notify after each queue mutation, outside queue locks. The host rebuilds
+    /// the whole view and filters duplicates. Installation must be inert.
+    fn set_notifier(&self, notifier: super::GuardStateNotifier);
     fn view(&self) -> Vec<PendingMeta>;
 }
 
@@ -185,7 +185,7 @@ impl PendingRegistry for DefaultNoopRegistry {
     fn drain(&self) -> futures::future::BoxFuture<'_, ()> {
         Box::pin(async {})
     }
-    fn set_publisher(&self, _: std::sync::Arc<dyn Fn(Vec<PendingMeta>) + Send + Sync>) {}
+    fn set_notifier(&self, _: super::GuardStateNotifier) {}
     fn view(&self) -> Vec<PendingMeta> {
         Vec::new()
     }

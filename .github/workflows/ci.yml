@@ -224,6 +224,8 @@ jobs:
         run: pnpm rust -- test --manifest-path src-tauri/Cargo.toml --lib route::pointer::tests
       - name: Test Hold transport and native TCP disconnect
         run: pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml --lib route::server::tests::hold_ -- --nocapture
+      - name: Test guard provider command and event contract
+        run: pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml --lib api::commands::guard::tests -- --nocapture
       - name: Test background shutdown lifecycle
         run: |
           pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml --lib app_state:: -- --nocapture

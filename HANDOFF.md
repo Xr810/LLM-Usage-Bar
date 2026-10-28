@@ -2409,3 +2409,39 @@ withheld body and 64 KiB unread body, with zero response bytes before close.
 This isolates transport, not database or Tauri event integration. Exact pushed
 head CI remains the required full-suite/platform gate before architect review;
 §20 interactive desktop shutdown acceptance is still separate and unexecuted.
+
+#### 2026-10-28 PR #122: public guard state contract v1.11
+
+Draft PR #122 starts from main `54598ee2922f509d211d3673fd546ae41c9e8a4a`
+(#120 squash). `Injections.guard_state` is a deferred, fallible, Send FnOnce
+factory receiving the same migrated database Arc as the registry/license
+factories. Its independent failure logs exactly one static error:
+`Build dependency initialization failed; community guard state enabled.`
+The error payload is discarded. No Pro enforcement, schema, migration, command,
+event name, frontend or TypeScript wire changes are introduced.
+
+`policy::GuardStateProvider::snapshot()` returns `GuardStateCore` (state,
+blockedToday, allowedToday). Both provider and registry receive the same
+`GuardStateNotifier` through `set_notifier`; this replaces the registry's
+Vec-carrying publisher. Call `notify()` after mutations and outside internal
+locks. The host rebuilds provider.snapshot + registry.view through one assembly
+function, serializes publication, and emits the existing full
+`guard-state-changed` payload only when different from the last per-app view.
+The getter uses the same assembly without publishing. The optional
+`update_budget` provider method defaults to no-op for injected providers;
+community alone uses the existing cached API-budget yellow/red → warn,
+green/unknown → ok mapping, always with zero counters. Shutdown replaces both
+notifiers with no-ops after the existing bounded registry drain.
+
+Regressions cover injected capped/killed states and unequal nonzero counters
+through both command and actual Tauri event listeners; provider-only changes,
+pending enqueue/drop, unchanged notifications, budget publication not overriding
+injected state, pre-manage setup notification, per-app deduplication, community
+cached-budget command/event equivalence, and migrated same-Arc factory failure
+with exactly one redacted error. The existing subprocess-isolated logger test
+is extended rather than adding another process-global logger. Desktop CI now
+runs the guard command/event tests on both platforms in addition to the existing
+factory tests. Local formatting, CI YAML formatting, TypeScript and whitespace
+checks passed; Rust compilation/runtime and exact-head CI results remain pending.
+No merge or release is authorized; keep the PR Draft. Existing §20 native
+interactive shutdown acceptance gaps remain open.
