@@ -222,6 +222,8 @@ jobs:
         run: pnpm rust -- test --manifest-path src-tauri/Cargo.toml --lib secrets::windows::tests
       - name: Test routing connection and restore
         run: pnpm rust -- test --manifest-path src-tauri/Cargo.toml --lib route::pointer::tests
+      - name: Test Hold transport and native TCP disconnect
+        run: pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml --lib route::server::tests::hold_ -- --nocapture
       - name: Test background shutdown lifecycle
         run: |
           pnpm rust -- test --locked --manifest-path src-tauri/Cargo.toml --lib app_state:: -- --nocapture

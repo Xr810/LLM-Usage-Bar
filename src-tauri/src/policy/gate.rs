@@ -50,12 +50,13 @@ pub enum Decision {
         status: u16,
         body: Value,
     },
-    /// BE-30 fails closed immediately with HTTP 429 / GUARD_HOLD; no waiting.
-    /// PRO-2 may extend this response with interactive Hold handling later.
+    /// None (or a Noop registry) fails closed immediately with HTTP 429.
+    /// Some delegates suspension to the injected pending registry.
     Hold {
         reason: String,
         /// Optional retry delay in seconds, also emitted as Retry-After.
         retry_after_seconds: Option<u64>,
+        hold: Option<super::HoldSpec>,
     },
 }
 
@@ -139,6 +140,7 @@ mod tests {
         let hold = Decision::Hold {
             reason: "hard_cap".to_string(),
             retry_after_seconds: None,
+            hold: None,
         };
         assert_ne!(deny, Decision::Allow);
         assert_ne!(hold, Decision::Allow);

@@ -2582,6 +2582,24 @@ mod tests {
         assert_eq!(read_marker(&new), "ordinary-v13-row");
         assert_eq!(read_marker(&archive), "ordinary-v13-row");
         assert!(!old.exists());
+
+        // Identity migration preserves v13; the production opener must then
+        // migrate that real fixture through every step to the latest schema.
+        let db = Database::open_before_retention(&new).expect("upgrade v13 to latest");
+        let conn = db.conn.lock().unwrap();
+        assert_eq!(
+            Database::get_user_version(&conn).unwrap(),
+            crate::store::SCHEMA_VERSION
+        );
+        for column in ["guard_released_by", "held_ms"] {
+            assert!(Database::has_column(&conn, "proxy_request_logs", column).unwrap());
+        }
+        assert_eq!(read_marker(&new), "ordinary-v13-row");
+        let archived = Connection::open(&archive).unwrap();
+        assert_eq!(Database::get_user_version(&archived).unwrap(), 13);
+        for column in ["guard_released_by", "held_ms"] {
+            assert!(!Database::has_column(&archived, "proxy_request_logs", column).unwrap());
+        }
     }
 
     #[test]

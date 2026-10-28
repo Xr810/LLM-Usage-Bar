@@ -2327,3 +2327,85 @@ info/incremental compilation. Exact-head Linux/Windows/macOS CI execution
 evidence belongs to PR #119 and its thread; local compilation is not a passing
 runtime test. No frontend/private code, release, or merge. Existing §20 native
 interactive shutdown gaps remain open.
+
+#### 2026-10-28 PRO-2 phase 1: public Hold registry contract v1.10
+
+Public draft PR #120 starts at main `8667c4d6`. Only public transport contracts,
+injection, command shells, settings, events and audit storage are in scope.
+The private repository is not touched. No merge, release or private repin is
+authorized. Queue, deadline, allowance and opaque-scope policy belong to the
+injected `PendingRegistry`; the only concrete queue here is `cfg(test)`.
+
+`Decision::Hold` gains `Option<HoldSpec>`. None and the community Noop registry
+keep immediate 429 `GUARD_HOLD`. An injected ticket suspends before reading the
+body or sending response bytes; its terminal outcome drives transport only.
+Ticket Drop removes its entry. Commands delegate release/head selection,
+same-scope allowance release and deny directly to the registry. `drain` returns
+a future acknowledging ticket disposal; exit bounds it to two seconds.
+Registry publishers carry complete pending snapshots, and the host suppresses
+unchanged events while retaining pending entries across budget publications.
+
+The pending-registry factory receives the same migrated database Arc as the
+existing factories; its own failure emits one redacted error and falls back
+to Noop. Settings expose guard defaults 60 seconds / 8 requests / "5" USD,
+with strict 15–240 / 1–32 / 2,5,10,20 validation. Identity auto_allow already
+exists. Schema v30 adds exactly two nullable columns with no backfill:
+`guard_released_by` and `held_ms`. Unreleased rows remain audit-only
+`guard_hold`; legacy reasons normalize on read without rewriting rows.
+
+Verification in this 2 GB Linux orb: TypeScript checking, production Clippy
+`-D warnings`, and an intermediate wrapper-managed `check --locked --tests`
+passed (three pre-existing test warnings). Full test code generation and a
+later test-check retry were OOM-killed even with one build job and
+debug/incremental disabled, before execution; neither is a passing test run.
+The initial contract
+head passed all six public CI checks. The full phase-1 head still requires
+exact-head CI execution, including the real TCP zero-byte and disconnect tests,
+paused-clock terminal outcomes, command delegation, settings, migration and
+factory redaction regressions. Existing §20 native interactive shutdown gaps
+remain open; platform CI does not establish native interactive acceptance.
+
+#### 2026-10-28 PR #120 v1.10 contract audit and disconnect correction
+
+Fresh-orb audit confirmed remote head `2c6bd4d4559dd211d38b372fe48d488e6dd90bdc`,
+base `8667c4d6`, and Draft status. All public contract surfaces are present:
+serializable Rust/TS Hold types (Duration `{secs,nanos}`), the seven registry
+methods, exactly three command shells, pending fields on every guard view,
+C18 defaults/bounds, two nullable v30 audit columns without row backfill,
+closed unreleased reasons, normal released settlement, aggregate exclusions
+including hourly/legacy reasons, same-Arc post-migration factory with one
+redacted fallback error, and the two-second exit drain bound. Concrete queue
+policy remains test-only; the community dependency tree has no `lub-pro`.
+
+The missing lifecycle behavior was real TCP cancellation: Hyper can stop
+polling a socket behind an unread request body while the handler is held.
+Ticket Drop therefore never ran on peer close. The transport now races
+the connection future against non-consuming socket close detection; dropping
+the connection cancels the handler, writes its single `guard_hold` /
+`client_gone` / 499 audit, then drops the ticket and publishes the new snapshot.
+It does not emit an HTTP 499, consume the body, or send headers while held.
+The existing two-second regression assertion is unchanged. Coverage now also
+checks publisher counts, slot reuse, and a full eight-slot queue with unread
+socket data. Hold tests run in both existing desktop CI jobs; no release
+workflow was changed. The transport retains axum's automatic protocol
+negotiation and upgrade support, rather than restricting it to HTTP/1.
+
+Reviewed the v29→v30 migration and advanced the fixed-v13 fixture's exact
+version tripwire to 30 (source remains exactly 13). The migration regression
+now additionally opens the copied fixture through the production opener,
+asserts latest schema and both audit columns, and checks the archive stays
+v13 without those columns. Added the required `latency_ms` to the v29 fixture;
+no assertions were weakened, skipped, or removed.
+
+Local validation: `pnpm typecheck`, wrapper production Clippy `-D warnings`,
+wrapper `fmt --check`, CI YAML Prettier,
+`git diff --check`, and the all-target/all-feature community dependency-tree
+check passed. Full application test code generation hit the 2 GB limit (137)
+with one job and debug/incremental disabled; it did not execute tests. A
+temporary wrapper-managed Cargo harness directly importing production
+`route/transport.rs` reproduced the old `axum::serve` cancellation failure
+(two-second timeout) and passed with the new transport (0.11s), covering
+withheld body and 64 KiB unread body, with zero response bytes before close.
+This isolates transport, not database or Tauri event integration. Exact pushed
+head CI remains the required full-suite/platform gate before architect review;
+§20 interactive desktop shutdown acceptance is still separate and unexecuted.

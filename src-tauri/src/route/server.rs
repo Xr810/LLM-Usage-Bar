@@ -112,10 +112,28 @@ pub async fn start_with_gate(
     auth: Arc<dyn UpstreamAuth>,
     gate: Arc<dyn PolicyGate>,
 ) -> Result<(), AppError> {
+    start_with_registry(
+        db,
+        port,
+        auth,
+        gate,
+        Arc::new(crate::policy::DefaultNoopRegistry),
+    )
+    .await
+}
+
+pub async fn start_with_registry(
+    db: Arc<Database>,
+    port: u16,
+    auth: Arc<dyn UpstreamAuth>,
+    gate: Arc<dyn PolicyGate>,
+    pending_registry: Arc<dyn crate::policy::PendingRegistry>,
+) -> Result<(), AppError> {
     let state = Arc::new(RouterState {
         db,
         auth,
         gate,
+        pending_registry,
         sender: Arc::new(ReqwestSender),
         blacklist: Mutex::new(Vec::new()),
     });
@@ -129,7 +147,7 @@ pub async fn start_with_gate(
     let app = build_router(state);
     tauri::async_runtime::spawn(async move {
         log::info!("本地 router 已启动: http://{address}/v1/responses");
-        if let Err(error) = axum::serve(listener, app).await {
+        if let Err(error) = super::transport::serve(listener, app).await {
             log::error!("本地 router 服务退出: {error}");
         }
         // serve 返回（正常退出或出错）之后服务已不在监听：清掉公布值，
@@ -172,6 +190,7 @@ struct RouterState {
     db: Arc<Database>,
     auth: Arc<dyn UpstreamAuth>,
     gate: Arc<dyn PolicyGate>,
+    pending_registry: Arc<dyn crate::policy::PendingRegistry>,
     sender: Arc<dyn UpstreamSender>,
     /// 拉黑状态(内存,不落库)。过期靠读的时候判 `until_ms > now`,
     /// 不起任何后台清理任务(§6.4 第 2 条)。
@@ -556,6 +575,7 @@ struct RequestContext {
     oversize_head: Option<Bytes>,
     oversize_tail: Option<BodyDataStream>,
     request_start_ms: i64,
+    held: Option<(String, i64)>,
 }
 
 /// 单个候选尝试的结果。
@@ -647,6 +667,48 @@ async fn dispatch_proxy(
     }
 }
 
+/// Task cancellation while held is an audit-only 499; never an HTTP response.
+struct PendingDisconnectAudit {
+    db: Arc<Database>,
+    request_id: String,
+    classified: ClassifiedRequest,
+    client: String,
+    started: tokio::time::Instant,
+    armed: bool,
+}
+
+impl Drop for PendingDisconnectAudit {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        if let Ok(mut conn) = self.db.conn.lock() {
+            if let Err(error) = insert_proxy_settlement(
+                &mut conn,
+                &ProxySettlement {
+                    request_id: self.request_id.clone(),
+                    provider_id: String::new(),
+                    app_type: self.client.clone(),
+                    model: String::new(),
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    status_code: 499,
+                    created_at: now_millis() / 1000,
+                    billing_identity: identity_label(self.classified.identity).to_string(),
+                    key_fingerprint: self.classified.key_fp.clone(),
+                    session_id: self.classified.session_id.clone(),
+                    end_reason: "guard_hold".into(),
+                    error_message: Some("client_gone".into()),
+                    guard_released_by: None,
+                    held_ms: Some(self.started.elapsed().as_millis().min(i64::MAX as u128) as i64),
+                },
+            ) {
+                log::warn!("guard disconnect recording failed: {error}");
+            }
+        }
+    }
+}
+
 async fn handle_proxy_inner(
     state: Arc<RouterState>,
     client_headers: HeaderMap,
@@ -682,6 +744,7 @@ async fn handle_proxy_inner(
         est_cost_micro_usd: 0,
         via_subscription_optin,
     });
+    let mut held = None;
     match decision {
         crate::policy::Decision::Allow => {}
         crate::policy::Decision::Deny { rule, status, body } => {
@@ -707,6 +770,8 @@ async fn handle_proxy_inner(
                             session_id: classified.session_id,
                             end_reason: "guard_deny".to_string(),
                             error_message: Some(rule),
+                            guard_released_by: None,
+                            held_ms: None,
                         },
                     ) {
                         log::warn!("guard deny recording failed: {error}");
@@ -719,11 +784,79 @@ async fn handle_proxy_inner(
         crate::policy::Decision::Hold {
             reason,
             retry_after_seconds,
-        } => {
-            // BE-30 is an immediate, fail-closed 429, not a suspended request.
-            // PRO-2 interactive Hold handling will extend this response.
-            log::debug!("guard immediate hold: {reason}");
-            let mut details = serde_json::json!({ "reason": reason });
+            hold,
+        } => 'holding: {
+            log::debug!("guard hold: {reason}");
+            let mut disposition = "immediate";
+            let mut held_ms = None;
+            // Keep the ticket until the terminal audit row is durable, so a
+            // registry's shutdown acknowledgment cannot race that write.
+            let mut queued_ticket = None;
+            if let Some(spec) = hold {
+                let held_at = now_millis();
+                let meta = crate::policy::PendingMeta {
+                    pending_id: uuid::Uuid::new_v4().to_string(),
+                    request_id: request_id.clone(),
+                    kind: spec.kind,
+                    scope: spec.scope,
+                    provider: None,
+                    client: app_type.to_string(),
+                    session_id: classified.session_id.clone(),
+                    held_at,
+                    expires_at: held_at
+                        .saturating_add(spec.timeout.as_millis().min(i64::MAX as u128) as i64),
+                    reason: "Request held by policy.".to_string(),
+                };
+                match state.pending_registry.enqueue(meta, spec.timeout) {
+                    Err(crate::policy::EnqueueError::Unavailable) => {}
+                    Err(crate::policy::EnqueueError::Full) => disposition = "queue_full",
+                    Ok(ticket) => {
+                        let ticket = queued_ticket.insert(ticket);
+                        let mut audit = PendingDisconnectAudit {
+                            db: state.db.clone(),
+                            request_id: request_id.clone(),
+                            classified: classified.clone(),
+                            client: app_type.to_string(),
+                            started: tokio::time::Instant::now(),
+                            armed: true,
+                        };
+                        // No response (including headers) or body read before release.
+                        // Timeout policy is owned by the registry, not this transport.
+                        let outcome = (&mut ticket.receiver)
+                            .await
+                            .unwrap_or(crate::policy::HoldOutcome::Shutdown);
+                        audit.armed = false;
+                        let elapsed =
+                            audit.started.elapsed().as_millis().min(i64::MAX as u128) as i64;
+                        held_ms = Some(elapsed);
+                        match outcome {
+                            crate::policy::HoldOutcome::Released(by) => {
+                                let label = match by {
+                                    crate::policy::ReleasedBy::Once => "once",
+                                    crate::policy::ReleasedBy::MoreToday => "more_today",
+                                    crate::policy::ReleasedBy::AutoIdentity => "auto_identity",
+                                };
+                                held = Some((
+                                    label.to_string(),
+                                    if by == crate::policy::ReleasedBy::AutoIdentity {
+                                        0
+                                    } else {
+                                        elapsed
+                                    },
+                                ));
+                                break 'holding;
+                            }
+                            crate::policy::HoldOutcome::Denied => disposition = "denied",
+                            crate::policy::HoldOutcome::Timeout => disposition = "timeout",
+                            crate::policy::HoldOutcome::Shutdown => disposition = "shutdown",
+                        }
+                    }
+                }
+            }
+            let retry_after_seconds = retry_after_seconds
+                .or_else(|| (disposition == "timeout").then_some(1))
+                .map(|seconds| seconds.min(3600));
+            let mut details = serde_json::json!({ "reason": disposition });
             if let Some(seconds) = retry_after_seconds {
                 details["retryAfter"] = seconds.into();
             }
@@ -761,7 +894,9 @@ async fn handle_proxy_inner(
                             key_fingerprint: classified.key_fp,
                             session_id: classified.session_id,
                             end_reason: "guard_hold".to_string(),
-                            error_message: Some("immediate".to_string()),
+                            error_message: Some(disposition.to_string()),
+                            guard_released_by: None,
+                            held_ms,
                         },
                     ) {
                         log::warn!("guard hold recording failed: {error}");
@@ -800,6 +935,8 @@ async fn handle_proxy_inner(
                     session_id: classified.session_id,
                     end_reason: "blocked".to_string(),
                     error_message: None,
+                    guard_released_by: held.as_ref().map(|h| h.0.clone()),
+                    held_ms: held.as_ref().map(|h| h.1),
                 },
             )?;
             return Ok(plain_response(
@@ -822,6 +959,7 @@ async fn handle_proxy_inner(
                 request_id,
                 app_type: app_type.to_string(),
                 classified,
+                held,
             },
         )
         .await;
@@ -881,6 +1019,7 @@ async fn handle_proxy_inner(
         oversize_head,
         oversize_tail,
         request_start_ms: now_ms,
+        held,
     };
     forward_through_candidates(ctx).await
 }
@@ -1063,6 +1202,7 @@ async fn try_one_candidate(
                     request_id: ctx.request_id.clone(),
                     app_type: ctx.app_type.clone(),
                     classified: ctx.classified.clone(),
+                    held: ctx.held.clone(),
                 },
             )
             .map(Step::Success);
@@ -1149,6 +1289,7 @@ struct SettlementSeed {
     request_id: String,
     app_type: String,
     classified: ClassifiedRequest,
+    held: Option<(String, i64)>,
 }
 
 /// 2xx:记 attempt(success) 后把响应流式透传给客户端,绝不整体读进内存(§4.1)。
@@ -1301,6 +1442,8 @@ fn stream_upstream_success(
                         "completed".to_string()
                     },
                     error_message: None,
+                    guard_released_by: seed.held.as_ref().map(|h| h.0.clone()),
+                    held_ms: seed.held.as_ref().map(|h| h.1),
                 },
             ) {
                 log::warn!("request settlement failed: {error}");
@@ -1684,6 +1827,7 @@ mod tests {
             auth,
             sender,
             gate: Arc::new(AllowAllGate),
+            pending_registry: Arc::new(crate::policy::DefaultNoopRegistry),
             blacklist: Mutex::new(Vec::new()),
         })
     }
@@ -1785,6 +1929,13 @@ mod tests {
                 decision: crate::policy::Decision::Hold {
                     reason: reason.into(),
                     retry_after_seconds,
+                    hold: (reason == "queue_full").then(|| crate::policy::HoldSpec {
+                        kind: crate::policy::HoldKind::HardCap,
+                        scope: crate::policy::HoldScope::DailyCap {
+                            rule_id: "noop".into(),
+                        },
+                        timeout: Duration::from_secs(60),
+                    }),
                 },
                 settlements: Default::default(),
             });
@@ -1815,7 +1966,7 @@ mod tests {
             let body: serde_json::Value =
                 serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap())
                     .unwrap();
-            let mut details = json!({"reason": reason});
+            let mut details = json!({"reason": "immediate"});
             if let Some(seconds) = retry_after_seconds {
                 details["retryAfter"] = seconds.into();
             }
@@ -1849,6 +2000,371 @@ mod tests {
         }
     }
 
+    fn held_router(
+        max: usize,
+        script: Vec<ScriptedOutcome>,
+    ) -> (
+        Arc<Database>,
+        Arc<crate::policy::testing::TestRegistry>,
+        Arc<FakeSender>,
+        Router,
+    ) {
+        let db = memory_db();
+        seed_route(&db, "upstream", WireApi::Responses, 1, MODEL);
+        let registry = Arc::new(crate::policy::testing::TestRegistry::new(max));
+        let sender = fake_sender(script);
+        let mut state = test_state(db.clone(), ok_auth(), sender.clone());
+        let state_mut = Arc::get_mut(&mut state).unwrap();
+        state_mut.pending_registry = registry.clone();
+        state_mut.gate = Arc::new(FixedGate {
+            decision: crate::policy::Decision::Hold {
+                reason: "private test reason".into(),
+                retry_after_seconds: Some(9999),
+                hold: Some(crate::policy::HoldSpec {
+                    kind: crate::policy::HoldKind::HardCap,
+                    scope: crate::policy::HoldScope::DailyCap {
+                        rule_id: "opaque-test-scope".into(),
+                    },
+                    timeout: Duration::from_secs(15),
+                }),
+            },
+            settlements: Default::default(),
+        });
+        (db, registry, sender, test_router(state))
+    }
+
+    fn held_request() -> Request<Body> {
+        Request::builder()
+            .method("POST")
+            .uri("/v1/responses")
+            .body(Body::from(json_body(json!({"model":MODEL,"stream":true}))))
+            .unwrap()
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn hold_terminal_outcomes_are_single_audit_rows() {
+        use crate::policy::PendingRegistry;
+        for ending in ["denied", "timeout", "shutdown", "client_gone"] {
+            let (db, registry, sender, router) = held_router(1, vec![]);
+            let task = tokio::spawn(router.oneshot(held_request()));
+            registry.wait_count(1).await;
+            let id = registry.view()[0].pending_id.clone();
+            assert!(!task.is_finished());
+            assert!(sender.requests.lock().unwrap().is_empty());
+            tokio::time::advance(Duration::from_secs(3)).await;
+            match ending {
+                "denied" => {
+                    assert_eq!(registry.deny(Some(&id)).denied_count, 1);
+                }
+                "timeout" => {
+                    tokio::time::advance(Duration::from_secs(12)).await;
+                    assert!(!registry.release(Some(&id)).released);
+                }
+                "shutdown" => {
+                    tokio::time::timeout(Duration::from_secs(2), registry.drain())
+                        .await
+                        .unwrap();
+                }
+                "client_gone" => task.abort(),
+                _ => unreachable!(),
+            }
+            if ending == "client_gone" {
+                assert!(task.await.unwrap_err().is_cancelled());
+            } else {
+                let response = task.await.unwrap().unwrap();
+                assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+                assert_eq!(response.headers()[header::RETRY_AFTER], "3600");
+                let body = to_bytes(response.into_body(), 4096).await.unwrap();
+                assert!(!String::from_utf8_lossy(&body).contains("private test reason"));
+                assert_eq!(
+                    serde_json::from_slice::<serde_json::Value>(&body).unwrap()["details"]
+                        ["reason"],
+                    ending
+                );
+            }
+            assert!(registry.view().is_empty());
+            assert!(!registry.release(Some(&id)).released);
+            let conn = db.conn.lock().unwrap();
+            let rows: Vec<(String, String, i64, Option<String>, i64)> = conn.prepare(
+                "SELECT end_reason,error_message,status_code,guard_released_by,held_ms FROM proxy_request_logs"
+            ).unwrap().query_map([], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).unwrap().collect::<Result<_,_>>().unwrap();
+            assert_eq!(
+                rows,
+                vec![(
+                    "guard_hold".into(),
+                    ending.into(),
+                    if ending == "client_gone" { 499 } else { 429 },
+                    None,
+                    if ending == "timeout" { 15000 } else { 3000 }
+                )]
+            );
+            assert!(sender.requests.lock().unwrap().is_empty());
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn hold_queue_full_is_immediate_and_does_not_read_body() {
+        use crate::policy::PendingRegistry;
+        let (db, registry, _, router) = held_router(1, vec![]);
+        let first = tokio::spawn(router.clone().oneshot(held_request()));
+        registry.wait_count(1).await;
+        let request = Request::builder()
+            .method("POST")
+            .uri("/v1/responses")
+            .body(Body::from_stream(futures::stream::pending::<
+                Result<Bytes, std::io::Error>,
+            >()))
+            .unwrap();
+        let response = router.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        let body = to_bytes(response.into_body(), 4096).await.unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap()["details"]["reason"],
+            "queue_full"
+        );
+        assert_eq!(registry.deny(None).denied_count, 1);
+        first.await.unwrap().unwrap();
+        let count: i64 = db
+            .conn
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM proxy_request_logs", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[tokio::test]
+    async fn hold_emits_zero_wire_bytes_until_release_then_full_sse() {
+        use crate::policy::PendingRegistry;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let expected = b"data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":3,\"output_tokens\":7}}}\n\n";
+        let (db, registry, sender, router) = held_router(
+            2,
+            vec![ScriptedOutcome::Respond {
+                status: 200,
+                headers: vec![("content-type".into(), "text/event-stream".into())],
+                body: expected.to_vec(),
+            }],
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            super::super::transport::serve(listener, router)
+                .await
+                .unwrap();
+        });
+        let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
+        let body = format!(r#"{{"model":"{MODEL}","stream":true}}"#);
+        socket.write_all(format!("POST /v1/responses HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).as_bytes()).await.unwrap();
+        // Deliberately withhold the body until AFTER release.
+        registry.wait_count(1).await;
+        let mut byte = [0u8];
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), socket.read(&mut byte))
+                .await
+                .is_err()
+        );
+        assert!(sender.requests.lock().unwrap().is_empty());
+        assert!(registry.release(None).released);
+        socket.write_all(body.as_bytes()).await.unwrap();
+        let mut response = Vec::new();
+        tokio::time::timeout(Duration::from_secs(2), socket.read_to_end(&mut response))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(response.starts_with(b"HTTP/1.1 200"));
+        assert!(response
+            .windows(expected.len())
+            .any(|part| part == expected));
+        let row: (String,String,i64,i64) = db.conn.lock().unwrap().query_row(
+            "SELECT end_reason,guard_released_by,held_ms,input_tokens+output_tokens FROM proxy_request_logs", [], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))
+        ).unwrap();
+        assert_eq!(
+            (row.0.as_str(), row.1.as_str(), row.3),
+            ("completed", "once", 10)
+        );
+        assert!(row.2 >= 50);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn hold_tcp_disconnect_dequeues_and_records_only_499() {
+        use crate::policy::PendingRegistry;
+        use tokio::io::AsyncWriteExt;
+        let (db, registry, sender, router) = held_router(1, vec![]);
+        let publications = Arc::new(Mutex::new(Vec::new()));
+        let published = publications.clone();
+        registry.set_publisher(Arc::new(move |pending| {
+            published.lock().unwrap().push(pending.len());
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            super::super::transport::serve(listener, router)
+                .await
+                .unwrap();
+        });
+        let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
+        socket
+            .write_all(
+                b"POST /v1/responses HTTP/1.1\r\nHost: localhost\r\nContent-Length: 4096\r\n\r\n",
+            )
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), registry.wait_count(1))
+            .await
+            .unwrap();
+        drop(socket);
+        tokio::time::timeout(Duration::from_secs(2), registry.wait_count(0))
+            .await
+            .expect("disconnect removes waiter without a policy timeout");
+        let row: (i64, String, i64) = db
+            .conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT status_code,error_message,COUNT(*) FROM proxy_request_logs",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(row, (499, "client_gone".into(), 1));
+        assert!(sender.requests.lock().unwrap().is_empty());
+        assert_eq!(*publications.lock().unwrap(), vec![1, 0]);
+        // The queue was at maxPending. A new client must acquire the freed slot,
+        // not receive queue_full or wait for the disconnected ticket's timeout.
+        let mut replacement = tokio::net::TcpStream::connect(address).await.unwrap();
+        replacement
+            .write_all(
+                b"POST /v1/responses HTTP/1.1\r\nHost: localhost\r\nContent-Length: 4096\r\n\r\n",
+            )
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), registry.wait_count(1))
+            .await
+            .expect("disconnected client's slot is reusable");
+        assert_eq!(*publications.lock().unwrap(), vec![1, 0, 1]);
+        drop(replacement);
+        tokio::time::timeout(Duration::from_secs(2), registry.wait_count(0))
+            .await
+            .unwrap();
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn hold_disconnect_with_unread_body_frees_one_of_eight_slots() {
+        use crate::policy::PendingRegistry;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (db, registry, sender, router) = held_router(8, vec![]);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            super::super::transport::serve(listener, router)
+                .await
+                .unwrap();
+        });
+        let headers =
+            b"POST /v1/responses HTTP/1.1\r\nHost: localhost\r\nContent-Length: 1048576\r\n\r\n";
+        let mut clients = Vec::new();
+        for count in 1..=8 {
+            let mut client = tokio::net::TcpStream::connect(address).await.unwrap();
+            client.write_all(headers).await.unwrap();
+            tokio::time::timeout(Duration::from_secs(2), registry.wait_count(count))
+                .await
+                .unwrap();
+            clients.push(client);
+        }
+        let mut overflow = tokio::net::TcpStream::connect(address).await.unwrap();
+        overflow.write_all(headers).await.unwrap();
+        let mut response = [0; 12];
+        tokio::time::timeout(Duration::from_secs(2), overflow.read_exact(&mut response))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(&response, b"HTTP/1.1 429");
+        let disconnected_id = registry.view().last().unwrap().request_id.clone();
+        let mut disconnected = clients.pop().unwrap();
+        // Leave more than Hyper's body channel can buffer unread on the socket.
+        // EOF detection must not require consuming these bytes.
+        disconnected
+            .write_all(&vec![b'x'; 64 * 1024])
+            .await
+            .unwrap();
+        drop(disconnected);
+        tokio::time::timeout(Duration::from_secs(2), registry.wait_count(7))
+            .await
+            .expect("unread body must not hide disconnect");
+        let audit: (String, String, i64) = db.conn.lock().unwrap().query_row(
+            "SELECT end_reason,error_message,status_code FROM proxy_request_logs WHERE request_id=?1",
+            [&disconnected_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        ).unwrap();
+        assert_eq!(audit, ("guard_hold".into(), "client_gone".into(), 499));
+        let mut replacement = tokio::net::TcpStream::connect(address).await.unwrap();
+        replacement.write_all(headers).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), registry.wait_count(8))
+            .await
+            .expect("freed slot must accept replacement");
+        assert!(sender.requests.lock().unwrap().is_empty());
+        clients.push(replacement);
+        drop(clients);
+        tokio::time::timeout(Duration::from_secs(2), registry.wait_count(0))
+            .await
+            .unwrap();
+        server.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn hold_release_provenance_is_counted_and_auto_identity_has_zero_duration() {
+        use crate::policy::{HoldOutcome, PendingRegistry, ReleasedBy};
+        for by in [ReleasedBy::MoreToday, ReleasedBy::AutoIdentity] {
+            let (db, registry, _, router) = held_router(
+                1,
+                vec![ScriptedOutcome::Respond {
+                    status: 200,
+                    headers: vec![],
+                    body: br#"{"usage":{"input_tokens":2,"output_tokens":5}}"#.to_vec(),
+                }],
+            );
+            let task = tokio::spawn(router.oneshot(held_request()));
+            registry.wait_count(1).await;
+            tokio::time::advance(Duration::from_secs(4)).await;
+            let id = registry.view()[0].pending_id.clone();
+            if by == ReleasedBy::MoreToday {
+                assert_eq!(registry.allow_more_today(Some("5")).released_count, 1);
+            } else {
+                registry.finish(&id, HoldOutcome::Released(by));
+            }
+            let response = task.await.unwrap().unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            to_bytes(response.into_body(), 4096).await.unwrap();
+            let conn = db.conn.lock().unwrap();
+            let row: (String,i64,String,i64) = conn.query_row("SELECT guard_released_by,held_ms,end_reason,input_tokens+output_tokens FROM proxy_request_logs", [], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).unwrap();
+            assert_eq!(
+                row,
+                (
+                    if by == ReleasedBy::MoreToday {
+                        "more_today"
+                    } else {
+                        "auto_identity"
+                    }
+                    .into(),
+                    if by == ReleasedBy::MoreToday { 4000 } else { 0 },
+                    "completed".into(),
+                    7
+                )
+            );
+            assert_eq!(
+                conn.query_row(
+                    "SELECT SUM(request_count) FROM usage_hourly_rollups",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+                1
+            );
+        }
+    }
+
     #[tokio::test]
     async fn injected_allow_and_community_gate_preserve_upstream_response() {
         let expected = br#"{"usage":{"input_tokens":3,"output_tokens":7},"result":"unchanged"}"#;
@@ -1875,6 +2391,17 @@ mod tests {
             assert_eq!(body.as_ref(), expected);
             assert_eq!(sender.requests.lock().unwrap().len(), 1);
             assert_eq!(gate.settlements.load(Ordering::SeqCst), usize::from(inject));
+            let audit: (Option<String>, Option<i64>) = db
+                .conn
+                .lock()
+                .unwrap()
+                .query_row(
+                    "SELECT guard_released_by, held_ms FROM proxy_request_logs",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(audit, (None, None));
             assert_eq!(
                 db.get_usage_summary(None, None, None, None, None)
                     .unwrap()
@@ -3028,6 +3555,7 @@ mod tests {
                 request_id: "broken-stream".into(),
                 app_type: "claude".into(),
                 classified: classify_headers(&HeaderMap::new(), false),
+                held: None,
             },
         )
         .unwrap();

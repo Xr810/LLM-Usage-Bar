@@ -342,6 +342,79 @@ pub enum IdentitySwitchPolicy {
     AutoAllow,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum AllowanceUsd {
+    #[serde(rename = "2")]
+    Two,
+    #[default]
+    #[serde(rename = "5")]
+    Five,
+    #[serde(rename = "10")]
+    Ten,
+    #[serde(rename = "20")]
+    Twenty,
+}
+
+impl AllowanceUsd {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Two => "2",
+            Self::Five => "5",
+            Self::Ten => "10",
+            Self::Twenty => "20",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", try_from = "serde_json::Value")]
+pub struct GuardSettings {
+    pub hold_timeout_secs: u64,
+    pub max_pending: usize,
+    pub allow_more_today_default_usd: AllowanceUsd,
+}
+
+impl Default for GuardSettings {
+    fn default() -> Self {
+        Self {
+            hold_timeout_secs: 60,
+            max_pending: 8,
+            allow_more_today_default_usd: AllowanceUsd::Five,
+        }
+    }
+}
+
+impl TryFrom<serde_json::Value> for GuardSettings {
+    type Error = String;
+    fn try_from(value: serde_json::Value) -> Result<Self, Self::Error> {
+        let object = value.as_object().ok_or("guard must be an object")?;
+        let mut settings = Self::default();
+        for (key, value) in object {
+            match key.as_str() {
+                "holdTimeoutSecs" => {
+                    settings.hold_timeout_secs = value
+                        .as_u64()
+                        .filter(|v| (15..=240).contains(v))
+                        .ok_or("holdTimeoutSecs must be 15..240")?
+                }
+                "maxPending" => {
+                    settings.max_pending = value
+                        .as_u64()
+                        .filter(|v| (1..=32).contains(v))
+                        .ok_or("maxPending must be 1..32")?
+                        as usize
+                }
+                "allowMoreTodayDefaultUsd" => {
+                    settings.allow_more_today_default_usd = serde_json::from_value(value.clone())
+                        .map_err(|_| "allowMoreTodayDefaultUsd must be 2, 5, 10, or 20")?
+                }
+                _ => return Err(format!("Unknown guard setting: {key}")),
+            }
+        }
+        Ok(settings)
+    }
+}
+
 /// Local safety policy for the proxy or a license check (ADR-012 / ADR-013).
 ///
 /// `open` is the less safe choice. File loads coerce an unknown value to
@@ -376,6 +449,7 @@ pub struct UiPrefs {
     pub subscription_warn_pct: u8,
     pub on_identity_switch: IdentitySwitchPolicy,
     pub failure_modes: FailureModes,
+    pub guard: GuardSettings,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -540,6 +614,8 @@ pub struct AppSettings {
     /// Must not be copied into the synced sqlite `settings` table.
     #[serde(default, deserialize_with = "deserialize_failure_modes")]
     pub failure_modes: FailureModes,
+    #[serde(default)]
+    pub guard: GuardSettings,
 
     // ===== 主页面显示的应用 =====
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -756,6 +832,7 @@ impl Default for AppSettings {
             subscription_warn_pct: default_subscription_warn_pct(),
             on_identity_switch: IdentitySwitchPolicy::Ask,
             failure_modes: FailureModes::default(),
+            guard: GuardSettings::default(),
             visible_apps: None,
             claude_config_dir: None,
             codex_config_dir: None,
@@ -877,6 +954,7 @@ impl AppSettings {
             subscription_warn_pct: self.subscription_warn_pct,
             on_identity_switch: self.on_identity_switch,
             failure_modes: self.failure_modes,
+            guard: self.guard,
         }
     }
 
@@ -1459,6 +1537,7 @@ mod tests {
             subscription_warn_pct: default_subscription_warn_pct(),
             on_identity_switch: IdentitySwitchPolicy::Ask,
             failure_modes: FailureModes::default(),
+            guard: GuardSettings::default(),
         }
     }
 

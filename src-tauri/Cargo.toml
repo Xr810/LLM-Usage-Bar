@@ -61,6 +61,7 @@ bytes = "1.5"
 axum = "0.8"
 tower = "0.5"
 hyper = { version = "1.0", features = ["full"] }
+hyper-util = { version = "0.1", features = ["tokio", "service", "server-auto"] }
 http = "1"
 rustls = "0.23"
 regex = "1.10"
@@ -120,6 +121,7 @@ strip = "symbols"
 
 [dev-dependencies]
 tauri = { version = "2.11.5", features = ["test"] }
+tokio = { version = "1", features = ["test-util"] }
 serial_test = "4"
 tempfile = "3"
 # 剪枝测试需要显式设置 mtime（CI 文件系统的 mtime 分辨率可能是秒级，
