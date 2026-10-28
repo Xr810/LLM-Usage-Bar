@@ -19,6 +19,24 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 pub const GUARD_STATE_CHANGED_EVENT: &str = "guard-state-changed";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GuardSetKilledResult {
+    pub changed: bool,
+}
+
+#[tauri::command]
+pub fn guard_set_killed<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    killed: bool,
+) -> GuardSetKilledResult {
+    let changed = state.guard_state.set_killed(killed);
+    if changed {
+        guard_state_notifier(&app, &state).notify();
+    }
+    GuardSetKilledResult { changed }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GuardStateView {
