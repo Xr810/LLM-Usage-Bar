@@ -380,10 +380,11 @@ mod tests {
                 UsageStatus::Red,
             ] {
                 *budget.lock().unwrap() = status;
+                let app_handle = app.handle().clone();
                 app.state::<AppState>()
                     .tray_usage_service
-                    .rebuild_from_persisted(|snapshot| {
-                        publish_guard_state_if_changed(app.handle(), snapshot.api_budget.status);
+                    .rebuild_from_persisted(move |snapshot| {
+                        publish_guard_state_if_changed(&app_handle, snapshot.api_budget.status);
                     })
                     .await;
                 let command =
