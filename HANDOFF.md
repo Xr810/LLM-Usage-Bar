@@ -2317,9 +2317,13 @@ migrated schema and Arc identity in factories, no pruning before resolution,
 exact error counts, continued state/lifecycle use, and cycle-free teardown.
 Existing license-command and lifecycle regressions use consuming factories.
 
-Local wrapper-managed `check --locked --tests` passed (6m26s, three existing
-test warnings). Initial Clippy found factory type complexity; a private generic
-type alias removes duplication without changing the field types. Final Clippy,
-runtime tests and exact-head CI evidence belong to the PR/thread; no success
-is inferred here. No frontend/private code, release, or merge. Existing §20
-native interactive shutdown gaps remain open.
+Local wrapper-managed `check --locked --tests` passed again on the final code
+(49.10s, three existing test warnings), as did production Clippy `-D warnings`,
+`fmt --check`, and `git diff --check`. Initial Clippy found factory type
+complexity; a private generic alias removes duplication without changing the
+field types. The focused runtime test compile was killed by the 2 GB orb limit
+(exit 137), before test execution, despite one build job and disabled debug
+info/incremental compilation. Exact-head Linux/Windows/macOS CI execution
+evidence belongs to PR #119 and its thread; local compilation is not a passing
+runtime test. No frontend/private code, release, or merge. Existing §20 native
+interactive shutdown gaps remain open.
