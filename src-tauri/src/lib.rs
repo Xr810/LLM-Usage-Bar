@@ -870,6 +870,7 @@ pub fn run_with_injections(ctx: tauri::Context<tauri::Wry>, injections: Injectio
                 quota_service,
                 injections,
             );
+            app_state.db.startup_cleanup();
 
             let license_app = app.handle().clone();
             app_state.license_lifecycle.set_publisher(Arc::new(move |status| {

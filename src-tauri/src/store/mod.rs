@@ -222,6 +222,18 @@ impl Database {
 
     pub(crate) fn startup_cleanup(&self) {
         let db = self;
+        {
+            let retention = db.retention_policy.lock().unwrap();
+            if let RetentionProvider::Deferred(provider) = &*retention {
+                if provider
+                    .as_ref()
+                    .and_then(std::sync::Weak::upgrade)
+                    .is_none()
+                {
+                    return;
+                }
+            }
+        }
         // Startup cleanup: prune old logs and reclaim space
         // Retry pending retention even in a community build, BEFORE pruning.
         // A retry failure skips cleanup, never database startup or proxy use.
