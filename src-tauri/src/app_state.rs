@@ -20,24 +20,15 @@ pub(crate) use background::BackgroundShutdown;
 use background::BackgroundTasks;
 use std::sync::Arc;
 
+type DatabaseFactory<T> = Box<dyn FnOnce(Arc<Database>) -> Result<Arc<T>, crate::AppError> + Send>;
+
 /// Build-owned factories, called once with the migrated authoritative database.
 /// License runs first. Either failure discards both providers, closes admission,
 /// and disables configured cleanup for this run. Factory errors are not echoed.
 pub struct Injections {
-    pub license: Box<
-        dyn FnOnce(
-                Arc<Database>,
-            ) -> Result<Arc<dyn crate::policy::LicenseProvider>, crate::AppError>
-            + Send,
-    >,
+    pub license: DatabaseFactory<dyn crate::policy::LicenseProvider>,
     pub gate: Arc<dyn crate::policy::PolicyGate>,
-    pub retention: Box<
-        dyn FnOnce(
-                Arc<Database>,
-            )
-                -> Result<Arc<dyn crate::store::RetentionPolicyProvider>, crate::AppError>
-            + Send,
-    >,
+    pub retention: DatabaseFactory<dyn crate::store::RetentionPolicyProvider>,
 }
 
 impl Injections {
@@ -308,9 +299,26 @@ mod tests {
         log::set_logger(&LOGGER).unwrap();
         log::set_max_level(log::LevelFilter::Error);
 
-        // A real DB-owning provider also exercises cycle-free shutdown.
-        struct Retention(Arc<Database>);
-        impl crate::RetentionPolicyProvider for Retention {
+        // Test-only official provider owning the DB exercises cycle-free shutdown.
+        struct TestProvider(Arc<Database>);
+        impl crate::policy::LicenseProvider for TestProvider {
+            fn status(&self) -> crate::policy::LicenseStatus {
+                let mut status = crate::policy::community_license_status();
+                status.build = crate::policy::LicenseBuild::Official;
+                status.tier = crate::policy::LicenseTier::Pro;
+                status
+            }
+            fn activate(
+                &self,
+                token: &str,
+            ) -> Result<crate::policy::LicenseStatus, crate::AppError> {
+                crate::policy::activate_community_license(token)
+            }
+            fn deactivate(&self) -> Result<(), crate::AppError> {
+                crate::policy::deactivate_community_license()
+            }
+        }
+        impl crate::RetentionPolicyProvider for TestProvider {
             fn retention_policy(&self, detail_days: i64) -> crate::RetentionPolicy {
                 assert!(self.0.database_path().is_some());
                 crate::RetentionPolicy {
@@ -358,7 +366,7 @@ mod tests {
                     if mode == "license-error" {
                         Err(crate::AppError::internal("private factory failure detail"))
                     } else {
-                        Ok(Arc::new(crate::policy::CommunityLicenseProvider))
+                        Ok(Arc::new(TestProvider(db)))
                     }
                 });
                 injections.retention = Box::new(move |db| {
@@ -370,7 +378,7 @@ mod tests {
                     if mode == "retention-error" {
                         Err(crate::AppError::internal("private factory failure detail"))
                     } else {
-                        Ok(Arc::new(Retention(db)))
+                        Ok(Arc::new(TestProvider(db)))
                     }
                 });
             }
@@ -383,10 +391,18 @@ mod tests {
             );
             state.db.startup_cleanup();
             assert!(Arc::ptr_eq(&state.db, &db));
-            assert_eq!(
-                state.license.status(),
-                crate::policy::community_license_status()
-            );
+            if mode == "success" {
+                assert_eq!(
+                    state.license.status().build,
+                    crate::policy::LicenseBuild::Official
+                );
+                assert_eq!(state.license.status().tier, crate::policy::LicenseTier::Pro);
+            } else {
+                assert_eq!(
+                    state.license.status(),
+                    crate::policy::community_license_status()
+                );
+            }
             state.license_lifecycle.reconcile().unwrap();
             let failed = mode.ends_with("error");
             let request = crate::policy::ReqMeta {
