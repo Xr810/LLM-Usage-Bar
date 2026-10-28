@@ -2379,7 +2379,7 @@ policy remains test-only; the community dependency tree has no `lub-pro`.
 
 The missing lifecycle behavior was real TCP cancellation: Hyper can stop
 polling a socket behind an unread request body while the handler is held.
-Ticket Drop therefore never ran on peer close. The HTTP/1 transport now races
+Ticket Drop therefore never ran on peer close. The transport now races
 the connection future against non-consuming socket close detection; dropping
 the connection cancels the handler, writes its single `guard_hold` /
 `client_gone` / 499 audit, then drops the ticket and publishes the new snapshot.
@@ -2387,7 +2387,8 @@ It does not emit an HTTP 499, consume the body, or send headers while held.
 The existing two-second regression assertion is unchanged. Coverage now also
 checks publisher counts, slot reuse, and a full eight-slot queue with unread
 socket data. Hold tests run in both existing desktop CI jobs; no release
-workflow was changed.
+workflow was changed. The transport retains axum's automatic protocol
+negotiation and upgrade support, rather than restricting it to HTTP/1.
 
 Reviewed the v29→v30 migration and advanced the fixed-v13 fixture's exact
 version tripwire to 30 (source remains exactly 13). The migration regression
@@ -2396,7 +2397,8 @@ asserts latest schema and both audit columns, and checks the archive stays
 v13 without those columns. Added the required `latency_ms` to the v29 fixture;
 no assertions were weakened, skipped, or removed.
 
-Local validation: `pnpm typecheck`, wrapper `fmt --check`, CI YAML Prettier,
+Local validation: `pnpm typecheck`, wrapper production Clippy `-D warnings`,
+wrapper `fmt --check`, CI YAML Prettier,
 `git diff --check`, and the all-target/all-feature community dependency-tree
 check passed. Full application test code generation hit the 2 GB limit (137)
 with one job and debug/incremental disabled; it did not execute tests. A

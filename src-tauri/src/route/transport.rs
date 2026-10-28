@@ -8,7 +8,11 @@ use std::{
 };
 
 use axum::serve::Listener;
-use hyper_util::{rt::TokioIo, service::TowerToHyperService};
+use hyper_util::{
+    rt::{TokioExecutor, TokioIo},
+    server::conn::auto::Builder,
+    service::TowerToHyperService,
+};
 use tokio::{
     io::{AsyncRead, ReadBuf},
     net::{tcp::OwnedReadHalf, TcpListener},
@@ -65,10 +69,9 @@ pub(super) async fn serve(mut listener: TcpListener, router: axum::Router) -> io
         let io = tokio::io::join(SharedRead(read.clone()), write);
         let service = TowerToHyperService::new(router.clone());
         tokio::spawn(async move {
-            let builder = hyper::server::conn::http1::Builder::new();
-            let connection = builder
-                .serve_connection(TokioIo::new(io), service)
-                .with_upgrades();
+            // Keep axum::serve's protocol negotiation and upgrade support.
+            let builder = Builder::new(TokioExecutor::new());
+            let connection = builder.serve_connection_with_upgrades(TokioIo::new(io), service);
             tokio::select! {
                 result = connection => {
                     if let Err(error) = result {
