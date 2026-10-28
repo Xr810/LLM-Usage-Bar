@@ -4,6 +4,7 @@
 //! 本模块的默认实现只放行，并且不读写 License 或导出状态。
 
 mod gate;
+mod guard;
 mod license;
 mod lifecycle;
 mod pending;
@@ -12,6 +13,7 @@ mod receipt;
 pub(crate) mod testing;
 
 pub use crate::store::{activation_retryable, RetentionStore};
+pub use guard::*;
 pub use lifecycle::{LicenseLifecycle, LicensePublisher};
 pub use pending::*;
 
