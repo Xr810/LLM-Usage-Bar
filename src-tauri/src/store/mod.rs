@@ -20,6 +20,7 @@
 
 pub(crate) mod backup;
 mod dao;
+mod history;
 mod identity_migration;
 mod migration;
 pub(crate) mod migrations;
@@ -54,6 +55,7 @@ pub(crate) use dao::router::{
     AttemptOutcome, ModelRoute, RouterAttempt, RouterAuthKind, RouterProvider, WireApi,
 };
 pub use dao::usage_sync_cursors::UsageSyncCursor;
+pub use history::{CommunityHistoryVisibilityPolicy, HistoryVisibility, HistoryVisibilityPolicy};
 pub(crate) use identity_migration::{prepare_database_identity, DatabaseIdentityOutcome};
 
 use crate::config::get_app_config_dir;
@@ -99,6 +101,7 @@ pub struct Database {
     pub(crate) rhythm_cache_identity: u64,
     database_path: Option<PathBuf>,
     retention_policy: Mutex<RetentionProvider>,
+    history_visibility: Mutex<Option<std::sync::Weak<dyn HistoryVisibilityPolicy>>>,
 }
 
 enum RetentionProvider {
@@ -184,6 +187,7 @@ impl Database {
             rhythm_cache_identity: next_rhythm_cache_identity(),
             database_path: Some(db_path.to_path_buf()),
             retention_policy: Mutex::new(RetentionProvider::Deferred(None)),
+            history_visibility: Mutex::new(None),
         };
         db.create_tables()?;
 
@@ -289,6 +293,7 @@ impl Database {
             usage_source_binding_operation: Mutex::new(()),
             rhythm_cache_identity: next_rhythm_cache_identity(),
             database_path: None,
+            history_visibility: Mutex::new(None),
             retention_policy: Mutex::new(RetentionProvider::Owned(Box::new(
                 CommunityRetentionPolicy,
             ))),

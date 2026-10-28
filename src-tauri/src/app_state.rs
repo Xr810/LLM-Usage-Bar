@@ -30,6 +30,7 @@ pub struct Injections {
     pub license: DatabaseFactory<dyn crate::policy::LicenseProvider>,
     pub pending_registry: DatabaseFactory<dyn crate::policy::PendingRegistry>,
     pub guard_state: DatabaseFactory<dyn crate::policy::GuardStateProvider>,
+    pub history_visibility: DatabaseFactory<dyn crate::store::HistoryVisibilityPolicy>,
     pub gate: Arc<dyn crate::policy::PolicyGate>,
     pub retention: DatabaseFactory<dyn crate::store::RetentionPolicyProvider>,
 }
@@ -45,6 +46,9 @@ impl Injections {
                 ))
             }),
             gate: Arc::new(crate::policy::AllowAllGate),
+            history_visibility: Box::new(|_| {
+                Ok(Arc::new(crate::store::CommunityHistoryVisibilityPolicy))
+            }),
             retention: Box::new(|_| Ok(Arc::new(crate::store::CommunityRetentionPolicy))),
         }
     }
@@ -76,6 +80,7 @@ pub struct AppState {
         Arc<std::sync::Mutex<Option<crate::api::commands::GuardStateView>>>,
     // Keep retention alive without a Database -> provider -> Database cycle.
     _retention: Option<Arc<dyn crate::store::RetentionPolicyProvider>>,
+    _history_visibility: Arc<dyn crate::store::HistoryVisibilityPolicy>,
     pub credential_store: Arc<dyn CredentialStore>,
     pub binding_credential_service: Arc<BindingCredentialService>,
     pub claude_cli_auth_service: Arc<ClaudeCliAuthService>,
@@ -164,6 +169,13 @@ impl AppState {
             log::error!("Build dependency initialization failed; community guard state enabled.");
             Arc::new(crate::policy::CommunityGuardStateProvider::default())
         });
+        let history_visibility = (injections.history_visibility)(db.clone()).unwrap_or_else(|_| {
+            log::error!(
+                "Build dependency initialization failed; community history visibility enabled."
+            );
+            Arc::new(crate::store::CommunityHistoryVisibilityPolicy)
+        });
+        db.install_history_visibility(&history_visibility);
         let resolved = (injections.license)(db.clone()).and_then(|license| {
             let retention = (injections.retention)(db.clone())?;
             // An injected Pro entitlement must survive a downgrade before the
@@ -216,6 +228,7 @@ impl AppState {
             guard_state,
             last_published_guard: Arc::new(std::sync::Mutex::new(None)),
             _retention: retention,
+            _history_visibility: history_visibility,
             credential_store,
             binding_credential_service,
             claude_cli_auth_service,
@@ -367,6 +380,7 @@ mod tests {
             "retention-error",
             "pending-error",
             "guard-error",
+            "history-error",
         ] {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("authoritative.db");
@@ -386,6 +400,21 @@ mod tests {
             let license_db = weak.clone();
             let retention_db = weak.clone();
             let mut injections = Injections::community();
+            let history_db = weak.clone();
+            injections.history_visibility = Box::new(move |db| {
+                assert!(Arc::ptr_eq(&db, &history_db.upgrade().unwrap()));
+                assert_eq!(
+                    Database::get_user_version(&db.conn.lock().unwrap()).unwrap(),
+                    crate::store::SCHEMA_VERSION
+                );
+                if mode == "history-error" {
+                    Err(crate::AppError::internal(
+                        "private history factory token /secret/path",
+                    ))
+                } else {
+                    Ok(Arc::new(crate::store::CommunityHistoryVisibilityPolicy))
+                }
+            });
             let guard_db = weak.clone();
             injections.guard_state = Box::new(move |db| {
                 assert!(Arc::ptr_eq(&db, &guard_db.upgrade().unwrap()));
@@ -463,6 +492,7 @@ mod tests {
             );
             state.db.startup_cleanup();
             assert!(Arc::ptr_eq(&state.db, &db));
+            assert_eq!(db.history_visibility().cutoff, None);
             if mode == "success" {
                 assert_eq!(
                     state.license.status().build,
@@ -518,6 +548,8 @@ mod tests {
                 req_id: "factory-test".into(),
                 app_type: "claude".into(),
                 provider_id: "p".into(),
+                selected_provider_id: "p".into(),
+                identity_fingerprint: None,
                 model: "m".into(),
                 billing_identity: crate::policy::BillingIdentity::ApiKey,
                 key_fp: None,
@@ -549,7 +581,7 @@ mod tests {
                 total,
                 match mode {
                     "success" => 500,
-                    "community" | "pending-error" | "guard-error" => 0,
+                    "community" | "pending-error" | "guard-error" | "history-error" => 0,
                     _ => 1300,
                 },
                 "{mode}"
@@ -568,6 +600,9 @@ mod tests {
                     logs.as_slice(),
                     &["Build dependency initialization failed; community guard state enabled."]
                 );
+            }
+            if mode == "history-error" {
+                assert_eq!(logs.as_slice(), &["Build dependency initialization failed; community history visibility enabled."]);
             }
             drop(logs);
             drop(state);

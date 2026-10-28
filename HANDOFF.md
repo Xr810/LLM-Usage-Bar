@@ -2445,3 +2445,41 @@ factory tests. Local formatting, CI YAML formatting, TypeScript and whitespace
 checks passed; Rust compilation/runtime and exact-head CI results remain pending.
 No merge or release is authorized; keep the PR Draft. Existing §20 native
 interactive shutdown acceptance gaps remain open.
+
+#### 2026-10-28 PR #123: public hook contract v1.13 (in progress)
+
+One Draft PR starts at main `5cb3acc7718514e580a8df4c0504994f6a71b310`.
+`GuardStateProvider::set_killed(bool) -> bool` defaults to false and reports
+changed state, not the resulting killed flag. The registered `guard_set_killed`
+command returns `{ changed: bool }`, exported as `GuardSetKilledResult` in
+TypeScript. Only true invalidates the existing deduplicating guard notifier.
+The existing guard factory/fallback is reused; no persistence is introduced.
+
+`ReqMeta.selected_provider_id` and `identity_fingerprint` describe the selected
+outbound identity. Routing computes the fingerprint using the public one-way
+hash function, after resolving provider auth but before sending upstream bytes.
+Changing provider requires admission again; repeated attempts on the same
+provider reuse admission. Terminal Hold/Deny responses end routing. Provider
+selection requires the model from the buffered request or oversized prefix:
+the old pre-body-read admission guarantee is replaced by zero upstream and
+response bytes while held. Subscription forwarding still uses its single
+official endpoint and existing consent rules.
+
+`Injections.history_visibility` resolves `HistoryVisibilityPolicy` from the
+same migrated database Arc. Its independent failure emits one static redacted
+error and falls back to community (`None`, no history floor). AppState owns
+the provider and Database keeps a weak reference to avoid a provider/DB cycle.
+`Database::history_visibility()` captures an inclusive local-date cutoff once
+for each history read; row/count pairs and detail/daily-rollup aggregates share
+that snapshot. Existing view-specific restrictions may remain tighter.
+Billing-history exporters must use this read boundary; community receipt CSV
+remains unavailable. Full SQL backups and sync exports bypass visibility and
+continue exporting retained data. No schema, migration, Pro enforcement, new
+event, or frontend page changes belong to this contract.
+
+Validation is ongoing. The initial kill-shell head passed local TypeScript,
+formatting and whitespace checks. Full local Rust test compilation exceeded
+the 2 GB orb limit (137); it also identified a local type-inference error that
+was corrected before the next push. Runtime/platform success must come from
+the exact implementation head, not the initial shell's CI. Existing §20 native
+interactive shutdown gaps remain open. Keep Draft; no merge/release authorized.

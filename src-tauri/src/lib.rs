@@ -60,7 +60,10 @@ pub use model::{
 pub use prompt::Prompt;
 pub use provider::{Provider, ProviderMeta};
 pub use quota::claude_quota::run_claude_statusline_bridge;
-pub use store::{CommunityRetentionPolicy, Database, RetentionPolicy, RetentionPolicyProvider};
+pub use store::{
+    CommunityHistoryVisibilityPolicy, CommunityRetentionPolicy, Database, HistoryVisibility,
+    HistoryVisibilityPolicy, RetentionPolicy, RetentionPolicyProvider,
+};
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 

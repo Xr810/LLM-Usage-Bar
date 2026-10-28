@@ -169,6 +169,7 @@ impl Database {
         provider_id: &str,
         since: i64,
     ) -> Result<Vec<QuotaSnapshot>, AppError> {
+        let since = self.history_visibility().clamp_start(Some(since))?.unwrap();
         let conn = lock_conn!(self.conn);
         let mut statement = conn.prepare(
             "SELECT snapshot_id, provider_id, fetched_at,

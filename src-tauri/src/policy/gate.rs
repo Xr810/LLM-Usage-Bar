@@ -19,6 +19,10 @@ pub struct ReqMeta {
     pub req_id: String,
     pub app_type: String,
     pub provider_id: String,
+    /// Selected upstream for this admission attempt (not an inbound label).
+    pub selected_provider_id: String,
+    /// One-way fingerprint of the selected outbound credential, never raw auth.
+    pub identity_fingerprint: Option<String>,
     pub model: String,
     pub billing_identity: BillingIdentity,
     pub key_fp: Option<String>,
@@ -99,6 +103,8 @@ mod tests {
             req_id: "req-1".to_string(),
             app_type: "claude".to_string(),
             provider_id: "anthropic".to_string(),
+            selected_provider_id: "anthropic".to_string(),
+            identity_fingerprint: Some("fp-not-a-key".to_string()),
             model: "claude-sonnet".to_string(),
             billing_identity: identity,
             key_fp: Some("fp-not-a-key".to_string()),
