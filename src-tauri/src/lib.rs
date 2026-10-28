@@ -914,9 +914,14 @@ pub fn run_with_injections(ctx: tauri::Context<tauri::Wry>, injections: Injectio
                 ));
             let router_db = app_state.db.clone();
             let router_gate = app_state.gate.clone();
+            let router_registry = app_state.pending_registry.clone();
+            let guard_app = app.handle().clone();
+            router_registry.set_publisher(Arc::new(move |pending| {
+                commands::publish_pending_state_if_changed(&guard_app, pending);
+            }));
             tauri::async_runtime::spawn(async move {
                 if let Err(error) =
-                    crate::route::server::start_with_gate(router_db, router_port, router_auth, router_gate).await
+                    crate::route::server::start_with_registry(router_db, router_port, router_auth, router_gate, router_registry).await
                 {
                     log::error!("[ROUTER] 启动失败: {error}");
                 }
@@ -1648,6 +1653,9 @@ pub fn run_with_injections(ctx: tauri::Context<tauri::Wry>, injections: Injectio
             commands::get_quota_status,
             // BE-21: tray guard snapshot (C12 read)
             commands::get_guard_state,
+            commands::guard_allow_once,
+            commands::guard_allow_more_today,
+            commands::guard_deny_pending,
             // BE-22: read-only session list (C14)
             commands::list_sessions,
             // BE-17: takeover wizard and detect_tools (C3 / C22)
@@ -1764,6 +1772,14 @@ pub fn run_with_injections(ctx: tauri::Context<tauri::Wry>, injections: Injectio
 /// 确保 Claude Code/Codex/Gemini 的配置不会处于损坏状态。
 /// 使用 stop_with_restore_keep_state 保留 settings 表中的代理状态，下次启动时自动恢复。
 pub async fn cleanup_before_exit(app_handle: &tauri::AppHandle) {
+    if let Some(state) = app_handle.try_state::<app_state::AppState>() {
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            state.pending_registry.drain(),
+        )
+        .await;
+        state.pending_registry.set_publisher(Arc::new(|_| {}));
+    }
     let cleanup_resources = app_handle
         .try_state::<app_state::AppState>()
         .map(|state| state.take_background_tasks());

@@ -432,6 +432,21 @@ impl Database {
                         super::migrations::schema_v29::migrate_v28_to_v29(conn)?;
                         Self::set_user_version(conn, 29)?;
                     }
+                    29 => {
+                        Self::add_column_if_missing(
+                            conn,
+                            "proxy_request_logs",
+                            "guard_released_by",
+                            "TEXT",
+                        )?;
+                        Self::add_column_if_missing(
+                            conn,
+                            "proxy_request_logs",
+                            "held_ms",
+                            "INTEGER",
+                        )?;
+                        Self::set_user_version(conn, 30)?;
+                    }
                     _ => {
                         return Err(AppError::Database(format!(
                             "未知的数据库版本 {version}，无法迁移到 {SCHEMA_VERSION}"

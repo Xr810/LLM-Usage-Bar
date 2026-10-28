@@ -23,8 +23,9 @@ use std::sync::Arc;
 type DatabaseFactory<T> = Box<dyn FnOnce(Arc<Database>) -> Result<Arc<T>, crate::AppError> + Send>;
 
 /// Build-owned factories, called once with the migrated authoritative database.
-/// License runs first. Either failure discards both providers, closes admission,
-/// and disables configured cleanup for this run. Factory errors are not echoed.
+/// License precedes retention; either failure closes admission and disables
+/// cleanup. Pending-registry failure independently falls back to Noop.
+/// Factory errors are never echoed.
 pub struct Injections {
     pub license: DatabaseFactory<dyn crate::policy::LicenseProvider>,
     pub pending_registry: DatabaseFactory<dyn crate::policy::PendingRegistry>,
@@ -145,7 +146,9 @@ impl AppState {
         injections: Injections,
     ) -> Self {
         let pending_registry = (injections.pending_registry)(db.clone()).unwrap_or_else(|_| {
-            log::error!("Pending registry initialization failed; using community registry.");
+            log::error!(
+                "Build dependency initialization failed; community pending registry enabled."
+            );
             Arc::new(crate::policy::DefaultNoopRegistry)
         });
         let resolved = (injections.license)(db.clone()).and_then(|license| {
@@ -342,7 +345,13 @@ mod tests {
                 }
             }
         }
-        for mode in ["community", "success", "license-error", "retention-error"] {
+        for mode in [
+            "community",
+            "success",
+            "license-error",
+            "retention-error",
+            "pending-error",
+        ] {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("authoritative.db");
             let db = Arc::new(Database::open_before_retention(&path).unwrap());
@@ -361,7 +370,22 @@ mod tests {
             let license_db = weak.clone();
             let retention_db = weak.clone();
             let mut injections = Injections::community();
-            if mode != "community" {
+            let pending_db = weak.clone();
+            injections.pending_registry = Box::new(move |db| {
+                assert!(Arc::ptr_eq(&db, &pending_db.upgrade().unwrap()));
+                let conn = db.conn.lock().unwrap();
+                assert_eq!(
+                    Database::get_user_version(&conn).unwrap(),
+                    crate::store::SCHEMA_VERSION
+                );
+                assert!(Database::has_column(&conn, "proxy_request_logs", "held_ms").unwrap());
+                if mode == "pending-error" {
+                    Err(crate::AppError::internal("private factory failure detail"))
+                } else {
+                    Ok(Arc::new(crate::policy::DefaultNoopRegistry))
+                }
+            });
+            if !matches!(mode, "community" | "pending-error") {
                 injections.license = Box::new(move |db| {
                     assert!(Arc::ptr_eq(&db, &license_db.upgrade().unwrap()));
                     let conn = db.conn.lock().unwrap();
@@ -419,7 +443,9 @@ mod tests {
                 );
             }
             state.license_lifecycle.reconcile().unwrap();
-            let failed = mode.ends_with("error");
+            let failed = matches!(mode, "license-error" | "retention-error");
+            assert!(state.pending_registry.view().is_empty());
+            assert!(!state.pending_registry.release(None).released);
             let request = crate::policy::ReqMeta {
                 req_id: "factory-test".into(),
                 app_type: "claude".into(),
@@ -455,13 +481,17 @@ mod tests {
                 total,
                 match mode {
                     "success" => 500,
-                    "community" => 0,
+                    "community" | "pending-error" => 0,
                     _ => 1300,
                 },
                 "{mode}"
             );
             let logs = LOGGER.0.lock().unwrap();
-            assert_eq!(logs.len(), usize::from(failed), "{mode}: {logs:?}");
+            assert_eq!(
+                logs.len(),
+                usize::from(mode.ends_with("error")),
+                "{mode}: {logs:?}"
+            );
             assert!(logs
                 .iter()
                 .all(|line| !line.contains("private factory failure detail")));

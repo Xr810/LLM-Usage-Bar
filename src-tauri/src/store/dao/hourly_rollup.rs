@@ -304,6 +304,8 @@ pub struct ProxySettlement {
     pub session_id: Option<String>,
     pub end_reason: String,
     pub error_message: Option<String>,
+    pub guard_released_by: Option<String>,
+    pub held_ms: Option<i64>,
 }
 
 pub(crate) fn insert_proxy_settlement(
@@ -319,10 +321,11 @@ pub(crate) fn insert_proxy_settlement(
                  request_id, provider_id, app_type, model,
                  input_tokens, output_tokens, total_cost_usd, latency_ms, status_code,
                  session_id, is_streaming, created_at, data_source,
-                 billing_identity, key_fingerprint, end_reason, cost_source, error_message
+                 billing_identity, key_fingerprint, end_reason, cost_source, error_message,
+                 guard_released_by, held_ms
              ) VALUES (
                  ?1, ?2, ?3, ?4, ?5, ?6, '0', 0, ?7, ?8, 1, ?9, 'proxy',
-                 ?10, ?11, ?12, 'metered', ?13
+                 ?10, ?11, ?12, 'metered', ?13, ?14, ?15
              ) ON CONFLICT(request_id) DO NOTHING",
             params![
                 row.request_id,
@@ -338,6 +341,8 @@ pub(crate) fn insert_proxy_settlement(
                 row.key_fingerprint,
                 row.end_reason,
                 row.error_message,
+                row.guard_released_by,
+                row.held_ms,
             ],
         )
         .map_err(|error| AppError::Database(format!("结算代理请求失败: {error}")))?;
@@ -456,8 +461,15 @@ fn delta_from_row(row: &Row<'_>) -> Result<HourlyLogDelta, AppError> {
             .get(6)
             .map_err(|error| AppError::Database(format!("读取请求明细失败: {error}")))?,
         end_reason: row
-            .get(7)
-            .map_err(|error| AppError::Database(format!("读取请求明细失败: {error}")))?,
+            .get::<_, Option<String>>(7)
+            .map_err(|error| AppError::Database(format!("读取请求明细失败: {error}")))?
+            .map(|reason| {
+                if reason.to_ascii_lowercase().starts_with("guard_hold") {
+                    "guard_hold".to_string()
+                } else {
+                    reason
+                }
+            }),
         input_tokens: row
             .get(8)
             .map_err(|error| AppError::Database(format!("读取请求明细失败: {error}")))?,

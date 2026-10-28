@@ -3120,7 +3120,10 @@ fn schema_migration_v24_through_v26_adds_key_scoped_usage_snapshots() {
 
     Database::apply_schema_migrations_on_conn(&conn).expect("migrate v24 through current schema");
 
-    assert_eq!(Database::get_user_version(&conn).unwrap(), 29);
+    assert_eq!(
+        Database::get_user_version(&conn).unwrap(),
+        super::SCHEMA_VERSION
+    );
     assert!(Database::table_exists(&conn, "provider_key_usage_snapshots").unwrap());
     for column in [
         "key_id",
@@ -3155,6 +3158,47 @@ fn schema_migration_v24_through_v26_adds_key_scoped_usage_snapshots() {
 }
 
 #[test]
+fn hold_v30_upgrade_adds_only_nullable_audit_columns_without_rewriting_rows() {
+    let db = Database::memory().unwrap();
+    let conn = db.conn.lock().unwrap();
+    conn.execute_batch("ALTER TABLE proxy_request_logs DROP COLUMN guard_released_by;
+        ALTER TABLE proxy_request_logs DROP COLUMN held_ms;
+        INSERT INTO proxy_request_logs (request_id,provider_id,app_type,model,status_code,created_at,end_reason)
+        VALUES ('legacy-hold','p','claude','m',429,1,'guard_hold_timeout');").unwrap();
+    Database::set_user_version(&conn, 29).unwrap();
+    let before: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('proxy_request_logs')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    Database::apply_schema_migrations_on_conn(&conn).unwrap();
+    let after: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('proxy_request_logs')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(after, before + 2);
+    for column in ["guard_released_by", "held_ms"] {
+        let info = get_column_info(&conn, "proxy_request_logs", column);
+        assert_eq!(info.notnull, 0);
+        assert_eq!(info.default, None);
+    }
+    let row: (String,Option<String>,Option<i64>) = conn.query_row("SELECT end_reason,guard_released_by,held_ms FROM proxy_request_logs WHERE request_id='legacy-hold'", [], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();
+    assert_eq!(row, ("guard_hold_timeout".into(), None, None));
+    drop(conn);
+    assert_eq!(
+        db.get_usage_summary(None, None, None, None, None)
+            .unwrap()
+            .total_requests,
+        0
+    );
+}
+
+#[test]
 fn schema_migration_v25_to_v26_preserves_the_configured_keychain_slot() {
     let db = Database::memory().expect("create current in-memory database");
     let conn = db.conn.lock().expect("lock in-memory database");
@@ -3176,7 +3220,10 @@ fn schema_migration_v25_to_v26_preserves_the_configured_keychain_slot() {
 
     Database::apply_schema_migrations_on_conn(&conn).expect("migrate v25 to v26");
 
-    assert_eq!(Database::get_user_version(&conn).unwrap(), 29);
+    assert_eq!(
+        Database::get_user_version(&conn).unwrap(),
+        super::SCHEMA_VERSION
+    );
     assert_eq!(
         conn.query_row("SELECT COUNT(*) FROM provider_api_keys", [], |row| row
             .get::<_, i64>(0),)
@@ -3225,7 +3272,10 @@ fn schema_migration_is_a_no_op_for_an_already_migrated_v26_database() {
 
     Database::apply_schema_migrations_on_conn(&conn).expect("reopen schema v26");
 
-    assert_eq!(Database::get_user_version(&conn).unwrap(), 29);
+    assert_eq!(
+        Database::get_user_version(&conn).unwrap(),
+        super::SCHEMA_VERSION
+    );
     assert_eq!(
         conn.query_row(
             "SELECT usage_total_usd, fetched_at

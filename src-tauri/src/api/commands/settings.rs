@@ -55,6 +55,7 @@ fn merge_settings_for_save(
     incoming.subscription_warn_pct = existing.subscription_warn_pct;
     incoming.on_identity_switch = existing.on_identity_switch;
     incoming.failure_modes = existing.failure_modes;
+    incoming.guard = existing.guard;
     incoming
 }
 

@@ -22,7 +22,8 @@ pub enum HoldScope {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct HoldSpec {
     pub kind: HoldKind,
     pub scope: HoldScope,
@@ -53,7 +54,8 @@ pub enum ReleasedBy {
     AutoIdentity,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "releasedBy", rename_all = "snake_case")]
 pub enum HoldOutcome {
     Released(ReleasedBy),
     Denied,
@@ -126,11 +128,17 @@ pub trait PendingRegistry: Send + Sync {
     fn release(&self, pending_id: Option<&str>) -> ReleaseResult;
     /// None uses the configured default. Scope selection, local-day allowance
     /// reset and same-scope FIFO release belong exclusively to the registry.
+    /// Add allowance until local midnight without changing the cap, then release
+    /// all matching entries in FIFO order without per-request cost estimates.
     fn allow_more_today(&self, amount_usd: Option<&str>) -> AllowanceResult;
     /// None denies all entries.
     fn deny(&self, pending_id: Option<&str>) -> DenyResult;
-    /// Resolve all waiters with Shutdown; must not block.
-    fn drain(&self);
+    /// Resolve all waiters with Shutdown, then await their dequeue acknowledgments.
+    /// The host bounds this future to two seconds on exit.
+    fn drain(&self) -> futures::future::BoxFuture<'_, ()>;
+    /// Publish after each queue mutation, outside queue locks. The host filters
+    /// unchanged snapshots. Installing a publisher must not enqueue anything.
+    fn set_publisher(&self, publisher: std::sync::Arc<dyn Fn(Vec<PendingMeta>) + Send + Sync>);
     fn view(&self) -> Vec<PendingMeta>;
 }
 
@@ -160,7 +168,10 @@ impl PendingRegistry for DefaultNoopRegistry {
     fn deny(&self, _: Option<&str>) -> DenyResult {
         DenyResult { denied_count: 0 }
     }
-    fn drain(&self) {}
+    fn drain(&self) -> futures::future::BoxFuture<'_, ()> {
+        Box::pin(async {})
+    }
+    fn set_publisher(&self, _: std::sync::Arc<dyn Fn(Vec<PendingMeta>) + Send + Sync>) {}
     fn view(&self) -> Vec<PendingMeta> {
         Vec::new()
     }

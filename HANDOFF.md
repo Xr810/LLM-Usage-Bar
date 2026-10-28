@@ -2327,3 +2327,40 @@ info/incremental compilation. Exact-head Linux/Windows/macOS CI execution
 evidence belongs to PR #119 and its thread; local compilation is not a passing
 runtime test. No frontend/private code, release, or merge. Existing §20 native
 interactive shutdown gaps remain open.
+
+#### 2026-10-28 PRO-2 phase 1: public Hold registry contract v1.10
+
+Public draft PR #120 starts at main `8667c4d6`. Only public transport contracts,
+injection, command shells, settings, events and audit storage are in scope.
+The private repository is not touched. No merge, release or private repin is
+authorized. Queue, deadline, allowance and opaque-scope policy belong to the
+injected `PendingRegistry`; the only concrete queue here is `cfg(test)`.
+
+`Decision::Hold` gains `Option<HoldSpec>`. None and the community Noop registry
+keep immediate 429 `GUARD_HOLD`. An injected ticket suspends before reading the
+body or sending response bytes; its terminal outcome drives transport only.
+Ticket Drop removes its entry. Commands delegate release/head selection,
+same-scope allowance release and deny directly to the registry. `drain` returns
+a future acknowledging ticket disposal; exit bounds it to two seconds.
+Registry publishers carry complete pending snapshots, and the host suppresses
+unchanged events while retaining pending entries across budget publications.
+
+The pending-registry factory receives the same migrated database Arc as the
+existing factories; its own failure emits one redacted error and falls back
+to Noop. Settings expose guard defaults 60 seconds / 8 requests / "5" USD,
+with strict 15–240 / 1–32 / 2,5,10,20 validation. Identity auto_allow already
+exists. Schema v30 adds exactly two nullable columns with no backfill:
+`guard_released_by` and `held_ms`. Unreleased rows remain audit-only
+`guard_hold`; legacy reasons normalize on read without rewriting rows.
+
+Verification in this 2 GB Linux orb: TypeScript checking, production Clippy
+`-D warnings`, and an intermediate wrapper-managed `check --locked --tests`
+passed (three pre-existing test warnings). Full test code generation and a
+later test-check retry were OOM-killed even with one build job and
+debug/incremental disabled, before execution; neither is a passing test run.
+The initial contract
+head passed all six public CI checks. The full phase-1 head still requires
+exact-head CI execution, including the real TCP zero-byte and disconnect tests,
+paused-clock terminal outcomes, command delegation, settings, migration and
+factory redaction regressions. Existing §20 native interactive shutdown gaps
+remain open; platform CI does not establish native interactive acceptance.

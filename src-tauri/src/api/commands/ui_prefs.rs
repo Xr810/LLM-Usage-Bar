@@ -100,7 +100,11 @@ pub(crate) fn apply_ui_prefs_patch(
     for key in object.keys() {
         if !matches!(
             key.as_str(),
-            "alertThresholdPct" | "subscriptionWarnPct" | "onIdentitySwitch" | "failureModes"
+            "alertThresholdPct"
+                | "subscriptionWarnPct"
+                | "onIdentitySwitch"
+                | "failureModes"
+                | "guard"
         ) {
             return Err(AppError::invalid_argument("Unknown UI preference.", key));
         }
@@ -122,9 +126,26 @@ pub(crate) fn apply_ui_prefs_patch(
         Some(value) => require_failure_modes(settings.failure_modes, value)?,
         None => settings.failure_modes,
     };
+    let next_guard = match object.get("guard") {
+        Some(value) => {
+            let patch = value
+                .as_object()
+                .ok_or_else(|| AppError::invalid_argument("guard must be an object", "guard"))?;
+            let mut merged =
+                serde_json::to_value(settings.guard).expect("guard settings serialize");
+            merged.as_object_mut().unwrap().extend(patch.clone());
+            serde_json::from_value(merged)
+                .map_err(|_| AppError::invalid_argument("Invalid guard settings", "guard"))?
+        }
+        None => settings.guard,
+    };
 
     let mut changed_keys = Vec::new();
     let mut opened_failure_modes = Vec::new();
+    if next_guard != settings.guard {
+        settings.guard = next_guard;
+        changed_keys.push("guard".to_string());
+    }
     if next_alert != settings.alert_threshold_pct {
         settings.alert_threshold_pct = next_alert;
         changed_keys.push("alertThresholdPct".to_string());
@@ -233,6 +254,39 @@ mod tests {
 
     fn prefs_of(settings: &AppSettings) -> UiPrefs {
         settings.ui_prefs()
+    }
+
+    #[test]
+    fn guard_settings_validate_boundaries_and_preserve_omitted_fields() {
+        let mut settings = AppSettings::default();
+        assert_eq!(
+            serde_json::to_value(settings.guard).unwrap(),
+            json!({"holdTimeoutSecs":60,"maxPending":8,"allowMoreTodayDefaultUsd":"5"})
+        );
+        for patch in [
+            json!({"holdTimeoutSecs":14}),
+            json!({"holdTimeoutSecs":241}),
+            json!({"maxPending":0}),
+            json!({"maxPending":33}),
+            json!({"allowMoreTodayDefaultUsd":"3"}),
+        ] {
+            let before = settings.guard;
+            assert!(apply_ui_prefs_patch(&mut settings, &json!({"guard":patch})).is_err());
+            assert_eq!(settings.guard, before);
+            assert!(
+                serde_json::from_value::<crate::config::settings::GuardSettings>(patch).is_err()
+            );
+        }
+        for (seconds, max) in [(15, 1), (240, 32)] {
+            apply_ui_prefs_patch(
+                &mut settings,
+                &json!({"guard":{"holdTimeoutSecs":seconds,"maxPending":max}}),
+            )
+            .unwrap();
+            assert_eq!(settings.guard.hold_timeout_secs, seconds);
+            assert_eq!(settings.guard.max_pending, max);
+            assert_eq!(settings.guard.allow_more_today_default_usd.as_str(), "5");
+        }
     }
 
     #[test]

@@ -50,8 +50,8 @@ pub enum Decision {
         status: u16,
         body: Value,
     },
-    /// BE-30 fails closed immediately with HTTP 429 / GUARD_HOLD; no waiting.
-    /// PRO-2 may extend this response with interactive Hold handling later.
+    /// None (or a Noop registry) fails closed immediately with HTTP 429.
+    /// Some delegates suspension to the injected pending registry.
     Hold {
         reason: String,
         /// Optional retry delay in seconds, also emitted as Retry-After.

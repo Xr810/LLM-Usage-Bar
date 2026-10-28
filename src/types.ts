@@ -736,3 +736,55 @@ export interface HermesMemoryLimits {
   memoryEnabled: boolean;
   userEnabled: boolean;
 }
+
+/** Public v1.10 Hold wire contract; queue policy belongs to the injected registry. */
+export type HoldKind = "hard_cap" | "identity_switch";
+export type HoldScope =
+  | { kind: "daily_cap"; ruleId: string }
+  | { kind: "identity"; projectKey: string };
+export type ReleasedBy = "once" | "more_today" | "auto_identity";
+export interface HoldSpec {
+  kind: HoldKind;
+  scope: HoldScope;
+  /** Serde's std::time::Duration representation. */
+  timeout: { secs: number; nanos: number };
+}
+export type HoldOutcome =
+  | { kind: "released"; releasedBy: ReleasedBy }
+  | { kind: "denied" | "timeout" | "shutdown" };
+export type AllowanceUsd = "2" | "5" | "10" | "20";
+export interface PendingMeta {
+  pendingId: string;
+  requestId: string;
+  kind: HoldKind;
+  scope: HoldScope;
+  provider: string | null;
+  client: string;
+  sessionId: string | null;
+  heldAt: number;
+  expiresAt: number;
+  reason: string;
+}
+export interface GuardStateView {
+  state: "ok" | "warn" | "capped" | "killed";
+  blockedToday: number;
+  allowedToday: { count: number; usd: string };
+  pendingCount: number;
+  pending: PendingMeta[];
+}
+export interface GuardSettings {
+  holdTimeoutSecs: number;
+  maxPending: number;
+  allowMoreTodayDefaultUsd: AllowanceUsd;
+}
+export interface GuardReleaseResult {
+  released: boolean;
+  pendingId: string | null;
+}
+export interface GuardAllowanceResult {
+  releasedCount: number;
+  allowanceUsd: string;
+}
+export interface GuardDenyResult {
+  deniedCount: number;
+}
