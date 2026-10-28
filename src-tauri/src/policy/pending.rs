@@ -27,7 +27,21 @@ pub enum HoldScope {
 pub struct HoldSpec {
     pub kind: HoldKind,
     pub scope: HoldScope,
+    #[serde(rename = "timeoutSecs", with = "timeout_secs")]
     pub timeout: std::time::Duration,
+}
+
+mod timeout_secs {
+    use serde::{Deserialize, Deserializer, Serializer};
+    use std::time::Duration;
+
+    pub fn serialize<S: Serializer>(timeout: &Duration, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_u64(timeout.as_secs())
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Duration, D::Error> {
+        u64::deserialize(deserializer).map(Duration::from_secs)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

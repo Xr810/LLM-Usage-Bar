@@ -285,7 +285,7 @@ fn noop_and_wire_contract() {
     let wire = serde_json::to_value(&spec).unwrap();
     assert_eq!(
         wire,
-        serde_json::json!({"kind":"identity_switch","scope":{"kind":"identity","projectKey":"p"},"timeout":{"secs":60,"nanos":0}})
+        serde_json::json!({"kind":"identity_switch","scope":{"kind":"identity","projectKey":"p"},"timeoutSecs":60})
     );
     assert_eq!(serde_json::from_value::<HoldSpec>(wire).unwrap(), spec);
     assert_eq!(

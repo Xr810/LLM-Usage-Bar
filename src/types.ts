@@ -746,8 +746,7 @@ export type ReleasedBy = "once" | "more_today" | "auto_identity";
 export interface HoldSpec {
   kind: HoldKind;
   scope: HoldScope;
-  /** Serde's std::time::Duration representation. */
-  timeout: { secs: number; nanos: number };
+  timeoutSecs: number;
 }
 export type HoldOutcome =
   | { kind: "released"; releasedBy: ReleasedBy }
