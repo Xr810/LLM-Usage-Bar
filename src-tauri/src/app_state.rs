@@ -20,21 +20,38 @@ pub(crate) use background::BackgroundShutdown;
 use background::BackgroundTasks;
 use std::sync::Arc;
 
-/// Build-owned dependencies, selected before opening the database.
+type DatabaseFactory<T> = Box<dyn FnOnce(Arc<Database>) -> Result<Arc<T>, crate::AppError> + Send>;
+
+/// Build-owned factories, called once with the migrated authoritative database.
+/// License runs first. Either failure discards both providers, closes admission,
+/// and disables configured cleanup for this run. Factory errors are not echoed.
 pub struct Injections {
-    pub license: Arc<dyn crate::policy::LicenseProvider>,
+    pub license: DatabaseFactory<dyn crate::policy::LicenseProvider>,
     pub gate: Arc<dyn crate::policy::PolicyGate>,
-    pub retention: Arc<dyn crate::store::RetentionPolicyProvider>,
+    pub retention: DatabaseFactory<dyn crate::store::RetentionPolicyProvider>,
 }
 
 impl Injections {
     pub fn community() -> Self {
         Self {
-            license: Arc::new(crate::policy::CommunityLicenseProvider),
+            license: Box::new(|_| Ok(Arc::new(crate::policy::CommunityLicenseProvider))),
             gate: Arc::new(crate::policy::AllowAllGate),
-            retention: Arc::new(crate::store::CommunityRetentionPolicy),
+            retention: Box::new(|_| Ok(Arc::new(crate::store::CommunityRetentionPolicy))),
         }
     }
+}
+
+struct UnavailableGate;
+
+impl crate::policy::PolicyGate for UnavailableGate {
+    fn admit(&self, _: &crate::policy::ReqMeta) -> crate::policy::Decision {
+        crate::policy::Decision::Hold {
+            reason: "Build dependencies unavailable".into(),
+            retry_after_seconds: None,
+        }
+    }
+
+    fn settle(&self, _: &str, _: &crate::policy::Usage) {}
 }
 
 /// 全局应用状态
@@ -43,6 +60,8 @@ pub struct AppState {
     pub license: Arc<dyn crate::policy::LicenseProvider>,
     pub license_lifecycle: Arc<crate::policy::LicenseLifecycle>,
     pub gate: Arc<dyn crate::policy::PolicyGate>,
+    // Keep retention alive without a Database -> provider -> Database cycle.
+    _retention: Option<Arc<dyn crate::store::RetentionPolicyProvider>>,
     pub credential_store: Arc<dyn CredentialStore>,
     pub binding_credential_service: Arc<BindingCredentialService>,
     pub claude_cli_auth_service: Arc<ClaudeCliAuthService>,
@@ -71,7 +90,7 @@ impl AppState {
             credential_store,
             Arc::new(ClaudeCliAuthService::production()),
             quota_service,
-            &Injections::community(),
+            Injections::community(),
         )
     }
 
@@ -80,19 +99,14 @@ impl AppState {
         credential_store: Arc<dyn CredentialStore>,
         quota_service: Arc<QuotaService>,
     ) -> Self {
-        Self::new_with_injections(
-            db,
-            credential_store,
-            quota_service,
-            &Injections::community(),
-        )
+        Self::new_with_injections(db, credential_store, quota_service, Injections::community())
     }
 
     pub fn new_with_injections(
         db: Arc<Database>,
         credential_store: Arc<dyn CredentialStore>,
         quota_service: Arc<QuotaService>,
-        injections: &Injections,
+        injections: Injections,
     ) -> Self {
         Self::new_with_services(
             db,
@@ -115,7 +129,7 @@ impl AppState {
             credential_store,
             Arc::new(ClaudeCliAuthService::new(runner)),
             quota_service,
-            &Injections::community(),
+            Injections::community(),
         )
     }
 
@@ -124,8 +138,31 @@ impl AppState {
         credential_store: Arc<dyn CredentialStore>,
         claude_cli_auth_service: Arc<ClaudeCliAuthService>,
         quota_service: Arc<QuotaService>,
-        injections: &Injections,
+        injections: Injections,
     ) -> Self {
+        let resolved = (injections.license)(db.clone()).and_then(|license| {
+            let retention = (injections.retention)(db.clone())?;
+            // An injected Pro entitlement must survive a downgrade before the
+            // first prune. Persist its floor before exposing either provider.
+            if license.status().tier == crate::policy::LicenseTier::Pro {
+                crate::policy::RetentionStore::new(db.clone()).set_pending_target(730)?;
+            }
+            Ok((license, retention))
+        });
+        let (license, gate, retention) = match resolved {
+            Ok((license, retention)) => (license, injections.gate, Some(retention)),
+            Err(_) => {
+                // Factory errors can contain build-private material; never echo them.
+                log::error!("Build dependency initialization failed; community license, closed gate, cleanup disabled.");
+                (
+                    Arc::new(crate::policy::CommunityLicenseProvider)
+                        as Arc<dyn crate::policy::LicenseProvider>,
+                    Arc::new(UnavailableGate) as Arc<dyn crate::policy::PolicyGate>,
+                    None,
+                )
+            }
+        };
+        db.install_retention_policy(retention.as_ref());
         let binding_credential_service = Arc::new(BindingCredentialService::new(
             db.clone(),
             credential_store.clone(),
@@ -137,10 +174,7 @@ impl AppState {
             ));
         let session_usage_service = Arc::new(SessionUsageService::new(db.clone()));
         let tool_detection_cache = Arc::new(ToolDetectionCache::default());
-        let license_lifecycle = Arc::new(crate::policy::LicenseLifecycle::new(
-            injections.license.clone(),
-            db.clone(),
-        ));
+        let license_lifecycle = Arc::new(crate::policy::LicenseLifecycle::new(license, db.clone()));
         let tray_usage_service = Arc::new(TrayUsageService::new(
             db.clone(),
             quota_service.clone(),
@@ -153,7 +187,8 @@ impl AppState {
             db,
             license: license_lifecycle.clone(),
             license_lifecycle,
-            gate: injections.gate.clone(),
+            gate,
+            _retention: retention,
             credential_store,
             binding_credential_service,
             claude_cli_auth_service,
@@ -235,6 +270,203 @@ mod tests {
     use chrono::{Local, TimeZone};
     use futures::future::BoxFuture;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn deferred_factories_share_migrated_database_and_fail_closed_once() {
+        // Isolate the process-global logger from other test modules.
+        const CHILD: &str = "LUB_DEFERRED_FACTORY_TEST";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "app_state::tests::deferred_factories_share_migrated_database_and_fail_closed_once", "--nocapture"])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        struct Logger(std::sync::Mutex<Vec<String>>);
+        impl log::Log for Logger {
+            fn enabled(&self, _: &log::Metadata<'_>) -> bool {
+                true
+            }
+            fn log(&self, record: &log::Record<'_>) {
+                if record.level() == log::Level::Error {
+                    self.0.lock().unwrap().push(record.args().to_string());
+                }
+            }
+            fn flush(&self) {}
+        }
+        static LOGGER: Logger = Logger(std::sync::Mutex::new(Vec::new()));
+        log::set_logger(&LOGGER).unwrap();
+        log::set_max_level(log::LevelFilter::Error);
+
+        // Test-only official provider owning the DB exercises cycle-free shutdown.
+        struct TestProvider(Arc<Database>);
+        impl crate::policy::LicenseProvider for TestProvider {
+            fn status(&self) -> crate::policy::LicenseStatus {
+                let mut status = crate::policy::community_license_status();
+                status.build = crate::policy::LicenseBuild::Official;
+                status.tier = crate::policy::LicenseTier::Pro;
+                status
+            }
+            fn activate(
+                &self,
+                token: &str,
+            ) -> Result<crate::policy::LicenseStatus, crate::AppError> {
+                crate::policy::activate_community_license(token)
+            }
+            fn deactivate(&self) -> Result<(), crate::AppError> {
+                crate::policy::deactivate_community_license()
+            }
+        }
+        impl crate::RetentionPolicyProvider for TestProvider {
+            fn retention_policy(&self, detail_days: i64) -> crate::RetentionPolicy {
+                assert!(self.0.database_path().is_some());
+                crate::RetentionPolicy {
+                    detail_days,
+                    hourly_days: 730,
+                }
+            }
+        }
+        for mode in ["community", "success", "license-error", "retention-error"] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("authoritative.db");
+            let db = Arc::new(Database::open_before_retention(&path).unwrap());
+            for days in [500, 800] {
+                db.conn.lock().unwrap().execute(
+                    "INSERT INTO usage_hourly_rollups
+                     (hour_utc, app_type, provider_id, model, billing_identity, data_source, request_count)
+                     VALUES (?1, 'claude', 'factory-test', 'model', '', 'proxy', ?2)",
+                    rusqlite::params![(chrono::Utc::now() - chrono::Duration::days(days)).timestamp().div_euclid(3600) * 3600, days],
+                ).unwrap();
+            }
+            // Reopen through the exact production opener: it must not prune yet.
+            drop(db);
+            let db = Arc::new(Database::open_before_retention(&path).unwrap());
+            let weak = Arc::downgrade(&db);
+            let license_db = weak.clone();
+            let retention_db = weak.clone();
+            let mut injections = Injections::community();
+            if mode != "community" {
+                injections.license = Box::new(move |db| {
+                    assert!(Arc::ptr_eq(&db, &license_db.upgrade().unwrap()));
+                    let conn = db.conn.lock().unwrap();
+                    assert_eq!(
+                        Database::get_user_version(&conn).unwrap(),
+                        crate::store::SCHEMA_VERSION
+                    );
+                    assert_eq!(
+                        conn.query_row("SELECT COUNT(*) FROM usage_hourly_rollups", [], |row| row
+                            .get::<_, i64>(
+                            0
+                        ))
+                        .unwrap(),
+                        2
+                    );
+                    drop(conn);
+                    if mode == "license-error" {
+                        Err(crate::AppError::internal("private factory failure detail"))
+                    } else {
+                        Ok(Arc::new(TestProvider(db)))
+                    }
+                });
+                injections.retention = Box::new(move |db| {
+                    assert_ne!(
+                        mode, "license-error",
+                        "retention must not run after license failure"
+                    );
+                    assert!(Arc::ptr_eq(&db, &retention_db.upgrade().unwrap()));
+                    if mode == "retention-error" {
+                        Err(crate::AppError::internal("private factory failure detail"))
+                    } else {
+                        Ok(Arc::new(TestProvider(db)))
+                    }
+                });
+            }
+            LOGGER.0.lock().unwrap().clear();
+            let state = AppState::new_with_injections(
+                db.clone(),
+                unavailable_credential_store(),
+                Arc::new(QuotaService::new(db.clone())),
+                injections,
+            );
+            state.db.startup_cleanup();
+            assert!(Arc::ptr_eq(&state.db, &db));
+            if mode == "success" {
+                assert_eq!(
+                    state.license.status().build,
+                    crate::policy::LicenseBuild::Official
+                );
+                assert_eq!(state.license.status().tier, crate::policy::LicenseTier::Pro);
+            } else {
+                assert_eq!(
+                    state.license.status(),
+                    crate::policy::community_license_status()
+                );
+            }
+            state.license_lifecycle.reconcile().unwrap();
+            let failed = mode.ends_with("error");
+            let request = crate::policy::ReqMeta {
+                req_id: "factory-test".into(),
+                app_type: "claude".into(),
+                provider_id: "p".into(),
+                model: "m".into(),
+                billing_identity: crate::policy::BillingIdentity::ApiKey,
+                key_fp: None,
+                session_id: None,
+                est_cost_micro_usd: 1,
+                via_subscription_optin: false,
+            };
+            if failed {
+                assert!(matches!(
+                    state.gate.admit(&request),
+                    crate::policy::Decision::Hold { .. }
+                ));
+                assert!(db.rollup_and_prune_configured().is_err());
+            } else {
+                assert_eq!(state.gate.admit(&request), crate::policy::Decision::Allow);
+                db.rollup_and_prune_configured().unwrap();
+            }
+            let total: i64 = db
+                .conn
+                .lock()
+                .unwrap()
+                .query_row(
+                    "SELECT COALESCE(SUM(request_count), 0) FROM usage_hourly_rollups",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                total,
+                match mode {
+                    "success" => 500,
+                    "community" => 0,
+                    _ => 1300,
+                },
+                "{mode}"
+            );
+            let logs = LOGGER.0.lock().unwrap();
+            assert_eq!(logs.len(), usize::from(failed), "{mode}: {logs:?}");
+            assert!(logs
+                .iter()
+                .all(|line| !line.contains("private factory failure detail")));
+            drop(logs);
+            drop(state);
+            // Scheduled cleanup must not silently revert to community after teardown.
+            assert!(db.rollup_and_prune_configured().is_err());
+            drop(db);
+            assert!(
+                weak.upgrade().is_none(),
+                "provider must not leak the database"
+            );
+        }
+    }
 
     struct CountingCollector {
         calls: AtomicUsize,

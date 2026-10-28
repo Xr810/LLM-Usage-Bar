@@ -2288,3 +2288,42 @@ Clippy passed. The first pushed revision passed all six checks, but that does
 not validate the subsequent clock/provider-ack correction. Final exact-head
 CI and local check results belong to the PR/thread, not inferred here.
 No frontend/private code, merge, or release. §20 native shutdown gaps remain.
+
+#### 2026-10-28 Contract v1.9: deferred factories on the authoritative database
+
+PR #119 starts from freshly fetched `origin/main` on
+`contract-v1.9-deferred-factories`. The executable supplies
+`tauri::generate_context!()` to `run_with_injections(Context<Wry>, Injections)`;
+that remains the only builder. No public database-access API was added.
+
+`Injections::license` and `retention` are independent, consuming factories:
+`Box<dyn FnOnce(Arc<Database>) -> Result<Arc<dyn Provider>, AppError> + Send>`.
+Core opens/migrates its authoritative database before calling license, then
+retention, with clones of that same Arc. Startup cleanup runs only after
+resolution. Either error discards both providers, uses community license and
+an immediate Hold gate (existing HTTP 429 path), disables configured cleanup,
+and logs one sanitized error without the factory error text. License failure
+short-circuits retention. Community defaults keep AllowAll and 400-day hourly
+retention; persisted high-water and pending-retention retry remain in force.
+
+AppState owns retention; Database keeps a weak reference so DB-owning providers
+cannot create a reference cycle. Missing/expired retention rejects scheduled
+configured pruning rather than silently falling back to a shorter window.
+The existing direct database constructors retain their startup cleanup behavior.
+
+The disk-backed regression covers community/success/license-error/retention-error,
+migrated schema and Arc identity in factories, no pruning before resolution,
+500/800-day retention controls, official-provider discard on retention failure,
+exact error counts, continued state/lifecycle use, and cycle-free teardown.
+Existing license-command and lifecycle regressions use consuming factories.
+
+Local wrapper-managed `check --locked --tests` passed again on the final code
+(49.10s, three existing test warnings), as did production Clippy `-D warnings`,
+`fmt --check`, and `git diff --check`. Initial Clippy found factory type
+complexity; a private generic alias removes duplication without changing the
+field types. The focused runtime test compile was killed by the 2 GB orb limit
+(exit 137), before test execution, despite one build job and disabled debug
+info/incremental compilation. Exact-head Linux/Windows/macOS CI execution
+evidence belongs to PR #119 and its thread; local compilation is not a passing
+runtime test. No frontend/private code, release, or merge. Existing §20 native
+interactive shutdown gaps remain open.

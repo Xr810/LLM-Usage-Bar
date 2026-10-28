@@ -62,7 +62,24 @@ impl Database {
     /// Aggregate and prune using the saved detail window and injected policy.
     pub fn rollup_and_prune_configured(&self) -> Result<u64, AppError> {
         let detail_days = self.detail_retention_days()?;
-        self.rollup_and_prune_with_policy(self.retention_policy.retention_policy(detail_days))
+        let policy = {
+            let retention = crate::store::lock_conn!(self.retention_policy);
+            match &*retention {
+                crate::store::RetentionProvider::Owned(provider) => {
+                    provider.retention_policy(detail_days)
+                }
+                crate::store::RetentionProvider::Deferred(provider) => {
+                    let provider = provider.as_ref().and_then(std::sync::Weak::upgrade);
+                    drop(retention);
+                    provider
+                        .ok_or_else(|| {
+                            AppError::internal("Retention unavailable; cleanup disabled.")
+                        })?
+                        .retention_policy(detail_days)
+                }
+            }
+        };
+        self.rollup_and_prune_with_policy(policy)
     }
 
     /// Aggregate proxy_request_logs older than `retain_days` into usage_daily_rollups,

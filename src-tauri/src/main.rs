@@ -42,5 +42,8 @@ fn main() {
         }
     }
 
-    llm_usage_bar_lib::run();
+    llm_usage_bar_lib::run_with_injections(
+        tauri::generate_context!(),
+        llm_usage_bar_lib::Injections::community(),
+    );
 }

@@ -378,14 +378,14 @@ fn commands_emit_full_tauri_payload_once_per_transition_and_community_never_emit
             Arc::new(TestProvider::new(db.clone()))
         };
         let injections = crate::Injections {
-            license: provider,
+            license: Box::new(move |_| Ok(provider)),
             ..crate::Injections::community()
         };
         let state = crate::AppState::new_with_injections(
             db.clone(),
             crate::secrets::unavailable_credential_store(),
             Arc::new(crate::quota::QuotaService::new(db)),
-            &injections,
+            injections,
         );
         let app = tauri::test::mock_app();
         let events = Arc::new(Mutex::new(Vec::<LicenseStatus>::new()));
