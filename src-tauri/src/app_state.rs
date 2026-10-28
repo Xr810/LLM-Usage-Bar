@@ -141,7 +141,13 @@ impl AppState {
         injections: Injections,
     ) -> Self {
         let resolved = (injections.license)(db.clone()).and_then(|license| {
-            (injections.retention)(db.clone()).map(|retention| (license, retention))
+            let retention = (injections.retention)(db.clone())?;
+            // An injected Pro entitlement must survive a downgrade before the
+            // first prune. Persist its floor before exposing either provider.
+            if license.status().tier == crate::policy::LicenseTier::Pro {
+                crate::policy::RetentionStore::new(db.clone()).set_pending_target(730)?;
+            }
+            Ok((license, retention))
         });
         let (license, gate, retention) = match resolved {
             Ok((license, retention)) => (license, injections.gate, Some(retention)),
