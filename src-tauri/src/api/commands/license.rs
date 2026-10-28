@@ -77,18 +77,16 @@ mod tests {
     #[tokio::test]
     async fn injected_license_controls_commands_tray_and_downgrade_visibility_not_pruning() {
         let provider = Arc::new(TestLicense(AtomicBool::new(true)));
+        let license = provider.clone();
+        let retention = provider.clone();
         let injections = crate::Injections {
-            license: provider.clone(),
-            retention: provider.clone(),
+            license: Box::new(move |_| Ok(license)),
+            retention: Box::new(move |_| Ok(retention)),
             ..crate::Injections::community()
         };
         let dir = tempfile::tempdir().unwrap();
         let db = Arc::new(
-            crate::Database::init_at_with_retention_policy(
-                &dir.path().join("retention.db"),
-                Box::new(injections.retention.clone()),
-            )
-            .unwrap(),
+            crate::Database::open_before_retention(&dir.path().join("retention.db")).unwrap(),
         );
         let now = chrono::Utc::now();
         let old_hour = (now - chrono::Duration::days(500))
@@ -109,7 +107,7 @@ mod tests {
             db.clone(),
             crate::secrets::unavailable_credential_store(),
             Arc::new(crate::quota::QuotaService::new(db.clone())),
-            &injections,
+            injections,
         );
         assert_eq!(
             state.tray_usage_service.cached_snapshot().await.build_type,
@@ -195,18 +193,16 @@ mod tests {
     #[tokio::test]
     async fn renewal_after_downgrade_restores_hidden_history_and_high_water_never_lowers() {
         let provider = Arc::new(TestLicense(AtomicBool::new(true)));
+        let license = provider.clone();
+        let retention = provider.clone();
         let injections = crate::Injections {
-            license: provider.clone(),
-            retention: provider.clone(),
+            license: Box::new(move |_| Ok(license)),
+            retention: Box::new(move |_| Ok(retention)),
             ..crate::Injections::community()
         };
         let dir = tempfile::tempdir().unwrap();
         let db = Arc::new(
-            crate::Database::init_at_with_retention_policy(
-                &dir.path().join("renewal.db"),
-                Box::new(injections.retention.clone()),
-            )
-            .unwrap(),
+            crate::Database::open_before_retention(&dir.path().join("renewal.db")).unwrap(),
         );
         let now = chrono::Utc::now();
         let old_hour = (now - chrono::Duration::days(500))
@@ -227,7 +223,7 @@ mod tests {
             db.clone(),
             crate::secrets::unavailable_credential_store(),
             Arc::new(crate::quota::QuotaService::new(db.clone())),
-            &injections,
+            injections,
         );
         let app = tauri::test::mock_app();
         app.manage(state);

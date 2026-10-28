@@ -481,12 +481,13 @@ fn start_main_window_visibility_monitor(app: tauri::AppHandle) {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+#[cfg(mobile)]
 pub fn run() {
-    run_with_injections(Injections::community());
+    run_with_injections(tauri::generate_context!(), Injections::community());
 }
 
 /// Select build dependencies before any startup database cleanup can run.
-pub fn run_with_injections(injections: Injections) {
+pub fn run_with_injections(ctx: tauri::Context<tauri::Wry>, injections: Injections) {
     // 设置 panic hook，在应用崩溃时记录日志到 <app_config_dir>/crash.log（默认 ~/.llm-usage-bar/crash.log）
     panic_hook::setup_panic_hook();
 
@@ -778,9 +779,7 @@ pub fn run_with_injections(injections: Injections) {
             };
 
             let db = loop {
-                match ready_database.open_with(|path| {
-                    Database::init_at_with_retention_policy(path, Box::new(injections.retention.clone()))
-                }) {
+                match ready_database.open_with(Database::open_before_retention) {
                     Ok(db) => break Arc::new(db),
                     Err(e) => {
                         log::error!("Failed to init database: {e}");
@@ -869,7 +868,7 @@ pub fn run_with_injections(injections: Injections) {
                 db,
                 credential_store,
                 quota_service,
-                &injections,
+                injections,
             );
 
             let license_app = app.handle().clone();
@@ -1658,7 +1657,7 @@ pub fn run_with_injections(injections: Injections) {
         ]);
 
     let app = builder
-        .build(tauri::generate_context!())
+        .build(ctx)
         .expect("error while running tauri application");
 
     let mut exit_cleanup_started = false;

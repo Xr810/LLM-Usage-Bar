@@ -22,19 +22,43 @@ use std::sync::Arc;
 
 /// Build-owned dependencies, selected before opening the database.
 pub struct Injections {
-    pub license: Arc<dyn crate::policy::LicenseProvider>,
+    pub license: Box<
+        dyn FnOnce(
+                Arc<Database>,
+            ) -> Result<Arc<dyn crate::policy::LicenseProvider>, crate::AppError>
+            + Send,
+    >,
     pub gate: Arc<dyn crate::policy::PolicyGate>,
-    pub retention: Arc<dyn crate::store::RetentionPolicyProvider>,
+    pub retention: Box<
+        dyn FnOnce(
+                Arc<Database>,
+            )
+                -> Result<Arc<dyn crate::store::RetentionPolicyProvider>, crate::AppError>
+            + Send,
+    >,
 }
 
 impl Injections {
     pub fn community() -> Self {
         Self {
-            license: Arc::new(crate::policy::CommunityLicenseProvider),
+            license: Box::new(|_| Ok(Arc::new(crate::policy::CommunityLicenseProvider))),
             gate: Arc::new(crate::policy::AllowAllGate),
-            retention: Arc::new(crate::store::CommunityRetentionPolicy),
+            retention: Box::new(|_| Ok(Arc::new(crate::store::CommunityRetentionPolicy))),
         }
     }
+}
+
+struct UnavailableGate;
+
+impl crate::policy::PolicyGate for UnavailableGate {
+    fn admit(&self, _: &crate::policy::ReqMeta) -> crate::policy::Decision {
+        crate::policy::Decision::Hold {
+            reason: "Build dependencies unavailable".into(),
+            retry_after_seconds: None,
+        }
+    }
+
+    fn settle(&self, _: &str, _: &crate::policy::Usage) {}
 }
 
 /// 全局应用状态
@@ -43,6 +67,8 @@ pub struct AppState {
     pub license: Arc<dyn crate::policy::LicenseProvider>,
     pub license_lifecycle: Arc<crate::policy::LicenseLifecycle>,
     pub gate: Arc<dyn crate::policy::PolicyGate>,
+    // Keep retention alive without a Database -> provider -> Database cycle.
+    _retention: Option<Arc<dyn crate::store::RetentionPolicyProvider>>,
     pub credential_store: Arc<dyn CredentialStore>,
     pub binding_credential_service: Arc<BindingCredentialService>,
     pub claude_cli_auth_service: Arc<ClaudeCliAuthService>,
@@ -71,7 +97,7 @@ impl AppState {
             credential_store,
             Arc::new(ClaudeCliAuthService::production()),
             quota_service,
-            &Injections::community(),
+            Injections::community(),
         )
     }
 
@@ -80,19 +106,14 @@ impl AppState {
         credential_store: Arc<dyn CredentialStore>,
         quota_service: Arc<QuotaService>,
     ) -> Self {
-        Self::new_with_injections(
-            db,
-            credential_store,
-            quota_service,
-            &Injections::community(),
-        )
+        Self::new_with_injections(db, credential_store, quota_service, Injections::community())
     }
 
     pub fn new_with_injections(
         db: Arc<Database>,
         credential_store: Arc<dyn CredentialStore>,
         quota_service: Arc<QuotaService>,
-        injections: &Injections,
+        injections: Injections,
     ) -> Self {
         Self::new_with_services(
             db,
@@ -115,7 +136,7 @@ impl AppState {
             credential_store,
             Arc::new(ClaudeCliAuthService::new(runner)),
             quota_service,
-            &Injections::community(),
+            Injections::community(),
         )
     }
 
@@ -124,8 +145,28 @@ impl AppState {
         credential_store: Arc<dyn CredentialStore>,
         claude_cli_auth_service: Arc<ClaudeCliAuthService>,
         quota_service: Arc<QuotaService>,
-        injections: &Injections,
+        injections: Injections,
     ) -> Self {
+        let resolved = (injections.license)(db.clone()).and_then(|license| {
+            (injections.retention)(db.clone()).map(|retention| (license, retention))
+        });
+        let (license, gate, retention) = match resolved {
+            Ok((license, retention)) => (license, injections.gate, Some(retention)),
+            Err(_) => {
+                // Factory errors can contain build-private material; never echo them.
+                log::error!("Build dependency initialization failed; community license, closed gate, cleanup disabled.");
+                (
+                    Arc::new(crate::policy::CommunityLicenseProvider)
+                        as Arc<dyn crate::policy::LicenseProvider>,
+                    Arc::new(UnavailableGate) as Arc<dyn crate::policy::PolicyGate>,
+                    None,
+                )
+            }
+        };
+        db.install_retention_policy(retention.as_ref());
+        if retention.is_some() {
+            db.startup_cleanup();
+        }
         let binding_credential_service = Arc::new(BindingCredentialService::new(
             db.clone(),
             credential_store.clone(),
@@ -137,10 +178,7 @@ impl AppState {
             ));
         let session_usage_service = Arc::new(SessionUsageService::new(db.clone()));
         let tool_detection_cache = Arc::new(ToolDetectionCache::default());
-        let license_lifecycle = Arc::new(crate::policy::LicenseLifecycle::new(
-            injections.license.clone(),
-            db.clone(),
-        ));
+        let license_lifecycle = Arc::new(crate::policy::LicenseLifecycle::new(license, db.clone()));
         let tray_usage_service = Arc::new(TrayUsageService::new(
             db.clone(),
             quota_service.clone(),
@@ -153,7 +191,8 @@ impl AppState {
             db,
             license: license_lifecycle.clone(),
             license_lifecycle,
-            gate: injections.gate.clone(),
+            gate,
+            _retention: retention,
             credential_store,
             binding_credential_service,
             claude_cli_auth_service,

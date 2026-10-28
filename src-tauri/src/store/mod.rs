@@ -98,7 +98,12 @@ pub struct Database {
     pub(crate) usage_source_binding_operation: Mutex<()>,
     pub(crate) rhythm_cache_identity: u64,
     database_path: Option<PathBuf>,
-    retention_policy: Box<dyn RetentionPolicyProvider>,
+    retention_policy: Mutex<RetentionProvider>,
+}
+
+enum RetentionProvider {
+    Owned(Box<dyn RetentionPolicyProvider>),
+    Deferred(Option<std::sync::Weak<dyn RetentionPolicyProvider>>),
 }
 
 static NEXT_RHYTHM_CACHE_ID: AtomicU64 = AtomicU64::new(1);
@@ -142,6 +147,14 @@ impl Database {
         db_path: &Path,
         retention_policy: Box<dyn RetentionPolicyProvider>,
     ) -> Result<Self, AppError> {
+        let db = Self::open_before_retention(db_path)?;
+        *lock_conn!(db.retention_policy) = RetentionProvider::Owned(retention_policy);
+        db.startup_cleanup();
+        Ok(db)
+    }
+
+    /// Core-only opening path: migrate before resolving build factories.
+    pub(crate) fn open_before_retention(db_path: &Path) -> Result<Self, AppError> {
         let db_exists = db_path.exists();
         // Resolve external source roots before opening or migrating SQLite so
         // v13 cursor classification never depends on post-database state.
@@ -170,7 +183,7 @@ impl Database {
             usage_source_binding_operation: Mutex::new(()),
             rhythm_cache_identity: next_rhythm_cache_identity(),
             database_path: Some(db_path.to_path_buf()),
-            retention_policy,
+            retention_policy: Mutex::new(RetentionProvider::Deferred(None)),
         };
         db.create_tables()?;
 
@@ -195,6 +208,20 @@ impl Database {
         }
         db.ensure_model_pricing_seeded()?;
 
+        Ok(db)
+    }
+
+    pub(crate) fn install_retention_policy(
+        &self,
+        provider: Option<&std::sync::Arc<dyn RetentionPolicyProvider>>,
+    ) {
+        // AppState owns the provider; a provider may itself own this database.
+        *self.retention_policy.lock().unwrap() =
+            RetentionProvider::Deferred(provider.map(std::sync::Arc::downgrade));
+    }
+
+    pub(crate) fn startup_cleanup(&self) {
+        let db = self;
         // Startup cleanup: prune old logs and reclaim space
         // Retry pending retention even in a community build, BEFORE pruning.
         // A retry failure skips cleanup, never database startup or proxy use.
@@ -206,13 +233,11 @@ impl Database {
         }
         // Reclaim disk space after cleanup
         {
-            let conn = lock_conn!(db.conn);
+            let Ok(conn) = db.conn.lock() else { return };
             if let Err(e) = conn.execute_batch("PRAGMA incremental_vacuum;") {
                 log::warn!("Startup incremental vacuum failed: {e}");
             }
         }
-
-        Ok(db)
     }
 
     /// 返回此连接所代表的权威磁盘路径；内存数据库返回 `None`。
@@ -252,7 +277,9 @@ impl Database {
             usage_source_binding_operation: Mutex::new(()),
             rhythm_cache_identity: next_rhythm_cache_identity(),
             database_path: None,
-            retention_policy: Box::new(CommunityRetentionPolicy),
+            retention_policy: Mutex::new(RetentionProvider::Owned(Box::new(
+                CommunityRetentionPolicy,
+            ))),
         };
         db.create_tables()?;
         db.apply_schema_migrations()?;
