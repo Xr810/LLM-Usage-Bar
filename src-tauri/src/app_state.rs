@@ -27,6 +27,7 @@ type DatabaseFactory<T> = Box<dyn FnOnce(Arc<Database>) -> Result<Arc<T>, crate:
 /// and disables configured cleanup for this run. Factory errors are not echoed.
 pub struct Injections {
     pub license: DatabaseFactory<dyn crate::policy::LicenseProvider>,
+    pub pending_registry: DatabaseFactory<dyn crate::policy::PendingRegistry>,
     pub gate: Arc<dyn crate::policy::PolicyGate>,
     pub retention: DatabaseFactory<dyn crate::store::RetentionPolicyProvider>,
 }
@@ -35,6 +36,7 @@ impl Injections {
     pub fn community() -> Self {
         Self {
             license: Box::new(|_| Ok(Arc::new(crate::policy::CommunityLicenseProvider))),
+            pending_registry: Box::new(|_| Ok(Arc::new(crate::policy::DefaultNoopRegistry))),
             gate: Arc::new(crate::policy::AllowAllGate),
             retention: Box::new(|_| Ok(Arc::new(crate::store::CommunityRetentionPolicy))),
         }
@@ -48,6 +50,7 @@ impl crate::policy::PolicyGate for UnavailableGate {
         crate::policy::Decision::Hold {
             reason: "Build dependencies unavailable".into(),
             retry_after_seconds: None,
+            hold: None,
         }
     }
 
@@ -60,6 +63,7 @@ pub struct AppState {
     pub license: Arc<dyn crate::policy::LicenseProvider>,
     pub license_lifecycle: Arc<crate::policy::LicenseLifecycle>,
     pub gate: Arc<dyn crate::policy::PolicyGate>,
+    pub pending_registry: Arc<dyn crate::policy::PendingRegistry>,
     // Keep retention alive without a Database -> provider -> Database cycle.
     _retention: Option<Arc<dyn crate::store::RetentionPolicyProvider>>,
     pub credential_store: Arc<dyn CredentialStore>,
@@ -140,6 +144,10 @@ impl AppState {
         quota_service: Arc<QuotaService>,
         injections: Injections,
     ) -> Self {
+        let pending_registry = (injections.pending_registry)(db.clone()).unwrap_or_else(|_| {
+            log::error!("Pending registry initialization failed; using community registry.");
+            Arc::new(crate::policy::DefaultNoopRegistry)
+        });
         let resolved = (injections.license)(db.clone()).and_then(|license| {
             let retention = (injections.retention)(db.clone())?;
             // An injected Pro entitlement must survive a downgrade before the
@@ -188,6 +196,7 @@ impl AppState {
             license: license_lifecycle.clone(),
             license_lifecycle,
             gate,
+            pending_registry,
             _retention: retention,
             credential_store,
             binding_credential_service,

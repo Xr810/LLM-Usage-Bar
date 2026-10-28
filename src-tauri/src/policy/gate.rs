@@ -56,6 +56,7 @@ pub enum Decision {
         reason: String,
         /// Optional retry delay in seconds, also emitted as Retry-After.
         retry_after_seconds: Option<u64>,
+        hold: Option<super::HoldSpec>,
     },
 }
 
@@ -139,6 +140,7 @@ mod tests {
         let hold = Decision::Hold {
             reason: "hard_cap".to_string(),
             retry_after_seconds: None,
+            hold: None,
         };
         assert_ne!(deny, Decision::Allow);
         assert_ne!(hold, Decision::Allow);

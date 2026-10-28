@@ -6,10 +6,12 @@
 mod gate;
 mod license;
 mod lifecycle;
+mod pending;
 mod receipt;
 
 pub use crate::store::{activation_retryable, RetentionStore};
 pub use lifecycle::{LicenseLifecycle, LicensePublisher};
+pub use pending::*;
 
 pub use gate::{AllowAllGate, BillingIdentity, Decision, PolicyGate, ReqMeta, Usage};
 pub use license::{

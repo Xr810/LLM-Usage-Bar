@@ -719,6 +719,7 @@ async fn handle_proxy_inner(
         crate::policy::Decision::Hold {
             reason,
             retry_after_seconds,
+            hold: _,
         } => {
             // BE-30 is an immediate, fail-closed 429, not a suspended request.
             // PRO-2 interactive Hold handling will extend this response.
@@ -1785,6 +1786,7 @@ mod tests {
                 decision: crate::policy::Decision::Hold {
                     reason: reason.into(),
                     retry_after_seconds,
+                    hold: None,
                 },
                 settlements: Default::default(),
             });
