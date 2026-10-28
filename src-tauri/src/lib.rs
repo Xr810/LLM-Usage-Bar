@@ -230,7 +230,11 @@ pub fn create_schema_v13_fixture_test_hook(path: &Path) -> Result<(), AppError> 
     // Reviewed for schema v29: v28 -> v29 给 proxy_request_logs 加 ADR-021 列，新建
     // usage_hourly_rollups / rollup_dirty_hours / guard_counters，并把 model_pricing
     // 的 cache 价改成可空、补上 pending 列。这些都在 v13 之后，不改下面的 v13 基线。
-    if store::SCHEMA_VERSION != 29
+    // Reviewed for schema v30: v29 -> v30 only adds nullable guard_released_by
+    // and held_ms to proxy_request_logs, without defaults or row rewrites.
+    // create_tables_on_conn still creates the pre-migration baseline; neither
+    // audit column belongs in this fixed v13 fixture. Keep the version tripwire.
+    if store::SCHEMA_VERSION != 30
         || product_identity::DATABASE_IDENTITY_SOURCE_SCHEMA_VERSION != 13
     {
         return Err(AppError::Database(

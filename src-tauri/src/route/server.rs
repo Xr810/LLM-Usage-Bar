@@ -147,7 +147,7 @@ pub async fn start_with_registry(
     let app = build_router(state);
     tauri::async_runtime::spawn(async move {
         log::info!("本地 router 已启动: http://{address}/v1/responses");
-        if let Err(error) = axum::serve(listener, app).await {
+        if let Err(error) = super::transport::serve(listener, app).await {
             log::error!("本地 router 服务退出: {error}");
         }
         // serve 返回（正常退出或出错）之后服务已不在监听：清掉公布值，
@@ -2149,7 +2149,9 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
-            axum::serve(listener, router).await.unwrap();
+            super::super::transport::serve(listener, router)
+                .await
+                .unwrap();
         });
         let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
         let body = format!(r#"{{"model":"{MODEL}","stream":true}}"#);
@@ -2187,12 +2189,20 @@ mod tests {
 
     #[tokio::test]
     async fn hold_tcp_disconnect_dequeues_and_records_only_499() {
+        use crate::policy::PendingRegistry;
         use tokio::io::AsyncWriteExt;
         let (db, registry, sender, router) = held_router(1, vec![]);
+        let publications = Arc::new(Mutex::new(Vec::new()));
+        let published = publications.clone();
+        registry.set_publisher(Arc::new(move |pending| {
+            published.lock().unwrap().push(pending.len());
+        }));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
-            axum::serve(listener, router).await.unwrap();
+            super::super::transport::serve(listener, router)
+                .await
+                .unwrap();
         });
         let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
         socket
@@ -2220,6 +2230,86 @@ mod tests {
             .unwrap();
         assert_eq!(row, (499, "client_gone".into(), 1));
         assert!(sender.requests.lock().unwrap().is_empty());
+        assert_eq!(*publications.lock().unwrap(), vec![1, 0]);
+        // The queue was at maxPending. A new client must acquire the freed slot,
+        // not receive queue_full or wait for the disconnected ticket's timeout.
+        let mut replacement = tokio::net::TcpStream::connect(address).await.unwrap();
+        replacement
+            .write_all(
+                b"POST /v1/responses HTTP/1.1\r\nHost: localhost\r\nContent-Length: 4096\r\n\r\n",
+            )
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), registry.wait_count(1))
+            .await
+            .expect("disconnected client's slot is reusable");
+        assert_eq!(*publications.lock().unwrap(), vec![1, 0, 1]);
+        drop(replacement);
+        tokio::time::timeout(Duration::from_secs(2), registry.wait_count(0))
+            .await
+            .unwrap();
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn hold_disconnect_with_unread_body_frees_one_of_eight_slots() {
+        use crate::policy::PendingRegistry;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (db, registry, sender, router) = held_router(8, vec![]);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            super::super::transport::serve(listener, router)
+                .await
+                .unwrap();
+        });
+        let headers =
+            b"POST /v1/responses HTTP/1.1\r\nHost: localhost\r\nContent-Length: 1048576\r\n\r\n";
+        let mut clients = Vec::new();
+        for count in 1..=8 {
+            let mut client = tokio::net::TcpStream::connect(address).await.unwrap();
+            client.write_all(headers).await.unwrap();
+            tokio::time::timeout(Duration::from_secs(2), registry.wait_count(count))
+                .await
+                .unwrap();
+            clients.push(client);
+        }
+        let mut overflow = tokio::net::TcpStream::connect(address).await.unwrap();
+        overflow.write_all(headers).await.unwrap();
+        let mut response = [0; 12];
+        tokio::time::timeout(Duration::from_secs(2), overflow.read_exact(&mut response))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(&response, b"HTTP/1.1 429");
+        let disconnected_id = registry.view().last().unwrap().request_id.clone();
+        let mut disconnected = clients.pop().unwrap();
+        // Leave more than Hyper's body channel can buffer unread on the socket.
+        // EOF detection must not require consuming these bytes.
+        disconnected
+            .write_all(&vec![b'x'; 64 * 1024])
+            .await
+            .unwrap();
+        drop(disconnected);
+        tokio::time::timeout(Duration::from_secs(2), registry.wait_count(7))
+            .await
+            .expect("unread body must not hide disconnect");
+        let audit: (String, String, i64) = db.conn.lock().unwrap().query_row(
+            "SELECT end_reason,error_message,status_code FROM proxy_request_logs WHERE request_id=?1",
+            [&disconnected_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        ).unwrap();
+        assert_eq!(audit, ("guard_hold".into(), "client_gone".into(), 499));
+        let mut replacement = tokio::net::TcpStream::connect(address).await.unwrap();
+        replacement.write_all(headers).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), registry.wait_count(8))
+            .await
+            .expect("freed slot must accept replacement");
+        assert!(sender.requests.lock().unwrap().is_empty());
+        clients.push(replacement);
+        drop(clients);
+        tokio::time::timeout(Duration::from_secs(2), registry.wait_count(0))
+            .await
+            .unwrap();
         server.abort();
     }
 

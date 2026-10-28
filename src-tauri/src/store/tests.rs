@@ -3163,8 +3163,8 @@ fn hold_v30_upgrade_adds_only_nullable_audit_columns_without_rewriting_rows() {
     let conn = db.conn.lock().unwrap();
     conn.execute_batch("ALTER TABLE proxy_request_logs DROP COLUMN guard_released_by;
         ALTER TABLE proxy_request_logs DROP COLUMN held_ms;
-        INSERT INTO proxy_request_logs (request_id,provider_id,app_type,model,status_code,created_at,end_reason)
-        VALUES ('legacy-hold','p','claude','m',429,1,'guard_hold_timeout');").unwrap();
+        INSERT INTO proxy_request_logs (request_id,provider_id,app_type,model,status_code,created_at,end_reason,latency_ms)
+        VALUES ('legacy-hold','p','claude','m',429,1,'guard_hold_timeout',0);").unwrap();
     Database::set_user_version(&conn, 29).unwrap();
     let before: i64 = conn
         .query_row(
