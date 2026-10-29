@@ -167,6 +167,7 @@ struct GroupAccum {
 }
 
 fn load_rows(db: &Database) -> Result<Vec<RawRow>, AppError> {
+    let start = db.history_visibility().clamp_start(None)?;
     let conn = db
         .conn
         .lock()
@@ -176,11 +177,12 @@ fn load_rows(db: &Database) -> Result<Vec<RawRow>, AppError> {
             "SELECT request_id, COALESCE(data_source, 'proxy'), session_id, total_cost_usd, created_at
              FROM proxy_request_logs
              WHERE COALESCE(end_reason, '') != 'guard_deny'
+               AND (?1 IS NULL OR created_at >= ?1)
                AND COALESCE(end_reason, '') NOT LIKE 'guard_hold%'",
         )
         .map_err(|_| AppError::internal("Could not list sessions."))?;
     let mut rows = statement
-        .query([])
+        .query([start])
         .map_err(|_| AppError::internal("Could not list sessions."))?;
     let mut loaded = Vec::new();
     while let Some(row) = rows

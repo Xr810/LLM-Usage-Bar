@@ -122,19 +122,15 @@ impl PendingRegistry for TestRegistry {
         }
     }
     fn allow_more_today(&self, amount_usd: Option<&str>) -> AllowanceResult {
-        // Deliberately deterministic test policy: the head's opaque scope wins.
+        // Test transport only: production eligibility/baseline policy is injected.
         let view = self.view();
         let mut released_count = 0;
-        if let Some(head) = view.first() {
-            for entry in &view {
-                if entry.scope == head.scope
-                    && self.finish(
-                        &entry.pending_id,
-                        HoldOutcome::Released(ReleasedBy::MoreToday),
-                    )
-                {
-                    released_count += 1;
-                }
+        for entry in &view {
+            if self.finish(
+                &entry.pending_id,
+                HoldOutcome::Released(ReleasedBy::MoreToday),
+            ) {
+                released_count += 1;
             }
         }
         let mut inner = self.inner.lock().unwrap();
@@ -211,9 +207,12 @@ async fn registry_contract_fifo_scope_allowance_deny_timeout_and_drop() {
     let mut same = registry
         .enqueue(meta("same", 30, "A"), Duration::from_secs(15))
         .unwrap();
-    let mut other = registry
-        .enqueue(meta("other", 40, "B"), Duration::from_secs(15))
-        .unwrap();
+    let mut identity = meta("other", 40, "B");
+    identity.kind = HoldKind::IdentitySwitch;
+    identity.scope = HoldScope::Identity {
+        project_key: "project".into(),
+    };
+    let mut other = registry.enqueue(identity, Duration::from_secs(15)).unwrap();
     assert!(matches!(
         registry.enqueue(meta("overflow", 40, "A"), Duration::from_secs(15)),
         Err(EnqueueError::Full)
@@ -227,29 +226,18 @@ async fn registry_contract_fifo_scope_allowance_deny_timeout_and_drop() {
     assert_eq!(
         registry.allow_more_today(Some("2")),
         AllowanceResult {
-            released_count: 2,
+            released_count: 3,
             allowance_usd: "2".into()
         }
     );
-    for ticket in [&mut later, &mut same] {
+    for ticket in [&mut later, &mut same, &mut other] {
         assert_eq!(
             (&mut ticket.receiver).await.unwrap(),
             HoldOutcome::Released(ReleasedBy::MoreToday)
         );
     }
-    assert_eq!(
-        registry
-            .view()
-            .iter()
-            .map(|m| m.pending_id.as_str())
-            .collect::<Vec<_>>(),
-        vec!["other"]
-    );
-    assert!(registry.release(Some("other")).released);
-    assert_eq!(
-        (&mut other.receiver).await.unwrap(),
-        HoldOutcome::Released(ReleasedBy::Once)
-    );
+    assert!(registry.view().is_empty());
+    assert!(!registry.release(Some("other")).released);
     assert_eq!(registry.allow_more_today(None).allowance_usd, "7");
     let mut expired = registry
         .enqueue(meta("expired", 1, "A"), Duration::from_secs(15))

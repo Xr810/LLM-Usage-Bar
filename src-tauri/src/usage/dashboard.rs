@@ -357,6 +357,11 @@ impl<'a> UsageDashboardService<'a> {
         start_at: i64,
         end_at: i64,
     ) -> Result<BTreeSet<String>, AppError> {
+        let start_at = self
+            .db
+            .history_visibility()
+            .clamp_start(Some(start_at))?
+            .unwrap();
         let conn = self
             .db
             .conn
@@ -399,6 +404,11 @@ impl<'a> UsageDashboardService<'a> {
         start_at: i64,
         end_at: i64,
     ) -> Result<BTreeSet<String>, AppError> {
+        let start_at = self
+            .db
+            .history_visibility()
+            .clamp_start(Some(start_at))?
+            .unwrap();
         let conn = self
             .db
             .conn

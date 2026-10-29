@@ -293,6 +293,10 @@ impl Database {
             .and_then(|value| i64::try_from(value).ok())
             .ok_or_else(|| AppError::Message("pagination offset is too large".to_string()))?;
 
+        let start_at = self
+            .history_visibility()
+            .clamp_start(Some(start_at))?
+            .unwrap();
         let conn = lock_conn!(self.conn);
         let total = conn.query_row(
             "SELECT COUNT(*) FROM usage_events
@@ -345,6 +349,10 @@ impl Database {
         let limit = i64::try_from(page_size)
             .map_err(|_| AppError::Message("page size is too large".to_string()))?;
 
+        let start_at = self
+            .history_visibility()
+            .clamp_start(Some(start_at))?
+            .unwrap();
         let conn = lock_conn!(self.conn);
         let total = conn.query_row(
             "SELECT COUNT(*) FROM usage_events
@@ -384,23 +392,25 @@ impl Database {
     }
 
     pub fn get_unassigned_usage_diagnostics(&self) -> Result<UnassignedUsageDiagnostics, AppError> {
+        let start = self.history_visibility().clamp_start(None)?;
         let conn = lock_conn!(self.conn);
 
         let unassigned_event_count = conn.query_row(
-            "SELECT COUNT(*) FROM usage_events WHERE agent_module_id IS NULL",
-            [],
+            "SELECT COUNT(*) FROM usage_events WHERE agent_module_id IS NULL
+             AND (?1 IS NULL OR occurred_at >= ?1)",
+            [start],
             |row| row.get::<_, u64>(0),
         )?;
         let unassigned_groups = {
             let mut statement = conn.prepare(
                 "SELECT provider_id, source, COUNT(*), MIN(occurred_at), MAX(occurred_at)
                  FROM usage_events
-                 WHERE agent_module_id IS NULL
+                 WHERE agent_module_id IS NULL AND (?1 IS NULL OR occurred_at >= ?1)
                  GROUP BY provider_id, source
                  ORDER BY provider_id, source",
             )?;
             let rows = statement
-                .query_map([], |row| {
+                .query_map([start], |row| {
                     Ok(UnassignedUsageGroup {
                         provider_id: row.get(0)?,
                         source: enum_from_text(row.get(1)?, 1)?,
@@ -419,11 +429,12 @@ impl Database {
                  FROM usage_events AS event
                  JOIN agent_modules AS agent ON agent.id = event.agent_module_id
                  WHERE agent.archived_at IS NOT NULL
+                   AND (?1 IS NULL OR event.occurred_at >= ?1)
                  GROUP BY event.agent_module_id
                  ORDER BY event.agent_module_id",
             )?;
             let rows = statement
-                .query_map([], |row| {
+                .query_map([start], |row| {
                     Ok(ArchivedAgentUsageSummary {
                         agent_module_id: row.get(0)?,
                         event_count: nonnegative_u64(row, 1)?,
@@ -457,6 +468,7 @@ impl Database {
                        ON canonical.event_id = link.canonical_event_id
                      LEFT JOIN usage_events AS duplicate
                        ON duplicate.event_id = link.duplicate_event_id
+                     WHERE (?1 IS NULL OR link.created_at >= ?1)
                  )
                  SELECT reason, COUNT(*), MIN(created_at), MAX(created_at)
                  FROM classified
@@ -465,7 +477,7 @@ impl Database {
                  ORDER BY reason",
             )?;
             let rows = statement
-                .query_map([], |row| {
+                .query_map([start], |row| {
                     Ok(InvalidUsageLinkSummary {
                         reason: row.get(0)?,
                         link_count: nonnegative_u64(row, 1)?,

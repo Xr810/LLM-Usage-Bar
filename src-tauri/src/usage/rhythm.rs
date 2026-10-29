@@ -507,6 +507,7 @@ fn metered_history_bounds(
     provider_ids: &[&str],
     now_timestamp: i64,
 ) -> Result<Option<(i64, i64)>, AppError> {
+    let start = db.history_visibility().clamp_start(None)?;
     let conn = db
         .conn
         .lock()
@@ -517,8 +518,9 @@ fn metered_history_bounds(
         let bounds = conn.query_row(
             "SELECT MIN(occurred_at), MAX(occurred_at)
              FROM usage_events
-             WHERE provider_id = ?1 AND occurred_at <= ?2",
-            rusqlite::params![provider_id, now_timestamp],
+             WHERE provider_id = ?1 AND occurred_at <= ?2
+               AND (?3 IS NULL OR occurred_at >= ?3)",
+            rusqlite::params![provider_id, now_timestamp, start],
             |row| Ok((row.get::<_, Option<i64>>(0)?, row.get::<_, Option<i64>>(1)?)),
         )?;
         if let (Some(provider_first), Some(provider_last)) = bounds {
@@ -534,6 +536,7 @@ struct ProfileCacheKey {
     database_identity: u64,
     provider_id: String,
     window_kind: String,
+    history_cutoff: Option<NaiveDate>,
 }
 
 #[derive(Debug, Clone)]
@@ -559,6 +562,7 @@ fn cached_profile(
         database_identity: db.rhythm_cache_identity,
         provider_id: provider_id.to_string(),
         window_kind: window_kind.to_string(),
+        history_cutoff: db.history_visibility().cutoff,
     };
     if let Some(cached) = cache.get(&key) {
         if now_timestamp

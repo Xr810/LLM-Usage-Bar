@@ -16,6 +16,8 @@ use crate::policy::{LicenseBuild, LicenseStatus, LicenseTier};
 use crate::store::{lock_conn, Database};
 
 #[cfg(test)]
+mod history_visibility_tests;
+#[cfg(test)]
 mod tests;
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
@@ -267,8 +269,14 @@ pub fn query_usage_trend_at(
 fn query(
     db: &Database,
     request: &UsageTrendRequest,
-    range: QueryRange,
+    mut range: QueryRange,
 ) -> Result<UsageTrendResponse, AppError> {
+    if let Some(cutoff) = db.history_visibility().cutoff {
+        if cutoff > range.from {
+            range.from = cutoff;
+            range.clamped_from = Some(cutoff.format("%Y-%m-%d").to_string());
+        }
+    }
     let mut groups = BTreeMap::<String, SeriesTotals>::new();
     // Keep the empty/all or unattributed series even when there are no rows.
     groups.insert(

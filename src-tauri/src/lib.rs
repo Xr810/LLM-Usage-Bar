@@ -60,7 +60,10 @@ pub use model::{
 pub use prompt::Prompt;
 pub use provider::{Provider, ProviderMeta};
 pub use quota::claude_quota::run_claude_statusline_bridge;
-pub use store::{CommunityRetentionPolicy, Database, RetentionPolicy, RetentionPolicyProvider};
+pub use store::{
+    CommunityHistoryVisibilityPolicy, CommunityRetentionPolicy, Database, HistoryVisibility,
+    HistoryVisibilityPolicy, RetentionPolicy, RetentionPolicyProvider,
+};
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
@@ -1659,6 +1662,7 @@ pub fn run_with_injections(ctx: tauri::Context<tauri::Wry>, injections: Injectio
             commands::guard_allow_once,
             commands::guard_allow_more_today,
             commands::guard_deny_pending,
+            commands::guard_set_killed,
             // BE-22: read-only session list (C14)
             commands::list_sessions,
             // BE-17: takeover wizard and detect_tools (C3 / C22)

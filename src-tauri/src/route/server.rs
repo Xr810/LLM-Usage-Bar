@@ -576,6 +576,7 @@ struct RequestContext {
     oversize_tail: Option<BodyDataStream>,
     request_start_ms: i64,
     held: Option<(String, i64)>,
+    admitted_provider: Option<String>,
 }
 
 /// 单个候选尝试的结果。
@@ -709,42 +710,17 @@ impl Drop for PendingDisconnectAudit {
     }
 }
 
-async fn handle_proxy_inner(
-    state: Arc<RouterState>,
-    client_headers: HeaderMap,
-    body: Body,
-    expected_wire: WireApi,
-    upstream_suffix: &'static str,
-    app_type: &str,
-    codex_path: bool,
-) -> Result<Response, AppError> {
-    let classified = classify_headers(&client_headers, codex_path);
-    let request_id = format!("proxy-{}", uuid::Uuid::new_v4());
-    log::info!(
-        "router {} request_id={request_id} {}",
-        classified.log_label(),
-        upstream_suffix
-    );
-    if classified.passthrough && !SUBSCRIPTION_SEEN.swap(true, Ordering::Relaxed) {
-        log::info!("request_id={request_id} detected subscription traffic on the local proxy");
-    }
-    let via_subscription_optin = classified.passthrough
-        && subscription_terms_acknowledged(
-            state.db.get_setting(SUBSCRIPTION_TERMS_KEY)?.as_deref(),
-            now_millis(),
-        );
-    let decision = state.gate.admit(&ReqMeta {
-        req_id: request_id.clone(),
-        app_type: app_type.to_string(),
-        provider_id: String::new(),
-        model: String::new(),
-        billing_identity: classified.identity,
-        key_fp: classified.key_fp.clone(),
-        session_id: classified.session_id.clone(),
-        est_cost_micro_usd: 0,
-        via_subscription_optin,
-    });
-    let mut held = None;
+/// Admission runs after selecting an upstream identity and before sending bytes.
+/// A terminal gate response must never fall through to another candidate.
+async fn admit_selected(
+    state: &RouterState,
+    classified: &ClassifiedRequest,
+    meta: ReqMeta,
+    held: &mut Option<(String, i64)>,
+) -> Result<Option<Response>, AppError> {
+    let request_id = meta.req_id.clone();
+    let app_type = &meta.app_type;
+    let decision = state.gate.admit(&meta);
     match decision {
         crate::policy::Decision::Allow => {}
         crate::policy::Decision::Deny { rule, status, body } => {
@@ -758,16 +734,16 @@ async fn handle_proxy_inner(
                         &mut conn,
                         &ProxySettlement {
                             request_id,
-                            provider_id: String::new(),
+                            provider_id: meta.selected_provider_id.clone(),
                             app_type: app_type.to_string(),
-                            model: String::new(),
+                            model: meta.model.clone(),
                             input_tokens: 0,
                             output_tokens: 0,
                             status_code: i64::from(status.as_u16()),
                             created_at: now_millis() / 1000,
                             billing_identity: identity_label(classified.identity).to_string(),
-                            key_fingerprint: classified.key_fp,
-                            session_id: classified.session_id,
+                            key_fingerprint: meta.identity_fingerprint.clone(),
+                            session_id: classified.session_id.clone(),
                             end_reason: "guard_deny".to_string(),
                             error_message: Some(rule),
                             guard_released_by: None,
@@ -779,7 +755,7 @@ async fn handle_proxy_inner(
                 }
                 Err(error) => log::warn!("guard deny recording failed: {error}"),
             }
-            return Ok((status, axum::Json(body)).into_response());
+            return Ok(Some((status, axum::Json(body)).into_response()));
         }
         crate::policy::Decision::Hold {
             reason,
@@ -799,7 +775,7 @@ async fn handle_proxy_inner(
                     request_id: request_id.clone(),
                     kind: spec.kind,
                     scope: spec.scope,
-                    provider: None,
+                    provider: Some(meta.selected_provider_id.clone()),
                     client: app_type.to_string(),
                     session_id: classified.session_id.clone(),
                     held_at,
@@ -820,7 +796,7 @@ async fn handle_proxy_inner(
                             started: tokio::time::Instant::now(),
                             armed: true,
                         };
-                        // No response (including headers) or body read before release.
+                        // No response (including headers) or upstream send before release.
                         // Timeout policy is owned by the registry, not this transport.
                         let outcome = (&mut ticket.receiver)
                             .await
@@ -836,7 +812,7 @@ async fn handle_proxy_inner(
                                     crate::policy::ReleasedBy::MoreToday => "more_today",
                                     crate::policy::ReleasedBy::AutoIdentity => "auto_identity",
                                 };
-                                held = Some((
+                                *held = Some((
                                     label.to_string(),
                                     if by == crate::policy::ReleasedBy::AutoIdentity {
                                         0
@@ -874,7 +850,7 @@ async fn handle_proxy_inner(
                     .headers_mut()
                     .insert(header::RETRY_AFTER, seconds.into());
             }
-            // No body read or upstream call is needed to record this decision.
+            // No upstream call is needed to record this decision.
             // A logging failure must not turn a fail-closed Hold into forwarding
             // or replace its prescribed response with a database error.
             match state.db.conn.lock() {
@@ -883,16 +859,16 @@ async fn handle_proxy_inner(
                         &mut conn,
                         &ProxySettlement {
                             request_id,
-                            provider_id: String::new(),
+                            provider_id: meta.selected_provider_id.clone(),
                             app_type: app_type.to_string(),
-                            model: String::new(),
+                            model: meta.model.clone(),
                             input_tokens: 0,
                             output_tokens: 0,
                             status_code: 429,
                             created_at: now_millis() / 1000,
                             billing_identity: identity_label(classified.identity).to_string(),
-                            key_fingerprint: classified.key_fp,
-                            session_id: classified.session_id,
+                            key_fingerprint: meta.identity_fingerprint.clone(),
+                            session_id: classified.session_id.clone(),
                             end_reason: "guard_hold".to_string(),
                             error_message: Some(disposition.to_string()),
                             guard_released_by: None,
@@ -904,9 +880,37 @@ async fn handle_proxy_inner(
                 }
                 Err(error) => log::warn!("guard hold recording failed: {error}"),
             }
-            return Ok(response);
+            return Ok(Some(response));
         }
     }
+    Ok(None)
+}
+
+async fn handle_proxy_inner(
+    state: Arc<RouterState>,
+    client_headers: HeaderMap,
+    body: Body,
+    expected_wire: WireApi,
+    upstream_suffix: &'static str,
+    app_type: &str,
+    codex_path: bool,
+) -> Result<Response, AppError> {
+    let classified = classify_headers(&client_headers, codex_path);
+    let request_id = format!("proxy-{}", uuid::Uuid::new_v4());
+    log::info!(
+        "router {} request_id={request_id} {}",
+        classified.log_label(),
+        upstream_suffix
+    );
+    if classified.passthrough && !SUBSCRIPTION_SEEN.swap(true, Ordering::Relaxed) {
+        log::info!("request_id={request_id} detected subscription traffic on the local proxy");
+    }
+    let via_subscription_optin = classified.passthrough
+        && subscription_terms_acknowledged(
+            state.db.get_setting(SUBSCRIPTION_TERMS_KEY)?.as_deref(),
+            now_millis(),
+        );
+    let held: Option<(String, i64)> = None;
     // 1. 读 body(带缓存上限)
     let inbound = read_request_body(body).await?;
     // 2. 逻辑模型
@@ -1020,6 +1024,7 @@ async fn handle_proxy_inner(
         oversize_tail,
         request_start_ms: now_ms,
         held,
+        admitted_provider: None,
     };
     forward_through_candidates(ctx).await
 }
@@ -1031,7 +1036,7 @@ async fn forward_subscription(
     headers: HeaderMap,
     inbound: InboundBody,
     model: String,
-    seed: SettlementSeed,
+    mut seed: SettlementSeed,
 ) -> Result<Response, AppError> {
     let body = match inbound {
         InboundBody::Buffered(bytes) => OutboundBody::Buffered(bytes),
@@ -1042,6 +1047,28 @@ async fn forward_subscription(
         upstream_model: model.clone(),
         blacklisted: false,
     };
+    if let Some(response) = admit_selected(
+        &state,
+        &seed.classified,
+        ReqMeta {
+            req_id: seed.request_id.clone(),
+            app_type: seed.app_type.clone(),
+            provider_id: candidate.provider_id.clone(),
+            selected_provider_id: candidate.provider_id.clone(),
+            identity_fingerprint: seed.classified.key_fp.clone(),
+            model: model.clone(),
+            billing_identity: seed.classified.identity,
+            key_fp: seed.classified.key_fp.clone(),
+            session_id: seed.classified.session_id.clone(),
+            est_cost_micro_usd: 0,
+            via_subscription_optin: true,
+        },
+        &mut seed.held,
+    )
+    .await?
+    {
+        return Ok(response);
+    }
     let started = now_millis();
     let result = state
         .sender
@@ -1153,6 +1180,45 @@ async fn try_one_candidate(
             return Ok(Step::Skipped);
         }
     };
+    if ctx.admitted_provider.as_deref() != Some(&candidate.provider_id) {
+        let identity_fingerprint = auth_headers.iter().find_map(|(name, value)| {
+            if name.eq_ignore_ascii_case("x-api-key") {
+                Some(crate::route::identity::fingerprint(value))
+            } else if name.eq_ignore_ascii_case("authorization") {
+                Some(crate::route::identity::fingerprint(
+                    value
+                        .strip_prefix("Bearer ")
+                        .or_else(|| value.strip_prefix("bearer "))
+                        .unwrap_or(value),
+                ))
+            } else {
+                None
+            }
+        });
+        if let Some(response) = admit_selected(
+            state,
+            &ctx.classified,
+            ReqMeta {
+                req_id: ctx.request_id.clone(),
+                app_type: ctx.app_type.clone(),
+                provider_id: candidate.provider_id.clone(),
+                selected_provider_id: candidate.provider_id.clone(),
+                identity_fingerprint,
+                model: ctx.logical_model.clone(),
+                billing_identity: ctx.classified.identity,
+                key_fp: ctx.classified.key_fp.clone(),
+                session_id: ctx.classified.session_id.clone(),
+                est_cost_micro_usd: 0,
+                via_subscription_optin: false,
+            },
+            &mut ctx.held,
+        )
+        .await?
+        {
+            return Ok(Step::GiveUp(response));
+        }
+        ctx.admitted_provider = Some(candidate.provider_id.clone());
+    }
     // 改写 model,组装出站体。
     let outbound_body = match (&ctx.buffered_body, &ctx.oversize_head) {
         (Some(bytes), _) => {
@@ -1836,6 +1902,161 @@ mod tests {
         build_router(state)
     }
 
+    #[tokio::test]
+    async fn failover_readmits_selected_identity_and_terminal_decisions_stop_routing() {
+        struct Auth;
+        impl UpstreamAuth for Auth {
+            fn headers_for<'a>(
+                &'a self,
+                provider: &'a str,
+            ) -> BoxFuture<'a, Result<Vec<(String, String)>, AppError>> {
+                Box::pin(async move {
+                    Ok(vec![(
+                        "Authorization".into(),
+                        format!("Bearer fixture-{provider}"),
+                    )])
+                })
+            }
+        }
+        struct Gate {
+            seen: Mutex<Vec<ReqMeta>>,
+            second: crate::policy::Decision,
+            sender: Arc<FakeSender>,
+        }
+        impl PolicyGate for Gate {
+            fn admit(&self, req: &ReqMeta) -> crate::policy::Decision {
+                assert!(
+                    self.sender.requests.lock().unwrap().iter().all(|sent| {
+                        sent.url
+                            != format!("https://{}.example/v1/responses", req.selected_provider_id)
+                    }),
+                    "selected upstream must receive no request before admission"
+                );
+                self.seen.lock().unwrap().push(req.clone());
+                if req.selected_provider_id == "second" {
+                    self.second.clone()
+                } else {
+                    crate::policy::Decision::Allow
+                }
+            }
+            fn settle(&self, _: &str, _: &crate::policy::Usage) {}
+        }
+        for retry_same in [false, true] {
+            for (decision, status, sends) in [
+                (crate::policy::Decision::Allow, 200, 2),
+                (
+                    crate::policy::Decision::Deny {
+                        rule: "test".into(),
+                        status: 451,
+                        body: json!({"denied":true}),
+                    },
+                    451,
+                    1,
+                ),
+                (
+                    crate::policy::Decision::Hold {
+                        reason: "test".into(),
+                        retry_after_seconds: None,
+                        hold: None,
+                    },
+                    429,
+                    1,
+                ),
+            ] {
+                let db = memory_db();
+                for (id, priority) in [("first", 1), ("second", 2), ("third", 3)] {
+                    seed_route(&db, id, WireApi::Responses, priority, MODEL);
+                }
+                let mut script = vec![
+                    ScriptedOutcome::Fail(SendFailure::Connect),
+                    ScriptedOutcome::Respond {
+                        status: 200,
+                        headers: vec![],
+                        body: b"{}".to_vec(),
+                    },
+                ];
+                if retry_same {
+                    script.insert(0, ScriptedOutcome::Fail(SendFailure::Connect));
+                }
+                let sender = fake_sender(script);
+                let gate = Arc::new(Gate {
+                    seen: Mutex::new(Vec::new()),
+                    second: decision,
+                    sender: sender.clone(),
+                });
+                let mut state = test_state(db.clone(), Arc::new(Auth), sender.clone());
+                Arc::get_mut(&mut state).unwrap().gate = gate.clone();
+                let actual = if retry_same {
+                    // Exercise the forwarding loop with a repeated candidate;
+                    // ordinary route storage currently produces unique providers.
+                    let providers = db
+                        .list_router_providers()
+                        .unwrap()
+                        .into_iter()
+                        .map(|p| (p.id.clone(), p))
+                        .collect();
+                    let candidates = ["first", "first", "second", "third"]
+                        .into_iter()
+                        .map(|id| Candidate {
+                            provider_id: id.into(),
+                            upstream_model: MODEL.into(),
+                            blacklisted: false,
+                        })
+                        .collect();
+                    forward_through_candidates(RequestContext {
+                        state,
+                        client_headers: HeaderMap::new(),
+                        classified: classify_headers(&HeaderMap::new(), true),
+                        request_id: "retry-test".into(),
+                        app_type: "codex".into(),
+                        expected_wire: WireApi::Responses,
+                        upstream_suffix: "responses",
+                        logical_model: MODEL.into(),
+                        providers,
+                        candidates,
+                        oversize: false,
+                        buffered_body: Some(json_body(json!({"model":MODEL})).into()),
+                        oversize_head: None,
+                        oversize_tail: None,
+                        request_start_ms: now_millis(),
+                        held: None,
+                        admitted_provider: None,
+                    })
+                    .await
+                    .unwrap()
+                    .status()
+                } else {
+                    post_json(test_router(state), json_body(json!({"model":MODEL})), &[])
+                        .await
+                        .0
+                };
+                assert_eq!(actual.as_u16(), status);
+                assert_eq!(
+                    sender.requests.lock().unwrap().len(),
+                    sends + usize::from(retry_same)
+                );
+                let seen = gate.seen.lock().unwrap();
+                assert_eq!(
+                    seen.iter()
+                        .map(|meta| meta.selected_provider_id.as_str())
+                        .collect::<Vec<_>>(),
+                    vec!["first", "second"]
+                );
+                assert_eq!(seen[0].req_id, seen[1].req_id);
+                assert_ne!(seen[0].identity_fingerprint, seen[1].identity_fingerprint);
+                for meta in seen.iter() {
+                    assert_eq!(meta.provider_id, meta.selected_provider_id);
+                    assert_eq!(meta.model, MODEL);
+                    assert!(meta.identity_fingerprint.as_ref().is_some_and(
+                        |fp| fp.len() == 16 && fp.bytes().all(|b| b.is_ascii_hexdigit())
+                    ));
+                    assert!(!format!("{meta:?}").contains("fixture-"));
+                    assert!(!format!("{meta:?}").contains("Bearer"));
+                }
+            }
+        }
+    }
+
     struct FixedGate {
         decision: crate::policy::Decision,
         settlements: std::sync::atomic::AtomicUsize,
@@ -1848,6 +2069,55 @@ mod tests {
 
         fn settle(&self, _req_id: &str, _usage: &crate::policy::Usage) {
             self.settlements.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    #[tokio::test]
+    async fn terminal_admission_reads_only_bounded_prefix_without_forwarding() {
+        for decision in [
+            crate::policy::Decision::Deny {
+                rule: "test".into(),
+                status: 451,
+                body: json!({"denied":true}),
+            },
+            crate::policy::Decision::Hold {
+                reason: "test".into(),
+                retry_after_seconds: None,
+                hold: None,
+            },
+        ] {
+            let expected = if matches!(decision, crate::policy::Decision::Deny { .. }) {
+                451
+            } else {
+                429
+            };
+            let db = memory_db();
+            seed_route(&db, "upstream", WireApi::Responses, 1, MODEL);
+            let sender = fake_sender(vec![]);
+            let mut state = test_state(db, ok_auth(), sender.clone());
+            Arc::get_mut(&mut state).unwrap().gate = Arc::new(FixedGate {
+                decision,
+                settlements: Default::default(),
+            });
+            let mut prefix = format!(r#"{{"model":"{MODEL}","input":""#).into_bytes();
+            prefix.resize(MAX_BUFFERED_BODY, b'x');
+            let chunks = futures::stream::iter([
+                Ok::<Bytes, std::io::Error>(prefix.into()),
+                Ok(Bytes::from_static(b"x")),
+            ])
+            .chain(futures::stream::poll_fn(
+                |_| -> std::task::Poll<Option<Result<Bytes, std::io::Error>>> {
+                    panic!("admission must not consume the unbounded body tail")
+                },
+            ));
+            let request = Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .body(Body::from_stream(chunks))
+                .unwrap();
+            let response = test_router(state).oneshot(request).await.unwrap();
+            assert_eq!(response.status().as_u16(), expected);
+            assert!(sender.requests.lock().unwrap().is_empty());
         }
     }
 
@@ -1870,14 +2140,12 @@ mod tests {
         let request = Request::builder()
             .method("POST")
             .uri("/v1/responses")
-            .body(Body::from_stream(futures::stream::pending::<
-                Result<Bytes, std::io::Error>,
-            >()))
+            .body(Body::from(json_body(json!({"model": MODEL}))))
             .unwrap();
         let response =
             tokio::time::timeout(Duration::from_secs(1), test_router(state).oneshot(request))
                 .await
-                .expect("Deny must not wait for the body")
+                .expect("Deny must not wait for upstream")
                 .unwrap();
         assert_eq!(response.status().as_u16(), 451);
         assert_eq!(response.headers()[header::CONTENT_TYPE], "application/json");
@@ -1941,14 +2209,12 @@ mod tests {
             });
             let mut state = test_state(db.clone(), ok_auth(), sender.clone());
             Arc::get_mut(&mut state).unwrap().gate = gate.clone();
-            // A body that never arrives proves Hold does not wait for input,
-            // an interactive decision, or upstream before returning its 429.
+            // The model selects the provider before admission; an immediate
+            // Hold must not wait for upstream or an interactive decision.
             let request = Request::builder()
                 .method("POST")
                 .uri("/v1/responses")
-                .body(Body::from_stream(futures::stream::pending::<
-                    Result<Bytes, std::io::Error>,
-                >()))
+                .body(Body::from(json_body(json!({"model": MODEL}))))
                 .unwrap();
             let response =
                 tokio::time::timeout(Duration::from_secs(1), test_router(state).oneshot(request))
@@ -2103,7 +2369,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn hold_queue_full_is_immediate_and_does_not_read_body() {
+    async fn hold_queue_full_is_immediate_and_does_not_forward() {
         use crate::policy::PendingRegistry;
         let (db, registry, _, router) = held_router(1, vec![]);
         let first = tokio::spawn(router.clone().oneshot(held_request()));
@@ -2111,9 +2377,7 @@ mod tests {
         let request = Request::builder()
             .method("POST")
             .uri("/v1/responses")
-            .body(Body::from_stream(futures::stream::pending::<
-                Result<Bytes, std::io::Error>,
-            >()))
+            .body(Body::from(json_body(json!({"model": MODEL}))))
             .unwrap();
         let response = router.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
@@ -2156,7 +2420,9 @@ mod tests {
         let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
         let body = format!(r#"{{"model":"{MODEL}","stream":true}}"#);
         socket.write_all(format!("POST /v1/responses HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).as_bytes()).await.unwrap();
-        // Deliberately withhold the body until AFTER release.
+        // Supply the model needed for provider selection, but observe no
+        // response or upstream request before release.
+        socket.write_all(body.as_bytes()).await.unwrap();
         registry.wait_count(1).await;
         let mut byte = [0u8];
         assert!(
@@ -2166,7 +2432,6 @@ mod tests {
         );
         assert!(sender.requests.lock().unwrap().is_empty());
         assert!(registry.release(None).released);
-        socket.write_all(body.as_bytes()).await.unwrap();
         let mut response = Vec::new();
         tokio::time::timeout(Duration::from_secs(2), socket.read_to_end(&mut response))
             .await
@@ -2209,12 +2474,12 @@ mod tests {
                 .unwrap();
         });
         let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
-        socket
-            .write_all(
-                b"POST /v1/responses HTTP/1.1\r\nHost: localhost\r\nContent-Length: 4096\r\n\r\n",
-            )
-            .await
-            .unwrap();
+        let body = format!(r#"{{"model":"{MODEL}"}}"#);
+        let request = format!(
+            "POST /v1/responses HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        socket.write_all(request.as_bytes()).await.unwrap();
         tokio::time::timeout(Duration::from_secs(2), registry.wait_count(1))
             .await
             .unwrap();
@@ -2238,12 +2503,7 @@ mod tests {
         // The queue was at maxPending. A new client must acquire the freed slot,
         // not receive queue_full or wait for the disconnected ticket's timeout.
         let mut replacement = tokio::net::TcpStream::connect(address).await.unwrap();
-        replacement
-            .write_all(
-                b"POST /v1/responses HTTP/1.1\r\nHost: localhost\r\nContent-Length: 4096\r\n\r\n",
-            )
-            .await
-            .unwrap();
+        replacement.write_all(request.as_bytes()).await.unwrap();
         tokio::time::timeout(Duration::from_secs(2), registry.wait_count(1))
             .await
             .expect("disconnected client's slot is reusable");
@@ -2267,8 +2527,17 @@ mod tests {
                 .await
                 .unwrap();
         });
-        let headers =
-            b"POST /v1/responses HTTP/1.1\r\nHost: localhost\r\nContent-Length: 1048576\r\n\r\n";
+        // Route from an oversized prefix while leaving the rest of the body
+        // unread. Disconnect detection must still cancel held requests.
+        let prefix = format!(
+            r#"{{"model":"{MODEL}","padding":"{}"#,
+            "x".repeat(MAX_BUFFERED_BODY)
+        );
+        let request = format!(
+            "POST /v1/responses HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\n\r\n{prefix}",
+            MAX_BUFFERED_BODY * 2
+        );
+        let headers = request.as_bytes();
         let mut clients = Vec::new();
         for count in 1..=8 {
             let mut client = tokio::net::TcpStream::connect(address).await.unwrap();

@@ -23,18 +23,19 @@ pub struct DataSourceSummary {
 
 /// 查询数据来源分布统计
 pub fn get_data_source_breakdown(db: &Database) -> Result<Vec<DataSourceSummary>, AppError> {
+    let start = db.history_visibility().clamp_start(None)?;
     let conn = lock_conn!(db.conn);
     let effective_filter = effective_usage_log_filter("l");
     let sql = format!(
         "SELECT COALESCE(l.data_source, 'proxy') as ds, COUNT(*) as cnt,
                 COALESCE(SUM(CAST(l.total_cost_usd AS REAL)), 0) as cost
          FROM proxy_request_logs l
-         WHERE {effective_filter}
+         WHERE {effective_filter} AND (?1 IS NULL OR l.created_at >= ?1)
          GROUP BY ds
          ORDER BY cnt DESC"
     );
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map([], |row| {
+    let rows = stmt.query_map([start], |row| {
         Ok(DataSourceSummary {
             data_source: row.get(0)?,
             request_count: row.get::<_, i64>(1)? as u32,
@@ -560,6 +561,7 @@ impl Database {
         provider_name: Option<&str>,
         model: Option<&str>,
     ) -> Result<UsageSummary, AppError> {
+        let start_date = self.history_visibility().clamp_start(start_date)?;
         let conn = lock_conn!(self.conn);
 
         // Build detail WHERE clause
@@ -721,6 +723,7 @@ impl Database {
         provider_name: Option<&str>,
         model: Option<&str>,
     ) -> Result<Vec<UsageSummaryByApp>, AppError> {
+        let start_date = self.history_visibility().clamp_start(start_date)?;
         let conn = lock_conn!(self.conn);
 
         let mut detail_conditions = vec![effective_usage_log_filter("l")];
@@ -886,6 +889,7 @@ impl Database {
         provider_name: Option<&str>,
         model: Option<&str>,
     ) -> Result<Vec<DailyStats>, AppError> {
+        let visibility = self.history_visibility();
         let conn = lock_conn!(self.conn);
 
         let end_ts = end_date.unwrap_or_else(|| Local::now().timestamp());
@@ -893,6 +897,10 @@ impl Database {
 
         if start_ts >= end_ts {
             start_ts = end_ts - 24 * 60 * 60;
+        }
+        start_ts = visibility.clamp_start(Some(start_ts))?.unwrap();
+        if start_ts >= end_ts {
+            return Ok(Vec::new());
         }
 
         let duration = end_ts - start_ts;
@@ -1226,6 +1234,7 @@ impl Database {
         provider_name: Option<&str>,
         model: Option<&str>,
     ) -> Result<Vec<ProviderStats>, AppError> {
+        let start_date = self.history_visibility().clamp_start(start_date)?;
         let conn = lock_conn!(self.conn);
 
         let mut detail_conditions = vec![effective_usage_log_filter("l")];
@@ -1370,6 +1379,7 @@ impl Database {
         provider_name: Option<&str>,
         model: Option<&str>,
     ) -> Result<Vec<ModelStats>, AppError> {
+        let start_date = self.history_visibility().clamp_start(start_date)?;
         let conn = lock_conn!(self.conn);
 
         let mut detail_conditions = vec![effective_usage_log_filter("l")];
@@ -1515,6 +1525,7 @@ impl Database {
         page: u32,
         page_size: u32,
     ) -> Result<PaginatedLogs, AppError> {
+        let start_date = self.history_visibility().clamp_start(filters.start_date)?;
         let conn = lock_conn!(self.conn);
 
         let mut conditions = vec![deduplicated_log_filter("l")];
@@ -1540,7 +1551,7 @@ impl Database {
             conditions.push("l.status_code = ?".to_string());
             params.push(Box::new(status as i64));
         }
-        if let Some(start) = filters.start_date {
+        if let Some(start) = start_date {
             conditions.push("l.created_at >= ?".to_string());
             params.push(Box::new(start));
         }
@@ -1612,6 +1623,7 @@ impl Database {
         &self,
         request_id: &str,
     ) -> Result<Option<RequestLogDetail>, AppError> {
+        let start = self.history_visibility().clamp_start(None)?;
         let conn = lock_conn!(self.conn);
 
         let detail_pname = provider_name_coalesce("l", "p");
@@ -1621,12 +1633,16 @@ impl Database {
                     input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
                     input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd, total_cost_usd,
                     is_streaming, latency_ms, first_token_ms, duration_ms,
-                    status_code, error_message, created_at, l.data_source, l.pricing_model
+                    status_code, error_message, l.created_at, l.data_source, l.pricing_model
              FROM proxy_request_logs l
              LEFT JOIN providers p ON l.provider_id = p.id AND l.app_type = p.app_type
-             WHERE l.request_id = ?"
+             WHERE l.request_id = ?1 AND (?2 IS NULL OR l.created_at >= ?2)"
         );
-        let result = conn.query_row(&detail_sql, [request_id], row_to_request_log_detail);
+        let result = conn.query_row(
+            &detail_sql,
+            rusqlite::params![request_id, start],
+            row_to_request_log_detail,
+        );
 
         match result {
             Ok(mut detail) => {
@@ -1645,6 +1661,9 @@ impl Database {
         provider_id: &str,
         app_type: &str,
     ) -> Result<ProviderLimitStatus, AppError> {
+        let visibility = self.history_visibility();
+        let start = visibility.clamp_start(None)?;
+        let date = visibility.cutoff.map(|day| day.to_string());
         let conn = lock_conn!(self.conn);
 
         // 获取 provider 的限额设置
@@ -1678,17 +1697,19 @@ impl Database {
                 "SELECT COALESCE(SUM(cost), 0) FROM (
                     SELECT CAST(total_cost_usd AS REAL) as cost
                     FROM proxy_request_logs
-                    WHERE provider_id = ? AND app_type = ?
+                    WHERE provider_id = ?1 AND app_type = ?2
+                      AND (?3 IS NULL OR created_at >= ?3)
                       AND COALESCE(end_reason, '') != 'guard_deny'
                       AND COALESCE(end_reason, '') NOT LIKE 'guard_hold%'
                       AND date(datetime(created_at, 'unixepoch', 'localtime')) = date('now', 'localtime')
                     UNION ALL
                     SELECT CAST(total_cost_usd AS REAL)
                     FROM usage_daily_rollups
-                    WHERE provider_id = ? AND app_type = ?
+                    WHERE provider_id = ?1 AND app_type = ?2
+                      AND (?4 IS NULL OR date >= ?4)
                       AND date = date('now', 'localtime')
                 )",
-                params![provider_id, app_type, provider_id, app_type],
+                params![provider_id, app_type, start, date],
                 |row| row.get(0),
             )
             .unwrap_or(0.0);
@@ -1699,17 +1720,19 @@ impl Database {
                 "SELECT COALESCE(SUM(cost), 0) FROM (
                     SELECT CAST(total_cost_usd AS REAL) as cost
                     FROM proxy_request_logs
-                    WHERE provider_id = ? AND app_type = ?
+                    WHERE provider_id = ?1 AND app_type = ?2
+                      AND (?3 IS NULL OR created_at >= ?3)
                       AND COALESCE(end_reason, '') != 'guard_deny'
                       AND COALESCE(end_reason, '') NOT LIKE 'guard_hold%'
                       AND strftime('%Y-%m', datetime(created_at, 'unixepoch', 'localtime')) = strftime('%Y-%m', 'now', 'localtime')
                     UNION ALL
                     SELECT CAST(total_cost_usd AS REAL)
                     FROM usage_daily_rollups
-                    WHERE provider_id = ? AND app_type = ?
+                    WHERE provider_id = ?1 AND app_type = ?2
+                      AND (?4 IS NULL OR date >= ?4)
                       AND strftime('%Y-%m', date) = strftime('%Y-%m', 'now', 'localtime')
                 )",
-                params![provider_id, app_type, provider_id, app_type],
+                params![provider_id, app_type, start, date],
                 |row| row.get(0),
             )
             .unwrap_or(0.0);
