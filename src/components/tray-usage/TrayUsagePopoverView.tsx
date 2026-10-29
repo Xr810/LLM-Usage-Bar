@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useLubEdition } from "@/components/lub/detectLubBuild";
 import { TrayPanelV5 } from "@/components/lub/TrayPanelV5";
@@ -20,6 +20,8 @@ export interface TrayUsagePopoverViewProps {
   now?: Date;
   /** C2 `uiFlags.upsellEntry`. Off until get_license_status says otherwise. */
   upsellEntry?: boolean;
+  /** Free→Pro hard-stop notice, already gated. Null renders nothing. */
+  upgradeNotice?: ReactNode;
 }
 
 export function TrayUsagePopoverView({
@@ -31,6 +33,7 @@ export function TrayUsagePopoverView({
   onOpenSettings,
   onQuit,
   upsellEntry = false,
+  upgradeNotice,
 }: TrayUsagePopoverViewProps) {
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage || i18n.language || "en";
@@ -48,6 +51,7 @@ export function TrayUsagePopoverView({
     >
       {loading && !snapshot ? (
         <section className="lub-panel" role="status">
+          {upgradeNotice}
           <p className="lub-loading">
             {t("trayUsage.loading", { defaultValue: "Loading usage…" })}
           </p>
@@ -60,6 +64,7 @@ export function TrayUsagePopoverView({
           upsellEntry={upsellEntry || edition.upsellEntry}
           refreshing={refreshing}
           showUtilityActions
+          upgradeNotice={upgradeNotice}
           onOpenTrends={onOpenDetails}
           onOpenSettings={() => onOpenSettings(null)}
           onRefresh={onRefresh}
@@ -74,6 +79,7 @@ export function TrayUsagePopoverView({
         />
       ) : (
         <section className="lub-panel">
+          {upgradeNotice}
           <p className="lub-empty">
             {t("trayUsage.empty", {
               defaultValue: "No visible Provider accounts",

@@ -1287,3 +1287,293 @@ html[data-window-surface="tray-popover"] .lub-scroll {
 .lub-win .lub-pad {
   padding: 12px 14px;
 }
+
+/* Free → Pro upgrade hard-stop notice. Sits at the top of the tray panel. */
+.lub-upgrade-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border-radius: var(--lub-radius-2);
+  background: var(--lub-group);
+}
+
+.lub-upgrade-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.lub-upgrade-icon {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--lub-track);
+  color: var(--lub-ink-2);
+}
+
+.lub-upgrade-copy {
+  min-width: 0;
+}
+
+.lub-upgrade-copy b {
+  display: block;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 20px;
+}
+
+.lub-upgrade-body {
+  margin: 3px 0 0;
+  color: var(--lub-ink-2);
+  font-size: var(--lub-fs-sub);
+  line-height: 1.45;
+}
+
+.lub-upgrade-monthly {
+  margin: 4px 0 0;
+  color: var(--lub-ink-2);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.lub-upgrade-close {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  place-items: center;
+  margin-top: -2px;
+  margin-right: -4px;
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--lub-ink-2);
+  cursor: pointer;
+}
+
+.lub-icon-14 {
+  width: 14px;
+  height: 14px;
+}
+
+.lub-upgrade-section {
+  display: flex;
+  flex-direction: column;
+  padding-top: 10px;
+  border-top: 1px solid var(--lub-hairline);
+}
+
+.lub-upgrade-section-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--lub-ink-2);
+  font-size: var(--lub-fs-sub);
+  font-weight: 600;
+  line-height: var(--lub-lh-sub);
+}
+
+.lub-upgrade-section-title.is-warn {
+  color: var(--lub-warn);
+}
+
+.lub-upgrade-dot {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--lub-warn);
+}
+
+.lub-upgrade-over {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--lub-warn) 13%, var(--lub-group));
+}
+
+html.dark .lub-upgrade-over {
+  background: color-mix(in srgb, var(--lub-warn) 12%, transparent);
+}
+
+html:not(.dark) .lub-upgrade-over .lub-btn:not(.lub-btn-primary) {
+  background: rgba(255, 255, 255, 0.75);
+}
+
+.lub-upgrade-line,
+.lub-upgrade-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.lub-upgrade-name {
+  min-width: 0;
+  font-weight: 500;
+}
+
+.lub-upgrade-amt {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.lub-upgrade-of {
+  color: var(--lub-ink-2);
+  font-weight: 400;
+}
+
+.lub-upgrade-amt.is-over .lub-upgrade-spent {
+  color: var(--lub-warn);
+  font-weight: 600;
+}
+
+.lub-upgrade-actions,
+.lub-upgrade-foot-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* Stack a pair when the English labels do not fit; wrap words inside a full-width button. */
+.lub-upgrade-actions .lub-btn,
+.lub-upgrade-foot-actions .lub-btn {
+  flex: 1 1 auto;
+  max-width: 100%;
+  height: auto;
+  min-height: 30px;
+  padding: 6px 12px;
+  border-radius: 7px;
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.25;
+  text-align: center;
+  white-space: normal;
+}
+
+.lub-upgrade-actions .lub-btn {
+  white-space: nowrap;
+}
+
+.lub-upgrade-foot-actions .lub-btn:not(.lub-btn-primary) {
+  min-width: 0;
+}
+
+.lub-upgrade-foot-actions .lub-btn-primary {
+  flex: 0 1 auto;
+  min-width: 84px;
+  white-space: nowrap;
+}
+
+.lub-upgrade-notice .lub-btn:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.lub-upgrade-disclosure {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.lub-upgrade-disclosure .lub-icon {
+  color: var(--lub-ink-2);
+  transition: transform var(--lub-motion);
+}
+
+.lub-upgrade-disclosure[aria-expanded="false"] .lub-icon {
+  transform: rotate(-90deg);
+}
+
+.lub-upgrade-list {
+  margin-top: 4px;
+}
+
+.lub-upgrade-list[hidden] {
+  display: none;
+}
+
+.lub-upgrade-row {
+  padding: 7px 0;
+  border-top: 1px solid var(--lub-hairline);
+}
+
+.lub-upgrade-row:first-child {
+  border-top: 0;
+}
+
+.lub-upgrade-row-side {
+  display: flex;
+  flex-shrink: 0;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+}
+
+.lub-upgrade-switch {
+  padding: 0;
+  font-size: var(--lub-fs-sub);
+}
+
+.lub-upgrade-tag {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: var(--lub-track);
+  color: var(--lub-ink-2);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: var(--lub-lh-cap);
+  white-space: nowrap;
+}
+
+.lub-upgrade-foot {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--lub-hairline);
+}
+
+.lub-upgrade-foot-actions {
+  width: 100%;
+}
+
+.lub-upgrade-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0;
+  color: var(--lub-stop);
+  font-size: var(--lub-fs-sub);
+  line-height: 1.4;
+}
+
+.lub-upgrade-error .lub-icon {
+  margin-top: 2px;
+}
+
+.lub-upgrade-manage {
+  padding: 0;
+  font-size: var(--lub-fs-sub);
+}

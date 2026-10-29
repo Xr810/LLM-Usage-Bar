@@ -17,6 +17,8 @@ import {
   useTrayUsageSnapshot,
 } from "@/lib/query/trayUsage";
 import type { MainWindowDestination } from "@/types/trayUsage";
+import { UpgradeHardStopNotice } from "@/components/lub/UpgradeHardStopNotice";
+import { useUpgradeNotice } from "@/components/lub/useUpgradeNotice";
 import { TrayUsagePopoverView } from "./TrayUsagePopoverView";
 
 const initialRefreshKey = [...trayUsageKeys.all, "initial-refresh"] as const;
@@ -26,6 +28,7 @@ export function TrayUsagePopover() {
   const queryClient = useQueryClient();
   const { data, isLoading } = useTrayUsageSnapshot();
   const license = useLicenseStatus();
+  const upgradeNotice = useUpgradeNotice();
   const refresh = useRefreshTrayUsage();
   const hiddenForCycle = useRef(false);
   const navigationInProgress = useRef(false);
@@ -106,6 +109,17 @@ export function TrayUsagePopover() {
       onOpenSettings={openSettings}
       onQuit={() => void quitFromTray().catch(() => undefined)}
       upsellEntry={license.data?.uiFlags.upsellEntry === true}
+      upgradeNotice={
+        <UpgradeHardStopNotice
+          notice={upgradeNotice.notice}
+          license={license.data ?? null}
+          allowanceUsd={upgradeNotice.allowanceUsd}
+          onAck={upgradeNotice.ack}
+          onSetHardStop={upgradeNotice.setHardStop}
+          onAllowMoreToday={upgradeNotice.allowMoreToday}
+          onManageBudgets={() => openSettings(null)}
+        />
+      }
     />
   );
 }
