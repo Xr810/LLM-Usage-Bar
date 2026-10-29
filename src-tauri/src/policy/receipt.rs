@@ -20,6 +20,9 @@ pub struct ExportFilter {
 /// 收据导出（契约 C1）。社区实现不产生 CSV，也不碰磁盘。
 pub trait ReceiptExporter: Send + Sync {
     /// 返回 CSV 文本。社区构建返回 `PRO_REQUIRED`。
+    /// Implementations must capture Database::history_visibility once per export
+    /// and clamp every billing-history row read, including Free-reachable paths.
+    /// This does not apply to full SQL backups or sync exports.
     fn export(&self, range: &ExportRange, filter: &ExportFilter) -> Result<String, AppError>;
 }
 
@@ -63,5 +66,16 @@ mod tests {
                 .code(),
             err.code()
         );
+        // No range can enable community CSV or leak historical rows, including
+        // requests spanning either side of a visibility cutoff.
+        for (start_ms, end_ms) in [(i64::MIN, 0), (0, i64::MAX), (i64::MIN, i64::MAX)] {
+            assert_eq!(
+                exporter
+                    .export(&ExportRange { start_ms, end_ms }, &ExportFilter::default())
+                    .expect_err("community must never produce CSV rows")
+                    .code(),
+                err.code()
+            );
+        }
     }
 }

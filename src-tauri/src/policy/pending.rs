@@ -140,10 +140,11 @@ pub trait PendingRegistry: Send + Sync {
     ) -> Result<PendingTicket, EnqueueError>;
     /// None selects the earliest heldAt entry. Gone IDs are idempotent false.
     fn release(&self, pending_id: Option<&str>) -> ReleaseResult;
-    /// None uses the configured default. Scope selection, local-day allowance
-    /// reset and same-scope FIFO release belong exclusively to the registry.
-    /// Add allowance until local midnight without changing the cap, then release
-    /// all matching entries in FIFO order without per-request cost estimates.
+    /// None uses the configured default. Add allowance until local midnight
+    /// without changing the cap, then release all current eligible daily-cap
+    /// and identity-switch entries FIFO, never killed state. Provenance remains
+    /// MoreToday (wire: more_today) for both kinds. The injected registry owns
+    /// identity-baseline updates; later new key switches still require admission.
     fn allow_more_today(&self, amount_usd: Option<&str>) -> AllowanceResult;
     /// None denies all entries.
     fn deny(&self, pending_id: Option<&str>) -> DenyResult;

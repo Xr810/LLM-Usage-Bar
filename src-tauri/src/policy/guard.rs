@@ -44,6 +44,8 @@ pub trait GuardStateProvider: Send + Sync {
     fn snapshot(&self) -> GuardStateCore;
     /// Returns whether state changed. The command invalidates the shared view
     /// after this returns, outside provider locks. Community is inert.
+    /// Injected providers clear a true kill automatically at the next local
+    /// midnight; false clears it early. Persistence and scheduling are provider-owned.
     fn set_killed(&self, _killed: bool) -> bool {
         false
     }

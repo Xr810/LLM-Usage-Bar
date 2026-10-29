@@ -2494,5 +2494,31 @@ Both backend suites reported 1414 passed, 2 failed, 2 ignored. The new factory
 test incorrectly enabled the official license fixture for `history-error`;
 the new history fixture referenced nonexistent agent `claude` instead of
 `claude-code`. Desktop failures were the same factory test. Local corrections
-are prepared, but test runtime remains unverified in this memory-limited orb;
-CI-fix push requires renewed approval per the latest instruction.
+were approved and pushed normally as `f1d920156322747f4ae7269ded38a976f491f8be`;
+test runtime is verified through exact-head CI, not this memory-limited orb.
+
+#### 2026-10-29 PR #123: v1.14 architect rulings
+
+Kill clears automatically at the next local midnight; false clears it early.
+Expiry/persistence stay provider-owned. `more_today` is the architect-confirmed
+wire and audit provenance for both daily-cap and identity releases; no enum
+variant or stored-row migration is introduced. All current eligible holds
+release FIFO, never killed state. Production eligibility, identity-baseline
+updates and later-new-key-switch holds are private registry responsibilities;
+public production remains delegation/no-op. The test-only transport fake now
+covers both hold kinds, and command coverage asserts release cannot clear kill.
+
+No new public billing-history row API is needed. Receipt exporters must apply
+one shared history cutoff snapshot to every exported row; the only public CSV
+exporter returns PRO_REQUIRED for all ranges and produces no CSV. Full SQL
+backups and sync remain unclamped. Routing tests cover no send before selected
+provider admission, terminal Hold/Deny with no sends, the existing 4 MiB prefix
+limit without consuming an unbounded tail, different-provider readmission and
+same-provider retry reuse. Exact-head CI is required before final delivery.
+
+Head `f1d920156322747f4ae7269ded38a976f491f8be`: Frontend, label, macOS and
+Windows passed. Both backend suites passed 1415 tests and failed the new history
+test on an ambiguous `created_at` projection in the joined detail reader. The
+projection is now qualified as `l.created_at`; the existing cross-reader test
+covers this path. Formatting, typecheck and no-Pro Clippy passed locally;
+follow-up exact-head runtime CI remains pending.

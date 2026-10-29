@@ -24,6 +24,8 @@ pub struct GuardSetKilledResult {
     pub changed: bool,
 }
 
+/// Set kill until the next local midnight, or clear it early with false.
+/// The injected provider owns expiry; community remains a registered no-op.
 #[tauri::command]
 pub fn guard_set_killed<R: tauri::Runtime>(
     app: AppHandle<R>,
@@ -318,6 +320,12 @@ mod tests {
         assert_eq!(events.lock().unwrap().last(), Some(&killed));
         notifier.notify();
         assert_eq!(events.lock().unwrap().len(), 2);
+        assert_eq!(guard_allow_more_today(app.state(), None).released_count, 1);
+        // Releasing pending holds must never clear the provider's killed state.
+        assert_eq!(
+            get_guard_state(app.state()).await.unwrap().state,
+            GuardLevel::Killed
+        );
         drop(ticket);
         let empty = serde_json::to_value(get_guard_state(app.state()).await.unwrap()).unwrap();
         assert_eq!(empty["state"], "killed");

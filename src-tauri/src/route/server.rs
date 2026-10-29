@@ -1921,9 +1921,17 @@ mod tests {
         struct Gate {
             seen: Mutex<Vec<ReqMeta>>,
             second: crate::policy::Decision,
+            sender: Arc<FakeSender>,
         }
         impl PolicyGate for Gate {
             fn admit(&self, req: &ReqMeta) -> crate::policy::Decision {
+                assert!(
+                    self.sender.requests.lock().unwrap().iter().all(|sent| {
+                        sent.url
+                            != format!("https://{}.example/v1/responses", req.selected_provider_id)
+                    }),
+                    "selected upstream must receive no request before admission"
+                );
                 self.seen.lock().unwrap().push(req.clone());
                 if req.selected_provider_id == "second" {
                     self.second.clone()
@@ -1974,6 +1982,7 @@ mod tests {
                 let gate = Arc::new(Gate {
                     seen: Mutex::new(Vec::new()),
                     second: decision,
+                    sender: sender.clone(),
                 });
                 let mut state = test_state(db.clone(), Arc::new(Auth), sender.clone());
                 Arc::get_mut(&mut state).unwrap().gate = gate.clone();
@@ -2060,6 +2069,55 @@ mod tests {
 
         fn settle(&self, _req_id: &str, _usage: &crate::policy::Usage) {
             self.settlements.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    #[tokio::test]
+    async fn terminal_admission_reads_only_bounded_prefix_without_forwarding() {
+        for decision in [
+            crate::policy::Decision::Deny {
+                rule: "test".into(),
+                status: 451,
+                body: json!({"denied":true}),
+            },
+            crate::policy::Decision::Hold {
+                reason: "test".into(),
+                retry_after_seconds: None,
+                hold: None,
+            },
+        ] {
+            let expected = if matches!(decision, crate::policy::Decision::Deny { .. }) {
+                451
+            } else {
+                429
+            };
+            let db = memory_db();
+            seed_route(&db, "upstream", WireApi::Responses, 1, MODEL);
+            let sender = fake_sender(vec![]);
+            let mut state = test_state(db, ok_auth(), sender.clone());
+            Arc::get_mut(&mut state).unwrap().gate = Arc::new(FixedGate {
+                decision,
+                settlements: Default::default(),
+            });
+            let mut prefix = format!(r#"{{"model":"{MODEL}","input":""#).into_bytes();
+            prefix.resize(MAX_BUFFERED_BODY, b'x');
+            let chunks = futures::stream::iter([
+                Ok::<Bytes, std::io::Error>(prefix.into()),
+                Ok(Bytes::from_static(b"x")),
+            ])
+            .chain(futures::stream::poll_fn(
+                |_| -> std::task::Poll<Option<Result<Bytes, std::io::Error>>> {
+                    panic!("admission must not consume the unbounded body tail")
+                },
+            ));
+            let request = Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .body(Body::from_stream(chunks))
+                .unwrap();
+            let response = test_router(state).oneshot(request).await.unwrap();
+            assert_eq!(response.status().as_u16(), expected);
+            assert!(sender.requests.lock().unwrap().is_empty());
         }
     }
 
