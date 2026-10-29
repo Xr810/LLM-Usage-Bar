@@ -89,8 +89,10 @@ pub trait GuardStateProvider: Send + Sync {
     fn ack_upgrade_notice(&self, _notice_id: &str) -> bool {
         false
     }
-    /// Edit a converted daily budget (`shared` or `provider:<id>`). Storage and
-    /// enforcement are private; community remains warn-only. Return true only
+    /// On Pro, edit ANY daily budget currently in effect under the active
+    /// api_budget_mode (`shared` or `provider:<id>`), not only converted budgets.
+    /// Also used by the settings page hard-stop toggle. Storage and enforcement
+    /// are private; community remains warn-only. Return true only
     /// on change, false for unknown IDs or repeats. The command owns notification.
     fn set_budget_hard_stop(&self, _budget_id: &str, _hard_stop: bool) -> bool {
         false

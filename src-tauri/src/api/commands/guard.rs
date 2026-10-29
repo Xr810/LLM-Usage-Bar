@@ -120,6 +120,9 @@ pub fn guard_ack_upgrade_notice<R: tauri::Runtime>(
     GuardChangeResult { changed }
 }
 
+/// On Pro, toggle hard-stop for ANY daily budget currently in effect under the
+/// active api_budget_mode (`shared` or `provider:<id>`), not only converted ones.
+/// Also used by the settings page hard-stop toggle; community remains warn-only.
 #[tauri::command]
 pub fn guard_set_budget_hard_stop<R: tauri::Runtime>(
     app: AppHandle<R>,
