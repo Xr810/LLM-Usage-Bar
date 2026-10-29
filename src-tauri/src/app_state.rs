@@ -447,7 +447,10 @@ mod tests {
                     Ok(Arc::new(crate::policy::DefaultNoopRegistry))
                 }
             });
-            if !matches!(mode, "community" | "pending-error" | "guard-error") {
+            if !matches!(
+                mode,
+                "community" | "pending-error" | "guard-error" | "history-error"
+            ) {
                 injections.license = Box::new(move |db| {
                     assert!(Arc::ptr_eq(&db, &license_db.upgrade().unwrap()));
                     let conn = db.conn.lock().unwrap();

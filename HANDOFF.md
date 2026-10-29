@@ -2471,15 +2471,28 @@ error and falls back to community (`None`, no history floor). AppState owns
 the provider and Database keeps a weak reference to avoid a provider/DB cycle.
 `Database::history_visibility()` captures an inclusive local-date cutoff once
 for each history read; row/count pairs and detail/daily-rollup aggregates share
-that snapshot. Existing view-specific restrictions may remain tighter.
+that snapshot. Router billing totals (millisecond timestamps) and displayed
+provider-limit totals also use the shared cutoff. Existing view-specific
+restrictions may remain tighter.
 Billing-history exporters must use this read boundary; community receipt CSV
 remains unavailable. Full SQL backups and sync exports bypass visibility and
 continue exporting retained data. No schema, migration, Pro enforcement, new
 event, or frontend page changes belong to this contract.
 
 Validation is ongoing. The initial kill-shell head passed local TypeScript,
-formatting and whitespace checks. Full local Rust test compilation exceeded
+formatting and whitespace checks. Local no-default-features Clippy with
+`-D warnings` passed for the expanded implementation and additional history
+readers. Full local Rust test compilation exceeded
 the 2 GB orb limit (137); it also identified a local type-inference error that
 was corrected before the next push. Runtime/platform success must come from
 the exact implementation head, not the initial shell's CI. Existing §20 native
 interactive shutdown gaps remain open. Keep Draft; no merge/release authorized.
+
+Exact head `0b21406660e418797caad2b2df80625bc2bcbb7e`: Frontend Checks and
+label passed; Backend Checks, Backend (no pro feature), macOS and Windows failed.
+Both backend suites reported 1414 passed, 2 failed, 2 ignored. The new factory
+test incorrectly enabled the official license fixture for `history-error`;
+the new history fixture referenced nonexistent agent `claude` instead of
+`claude-code`. Desktop failures were the same factory test. Local corrections
+are prepared, but test runtime remains unverified in this memory-limited orb;
+CI-fix push requires renewed approval per the latest instruction.

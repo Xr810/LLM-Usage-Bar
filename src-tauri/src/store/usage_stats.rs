@@ -1661,6 +1661,9 @@ impl Database {
         provider_id: &str,
         app_type: &str,
     ) -> Result<ProviderLimitStatus, AppError> {
+        let visibility = self.history_visibility();
+        let start = visibility.clamp_start(None)?;
+        let date = visibility.cutoff.map(|day| day.to_string());
         let conn = lock_conn!(self.conn);
 
         // 获取 provider 的限额设置
@@ -1694,17 +1697,19 @@ impl Database {
                 "SELECT COALESCE(SUM(cost), 0) FROM (
                     SELECT CAST(total_cost_usd AS REAL) as cost
                     FROM proxy_request_logs
-                    WHERE provider_id = ? AND app_type = ?
+                    WHERE provider_id = ?1 AND app_type = ?2
+                      AND (?3 IS NULL OR created_at >= ?3)
                       AND COALESCE(end_reason, '') != 'guard_deny'
                       AND COALESCE(end_reason, '') NOT LIKE 'guard_hold%'
                       AND date(datetime(created_at, 'unixepoch', 'localtime')) = date('now', 'localtime')
                     UNION ALL
                     SELECT CAST(total_cost_usd AS REAL)
                     FROM usage_daily_rollups
-                    WHERE provider_id = ? AND app_type = ?
+                    WHERE provider_id = ?1 AND app_type = ?2
+                      AND (?4 IS NULL OR date >= ?4)
                       AND date = date('now', 'localtime')
                 )",
-                params![provider_id, app_type, provider_id, app_type],
+                params![provider_id, app_type, start, date],
                 |row| row.get(0),
             )
             .unwrap_or(0.0);
@@ -1715,17 +1720,19 @@ impl Database {
                 "SELECT COALESCE(SUM(cost), 0) FROM (
                     SELECT CAST(total_cost_usd AS REAL) as cost
                     FROM proxy_request_logs
-                    WHERE provider_id = ? AND app_type = ?
+                    WHERE provider_id = ?1 AND app_type = ?2
+                      AND (?3 IS NULL OR created_at >= ?3)
                       AND COALESCE(end_reason, '') != 'guard_deny'
                       AND COALESCE(end_reason, '') NOT LIKE 'guard_hold%'
                       AND strftime('%Y-%m', datetime(created_at, 'unixepoch', 'localtime')) = strftime('%Y-%m', 'now', 'localtime')
                     UNION ALL
                     SELECT CAST(total_cost_usd AS REAL)
                     FROM usage_daily_rollups
-                    WHERE provider_id = ? AND app_type = ?
+                    WHERE provider_id = ?1 AND app_type = ?2
+                      AND (?4 IS NULL OR date >= ?4)
                       AND strftime('%Y-%m', date) = strftime('%Y-%m', 'now', 'localtime')
                 )",
-                params![provider_id, app_type, provider_id, app_type],
+                params![provider_id, app_type, start, date],
                 |row| row.get(0),
             )
             .unwrap_or(0.0);

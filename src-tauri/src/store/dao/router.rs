@@ -313,6 +313,10 @@ impl Database {
         start_at: i64,
         end_at: i64,
     ) -> Result<Vec<RouterUsageSummary>, AppError> {
+        let start_at = self
+            .history_visibility()
+            .clamp_start(None)?
+            .map_or(start_at, |floor| start_at.max(floor.saturating_mul(1000)));
         let conn = lock_conn!(self.conn);
         let mut statement = conn.prepare(
             "SELECT provider_id,
