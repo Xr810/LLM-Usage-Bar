@@ -156,6 +156,11 @@ describe("UpgradeHardStopNotice", () => {
     expect(screen.queryByTestId("upgrade-hard-stop-notice")).toBeNull();
   });
 
+  it("renders nothing when a notice has no budgets", () => {
+    renderNotice({ notice: sampleNotice([]) });
+    expect(screen.queryByTestId("upgrade-hard-stop-notice")).toBeNull();
+  });
+
   it("splits over-today rows from the other converted budgets", () => {
     renderNotice();
     expect(
@@ -637,7 +642,7 @@ describe("useUpgradeNotice", () => {
     expect(screen.getByTestId("notice-id")).toHaveTextContent("notice-1");
   });
 
-  it("hides on ack before the command resolves and re-fetches only when changed", async () => {
+  it("hides on ack before the command resolves, then re-fetches", async () => {
     let releaseAck: (result: { changed: boolean }) => void = () => {};
     server.use(
       http.post("http://tauri.local/guard_get_upgrade_notice", () =>
@@ -672,7 +677,7 @@ describe("useUpgradeNotice", () => {
     expect(screen.getByTestId("notice-id")).toHaveTextContent("null");
   });
 
-  it("hides on ack without re-fetching when changed is false", async () => {
+  it("keeps the acked notice hidden when the re-fetch returns that same id", async () => {
     server.use(
       http.post("http://tauri.local/guard_get_upgrade_notice", () =>
         HttpResponse.json(sampleNotice()),
@@ -689,13 +694,77 @@ describe("useUpgradeNotice", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "ack" }));
     await waitFor(() =>
-      expect(commandCalls("guard_ack_upgrade_notice")).toHaveLength(1),
+      expect(commandCalls("guard_get_upgrade_notice")).toHaveLength(before + 1),
     );
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
     expect(screen.getByTestId("notice-id")).toHaveTextContent("null");
-    expect(commandCalls("guard_get_upgrade_notice")).toHaveLength(before);
+
+    actEmit("guard-state-changed");
+    await waitFor(() =>
+      expect(commandCalls("guard_get_upgrade_notice")).toHaveLength(before + 2),
+    );
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(screen.getByTestId("notice-id")).toHaveTextContent("null");
+  });
+
+  it("shows a merged notice when ack reports changed false and the id differs", async () => {
+    let gets = 0;
+    server.use(
+      http.post("http://tauri.local/guard_get_upgrade_notice", () => {
+        gets += 1;
+        return HttpResponse.json(
+          gets === 1
+            ? sampleNotice()
+            : sampleNotice(sampleBudgets(), "notice-merged"),
+        );
+      }),
+      http.post("http://tauri.local/guard_ack_upgrade_notice", () =>
+        HttpResponse.json({ changed: false }),
+      ),
+    );
+    render(<Harness />);
+    await waitFor(() =>
+      expect(screen.getByTestId("notice-id")).toHaveTextContent("notice-1"),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "ack" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("notice-id")).toHaveTextContent(
+        "notice-merged",
+      ),
+    );
+    expect(commandCalls("guard_ack_upgrade_notice")[0]?.[1]).toEqual({
+      noticeId: "notice-1",
+    });
+  });
+
+  it("treats an empty budget list as no notice", async () => {
+    const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => {});
+    server.use(
+      http.post("http://tauri.local/guard_get_upgrade_notice", () =>
+        HttpResponse.json({
+          noticeId: "notice-empty",
+          convertedAt: "2026-10-29T08:50:00Z",
+          budgets: [],
+        }),
+      ),
+    );
+    render(<Harness />);
+    await waitFor(() =>
+      expect(commandCalls("guard_get_upgrade_notice").length).toBeGreaterThan(
+        0,
+      ),
+    );
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(screen.getByTestId("notice-id")).toHaveTextContent("null");
+    expect(debugSpy).not.toHaveBeenCalled();
+    debugSpy.mockRestore();
   });
 
   it("re-fetches the notice after allow-more without a guard event", async () => {

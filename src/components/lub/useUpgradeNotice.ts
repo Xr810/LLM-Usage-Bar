@@ -22,10 +22,13 @@ export interface UpgradeNoticeController {
 
 /**
  * Pulls `guard_get_upgrade_notice` on startup, on `license-changed`, and on
- * `guard-state-changed`. Ack and hard-stop notify only when `{changed}` is
- * true, and that event is dropped when the guard snapshot is unchanged, so
- * those calls re-fetch the notice themselves. Allow-more does the same.
- * A missing command or any other failure becomes a null notice.
+ * `guard-state-changed`. Hard-stop notifies only when `{changed}` is true,
+ * and that event is dropped when the guard snapshot is unchanged, so a
+ * successful change re-fetches the notice. Allow-more always re-fetches.
+ * Ack always re-fetches too: a conversion merged in before the ack replaces
+ * the notice (`changed: false`, new noticeId). Only that acked id stays
+ * hidden. A missing command, an empty budget list, or any other failure
+ * becomes a null notice.
  */
 export function useUpgradeNotice(): UpgradeNoticeController {
   const [notice, setNotice] = useState<UpgradeNotice | null>(null);
@@ -38,7 +41,12 @@ export function useUpgradeNotice(): UpgradeNoticeController {
     try {
       const next = await guardGetUpgradeNotice();
       if (requestId.current !== id) return;
-      if (next != null && next.noticeId === dismissedId.current) return;
+      // A merged conversion replaces the notice id. Hide only the id that
+      // was acked; any other id is the current notice and must be shown.
+      if (next != null && next.noticeId === dismissedId.current) {
+        setNotice(null);
+        return;
+      }
       setNotice(next);
     } catch (error) {
       debugUpgradeNotice(error);
@@ -75,8 +83,8 @@ export function useUpgradeNotice(): UpgradeNoticeController {
       dismissedId.current = noticeId;
       setNotice((current) => (current?.noticeId === noticeId ? null : current));
       try {
-        const result = await guardAckUpgradeNotice(noticeId);
-        if (result.changed) await refreshNotice();
+        await guardAckUpgradeNotice(noticeId);
+        await refreshNotice();
       } catch (error) {
         debugUpgradeNotice(error);
         if (dismissedId.current === noticeId) dismissedId.current = null;

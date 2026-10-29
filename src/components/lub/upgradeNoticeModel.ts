@@ -14,6 +14,9 @@ export function upgradeNoticeVisible(
   if (license.build !== "official") return false;
   if (license.tier !== "pro" && license.tier !== "pro_p3") return false;
   if (license.state === "free") return false;
+  // Inactive budget modes are omitted. The backend sends null for an empty
+  // list; a notice that still arrives with no budgets is the same as none.
+  if (notice.budgets.length === 0) return false;
   return true;
 }
 

@@ -20,10 +20,12 @@ export async function guardGetUpgradeNotice(): Promise<UpgradeNotice | null> {
   if (value == null) return null;
   const notice = parseUpgradeNotice(value);
   if (notice == null) {
-    const error = new Error(
-      "guard_get_upgrade_notice returned an unexpected payload",
-    );
-    debugUpgradeNotice(error);
+    if (!isEmptyBudgetNotice(value)) {
+      const error = new Error(
+        "guard_get_upgrade_notice returned an unexpected payload",
+      );
+      debugUpgradeNotice(error);
+    }
     return null;
   }
   return notice;
@@ -87,7 +89,7 @@ function parseUpgradeNotice(value: unknown): UpgradeNotice | null {
   const raw = value as Record<string, unknown>;
   if (typeof raw.noticeId !== "string" || raw.noticeId === "") return null;
   if (typeof raw.convertedAt !== "string") return null;
-  if (!Array.isArray(raw.budgets)) return null;
+  if (!Array.isArray(raw.budgets) || raw.budgets.length === 0) return null;
   const budgets: ConvertedBudget[] = [];
   for (const item of raw.budgets) {
     const budget = parseConvertedBudget(item);
@@ -120,6 +122,12 @@ function parseConvertedBudget(value: unknown): ConvertedBudget | null {
     spentTodayUsd: raw.spentTodayUsd,
     overToday: raw.overToday,
   };
+}
+
+function isEmptyBudgetNotice(value: unknown): boolean {
+  if (value == null || typeof value !== "object") return false;
+  const budgets = (value as { budgets?: unknown }).budgets;
+  return Array.isArray(budgets) && budgets.length === 0;
 }
 
 function readChanged(value: unknown): GuardChangedResult {
