@@ -31,14 +31,17 @@ pub struct GuardStateCore {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConvertedBudget {
+    /// `shared` or `provider:<id>`, matching the reminder scope key.
     pub budget_id: String,
     /// Shared budgets have no display name, matching BudgetAlert::scope_label.
     pub name: Option<String>,
-    /// Existing reminder scope key: `shared` or `provider:<id>`.
-    pub scope: String,
-    pub daily_cap: String,
+    /// None for the shared budget.
+    pub provider_id: Option<String>,
+    /// Canonical decimal USD, using canonicalize_daily_budget for settings caps.
+    pub daily_cap_usd: String,
     /// Live at read time, not the spend recorded during conversion.
-    pub spent_today: String,
+    /// Decimal::normalize().to_string(), as in existing budget spending views.
+    pub spent_today_usd: String,
     /// Provider-owned live comparison with the daily cap.
     pub over_today: bool,
 }
@@ -72,7 +75,11 @@ pub trait GuardStateProvider: Send + Sync {
     /// Host's cached budget projection, used only by the community fallback.
     /// Injected enforcement providers keep their own authoritative state.
     fn update_budget(&self, _status: UsageStatus) {}
-    /// Providers refresh spent_today and over_today on every read.
+    /// Private providers convert only daily budgets actually in effect under
+    /// the current api_budget_mode. Monthly budgets remain warn-only and are
+    /// not converted (pending owner confirmation). Conversion/storage is private.
+    /// Providers refresh spent_today_usd and over_today on every read, using
+    /// the existing budget USD normalizers; the public host only returns shape.
     fn upgrade_notice(&self) -> Option<UpgradeNotice> {
         None
     }
@@ -80,6 +87,12 @@ pub trait GuardStateProvider: Send + Sync {
     /// unknown IDs return false. The command owns notification for this mutation;
     /// implementations must not notify again from this hook.
     fn ack_upgrade_notice(&self, _notice_id: &str) -> bool {
+        false
+    }
+    /// Edit a converted daily budget (`shared` or `provider:<id>`). Storage and
+    /// enforcement are private; community remains warn-only. Return true only
+    /// on change, false for unknown IDs or repeats. The command owns notification.
+    fn set_budget_hard_stop(&self, _budget_id: &str, _hard_stop: bool) -> bool {
         false
     }
 }

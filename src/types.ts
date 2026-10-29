@@ -773,12 +773,12 @@ export interface GuardStateView {
 }
 /** Public v1.14 notice; amounts are decimal USD strings, refreshed by the provider. */
 export interface ConvertedBudget {
+  /** shared or provider:<id>. */
   budgetId: string;
   name: string | null;
-  /** Reminder scope key: shared or provider:<id>. */
-  scope: string;
-  dailyCap: string;
-  spentToday: string;
+  providerId: string | null;
+  dailyCapUsd: string;
+  spentTodayUsd: string;
   overToday: boolean;
 }
 export interface UpgradeNotice {
