@@ -27,6 +27,31 @@ pub struct GuardStateCore {
     pub allowed_today: AllowedToday,
 }
 
+/// Converted reminder metadata; amounts reuse the budget model's decimal USD strings.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConvertedBudget {
+    pub budget_id: String,
+    /// Shared budgets have no display name, matching BudgetAlert::scope_label.
+    pub name: Option<String>,
+    /// Existing reminder scope key: `shared` or `provider:<id>`.
+    pub scope: String,
+    pub daily_cap: String,
+    /// Live at read time, not the spend recorded during conversion.
+    pub spent_today: String,
+    /// Provider-owned live comparison with the daily cap.
+    pub over_today: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpgradeNotice {
+    pub notice_id: String,
+    /// RFC3339 conversion timestamp, supplied by the provider.
+    pub converted_at: String,
+    pub budgets: Vec<ConvertedBudget>,
+}
+
 /// Invalidation only: the host reads both authoritative snapshots on every call.
 #[derive(Clone)]
 pub struct GuardStateNotifier(Arc<dyn Fn() + Send + Sync>);
@@ -47,6 +72,16 @@ pub trait GuardStateProvider: Send + Sync {
     /// Host's cached budget projection, used only by the community fallback.
     /// Injected enforcement providers keep their own authoritative state.
     fn update_budget(&self, _status: UsageStatus) {}
+    /// Providers refresh spent_today and over_today on every read.
+    fn upgrade_notice(&self) -> Option<UpgradeNotice> {
+        None
+    }
+    /// Return true only for a newly acknowledged matching notice. Repeated or
+    /// unknown IDs return false. The command owns notification for this mutation;
+    /// implementations must not notify again from this hook.
+    fn ack_upgrade_notice(&self, _notice_id: &str) -> bool {
+        false
+    }
 }
 
 pub struct CommunityGuardStateProvider(Mutex<UsageStatus>);

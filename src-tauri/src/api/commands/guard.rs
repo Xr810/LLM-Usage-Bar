@@ -95,6 +95,30 @@ pub async fn get_guard_state(state: State<'_, AppState>) -> Result<GuardStateVie
 }
 
 #[tauri::command]
+pub fn guard_get_upgrade_notice(state: State<'_, AppState>) -> Option<crate::policy::UpgradeNotice> {
+    state.guard_state.upgrade_notice()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AckUpgradeNoticeResult {
+    pub changed: bool,
+}
+
+#[tauri::command]
+pub fn guard_ack_upgrade_notice<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    notice_id: String,
+) -> AckUpgradeNoticeResult {
+    let changed = state.guard_state.ack_upgrade_notice(&notice_id);
+    if changed {
+        guard_state_notifier(&app, &state).notify();
+    }
+    AckUpgradeNoticeResult { changed }
+}
+
+#[tauri::command]
 pub fn guard_allow_once(
     state: State<'_, AppState>,
     pending_id: Option<String>,

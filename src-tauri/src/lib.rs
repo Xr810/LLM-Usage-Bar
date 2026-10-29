@@ -1659,6 +1659,8 @@ pub fn run_with_injections(ctx: tauri::Context<tauri::Wry>, injections: Injectio
             commands::guard_allow_once,
             commands::guard_allow_more_today,
             commands::guard_deny_pending,
+            commands::guard_get_upgrade_notice,
+            commands::guard_ack_upgrade_notice,
             // BE-22: read-only session list (C14)
             commands::list_sessions,
             // BE-17: takeover wizard and detect_tools (C3 / C22)
