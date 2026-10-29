@@ -1,13 +1,9 @@
 import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { SHOW_MONTHLY_REMINDER_NOTE } from "@/config/upgradeNotice";
-import type { AllowanceUsd } from "@/types";
+import type { GuardChangedResult } from "@/lib/api/guard";
+import type { AllowanceUsd, ConvertedBudget, UpgradeNotice } from "@/types";
 import type { LicenseStatus } from "@/types/license";
-import type {
-  ConvertedBudget,
-  GuardChangedResult,
-  UpgradeNotice,
-} from "@/types/upgradeNotice";
 import { debugUpgradeNotice } from "@/lib/upgradeNoticeDebug";
 import {
   convertedBudgetName,

@@ -26,7 +26,7 @@ import { SHOW_MONTHLY_REMINDER_NOTE } from "@/config/upgradeNotice";
 import { TrayUsagePopover } from "@/components/tray-usage/TrayUsagePopover";
 import { resetUpgradeNoticeDebug } from "@/lib/upgradeNoticeDebug";
 import type { LicenseStatus } from "@/types/license";
-import type { UpgradeNotice } from "@/types/upgradeNotice";
+import type { ConvertedBudget, UpgradeNotice } from "@/types";
 import { server } from "../../../tests/msw/server";
 import { commandCalls, emitTauriEvent } from "../../../tests/msw/tauriMocks";
 import { designPanelFixture } from "./panelFixture";
@@ -46,7 +46,7 @@ const proLicense: LicenseStatus = {
 };
 
 function sampleNotice(
-  budgets = sampleBudgets(),
+  budgets: ConvertedBudget[] = sampleBudgets(),
   noticeId = "notice-1",
 ): UpgradeNotice {
   return {
@@ -56,11 +56,11 @@ function sampleNotice(
   };
 }
 
-function sampleBudgets() {
+function sampleBudgets(): ConvertedBudget[] {
   return [
     {
       budgetId: "shared",
-      name: "",
+      name: null,
       providerId: null,
       dailyCapUsd: "30.00",
       spentTodayUsd: "15.60",
@@ -219,6 +219,18 @@ describe("UpgradeHardStopNotice", () => {
     expect(
       screen.getAllByRole("button", { name: "Switch back to reminder" }),
     ).toHaveLength(3);
+  });
+
+  it("localizes a blank budget name the same way as null", () => {
+    const blank = sampleBudgets().map((budget) => {
+      if (budget.budgetId === "shared") return { ...budget, name: "" };
+      if (budget.budgetId === "provider:openai")
+        return { ...budget, name: "  " };
+      return budget;
+    });
+    renderNotice({ notice: sampleNotice(blank) });
+    expect(screen.getAllByText("All providers (shared)")).toHaveLength(2);
+    expect(screen.queryByText("OpenAI")).toBeNull();
   });
 
   it("uses the English singular when one reminder budget was converted", () => {
@@ -566,6 +578,153 @@ describe("useUpgradeNotice", () => {
       expect(commandCalls("guard_allow_more_today")).toHaveLength(1),
     );
     expect(commandCalls("guard_allow_more_today")[0]?.[1]).toBeUndefined();
+  });
+
+  it("re-fetches the notice after a hard-stop that changed, without a guard event", async () => {
+    let gets = 0;
+    server.use(
+      http.post("http://tauri.local/guard_get_upgrade_notice", () => {
+        gets += 1;
+        return HttpResponse.json(
+          gets === 1
+            ? sampleNotice()
+            : sampleNotice(sampleBudgets(), "notice-after-stop"),
+        );
+      }),
+      http.post("http://tauri.local/guard_set_budget_hard_stop", () =>
+        HttpResponse.json({ changed: true }),
+      ),
+    );
+    render(<Harness />);
+    await waitFor(() =>
+      expect(screen.getByTestId("notice-id")).toHaveTextContent("notice-1"),
+    );
+    const before = commandCalls("guard_get_upgrade_notice").length;
+
+    fireEvent.click(screen.getByRole("button", { name: "switch" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("notice-id")).toHaveTextContent(
+        "notice-after-stop",
+      ),
+    );
+    expect(commandCalls("guard_get_upgrade_notice")).toHaveLength(before + 1);
+    expect(commandCalls("guard_set_budget_hard_stop")).toHaveLength(1);
+  });
+
+  it("does not re-fetch when a hard-stop reports changed false", async () => {
+    server.use(
+      http.post("http://tauri.local/guard_get_upgrade_notice", () =>
+        HttpResponse.json(sampleNotice()),
+      ),
+      http.post("http://tauri.local/guard_set_budget_hard_stop", () =>
+        HttpResponse.json({ changed: false }),
+      ),
+    );
+    render(<Harness />);
+    await waitFor(() =>
+      expect(screen.getByTestId("notice-id")).toHaveTextContent("notice-1"),
+    );
+    const before = commandCalls("guard_get_upgrade_notice").length;
+
+    fireEvent.click(screen.getByRole("button", { name: "switch" }));
+    await waitFor(() =>
+      expect(commandCalls("guard_set_budget_hard_stop")).toHaveLength(1),
+    );
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(commandCalls("guard_get_upgrade_notice")).toHaveLength(before);
+    expect(screen.getByTestId("notice-id")).toHaveTextContent("notice-1");
+  });
+
+  it("hides on ack before the command resolves and re-fetches only when changed", async () => {
+    let releaseAck: (result: { changed: boolean }) => void = () => {};
+    server.use(
+      http.post("http://tauri.local/guard_get_upgrade_notice", () =>
+        HttpResponse.json(sampleNotice()),
+      ),
+      http.post("http://tauri.local/guard_ack_upgrade_notice", async () => {
+        const result = await new Promise<{ changed: boolean }>((resolve) => {
+          releaseAck = resolve;
+        });
+        return HttpResponse.json(result);
+      }),
+    );
+    render(<Harness />);
+    await waitFor(() =>
+      expect(screen.getByTestId("notice-id")).toHaveTextContent("notice-1"),
+    );
+    const before = commandCalls("guard_get_upgrade_notice").length;
+
+    fireEvent.click(screen.getByRole("button", { name: "ack" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("notice-id")).toHaveTextContent("null"),
+    );
+    expect(commandCalls("guard_ack_upgrade_notice")).toHaveLength(1);
+    expect(commandCalls("guard_get_upgrade_notice")).toHaveLength(before);
+
+    await act(async () => {
+      releaseAck({ changed: true });
+    });
+    await waitFor(() =>
+      expect(commandCalls("guard_get_upgrade_notice")).toHaveLength(before + 1),
+    );
+    expect(screen.getByTestId("notice-id")).toHaveTextContent("null");
+  });
+
+  it("hides on ack without re-fetching when changed is false", async () => {
+    server.use(
+      http.post("http://tauri.local/guard_get_upgrade_notice", () =>
+        HttpResponse.json(sampleNotice()),
+      ),
+      http.post("http://tauri.local/guard_ack_upgrade_notice", () =>
+        HttpResponse.json({ changed: false }),
+      ),
+    );
+    render(<Harness />);
+    await waitFor(() =>
+      expect(screen.getByTestId("notice-id")).toHaveTextContent("notice-1"),
+    );
+    const before = commandCalls("guard_get_upgrade_notice").length;
+
+    fireEvent.click(screen.getByRole("button", { name: "ack" }));
+    await waitFor(() =>
+      expect(commandCalls("guard_ack_upgrade_notice")).toHaveLength(1),
+    );
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(screen.getByTestId("notice-id")).toHaveTextContent("null");
+    expect(commandCalls("guard_get_upgrade_notice")).toHaveLength(before);
+  });
+
+  it("re-fetches the notice after allow-more without a guard event", async () => {
+    let gets = 0;
+    server.use(
+      http.post("http://tauri.local/guard_get_upgrade_notice", () => {
+        gets += 1;
+        return HttpResponse.json(
+          gets === 1
+            ? sampleNotice()
+            : sampleNotice(sampleBudgets(), "notice-after-allow"),
+        );
+      }),
+    );
+    render(<Harness />);
+    await waitFor(() =>
+      expect(screen.getByTestId("notice-id")).toHaveTextContent("notice-1"),
+    );
+    const before = commandCalls("guard_get_upgrade_notice").length;
+
+    fireEvent.click(screen.getByRole("button", { name: "allow" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("notice-id")).toHaveTextContent(
+        "notice-after-allow",
+      ),
+    );
+    expect(commandCalls("guard_allow_more_today")).toHaveLength(1);
+    expect(commandCalls("guard_allow_more_today")[0]?.[1]).toBeUndefined();
+    expect(commandCalls("guard_get_upgrade_notice")).toHaveLength(before + 1);
   });
 });
 

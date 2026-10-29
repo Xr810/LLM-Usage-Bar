@@ -771,6 +771,22 @@ export interface GuardStateView {
   pendingCount: number;
   pending: PendingMeta[];
 }
+/** Public v1.14 notice; amounts are decimal USD strings, refreshed by the provider. */
+export interface ConvertedBudget {
+  /** shared or provider:<id>. */
+  budgetId: string;
+  name: string | null;
+  providerId: string | null;
+  dailyCapUsd: string;
+  spentTodayUsd: string;
+  overToday: boolean;
+}
+export interface UpgradeNotice {
+  noticeId: string;
+  /** RFC3339 conversion timestamp. */
+  convertedAt: string;
+  budgets: ConvertedBudget[];
+}
 export interface GuardSettings {
   holdTimeoutSecs: number;
   maxPending: number;

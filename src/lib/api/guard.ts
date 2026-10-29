@@ -1,11 +1,15 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AllowanceUsd, GuardAllowanceResult } from "@/types";
 import type {
+  AllowanceUsd,
   ConvertedBudget,
-  GuardChangedResult,
+  GuardAllowanceResult,
   UpgradeNotice,
-} from "@/types/upgradeNotice";
+} from "@/types";
 import { debugUpgradeNotice } from "@/lib/upgradeNoticeDebug";
+
+export interface GuardChangedResult {
+  changed: boolean;
+}
 
 /**
  * PRO-2 §8 commands. The backend may not be registered yet: a rejection or a
@@ -101,7 +105,7 @@ function parseConvertedBudget(value: unknown): ConvertedBudget | null {
   if (value == null || typeof value !== "object") return null;
   const raw = value as Record<string, unknown>;
   if (typeof raw.budgetId !== "string" || raw.budgetId === "") return null;
-  if (typeof raw.name !== "string") return null;
+  if (raw.name !== null && typeof raw.name !== "string") return null;
   if (raw.providerId !== null && typeof raw.providerId !== "string") {
     return null;
   }

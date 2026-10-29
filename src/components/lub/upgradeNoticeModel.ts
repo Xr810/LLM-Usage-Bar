@@ -1,5 +1,5 @@
 import type { LicenseStatus } from "@/types/license";
-import type { ConvertedBudget, UpgradeNotice } from "@/types/upgradeNotice";
+import type { ConvertedBudget, UpgradeNotice } from "@/types";
 
 /**
  * Community, Free (including an expired Pro, `state: "free"`), and a missing
@@ -21,10 +21,16 @@ export function convertedBudgetName(
   budget: ConvertedBudget,
   sharedName: string,
 ): string {
-  if (budget.budgetId === "shared") return sharedName;
-  const name = budget.name.trim();
-  if (name !== "") return name;
-  return budget.providerId ?? budget.budgetId;
+  // Shared budgets send name: null. A blank string is the same row, kept
+  // so an older payload does not render an empty label.
+  if (
+    budget.budgetId === "shared" ||
+    budget.name == null ||
+    budget.name.trim() === ""
+  ) {
+    return sharedName;
+  }
+  return budget.name;
 }
 
 /** Prefix a USD decimal string. Values that already include `$` are kept. */

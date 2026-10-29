@@ -10,7 +10,7 @@ import { OnboardingWizard } from "@/components/lub/OnboardingWizard";
 import { TrayPanelV5 } from "@/components/lub/TrayPanelV5";
 import { UpgradeHardStopNotice } from "@/components/lub/UpgradeHardStopNotice";
 import type { LicenseStatus } from "@/types/license";
-import type { UpgradeNotice } from "@/types/upgradeNotice";
+import type { UpgradeNotice } from "@/types";
 import { TrendsPage } from "@/components/lub/TrendsPage";
 import { UpgradePanel } from "@/components/lub/UpgradePanel";
 import { splitUsd } from "@/components/lub/money";
@@ -36,7 +36,7 @@ const previewNotice: UpgradeNotice = {
   budgets: [
     {
       budgetId: "shared",
-      name: "",
+      name: null,
       providerId: null,
       dailyCapUsd: "30.00",
       spentTodayUsd: "15.60",

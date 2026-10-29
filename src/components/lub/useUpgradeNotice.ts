@@ -7,9 +7,9 @@ import {
   guardGetUpgradeNotice,
   guardSetBudgetHardStop,
   readAllowMoreTodayDefaultUsd,
+  type GuardChangedResult,
 } from "@/lib/api/guard";
-import type { AllowanceUsd } from "@/types";
-import type { GuardChangedResult, UpgradeNotice } from "@/types/upgradeNotice";
+import type { AllowanceUsd, UpgradeNotice } from "@/types";
 import { debugUpgradeNotice } from "@/lib/upgradeNoticeDebug";
 
 export interface UpgradeNoticeController {
@@ -22,8 +22,10 @@ export interface UpgradeNoticeController {
 
 /**
  * Pulls `guard_get_upgrade_notice` on startup, on `license-changed`, and on
- * `guard-state-changed`. There is no dedicated event. A missing command or
- * any other failure becomes a null notice.
+ * `guard-state-changed`. Ack and hard-stop notify only when `{changed}` is
+ * true, and that event is dropped when the guard snapshot is unchanged, so
+ * those calls re-fetch the notice themselves. Allow-more does the same.
+ * A missing command or any other failure becomes a null notice.
  */
 export function useUpgradeNotice(): UpgradeNoticeController {
   const [notice, setNotice] = useState<UpgradeNotice | null>(null);
@@ -73,7 +75,8 @@ export function useUpgradeNotice(): UpgradeNoticeController {
       dismissedId.current = noticeId;
       setNotice((current) => (current?.noticeId === noticeId ? null : current));
       try {
-        await guardAckUpgradeNotice(noticeId);
+        const result = await guardAckUpgradeNotice(noticeId);
+        if (result.changed) await refreshNotice();
       } catch (error) {
         debugUpgradeNotice(error);
         if (dismissedId.current === noticeId) dismissedId.current = null;
@@ -83,9 +86,17 @@ export function useUpgradeNotice(): UpgradeNoticeController {
     [refreshNotice],
   );
 
-  const setHardStop = useCallback(async (budgetId: string) => {
-    return guardSetBudgetHardStop({ budgetId, hardStop: false });
-  }, []);
+  const setHardStop = useCallback(
+    async (budgetId: string) => {
+      const result = await guardSetBudgetHardStop({
+        budgetId,
+        hardStop: false,
+      });
+      if (result.changed) await refreshNotice();
+      return result;
+    },
+    [refreshNotice],
+  );
 
   const allowMoreToday = useCallback(async () => {
     try {
