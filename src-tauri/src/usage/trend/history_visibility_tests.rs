@@ -108,8 +108,16 @@ mod tests {
         let reference = seed(at, false);
         let baseline = reads(&db, at);
         assert_eq!(baseline["rows"]["total"], 2);
-        let backup = db.export_sql_string().unwrap();
-        let sync = db.export_sql_string_for_sync().unwrap();
+        // Export timestamps can cross a second boundary; compare every other
+        // line, including all schema and retained history rows.
+        let stable_export = |sql: String| {
+            sql.lines()
+                .filter(|line| !line.starts_with("-- 生成时间: "))
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+        let backup = stable_export(db.export_sql_string().unwrap());
+        let sync = stable_export(db.export_sql_string_for_sync().unwrap());
         let policy = Arc::new(Policy {
             cutoff: Mutex::new(Some(day)),
             calls: AtomicUsize::new(0),
@@ -193,8 +201,11 @@ mod tests {
                 7
             );
         }
-        assert_eq!(db.export_sql_string().unwrap(), backup);
-        assert_eq!(db.export_sql_string_for_sync().unwrap(), sync);
+        assert_eq!(stable_export(db.export_sql_string().unwrap()), backup);
+        assert_eq!(
+            stable_export(db.export_sql_string_for_sync().unwrap()),
+            sync
+        );
         *policy.cutoff.lock().unwrap() = None;
         assert_eq!(reads(&db, at), baseline);
     }
