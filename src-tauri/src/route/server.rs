@@ -720,168 +720,180 @@ async fn admit_selected(
 ) -> Result<Option<Response>, AppError> {
     let request_id = meta.req_id.clone();
     let app_type = &meta.app_type;
-    let decision = state.gate.admit(&meta);
-    match decision {
-        crate::policy::Decision::Allow => {}
-        crate::policy::Decision::Deny { rule, status, body } => {
-            let status = StatusCode::from_u16(status)
-                .map_err(|_| AppError::internal("Policy gate returned an invalid HTTP status."))?;
-            // Deny is audit-only. As with Hold, recording must never replace
-            // the gate response or allow this request to reach upstream.
-            match state.db.conn.lock() {
-                Ok(mut conn) => {
-                    if let Err(error) = insert_proxy_settlement(
-                        &mut conn,
-                        &ProxySettlement {
-                            request_id,
-                            provider_id: meta.selected_provider_id.clone(),
-                            app_type: app_type.to_string(),
-                            model: meta.model.clone(),
-                            input_tokens: 0,
-                            output_tokens: 0,
-                            status_code: i64::from(status.as_u16()),
-                            created_at: now_millis() / 1000,
-                            billing_identity: identity_label(classified.identity).to_string(),
-                            key_fingerprint: meta.identity_fingerprint.clone(),
-                            session_id: classified.session_id.clone(),
-                            end_reason: "guard_deny".to_string(),
-                            error_message: Some(rule),
-                            guard_released_by: None,
-                            held_ms: None,
-                        },
-                    ) {
-                        log::warn!("guard deny recording failed: {error}");
+    'admission: for attempt in 0..2 {
+        let decision = state.gate.admit(&meta);
+        match decision {
+            crate::policy::Decision::Allow => break 'admission,
+            crate::policy::Decision::Deny { rule, status, body } => {
+                let status = StatusCode::from_u16(status).map_err(|_| {
+                    AppError::internal("Policy gate returned an invalid HTTP status.")
+                })?;
+                // Deny is audit-only. As with Hold, recording must never replace
+                // the gate response or allow this request to reach upstream.
+                match state.db.conn.lock() {
+                    Ok(mut conn) => {
+                        if let Err(error) = insert_proxy_settlement(
+                            &mut conn,
+                            &ProxySettlement {
+                                request_id,
+                                provider_id: meta.selected_provider_id.clone(),
+                                app_type: app_type.to_string(),
+                                model: meta.model.clone(),
+                                input_tokens: 0,
+                                output_tokens: 0,
+                                status_code: i64::from(status.as_u16()),
+                                created_at: now_millis() / 1000,
+                                billing_identity: identity_label(classified.identity).to_string(),
+                                key_fingerprint: meta.identity_fingerprint.clone(),
+                                session_id: classified.session_id.clone(),
+                                end_reason: "guard_deny".to_string(),
+                                error_message: Some(rule),
+                                guard_released_by: None,
+                                held_ms: None,
+                            },
+                        ) {
+                            log::warn!("guard deny recording failed: {error}");
+                        }
                     }
+                    Err(error) => log::warn!("guard deny recording failed: {error}"),
                 }
-                Err(error) => log::warn!("guard deny recording failed: {error}"),
+                return Ok(Some((status, axum::Json(body)).into_response()));
             }
-            return Ok(Some((status, axum::Json(body)).into_response()));
-        }
-        crate::policy::Decision::Hold {
-            reason,
-            retry_after_seconds,
-            hold,
-        } => 'holding: {
-            log::debug!("guard hold: {reason}");
-            let mut disposition = "immediate";
-            let mut held_ms = None;
-            // Keep the ticket until the terminal audit row is durable, so a
-            // registry's shutdown acknowledgment cannot race that write.
-            let mut queued_ticket = None;
-            if let Some(spec) = hold {
-                let held_at = now_millis();
-                let meta = crate::policy::PendingMeta {
-                    pending_id: uuid::Uuid::new_v4().to_string(),
-                    request_id: request_id.clone(),
-                    kind: spec.kind,
-                    scope: spec.scope,
-                    provider: Some(meta.selected_provider_id.clone()),
-                    client: app_type.to_string(),
-                    session_id: classified.session_id.clone(),
-                    held_at,
-                    expires_at: held_at
-                        .saturating_add(spec.timeout.as_millis().min(i64::MAX as u128) as i64),
-                    reason: "Request held by policy.".to_string(),
-                };
-                match state.pending_registry.enqueue(meta, spec.timeout) {
-                    Err(crate::policy::EnqueueError::Unavailable) => {}
-                    Err(crate::policy::EnqueueError::Full) => disposition = "queue_full",
-                    Ok(ticket) => {
-                        let ticket = queued_ticket.insert(ticket);
-                        let mut audit = PendingDisconnectAudit {
-                            db: state.db.clone(),
-                            request_id: request_id.clone(),
-                            classified: classified.clone(),
-                            client: app_type.to_string(),
-                            started: tokio::time::Instant::now(),
-                            armed: true,
-                        };
-                        // No response (including headers) or upstream send before release.
-                        // Timeout policy is owned by the registry, not this transport.
-                        let outcome = (&mut ticket.receiver)
-                            .await
-                            .unwrap_or(crate::policy::HoldOutcome::Shutdown);
-                        audit.armed = false;
-                        let elapsed =
-                            audit.started.elapsed().as_millis().min(i64::MAX as u128) as i64;
-                        held_ms = Some(elapsed);
-                        match outcome {
-                            crate::policy::HoldOutcome::Released(by) => {
-                                let label = match by {
-                                    crate::policy::ReleasedBy::Once => "once",
-                                    crate::policy::ReleasedBy::MoreToday => "more_today",
-                                    crate::policy::ReleasedBy::AutoIdentity => "auto_identity",
-                                };
-                                *held = Some((
-                                    label.to_string(),
-                                    if by == crate::policy::ReleasedBy::AutoIdentity {
-                                        0
-                                    } else {
-                                        elapsed
-                                    },
-                                ));
-                                break 'holding;
+            crate::policy::Decision::Hold {
+                reason,
+                retry_after_seconds,
+                hold,
+            } => 'holding: {
+                log::debug!("guard hold: {reason}");
+                let mut disposition = "immediate";
+                let mut held_ms = None;
+                // Keep the ticket until the terminal audit row is durable, so a
+                // registry's shutdown acknowledgment cannot race that write.
+                let mut queued_ticket = None;
+                if let Some(spec) = hold {
+                    let readmit_identity =
+                        spec.kind == crate::policy::HoldKind::IdentitySwitch && attempt == 0;
+                    let held_at = now_millis();
+                    let meta = crate::policy::PendingMeta {
+                        pending_id: uuid::Uuid::new_v4().to_string(),
+                        request_id: request_id.clone(),
+                        kind: spec.kind,
+                        scope: spec.scope,
+                        provider: Some(meta.selected_provider_id.clone()),
+                        client: app_type.to_string(),
+                        session_id: classified.session_id.clone(),
+                        held_at,
+                        expires_at: held_at
+                            .saturating_add(spec.timeout.as_millis().min(i64::MAX as u128) as i64),
+                        reason: "Request held by policy.".to_string(),
+                    };
+                    match state.pending_registry.enqueue(meta, spec.timeout) {
+                        Err(crate::policy::EnqueueError::Unavailable) => {}
+                        Err(crate::policy::EnqueueError::Full) => disposition = "queue_full",
+                        Ok(ticket) => {
+                            let ticket = queued_ticket.insert(ticket);
+                            let mut audit = PendingDisconnectAudit {
+                                db: state.db.clone(),
+                                request_id: request_id.clone(),
+                                classified: classified.clone(),
+                                client: app_type.to_string(),
+                                started: tokio::time::Instant::now(),
+                                armed: true,
+                            };
+                            // No response (including headers) or upstream send before release.
+                            // Timeout policy is owned by the registry, not this transport.
+                            let outcome = (&mut ticket.receiver)
+                                .await
+                                .unwrap_or(crate::policy::HoldOutcome::Shutdown);
+                            audit.armed = false;
+                            let elapsed =
+                                audit.started.elapsed().as_millis().min(i64::MAX as u128) as i64;
+                            held_ms = Some(elapsed);
+                            match outcome {
+                                crate::policy::HoldOutcome::Released(by) => {
+                                    let label = match by {
+                                        crate::policy::ReleasedBy::Once => "once",
+                                        crate::policy::ReleasedBy::MoreToday => "more_today",
+                                        crate::policy::ReleasedBy::AutoIdentity => "auto_identity",
+                                    };
+                                    *held = Some((
+                                        label.to_string(),
+                                        if by == crate::policy::ReleasedBy::AutoIdentity {
+                                            0
+                                        } else {
+                                            elapsed
+                                        },
+                                    ));
+                                    // Identity release updates the baseline, not the budget.
+                                    // Recheck this same provider once before any upstream send;
+                                    // this is not a routing/failover attempt.
+                                    if readmit_identity {
+                                        continue 'admission;
+                                    }
+                                    break 'holding;
+                                }
+                                crate::policy::HoldOutcome::Denied => disposition = "denied",
+                                crate::policy::HoldOutcome::Timeout => disposition = "timeout",
+                                crate::policy::HoldOutcome::Shutdown => disposition = "shutdown",
                             }
-                            crate::policy::HoldOutcome::Denied => disposition = "denied",
-                            crate::policy::HoldOutcome::Timeout => disposition = "timeout",
-                            crate::policy::HoldOutcome::Shutdown => disposition = "shutdown",
                         }
                     }
                 }
-            }
-            let retry_after_seconds = retry_after_seconds
-                .or_else(|| (disposition == "timeout").then_some(1))
-                .map(|seconds| seconds.min(3600));
-            let mut details = serde_json::json!({ "reason": disposition });
-            if let Some(seconds) = retry_after_seconds {
-                details["retryAfter"] = seconds.into();
-            }
-            let mut response = (
-                StatusCode::TOO_MANY_REQUESTS,
-                axum::Json(AppError::coded_with_details(
-                    "GUARD_HOLD",
-                    "Request held by policy.",
-                    details,
-                )),
-            )
-                .into_response();
-            if let Some(seconds) = retry_after_seconds {
-                response
-                    .headers_mut()
-                    .insert(header::RETRY_AFTER, seconds.into());
-            }
-            // No upstream call is needed to record this decision.
-            // A logging failure must not turn a fail-closed Hold into forwarding
-            // or replace its prescribed response with a database error.
-            match state.db.conn.lock() {
-                Ok(mut conn) => {
-                    if let Err(error) = insert_proxy_settlement(
-                        &mut conn,
-                        &ProxySettlement {
-                            request_id,
-                            provider_id: meta.selected_provider_id.clone(),
-                            app_type: app_type.to_string(),
-                            model: meta.model.clone(),
-                            input_tokens: 0,
-                            output_tokens: 0,
-                            status_code: 429,
-                            created_at: now_millis() / 1000,
-                            billing_identity: identity_label(classified.identity).to_string(),
-                            key_fingerprint: meta.identity_fingerprint.clone(),
-                            session_id: classified.session_id.clone(),
-                            end_reason: "guard_hold".to_string(),
-                            error_message: Some(disposition.to_string()),
-                            guard_released_by: None,
-                            held_ms,
-                        },
-                    ) {
-                        log::warn!("guard hold recording failed: {error}");
-                    }
+                let retry_after_seconds = retry_after_seconds
+                    .or_else(|| (disposition == "timeout").then_some(1))
+                    .map(|seconds| seconds.min(3600));
+                let mut details = serde_json::json!({ "reason": disposition });
+                if let Some(seconds) = retry_after_seconds {
+                    details["retryAfter"] = seconds.into();
                 }
-                Err(error) => log::warn!("guard hold recording failed: {error}"),
+                let mut response = (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    axum::Json(AppError::coded_with_details(
+                        "GUARD_HOLD",
+                        "Request held by policy.",
+                        details,
+                    )),
+                )
+                    .into_response();
+                if let Some(seconds) = retry_after_seconds {
+                    response
+                        .headers_mut()
+                        .insert(header::RETRY_AFTER, seconds.into());
+                }
+                // No upstream call is needed to record this decision.
+                // A logging failure must not turn a fail-closed Hold into forwarding
+                // or replace its prescribed response with a database error.
+                match state.db.conn.lock() {
+                    Ok(mut conn) => {
+                        if let Err(error) = insert_proxy_settlement(
+                            &mut conn,
+                            &ProxySettlement {
+                                request_id,
+                                provider_id: meta.selected_provider_id.clone(),
+                                app_type: app_type.to_string(),
+                                model: meta.model.clone(),
+                                input_tokens: 0,
+                                output_tokens: 0,
+                                status_code: 429,
+                                created_at: now_millis() / 1000,
+                                billing_identity: identity_label(classified.identity).to_string(),
+                                key_fingerprint: meta.identity_fingerprint.clone(),
+                                session_id: classified.session_id.clone(),
+                                end_reason: "guard_hold".to_string(),
+                                error_message: Some(disposition.to_string()),
+                                guard_released_by: None,
+                                held_ms,
+                            },
+                        ) {
+                            log::warn!("guard hold recording failed: {error}");
+                        }
+                    }
+                    Err(error) => log::warn!("guard hold recording failed: {error}"),
+                }
+                return Ok(Some(response));
             }
-            return Ok(Some(response));
         }
+        break 'admission;
     }
     Ok(None)
 }
@@ -2305,6 +2317,163 @@ mod tests {
             .uri("/v1/responses")
             .body(Body::from(json_body(json!({"model":MODEL,"stream":true}))))
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn identity_release_readmits_same_provider_before_any_upstream_bytes() {
+        use crate::policy::{Decision, HoldKind, HoldScope, HoldSpec, PendingRegistry};
+
+        struct Gate {
+            seen: Mutex<Vec<ReqMeta>>,
+            after_identity: Mutex<Decision>,
+        }
+        impl PolicyGate for Gate {
+            fn admit(&self, req: &ReqMeta) -> Decision {
+                let mut seen = self.seen.lock().unwrap();
+                seen.push(req.clone());
+                if seen.len() == 1 {
+                    Decision::Hold {
+                        reason: "identity".into(),
+                        retry_after_seconds: None,
+                        hold: Some(HoldSpec {
+                            kind: HoldKind::IdentitySwitch,
+                            scope: HoldScope::Identity {
+                                project_key: "test-project".into(),
+                            },
+                            timeout: Duration::from_secs(15),
+                        }),
+                    }
+                } else {
+                    self.after_identity.lock().unwrap().clone()
+                }
+            }
+            fn settle(&self, _: &str, _: &crate::policy::Usage) {}
+        }
+
+        // Private policy/baseline/allowance storage is injected. Exercise its
+        // decisions through the public proxy, with an available failover route.
+        for ending in [
+            "daily_cap",
+            "more_today",
+            "killed",
+            "killed_hold",
+            "auto_identity",
+        ] {
+            let db = memory_db();
+            seed_route(&db, "upstream", WireApi::Responses, 1, MODEL);
+            seed_route(&db, "fallback", WireApi::Responses, 2, MODEL);
+            let registry = Arc::new(crate::policy::testing::TestRegistry::new(1));
+            let gate = Arc::new(Gate {
+                seen: Default::default(),
+                after_identity: Mutex::new(Decision::Hold {
+                    reason: "daily_cap".into(),
+                    retry_after_seconds: None,
+                    hold: Some(HoldSpec {
+                        kind: HoldKind::HardCap,
+                        scope: HoldScope::DailyCap {
+                            rule_id: "test-cap".into(),
+                        },
+                        timeout: Duration::from_secs(15),
+                    }),
+                }),
+            });
+            let sender = fake_sender(vec![ScriptedOutcome::Respond {
+                status: 200,
+                headers: vec![],
+                body: br#"{"usage":{"input_tokens":2,"output_tokens":5}}"#.to_vec(),
+            }]);
+            let mut state = test_state(db.clone(), ok_auth(), sender.clone());
+            Arc::get_mut(&mut state).unwrap().pending_registry = registry.clone();
+            Arc::get_mut(&mut state).unwrap().gate = gate.clone();
+            let task = tokio::spawn(test_router(state).oneshot(held_request()));
+            tokio::time::timeout(Duration::from_secs(2), registry.wait_count(1))
+                .await
+                .unwrap();
+            let identity = registry.view()[0].clone();
+            assert_eq!(identity.kind, HoldKind::IdentitySwitch);
+            assert!(!task.is_finished());
+            assert!(sender.requests.lock().unwrap().is_empty());
+
+            match ending {
+                "more_today" => {
+                    // The registry's allowance and baseline are committed before
+                    // waking transport; the injected gate now naturally allows.
+                    *gate.after_identity.lock().unwrap() = Decision::Allow;
+                    assert_eq!(registry.allow_more_today(Some("5")).released_count, 1);
+                }
+                "killed" => {
+                    *gate.after_identity.lock().unwrap() = Decision::Deny {
+                        rule: "killed".into(),
+                        status: 403,
+                        body: json!({"error":"killed"}),
+                    };
+                    assert!(registry.release(Some(&identity.pending_id)).released);
+                }
+                "killed_hold" => {
+                    *gate.after_identity.lock().unwrap() = Decision::Hold {
+                        reason: "killed".into(),
+                        retry_after_seconds: None,
+                        hold: None,
+                    };
+                    assert!(registry.release(Some(&identity.pending_id)).released);
+                }
+                "auto_identity" => {
+                    registry.finish(
+                        &identity.pending_id,
+                        crate::policy::HoldOutcome::Released(
+                            crate::policy::ReleasedBy::AutoIdentity,
+                        ),
+                    );
+                }
+                _ => assert!(registry.release(Some(&identity.pending_id)).released),
+            }
+            if matches!(ending, "daily_cap" | "auto_identity") {
+                tokio::time::timeout(Duration::from_secs(2), registry.wait_count(1))
+                    .await
+                    .unwrap();
+                let cap = registry.view()[0].clone();
+                assert_ne!(cap.pending_id, identity.pending_id);
+                assert_eq!(cap.kind, HoldKind::HardCap);
+                assert_eq!(cap.request_id, identity.request_id);
+                assert_eq!(cap.provider, identity.provider);
+                assert!(!task.is_finished());
+                assert!(
+                    sender.requests.lock().unwrap().is_empty(),
+                    "no upstream bytes before final allowance"
+                );
+                // A daily-cap release is final: do not re-admit a third time.
+                assert!(registry.release(Some(&cap.pending_id)).released);
+            }
+            let response = tokio::time::timeout(Duration::from_secs(2), task)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                match ending {
+                    "killed" => StatusCode::FORBIDDEN,
+                    "killed_hold" => StatusCode::TOO_MANY_REQUESTS,
+                    _ => StatusCode::OK,
+                }
+            );
+            to_bytes(response.into_body(), 4096).await.unwrap();
+            let seen = gate.seen.lock().unwrap();
+            assert_eq!(seen.len(), 2, "exactly one same-provider re-admission");
+            assert_eq!(seen[0], seen[1]);
+            assert_eq!(seen[0].selected_provider_id, "upstream");
+            assert_eq!(
+                sender.requests.lock().unwrap().len(),
+                usize::from(!ending.starts_with("killed"))
+            );
+            let count: i64 = db
+                .conn
+                .lock()
+                .unwrap()
+                .query_row("SELECT COUNT(*) FROM proxy_request_logs", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(count, 1, "one terminal settlement, no failover");
+        }
     }
 
     #[tokio::test(start_paused = true)]
