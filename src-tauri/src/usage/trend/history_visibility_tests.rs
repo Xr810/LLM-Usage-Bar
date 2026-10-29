@@ -29,6 +29,10 @@ mod tests {
         let db = Arc::new(Database::memory().unwrap());
         {
             let conn = db.conn.lock().unwrap();
+            // Monitor only the fixture account: startup presets carry random
+            // binding IDs/timestamps unrelated to history visibility.
+            conn.execute("UPDATE usage_providers SET enabled = 0", [])
+                .unwrap();
             conn.execute_batch("INSERT INTO usage_providers (id,name,billing_kind,product_group_id,token_sources,enabled,needs_review,created_at,updated_at)
                 VALUES ('history-test','History','metered','product','[\"proxy\"]',1,0,1,1);").unwrap();
             for (id, timestamp, tokens, cost) in [
