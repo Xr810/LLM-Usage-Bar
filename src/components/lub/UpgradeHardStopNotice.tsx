@@ -1,6 +1,5 @@
 import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { SHOW_MONTHLY_REMINDER_NOTE } from "@/config/upgradeNotice";
 import type { GuardChangedResult } from "@/lib/api/guard";
 import type { AllowanceUsd, ConvertedBudget, UpgradeNotice } from "@/types";
 import type { LicenseStatus } from "@/types/license";
@@ -23,8 +22,6 @@ export interface UpgradeHardStopNoticeProps {
   onSetHardStop: (budgetId: string) => Promise<GuardChangedResult>;
   onAllowMoreToday: () => Promise<void> | void;
   onManageBudgets: () => void;
-  /** Defaults to the single config flag. Tests pass false to cover the off state. */
-  showMonthlyNote?: boolean;
 }
 
 function LockIcon() {
@@ -99,7 +96,6 @@ export function UpgradeHardStopNotice({
   onSetHardStop,
   onAllowMoreToday,
   onManageBudgets,
-  showMonthlyNote = SHOW_MONTHLY_REMINDER_NOTE,
 }: UpgradeHardStopNoticeProps) {
   const { t, i18n } = useTranslation();
   const [open, setOpen] = useState(true);
@@ -229,11 +225,9 @@ export function UpgradeHardStopNotice({
           <p className="lub-upgrade-body">
             {t("guard.upgradeNotice.body", { count: notice.budgets.length })}
           </p>
-          {showMonthlyNote ? (
-            <p className="lub-upgrade-monthly">
-              {t("guard.upgradeNotice.monthlyNote")}
-            </p>
-          ) : null}
+          <p className="lub-upgrade-monthly">
+            {t("guard.upgradeNotice.monthlyNote")}
+          </p>
         </div>
         <button
           type="button"

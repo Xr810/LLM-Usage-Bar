@@ -22,7 +22,6 @@ import {
 import i18n from "i18next";
 import en from "@/i18n/locales/en.json";
 import zh from "@/i18n/locales/zh.json";
-import { SHOW_MONTHLY_REMINDER_NOTE } from "@/config/upgradeNotice";
 import { TrayUsagePopover } from "@/components/tray-usage/TrayUsagePopover";
 import { resetUpgradeNoticeDebug } from "@/lib/upgradeNoticeDebug";
 import type { LicenseStatus } from "@/types/license";
@@ -321,22 +320,12 @@ describe("UpgradeHardStopNotice", () => {
     expect(screen.getAllByText("Back to reminder")).toHaveLength(3);
   });
 
-  it("keeps the monthly reminder line behind the config flag", () => {
-    expect(SHOW_MONTHLY_REMINDER_NOTE).toBe(true);
-    const { rerender, props } = renderNotice();
+  it("shows the monthly reminder line with the notice", () => {
+    renderNotice();
     expect(
       screen.getByText(
         "Monthly budgets still only remind you; they never block.",
       ),
-    ).toBeInTheDocument();
-    rerender(<UpgradeHardStopNotice {...props} showMonthlyNote={false} />);
-    expect(
-      screen.queryByText(
-        "Monthly budgets still only remind you; they never block.",
-      ),
-    ).toBeNull();
-    expect(
-      screen.getByText(/your 3 reminder budgets now act as hard stops/),
     ).toBeInTheDocument();
   });
 
