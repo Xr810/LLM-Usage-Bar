@@ -2446,6 +2446,41 @@ checks passed; Rust compilation/runtime and exact-head CI results remain pending
 No merge or release is authorized; keep the PR Draft. Existing §20 native
 interactive shutdown acceptance gaps remain open.
 
+#### 2026-10-29 PR #124: public upgrade notice contract v1.14
+
+`GuardStateProvider` adds default `upgrade_notice` (None),
+`ack_upgrade_notice` (false), and `set_budget_hard_stop` (false). Registered
+commands are `guard_get_upgrade_notice`, `guard_ack_upgrade_notice` and
+`guard_set_budget_hard_stop`. Both mutations return `{changed: bool}` and call
+the existing notifier only on true; implementations must not notify again
+inside these hooks. Existing guard snapshot assembly, event shape and event
+deduplication are unchanged, so a notice-only change need not emit an event.
+
+`ConvertedBudget` is camelCase: budgetId (`shared` or `provider:<id>`), nullable
+name, nullable providerId (None for shared), dailyCapUsd, spentTodayUsd, overToday.
+USD strings use existing daily-budget canonicalization and Decimal normalization,
+not cents/floats. `UpgradeNotice` adds noticeId, RFC3339 convertedAt and budgets.
+Live spending/comparison and conversion/storage remain private-provider owned.
+Convert only daily budgets in effect under current api_budget_mode;
+monthly budgets not converted — pending owner confirmation. Monthly remains
+warn-only. TypeScript exports follow existing guard types in `src/types.ts`.
+
+Budget editing uses `guard_set_budget_hard_stop({budgetId, hardStop})` and the
+provider hook `set_budget_hard_stop`; community is inert/false. Existing
+`set_api_budget_config`, `set_provider_daily_budget`, `set_monthly_budget`
+signatures and storage are untouched. No frontend pages or Pro logic added.
+
+Regression coverage uses real Tauri command functions/listeners with injected
+and community providers: live over-cap reads, normalized USD round trips,
+unknown/repeated acknowledgement, one notifier rebuild for changed ack,
+hard-stop disable/re-enable idempotency, and no community events. Local
+TypeScript, Prettier, wrapped Rust formatting and whitespace checks passed.
+Focused Rust runtime tests and exact-head CI are pending at this commit;
+do not interpret compilation or older CI as this head's runtime evidence.
+Keep Draft; after #123 merges, update via merge-main only, then review before
+any PR merge. No rebase/force push, merge or release. Private #4 waits for this
+PR's merge. Existing §20 desktop-interaction verification gaps are unchanged.
+
 #### 2026-10-28 PR #123: public hook contract v1.13 (in progress)
 
 One Draft PR starts at main `5cb3acc7718514e580a8df4c0504994f6a71b310`.
