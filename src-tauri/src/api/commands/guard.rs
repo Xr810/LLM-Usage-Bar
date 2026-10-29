@@ -19,6 +19,26 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 pub const GUARD_STATE_CHANGED_EVENT: &str = "guard-state-changed";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GuardSetKilledResult {
+    pub changed: bool,
+}
+
+/// Set kill until the next local midnight, or clear it early with false.
+/// The injected provider owns expiry; community remains a registered no-op.
+#[tauri::command]
+pub fn guard_set_killed<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    killed: bool,
+) -> GuardSetKilledResult {
+    let changed = state.guard_state.set_killed(killed);
+    if changed {
+        guard_state_notifier(&app, &state).notify();
+    }
+    GuardSetKilledResult { changed }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GuardStateView {
@@ -370,6 +390,94 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn kill_command_delegates_and_only_publishes_changed_views() {
+        use tauri::Listener;
+        #[derive(Default)]
+        struct Provider(Mutex<(bool, Vec<bool>)>);
+        impl GuardStateProvider for Provider {
+            fn snapshot(&self) -> GuardStateCore {
+                let mut core = CommunityGuardStateProvider::default().snapshot();
+                if self.0.lock().unwrap().0 {
+                    core.state = GuardLevel::Killed;
+                }
+                core
+            }
+            fn set_killed(&self, killed: bool) -> bool {
+                let mut state = self.0.lock().unwrap();
+                state.1.push(killed);
+                let changed = state.0 != killed;
+                state.0 = killed;
+                changed
+            }
+            fn set_notifier(&self, _: GuardStateNotifier) {}
+        }
+        for injected in [false, true] {
+            let provider = Arc::new(Provider::default());
+            let mut injections = crate::Injections::community();
+            if injected {
+                let provider = provider.clone();
+                injections.guard_state = Box::new(move |_| Ok(provider));
+            }
+            let db = Arc::new(crate::Database::memory().unwrap());
+            let state = AppState::new_with_injections(
+                db.clone(),
+                crate::secrets::unavailable_credential_store(),
+                Arc::new(crate::quota::QuotaService::new(db)),
+                injections,
+            );
+            let app = tauri::test::mock_app();
+            app.manage(state);
+            let events = Arc::new(Mutex::new(Vec::<Value>::new()));
+            let sink = events.clone();
+            app.listen(GUARD_STATE_CHANGED_EVENT, move |event| {
+                sink.lock()
+                    .unwrap()
+                    .push(serde_json::from_str(event.payload()).unwrap());
+            });
+            for (killed, changed, count) in [
+                (false, false, 0),
+                (true, true, 1),
+                (true, false, 1),
+                (false, true, 2),
+                (false, false, 2),
+            ] {
+                let result = guard_set_killed(app.handle().clone(), app.state(), killed);
+                assert_eq!(
+                    serde_json::to_value(result).unwrap(),
+                    json!({"changed": injected && changed})
+                );
+                assert_eq!(
+                    events.lock().unwrap().len(),
+                    if injected { count } else { 0 }
+                );
+                let view = get_guard_state(app.state()).await.unwrap();
+                assert_eq!(
+                    view.state,
+                    if injected && killed {
+                        GuardLevel::Killed
+                    } else {
+                        GuardLevel::Ok
+                    }
+                );
+                if injected && count > 0 {
+                    assert_eq!(
+                        events.lock().unwrap().last(),
+                        Some(&serde_json::to_value(view).unwrap())
+                    );
+                }
+            }
+            assert_eq!(
+                provider.0.lock().unwrap().1,
+                if injected {
+                    vec![false, true, true, false, false]
+                } else {
+                    vec![]
+                }
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn injected_provider_and_registry_rebuild_the_same_command_and_event_view() {
         use crate::policy::testing::{meta, TestRegistry};
         use std::time::Duration;
@@ -454,6 +562,12 @@ mod tests {
         assert_eq!(events.lock().unwrap().last(), Some(&killed));
         notifier.notify();
         assert_eq!(events.lock().unwrap().len(), 2);
+        assert_eq!(guard_allow_more_today(app.state(), None).released_count, 1);
+        // Releasing pending holds must never clear the provider's killed state.
+        assert_eq!(
+            get_guard_state(app.state()).await.unwrap().state,
+            GuardLevel::Killed
+        );
         drop(ticket);
         let empty = serde_json::to_value(get_guard_state(app.state()).await.unwrap()).unwrap();
         assert_eq!(empty["state"], "killed");

@@ -2480,3 +2480,80 @@ do not interpret compilation or older CI as this head's runtime evidence.
 Keep Draft; after #123 merges, update via merge-main only, then review before
 any PR merge. No rebase/force push, merge or release. Private #4 waits for this
 PR's merge. Existing §20 desktop-interaction verification gaps are unchanged.
+
+#### 2026-10-28 PR #123: public hook contract v1.13 (in progress)
+
+One Draft PR starts at main `5cb3acc7718514e580a8df4c0504994f6a71b310`.
+`GuardStateProvider::set_killed(bool) -> bool` defaults to false and reports
+changed state, not the resulting killed flag. The registered `guard_set_killed`
+command returns `{ changed: bool }`, exported as `GuardSetKilledResult` in
+TypeScript. Only true invalidates the existing deduplicating guard notifier.
+The existing guard factory/fallback is reused; no persistence is introduced.
+
+`ReqMeta.selected_provider_id` and `identity_fingerprint` describe the selected
+outbound identity. Routing computes the fingerprint using the public one-way
+hash function, after resolving provider auth but before sending upstream bytes.
+Changing provider requires admission again; repeated attempts on the same
+provider reuse admission. Terminal Hold/Deny responses end routing. Provider
+selection requires the model from the buffered request or oversized prefix:
+the old pre-body-read admission guarantee is replaced by zero upstream and
+response bytes while held. Subscription forwarding still uses its single
+official endpoint and existing consent rules.
+
+`Injections.history_visibility` resolves `HistoryVisibilityPolicy` from the
+same migrated database Arc. Its independent failure emits one static redacted
+error and falls back to community (`None`, no history floor). AppState owns
+the provider and Database keeps a weak reference to avoid a provider/DB cycle.
+`Database::history_visibility()` captures an inclusive local-date cutoff once
+for each history read; row/count pairs and detail/daily-rollup aggregates share
+that snapshot. Router billing totals (millisecond timestamps) and displayed
+provider-limit totals also use the shared cutoff. Existing view-specific
+restrictions may remain tighter.
+Billing-history exporters must use this read boundary; community receipt CSV
+remains unavailable. Full SQL backups and sync exports bypass visibility and
+continue exporting retained data. No schema, migration, Pro enforcement, new
+event, or frontend page changes belong to this contract.
+
+Validation is ongoing. The initial kill-shell head passed local TypeScript,
+formatting and whitespace checks. Local no-default-features Clippy with
+`-D warnings` passed for the expanded implementation and additional history
+readers. Full local Rust test compilation exceeded
+the 2 GB orb limit (137); it also identified a local type-inference error that
+was corrected before the next push. Runtime/platform success must come from
+the exact implementation head, not the initial shell's CI. Existing §20 native
+interactive shutdown gaps remain open. Keep Draft; no merge/release authorized.
+
+Exact head `0b21406660e418797caad2b2df80625bc2bcbb7e`: Frontend Checks and
+label passed; Backend Checks, Backend (no pro feature), macOS and Windows failed.
+Both backend suites reported 1414 passed, 2 failed, 2 ignored. The new factory
+test incorrectly enabled the official license fixture for `history-error`;
+the new history fixture referenced nonexistent agent `claude` instead of
+`claude-code`. Desktop failures were the same factory test. Local corrections
+were approved and pushed normally as `f1d920156322747f4ae7269ded38a976f491f8be`;
+test runtime is verified through exact-head CI, not this memory-limited orb.
+
+#### 2026-10-29 PR #123: v1.14 architect rulings
+
+Kill clears automatically at the next local midnight; false clears it early.
+Expiry/persistence stay provider-owned. `more_today` is the architect-confirmed
+wire and audit provenance for both daily-cap and identity releases; no enum
+variant or stored-row migration is introduced. All current eligible holds
+release FIFO, never killed state. Production eligibility, identity-baseline
+updates and later-new-key-switch holds are private registry responsibilities;
+public production remains delegation/no-op. The test-only transport fake now
+covers both hold kinds, and command coverage asserts release cannot clear kill.
+
+No new public billing-history row API is needed. Receipt exporters must apply
+one shared history cutoff snapshot to every exported row; the only public CSV
+exporter returns PRO_REQUIRED for all ranges and produces no CSV. Full SQL
+backups and sync remain unclamped. Routing tests cover no send before selected
+provider admission, terminal Hold/Deny with no sends, the existing 4 MiB prefix
+limit without consuming an unbounded tail, different-provider readmission and
+same-provider retry reuse. Exact-head CI is required before final delivery.
+
+Head `f1d920156322747f4ae7269ded38a976f491f8be`: Frontend, label, macOS and
+Windows passed. Both backend suites passed 1415 tests and failed the new history
+test on an ambiguous `created_at` projection in the joined detail reader. The
+projection is now qualified as `l.created_at`; the existing cross-reader test
+covers this path. Formatting, typecheck and no-Pro Clippy passed locally;
+follow-up exact-head runtime CI remains pending.

@@ -58,6 +58,10 @@ pub fn most_used_provider_model(
     start_at: i64,
     end_at: i64,
 ) -> Result<Option<String>, AppError> {
+    let start_at = db
+        .history_visibility()
+        .clamp_start(Some(start_at))?
+        .unwrap();
     let conn = db
         .conn
         .lock()
@@ -105,6 +109,10 @@ fn aggregate_provider_trend(
         UsageTrendGranularity::Day
     };
     let mut buckets = empty_trend_buckets(start_at, end_at, granularity)?;
+    let visible_start = db
+        .history_visibility()
+        .clamp_start(Some(start_at))?
+        .unwrap();
     let conn = db
         .conn
         .lock()
@@ -132,7 +140,7 @@ fn aggregate_provider_trend(
            )
          ORDER BY event.occurred_at, event.event_id",
     )?;
-    let rows = statement.query_map(params![provider_id, start_at, end_at], |row| {
+    let rows = statement.query_map(params![provider_id, visible_start, end_at], |row| {
         Ok((
             row.get::<_, i64>(0)?,
             row.get::<_, i64>(1)?,
@@ -386,6 +394,10 @@ fn for_each_enabled_usage_event(
         ));
     }
 
+    let start_at = db
+        .history_visibility()
+        .clamp_start(Some(start_at))?
+        .unwrap();
     let conn = db
         .conn
         .lock()
@@ -879,6 +891,10 @@ pub fn aggregate_provider_range(
     start_at: i64,
     end_at: i64,
 ) -> Result<ProviderRangeAggregate, AppError> {
+    let start_at = db
+        .history_visibility()
+        .clamp_start(Some(start_at))?
+        .unwrap();
     let conn = db
         .conn
         .lock()
@@ -990,6 +1006,10 @@ pub fn aggregate_provider_account_range(
     start_at: i64,
     end_at: i64,
 ) -> Result<ProviderRangeAggregate, AppError> {
+    let start_at = db
+        .history_visibility()
+        .clamp_start(Some(start_at))?
+        .unwrap();
     let conn = db
         .conn
         .lock()

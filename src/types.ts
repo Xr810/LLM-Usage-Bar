@@ -803,3 +803,6 @@ export interface GuardAllowanceResult {
 export interface GuardDenyResult {
   deniedCount: number;
 }
+export interface GuardSetKilledResult {
+  changed: boolean;
+}

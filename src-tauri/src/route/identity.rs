@@ -186,7 +186,9 @@ fn header_str<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     headers.get(name).and_then(|value| value.to_str().ok())
 }
 
-fn fingerprint(secret: &str) -> String {
+/// Stable one-way credential fingerprint shared by inbound classification and
+/// selected-provider admission. Raw credentials must never enter policy metadata.
+pub fn fingerprint(secret: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(FINGERPRINT_SALT);
     hasher.update(secret.as_bytes());
