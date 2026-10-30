@@ -871,6 +871,28 @@
       "buy": "Buy Pro"
     }
   },
+  "guard": {
+    "upgradeNotice": {
+      "title": "Your budgets are now hard stops",
+      "body_one": "Since you upgraded to Pro, your {{count}} reminder budget now acts as a hard stop. When it hits its daily cap, requests pause until you decide whether to let them through.",
+      "body_other": "Since you upgraded to Pro, your {{count}} reminder budgets now act as hard stops. When one hits its daily cap, requests pause until you decide whether to let them through.",
+      "monthlyNote": "Monthly budgets still only remind you; they never block.",
+      "overTodayHeading": "Over today ({{n}}), the next request will be paused",
+      "otherHeading": "Other converted budgets ({{m}})",
+      "allHeading": "Converted budgets ({{m}})",
+      "sharedName": "All providers (shared)",
+      "amountPerDay": "{{spent}} / {{cap}}/day",
+      "allowMoreToday": "Allow {{amount}} more today",
+      "switchBack": "Switch back to reminder",
+      "switchedBack": "Back to reminder",
+      "switchAllBack": "Switch all back to reminders",
+      "switchAllPartialError": "Couldn't switch {{n}} back: {{names}}. Try again.",
+      "gotIt": "Got it",
+      "manageBudgets": "Manage budgets",
+      "dismissAria": "Dismiss notice",
+      "toggleListAria": "Show or hide converted budgets"
+    }
+  },
   "native": {
     "notify": {
       "budgetReachedTitle": "Daily API budget reached",

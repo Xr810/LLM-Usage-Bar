@@ -871,6 +871,28 @@
       "buy": "购买 Pro"
     }
   },
+  "guard": {
+    "upgradeNotice": {
+      "title": "预算已改为硬停",
+      "body_one": "升级到 Pro 后，你原有的 {{count}} 条提醒预算已改为硬停：达到每日上限时，请求会先暂停，等你决定是否放行。",
+      "body_other": "升级到 Pro 后，你原有的 {{count}} 条提醒预算已改为硬停：达到每日上限时，请求会先暂停，等你决定是否放行。",
+      "monthlyNote": "月预算仍只提醒，不会拦截。",
+      "overTodayHeading": "今天已超限（{{n}}），下一个请求会被暂停",
+      "otherHeading": "其他已转换的预算（{{m}}）",
+      "allHeading": "已转换的预算（{{m}}）",
+      "sharedName": "全部服务商合计",
+      "amountPerDay": "{{spent}} / {{cap}}/日",
+      "allowMoreToday": "今天多放行 {{amount}}",
+      "switchBack": "改回提醒",
+      "switchedBack": "已改回提醒",
+      "switchAllBack": "全部改回提醒",
+      "switchAllPartialError": "有 {{n}} 条未能改回：{{names}}，请重试。",
+      "gotIt": "知道了",
+      "manageBudgets": "管理预算",
+      "dismissAria": "关闭提示",
+      "toggleListAria": "展开或收起已转换的预算"
+    }
+  },
   "native": {
     "notify": {
       "budgetReachedTitle": "已达每日 API 预算",

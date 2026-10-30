@@ -1,4 +1,4 @@
-import { StrictMode, useEffect } from "react";
+import { StrictMode, useEffect, useRef } from "react";
 import ReactDOM from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { I18nextProvider, useTranslation } from "react-i18next";
@@ -8,6 +8,9 @@ import { CapsLegendWindow } from "@/components/lub/LegendCard";
 import { LicenseSettings } from "@/components/lub/LicenseSettings";
 import { OnboardingWizard } from "@/components/lub/OnboardingWizard";
 import { TrayPanelV5 } from "@/components/lub/TrayPanelV5";
+import { UpgradeHardStopNotice } from "@/components/lub/UpgradeHardStopNotice";
+import type { LicenseStatus } from "@/types/license";
+import type { UpgradeNotice } from "@/types";
 import { TrendsPage } from "@/components/lub/TrendsPage";
 import { UpgradePanel } from "@/components/lub/UpgradePanel";
 import { splitUsd } from "@/components/lub/money";
@@ -17,6 +20,75 @@ import {
   killedPanelFixture,
 } from "@/components/lub/panelFixture";
 import type { LubPanelModel } from "@/components/lub/panelModel";
+
+const previewLicense: LicenseStatus = {
+  tier: "pro",
+  state: "active",
+  build: "official",
+  features: [],
+  uiFlags: { upsellEntry: false },
+};
+
+/** Example ConvertedBudget rows from the approved upgrade-notice mockup. */
+const previewNotice: UpgradeNotice = {
+  noticeId: "example",
+  convertedAt: "2026-10-29T08:50:00Z",
+  budgets: [
+    {
+      budgetId: "shared",
+      name: null,
+      providerId: null,
+      dailyCapUsd: "30.00",
+      spentTodayUsd: "15.60",
+      overToday: false,
+    },
+    {
+      budgetId: "provider:anthropic",
+      name: "Anthropic",
+      providerId: "anthropic",
+      dailyCapUsd: "10.00",
+      spentTodayUsd: "12.40",
+      overToday: true,
+    },
+    {
+      budgetId: "provider:openai",
+      name: "OpenAI",
+      providerId: "openai",
+      dailyCapUsd: "15.00",
+      spentTodayUsd: "3.20",
+      overToday: false,
+    },
+  ],
+};
+
+function UpgradeNoticePreview({ fail = false }: { fail?: boolean }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!fail) return;
+    const button = ref.current?.querySelector<HTMLButtonElement>(
+      ".lub-upgrade-foot-actions .lub-btn:not(.lub-btn-primary)",
+    );
+    button?.click();
+  }, [fail]);
+  return (
+    <div ref={ref}>
+      <UpgradeHardStopNotice
+        notice={previewNotice}
+        license={previewLicense}
+        allowanceUsd="5"
+        onAck={() => undefined}
+        onSetHardStop={async (budgetId) => {
+          if (fail && budgetId === "provider:openai") {
+            throw new Error("example failure");
+          }
+          return { changed: true };
+        }}
+        onAllowMoreToday={() => undefined}
+        onManageBudgets={() => undefined}
+      />
+    </div>
+  );
+}
 
 function GalleryReady({ children }: { children: React.ReactNode }) {
   useEffect(() => {
@@ -142,6 +214,13 @@ function Gallery({
               locale={locale}
               openDayTip={screen === "tooltip"}
               scrollMaxPx={screen === "panelscroll" ? 214 : undefined}
+              upgradeNotice={
+                screen === "upgrade-notice" ? (
+                  <UpgradeNoticePreview />
+                ) : screen === "upgrade-notice-fail" ? (
+                  <UpgradeNoticePreview fail />
+                ) : null
+              }
               onOpenTrends={() => undefined}
               onOpenSettings={() => undefined}
             />

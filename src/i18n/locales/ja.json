@@ -871,6 +871,28 @@
       "buy": "Pro を購入"
     }
   },
+  "guard": {
+    "upgradeNotice": {
+      "title": "予算がハードストップになりました",
+      "body_one": "Pro にアップグレードしたため、以前のリマインダー予算 {{count}} 件がハードストップになりました。1日の上限に達すると、リクエストは一時停止し、通すかどうかはあなたが決めます。",
+      "body_other": "Pro にアップグレードしたため、以前のリマインダー予算 {{count}} 件がハードストップになりました。1日の上限に達すると、リクエストは一時停止し、通すかどうかはあなたが決めます。",
+      "monthlyNote": "月間予算はこれまでどおりリマインダーのみで、ブロックしません。",
+      "overTodayHeading": "本日の上限を超過（{{n}}）、次のリクエストは一時停止されます",
+      "otherHeading": "その他の変換済み予算（{{m}}）",
+      "allHeading": "変換済みの予算（{{m}}）",
+      "sharedName": "すべてのプロバイダー合計",
+      "amountPerDay": "{{spent}} / {{cap}}/日",
+      "allowMoreToday": "今日は {{amount}} 追加で許可",
+      "switchBack": "リマインダーに戻す",
+      "switchedBack": "リマインダーに戻しました",
+      "switchAllBack": "すべてリマインダーに戻す",
+      "switchAllPartialError": "{{n}} 件を戻せませんでした：{{names}}。もう一度お試しください。",
+      "gotIt": "了解",
+      "manageBudgets": "予算を管理",
+      "dismissAria": "通知を閉じる",
+      "toggleListAria": "変換済みの予算を表示または非表示"
+    }
+  },
   "native": {
     "notify": {
       "budgetReachedTitle": "1日のAPI予算に到達しました",

@@ -374,14 +374,14 @@ describe("TrayPanelV5 free over cap", () => {
 });
 
 describe("lub warn color", () => {
-  it("applies --lub-warn only to the banner, status label, and dot", () => {
+  it("applies --lub-warn only to status chrome and the upgrade notice", () => {
     const css = readFileSync("src/styles/lub-panel.css", "utf8");
     const rules = css.match(/[^{}]+\{[^{}]+\}/g) ?? [];
     const warnRules = rules.filter((rule) => rule.includes("--lub-warn"));
     expect(warnRules.length).toBeGreaterThan(0);
     for (const rule of warnRules) {
       expect(rule).toMatch(
-        /lub-dot-warn|lub-dot-over|lub-status-warn|lub-banner-warn/,
+        /lub-dot-warn|lub-dot-over|lub-status-warn|lub-banner-warn|lub-upgrade-/,
       );
     }
   });

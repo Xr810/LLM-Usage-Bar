@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { RefreshCw } from "lucide-react";
 import { ensureProCopy } from "@/i18n/proCopy";
@@ -39,6 +39,8 @@ interface TrayPanelV5Props {
    * build. Default off. A community build never shows that line.
    */
   upsellEntry?: boolean;
+  /** Free→Pro hard-stop notice. Rendered at the top of the panel. */
+  upgradeNotice?: ReactNode;
 }
 
 function PowerIcon() {
@@ -181,6 +183,7 @@ export function TrayPanelV5({
   build = "official",
   tier = "free",
   upsellEntry = false,
+  upgradeNotice,
 }: TrayPanelV5Props) {
   ensureProCopy();
   const { t, i18n } = useTranslation();
@@ -229,6 +232,7 @@ export function TrayPanelV5({
         data-testid="lub-tray-panel"
         data-state={model.state}
       >
+        {upgradeNotice}
         {model.licenseLapsed ? <LicenseLapseBar /> : null}
         <KilledBanner model={model} />
         <button
@@ -254,6 +258,7 @@ export function TrayPanelV5({
       data-testid="lub-tray-panel"
       data-state={model.state}
     >
+      {upgradeNotice}
       {model.licenseLapsed ? <LicenseLapseBar /> : null}
       {refreshError ? (
         <p className="lub-alert" role="alert">

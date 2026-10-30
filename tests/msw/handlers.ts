@@ -2191,4 +2191,24 @@ export const handlers = [
   ),
   http.post(`${TAURI_ENDPOINT}/reset_circuit_breaker`, () => success(true)),
   http.post(`${TAURI_ENDPOINT}/get_circuit_breaker_stats`, () => success(null)),
+
+  http.post(`${TAURI_ENDPOINT}/guard_get_upgrade_notice`, () => success(null)),
+  http.post(`${TAURI_ENDPOINT}/guard_ack_upgrade_notice`, () =>
+    success({ changed: false }),
+  ),
+  http.post(`${TAURI_ENDPOINT}/guard_set_budget_hard_stop`, () =>
+    success({ changed: false }),
+  ),
+  http.post(`${TAURI_ENDPOINT}/guard_allow_more_today`, () =>
+    success({ releasedCount: 0, allowanceUsd: "5" }),
+  ),
+  http.post(`${TAURI_ENDPOINT}/get_ui_prefs`, () =>
+    success({
+      guard: {
+        holdTimeoutSecs: 60,
+        maxPending: 8,
+        allowMoreTodayDefaultUsd: "5",
+      },
+    }),
+  ),
 ];
