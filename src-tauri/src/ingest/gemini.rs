@@ -125,6 +125,13 @@ pub fn sync_gemini_usage(db: &Database) -> Result<SessionSyncResult, AppError> {
     sync_with_parser(db, &GeminiParser::new(get_gemini_dir()), None)
 }
 
+pub(crate) fn sync_gemini_usage_until(
+    db: &Database,
+    stopped: &dyn Fn() -> bool,
+) -> Result<SessionSyncResult, AppError> {
+    super::sync_with_parser_until(db, &GeminiParser::new(get_gemini_dir()), None, stopped)
+}
+
 /// 把整个文件解析成归一化用量记录。
 ///
 /// Gemini 的 JSON 文件是「整文件重读 + 按 request_id 去重」,旧实现不读

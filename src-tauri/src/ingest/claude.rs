@@ -81,13 +81,22 @@ pub fn sync_claude_session_logs(db: &Database) -> Result<SessionSyncResult, AppE
 /// Provider-aware entry point used by the v13 usage path. It refuses to scan
 /// before an explicit Claude source binding exists and only advances a file's
 /// offset after all parsed records have been ingested successfully.
+#[cfg(test)]
 pub fn sync_claude_session_logs_bound(
     db: &Database,
     provider_id: &str,
 ) -> Result<ProviderSessionSyncResult, AppError> {
+    sync_claude_session_logs_bound_until(db, provider_id, &|| false)
+}
+
+pub(crate) fn sync_claude_session_logs_bound_until(
+    db: &Database,
+    provider_id: &str,
+    stopped: &dyn Fn() -> bool,
+) -> Result<ProviderSessionSyncResult, AppError> {
     let legacy = db.with_bound_usage_source("claude", provider_id, || {
         validate_bound_session_agent(db, "claude", provider_id)?;
-        sync_with_parser(db, &ClaudeParser, Some(provider_id))
+        super::sync_with_parser_until(db, &ClaudeParser, Some(provider_id), stopped)
     })?;
     let Some(legacy) = legacy else {
         return Ok(ProviderSessionSyncResult {

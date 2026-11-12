@@ -10,8 +10,13 @@ use crate::providers::shared::{
 use crate::quota::QuotaSchedulerHandle;
 use crate::usage::tray_usage_scheduler::TrayUsageSchedulerHandle;
 use slot::TaskSlot;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 pub(super) struct BackgroundTasks {
+    pub(super) sync_stop: Arc<AtomicBool>,
     runtime: runtime::RuntimeTasks<tauri::async_runtime::JoinHandle<()>>,
     pub(super) quota: TaskSlot<QuotaSchedulerHandle>,
     pub(super) midnight: TaskSlot<TrayUsageSchedulerHandle>,
@@ -22,6 +27,7 @@ pub(super) struct BackgroundTasks {
 impl Default for BackgroundTasks {
     fn default() -> Self {
         Self {
+            sync_stop: Arc::new(AtomicBool::new(false)),
             runtime: runtime::RuntimeTasks::default(),
             quota: TaskSlot::new("quota scheduler"),
             midnight: TaskSlot::new("tray usage midnight scheduler"),
@@ -37,6 +43,9 @@ impl BackgroundTasks {
     }
 
     pub(super) fn take(&self) -> BackgroundShutdown {
+        // Publish before abort/join: synchronous ingestion cannot observe an
+        // async abort until it yields, but can stop between committed records.
+        self.sync_stop.store(true, Ordering::Release);
         let runtime = self.runtime.close();
         for task in &runtime {
             task.abort();
